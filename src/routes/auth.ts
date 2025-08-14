@@ -29,30 +29,35 @@ const googleClient = new OAuth2Client(
 
 export const authRoute = new Hono()
 .get('/google', async (c) => {
-  const state = randomBytes(16).toString('hex');
-  const redirectUri = c.req.query('redirect_uri') || 'piru://auth';
+  try {
+    const state = randomBytes(16).toString('hex');
+    const redirectUri = c.req.query('redirect_uri') || 'piru://auth';
+    console.log('Redirect URI:', redirectUri);
+    const stateObj = { state, redirectUri };
+    const stateParam = Buffer.from(JSON.stringify(stateObj)).toString('base64');
+    setCookie(c, 'oauth_state', state, {
+      path: '/api/auth/google/callback',
+      httpOnly: true,
+      maxAge: 600,
+      sameSite: 'None',
+      // secure: process.env.NODE_ENV === 'production',
+      secure: true,
+  });
 
-  const stateObj = { state, redirectUri };
-  const stateParam = Buffer.from(JSON.stringify(stateObj)).toString('base64');
-  setCookie(c, 'oauth_state', state, {
-    path: '/api/auth/google/callback',
-    httpOnly: true,
-    maxAge: 600,
-    sameSite: 'None',
-    // secure: process.env.NODE_ENV === 'production',
-    secure: true,
-});
+    const authUrl = googleClient.generateAuthUrl({
+      access_type: 'offline',
+      scope: [
+        'https://www.googleapis.com/auth/userinfo.email', 
+        'https://www.googleapis.com/auth/userinfo.profile',
+      ],
+      state: stateParam,
+    })
 
-  const authUrl = googleClient.generateAuthUrl({
-    access_type: 'offline',
-    scope: [
-      'https://www.googleapis.com/auth/userinfo.email', 
-      'https://www.googleapis.com/auth/userinfo.profile',
-    ],
-    state: stateParam,
-  })
-
-  return c.redirect(authUrl)
+    return c.redirect(authUrl)
+  } catch (error) {
+    console.error('Error generating Google auth URL:', error);
+    return c.redirect('piru://auth?error=google_auth_url_error');
+  }
 })
 
 .get('/google/callback', async (c) => {
