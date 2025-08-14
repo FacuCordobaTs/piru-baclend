@@ -24,15 +24,13 @@ export const extractToken = (c: any) => {
 }
 
 const googleClient = new OAuth2Client(
-  process.env.GOOGLE_CLIENT_ID!,
-  process.env.GOOGLE_CLIENT_SECRET!,
-  process.env.GOOGLE_REDIRECT_URI!
-)
+  process.env.GOOGLE_CLIENT_ID!
+);
 
 export const authRoute = new Hono()
 .get('/google', async (c) => {
   const state = randomBytes(16).toString('hex');
-  const redirectUri = c.req.query('redirect_uri') || 'https://piru.app/home';
+  const redirectUri = c.req.query('redirect_uri') || 'piru://auth';
 
   const stateObj = { state, redirectUri };
   const stateParam = Buffer.from(JSON.stringify(stateObj)).toString('base64');
