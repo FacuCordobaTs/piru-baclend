@@ -21,10 +21,27 @@ habitRoute.get('/', async (c) => {
     const userHabits = await db.select().from(habits)
       .where(eq(habits.userId, userId))
       .orderBy(desc(habits.createdAt))
-    
+
+    let newHabits = [];    
+    if (userHabits.length !== 0) {
+      for (const habit of userHabits) {
+        const today = new Date()
+        const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+        const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1)
+        const habitCompletion = await db.select().from(habitCompletions)
+          .where(eq(habitCompletions.habitId, habit.id))
+          .orderBy(desc(habitCompletions.completedAt))
+          .limit(1)   
+        if (habitCompletion.length > 0) {
+          newHabits.push({ ...habit, completedToday: (habitCompletion[0].completedAt >= startOfDay && habitCompletion[0].completedAt < endOfDay )})
+        } else {
+          newHabits.push({ ...habit, completedToday: false })
+        }
+      }
+    }
     return c.json({
       success: true,
-      data: userHabits
+      data: newHabits
     })
   } catch (error) {
     console.error('Error getting habits:', error)
@@ -44,7 +61,7 @@ habitRoute.get('/:id', async (c) => {
     }
     
     const habitResult = await db.select().from(habits)
-      .where(eq(habits.id, habitId))
+      .where(and(eq(habits.id, habitId), eq(habits.userId, userId)))
       .limit(1)
     
     if (!habitResult.length) {
@@ -57,11 +74,16 @@ habitRoute.get('/:id', async (c) => {
       .orderBy(desc(habitCompletions.completedAt))
       .limit(10)
     
+    const today = new Date()
+    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+    const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1)
+    
     return c.json({
       success: true,
       data: {
         habit: habitResult[0],
-        recentCompletions: completions
+        recentCompletions: completions,
+        completedToday: (completions.length > 0 ? completions[0].completedAt >= startOfDay && completions[0].completedAt < endOfDay : false)
       }
     })
   } catch (error) {
@@ -101,9 +123,11 @@ habitRoute.post('/', zValidator('json', createHabitSchema), async (c) => {
       .where(eq(habits.id, habitId))
       .limit(1)
     
+    const habitResult = { ...newHabit[0], completedToday: false }
+
     return c.json({
       success: true,
-      data: newHabit[0],
+      data: habitResult,
       message: 'Habit created successfully'
     }, 201)
   } catch (error) {
@@ -134,7 +158,7 @@ habitRoute.put('/:id', zValidator('json', updateHabitSchema), async (c) => {
     
     // Check if habit exists and belongs to user
     const existingHabit = await db.select().from(habits)
-      .where(eq(habits.id, habitId))
+      .where(and(eq(habits.id, habitId), eq(habits.userId, userId)))
       .limit(1)
     
     if (!existingHabit.length) {
@@ -150,7 +174,7 @@ habitRoute.put('/:id', zValidator('json', updateHabitSchema), async (c) => {
     
     await db.update(habits)
       .set(updateData)
-      .where(eq(habits.id, habitId))
+      .where(and(eq(habits.id, habitId), eq(habits.userId, userId)))
     
     return c.json({ success: true, message: 'Habit updated successfully' })
   } catch (error) {
@@ -333,6 +357,74 @@ habitRoute.get('/:id/completions', async (c) => {
     })
   } catch (error) {
     console.error('Error getting habit completions:', error)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+// Get habit statistics
+habitRoute.get('/:id/stats', async (c) => {
+  try {
+    const db = drizzle(pool)
+    const userId = (c as any).user.id
+    const habitId = parseInt(c.req.param('id'))
+    
+    if (isNaN(habitId)) {
+      return c.json({ error: 'Invalid habit ID' }, 400)
+    }
+    
+    // Check if habit exists and belongs to user
+    const habitResult = await db.select().from(habits)
+      .where(and(eq(habits.id, habitId), eq(habits.userId, userId)))
+      .limit(1)
+    
+    if (!habitResult.length) {
+      return c.json({ error: 'Habit not found' }, 404)
+    }
+    
+    const habit = habitResult[0]
+    
+    // Get completion statistics
+    const allCompletions = await db.select().from(habitCompletions)
+      .where(eq(habitCompletions.habitId, habitId))
+      .orderBy(desc(habitCompletions.completedAt))
+    
+    const totalCompletions = allCompletions.length
+    const completionRate = (habit.targetDays || 7) > 0 ? Math.round((totalCompletions / (habit.targetDays || 7)) * 100) : 0
+    
+    // Calculate mood distribution
+    const moodCounts = allCompletions.reduce((acc, completion) => {
+      if (completion.mood) {
+        acc[completion.mood] = (acc[completion.mood] || 0) + 1
+      }
+      return acc
+    }, {} as Record<string, number>)
+    
+    // Get recent streak info
+    const recentCompletions = allCompletions.slice(0, 7) // Last 7 days
+    const recentStreak = recentCompletions.length
+    
+    return c.json({
+      success: true,
+      data: {
+        habit: {
+          id: habit.id,
+          name: habit.name,
+          currentStreak: habit.currentStreak,
+          longestStreak: habit.longestStreak,
+          targetDays: habit.targetDays,
+          experienceReward: habit.experienceReward
+        },
+        stats: {
+          totalCompletions,
+          completionRate,
+          recentStreak,
+          moodDistribution: moodCounts,
+          averageCompletionsPerWeek: Math.round((totalCompletions / Math.max(1, Math.ceil((Date.now() - new Date(habit.createdAt).getTime()) / (7 * 24 * 60 * 60 * 1000)))) * 100) / 100
+        }
+      }
+    })
+  } catch (error) {
+    console.error('Error getting habit stats:', error)
     return c.json({ error: 'Internal server error' }, 500)
   }
 })

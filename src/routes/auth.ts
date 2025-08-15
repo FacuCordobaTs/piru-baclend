@@ -27,39 +27,34 @@ const googleClient = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID!,
   process.env.GOOGLE_CLIENT_SECRET!,
   process.env.GOOGLE_REDIRECT_URI!
-);
+)
 
 export const authRoute = new Hono()
 .get('/google', async (c) => {
-  try {
-    const state = randomBytes(16).toString('hex');
-    const redirectUri = c.req.query('redirect_uri') || 'piru://auth';
-    console.log('Redirect URI:', redirectUri);
-    const stateObj = { state, redirectUri };
-    const stateParam = Buffer.from(JSON.stringify(stateObj)).toString('base64');
-    setCookie(c, 'oauth_state', state, {
-      path: '/api/auth/google/callback',
-      httpOnly: true,
-      maxAge: 600,
-      sameSite: 'None',
-      // secure: process.env.NODE_ENV === 'production',
-      secure: true,
-  });
+  const state = randomBytes(16).toString('hex');
+  const redirectUri = c.req.query('redirect_uri') || 'https://piru.app/home';
 
-    const authUrl = googleClient.generateAuthUrl({
-      access_type: 'offline',
-      scope: [
-        'https://www.googleapis.com/auth/userinfo.email', 
-        'https://www.googleapis.com/auth/userinfo.profile',
-      ],
-      state: stateParam,
-    })
+  const stateObj = { state, redirectUri };
+  const stateParam = Buffer.from(JSON.stringify(stateObj)).toString('base64');
+  setCookie(c, 'oauth_state', state, {
+    path: '/api/auth/google/callback',
+    httpOnly: true,
+    maxAge: 600,
+    sameSite: 'None',
+    // secure: process.env.NODE_ENV === 'production',
+    secure: true,
+});
 
-    return c.redirect(authUrl)
-  } catch (error) {
-    console.error('Error generating Google auth URL:', error);
-    return c.redirect('piru://auth?error=google_auth_url_error');
-  }
+  const authUrl = googleClient.generateAuthUrl({
+    access_type: 'offline',
+    scope: [
+      'https://www.googleapis.com/auth/userinfo.email', 
+      'https://www.googleapis.com/auth/userinfo.profile',
+    ],
+    state: stateParam,
+  })
+
+  return c.redirect(authUrl)
 })
 
 .get('/google/callback', async (c) => {
@@ -70,7 +65,7 @@ export const authRoute = new Hono()
   deleteCookie(c, 'oauth_state', { path: '/api/auth/google/callback' });
 
   // Decodifica el parámetro state
-  let redirectUri = 'piru://auth';
+  let redirectUri = 'https://piru.app/home';
   try {
     if (stateParam) {
       const stateObj = JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8'));
@@ -81,7 +76,7 @@ export const authRoute = new Hono()
     }
   } catch (e) {
     console.error('Error decoding state:', e);
-    redirectUri = 'piru://auth';
+    redirectUri = 'https://piru.app/home';
   }
 
   if (!code) {
