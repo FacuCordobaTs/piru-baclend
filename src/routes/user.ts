@@ -31,7 +31,6 @@ userRoute.get('/profile', async (c) => {
         user: (c as any).user,
         settings: settings ? {
           notificationsEnabled: settings.notificationsEnabled,
-          reminderTime: settings.reminderTime,
           language: settings.language
         } : null
       }
@@ -43,25 +42,26 @@ userRoute.get('/profile', async (c) => {
 })
 
 // Update user profile
-const updateProfileSchema = z.object({
-  name: z.string().min(1).max(255).optional(),
-  avatar: z.string().url().optional(),
-  skills: z.record(z.any()).optional()
+const completeQuizSchema = z.object({
+  name: z.string().min(1).max(255),
+  // avatar: z.string().url().optional(),
+  age: z.number().min(1).max(120),
+  physicalPoints: z.number().min(1).max(100),
+  mentalPoints: z.number().min(1).max(100),
+  spiritualPoints: z.number().min(1).max(100),
+  disciplinePoints:  z.number().min(1).max(100),
+  socialPoints:  z.number().min(1).max(100),
+ 
 })
 
-userRoute.put('/profile', zValidator('json', updateProfileSchema), async (c) => {
+userRoute.put('/complete-quiz', zValidator('json', completeQuizSchema), async (c) => {
   try {
     const body = c.req.valid('json')
     const db = drizzle(pool)
     const userId = (c as any).user.id
     
-    const updateData: any = {}
-    if (body.name !== undefined) updateData.name = body.name
-    if (body.avatar !== undefined) updateData.avatar = body.avatar
-    if (body.skills !== undefined) updateData.skills = body.skills
-    
     await db.update(users)
-      .set(updateData)
+      .set(body)
       .where(eq(users.id, userId))
     
     return c.json({ success: true, message: 'Profile updated successfully' })
@@ -104,7 +104,6 @@ userRoute.put('/settings', zValidator('json', updateSettingsSchema), async (c) =
       await db.insert(userSettings).values({
         userId: userId,
         notificationsEnabled: body.notificationsEnabled ?? true,
-        reminderTime: body.reminderTime ?? '09:00',
         language: body.language ?? 'es'
       })
     }

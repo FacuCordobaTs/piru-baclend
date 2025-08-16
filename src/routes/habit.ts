@@ -96,7 +96,7 @@ habitRoute.get('/:id', async (c) => {
 const createHabitSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().optional(),
-  targetDays: z.number().min(1).max(365).default(7),
+  targetDays: z.array(z.boolean()),
   experienceReward: z.number().min(1).max(100).default(10),
   reminderTime: z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).default('09:00')
 })
@@ -110,8 +110,13 @@ habitRoute.post('/', zValidator('json', createHabitSchema), async (c) => {
     const insertResult = await db.insert(habits).values({
       userId: userId,
       name: body.name,
-      description: body.description,
-      targetDays: body.targetDays,
+      targetMonday: body.targetDays[0],
+      targetTuesday:  body.targetDays[1],
+      targetWednesday:  body.targetDays[2],
+      targetThursday:  body.targetDays[3],
+      targetFriday:  body.targetDays[4],
+      targetSaturday:  body.targetDays[5],
+      targetSunday:  body.targetDays[6],
       experienceReward: body.experienceReward,
       reminderTime: body.reminderTime
     })
@@ -268,7 +273,6 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
     await db.insert(habitCompletions).values({
       habitId: habitId,
       userId: userId,
-      notes: body.notes,
       mood: body.mood
     })
     
@@ -389,7 +393,6 @@ habitRoute.get('/:id/stats', async (c) => {
       .orderBy(desc(habitCompletions.completedAt))
     
     const totalCompletions = allCompletions.length
-    const completionRate = (habit.targetDays || 7) > 0 ? Math.round((totalCompletions / (habit.targetDays || 7)) * 100) : 0
     
     // Calculate mood distribution
     const moodCounts = allCompletions.reduce((acc, completion) => {
@@ -411,12 +414,10 @@ habitRoute.get('/:id/stats', async (c) => {
           name: habit.name,
           currentStreak: habit.currentStreak,
           longestStreak: habit.longestStreak,
-          targetDays: habit.targetDays,
           experienceReward: habit.experienceReward
         },
         stats: {
           totalCompletions,
-          completionRate,
           recentStreak,
           moodDistribution: moodCounts,
           averageCompletionsPerWeek: Math.round((totalCompletions / Math.max(1, Math.ceil((Date.now() - new Date(habit.createdAt).getTime()) / (7 * 24 * 60 * 60 * 1000)))) * 100) / 100

@@ -7,42 +7,54 @@ export const users = mysqlTable("users", {
     googleId: varchar('google_id', { length: 255 }).unique().notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     level: int("level").default(1),
+    age: int("age").default(1),
     experience: int("experience").default(0),
     experienceToNext: int("experience_to_next").default(100),
     currentStreak: int("current_streak").default(0),
     longestStreak: int("longest_streak").default(0),
     avatar: varchar("avatar", { length: 255 }),
-    skills: json("skills"),
+    physicalPoints: int("phyisical_points").default(0),
+    mentalPoints: int("mental_points").default(0),
+    spiritualPoints: int("spiritual_points").default(0),
+    disciplinePoints: int("spiritual_points").default(0),
+    socialPoints: int("spiritual_points").default(0),
 });
 
 export const habits = mysqlTable("habits", {
     id: int("id").primaryKey().autoincrement(),
     userId: int("user_id").notNull().references(() => users.id),
     name: varchar("name", { length: 255 }).notNull(),
-    description: text("description"),
-    targetDays: int("target_days").default(7),
+    targetMonday: boolean("targetMonday").default(false),
+    targetTuesday: boolean("targetTuesday").default(false),
+    targetWednesday: boolean("targetWednesday").default(false),
+    targetThursday: boolean("targetThursday").default(false),
+    targetFriday: boolean("targetFriday").default(false),
+    targetSaturday: boolean("targetSaturday").default(false),
+    targetSunday: boolean("targetSunday").default(false),
     currentStreak: int("current_streak").default(0),
     longestStreak: int("longest_streak").default(0),
     experienceReward: int("experience_reward").default(10),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     reminderTime: varchar("reminder_time", { length: 10 }).default("09:00"),
+    physical: boolean().default(false),
+    mental: boolean().default(false),
+    spiritual: boolean().default(false),
+    discipline: boolean().default(false),
+    social: boolean().default(false),
 });
-
 
 export const habitCompletions = mysqlTable("habit_completions", {
     id: int("id").primaryKey().autoincrement(),
     habitId: int("habit_id").notNull().references(() => habits.id),
     userId: int("user_id").notNull().references(() => users.id),
     completedAt: timestamp("completed_at").defaultNow().notNull(),
-    notes: text("notes"),
-    mood: varchar("mood", { length: 20 }), // great, good, okay, bad
+    mood: varchar("mood", {length: 10})
 });
 
 export const userSettings = mysqlTable("user_settings", {
     id: int("id").primaryKey().autoincrement(),
     userId: int("user_id").notNull().unique().references(() => users.id),
     notificationsEnabled: boolean("notifications_enabled").default(true),
-    reminderTime: varchar("reminder_time", { length: 10 }).default("09:00"),
     language: varchar("language", { length: 10 }).default("es"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull()
 });
