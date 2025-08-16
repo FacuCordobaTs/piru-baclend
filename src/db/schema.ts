@@ -16,8 +16,8 @@ export const users = mysqlTable("users", {
     physicalPoints: int("phyisical_points").default(0),
     mentalPoints: int("mental_points").default(0),
     spiritualPoints: int("spiritual_points").default(0),
-    disciplinePoints: int("spiritual_points").default(0),
-    socialPoints: int("spiritual_points").default(0),
+    disciplinePoints: int("discipline_points").default(0),
+    socialPoints: int("social_points").default(0),
 });
 
 export const habits = mysqlTable("habits", {
@@ -48,7 +48,7 @@ export const habitCompletions = mysqlTable("habit_completions", {
     habitId: int("habit_id").notNull().references(() => habits.id),
     userId: int("user_id").notNull().references(() => users.id),
     completedAt: timestamp("completed_at").defaultNow().notNull(),
-    mood: varchar("mood", {length: 10})
+    mood: varchar("mood", {length: 20})
 });
 
 export const userSettings = mysqlTable("user_settings", {

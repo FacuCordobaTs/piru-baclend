@@ -98,7 +98,8 @@ const createHabitSchema = z.object({
   description: z.string().optional(),
   targetDays: z.array(z.boolean()),
   experienceReward: z.number().min(1).max(100).default(10),
-  reminderTime: z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).default('09:00')
+  reminderTime: z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).default('09:00'),
+  categories: z.array(z.boolean()),
 })
 
 habitRoute.post('/', zValidator('json', createHabitSchema), async (c) => {
@@ -118,7 +119,12 @@ habitRoute.post('/', zValidator('json', createHabitSchema), async (c) => {
       targetSaturday:  body.targetDays[5],
       targetSunday:  body.targetDays[6],
       experienceReward: body.experienceReward,
-      reminderTime: body.reminderTime
+      reminderTime: body.reminderTime,
+      physical: body.categories[0],
+      mental: body.categories[1],
+      spiritual: body.categories[2],
+      discipline: body.categories[3],
+      social: body.categories[4],
     })
     
     const habitId = insertResult[0].insertId
@@ -225,7 +231,6 @@ habitRoute.delete('/:id', async (c) => {
 
 // Complete a habit (mark as done for today)
 const completeHabitSchema = z.object({
-  notes: z.string().optional(),
   mood: z.enum(['great', 'good', 'okay', 'bad']).optional()
 })
 
@@ -290,21 +295,27 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
     // Add experience to user
     const user = (c as any).user
     const experienceGained = habit.experienceReward || 10
-    const newExperience = user.experience + experienceGained
+    let newExperience = user.experience + experienceGained
     let newLevel = user.level
     let newExperienceToNext = user.experienceToNext
-    
+
     // Check if user leveled up
     if (newExperience >= user.experienceToNext) {
       newLevel += 1
+      newExperience = newExperience - newExperienceToNext;
       newExperienceToNext = Math.floor(user.experienceToNext * 1.5)
     }
-    
+
     await db.update(users)
       .set({
         experience: newExperience,
         level: newLevel,
-        experienceToNext: newExperienceToNext
+        experienceToNext: newExperienceToNext,
+        physicalPoints: habit.physical ? (user.physicalPoints + (experienceGained/10)) : user.physicalPoints,
+        mentalPoints: habit.mental ? (user.mentalPoints + (experienceGained/10)) : user.mentalPoints,
+        spiritualPoints: habit.spiritual ? (user.spiritual + (experienceGained/10)) : user.spiritualPoints,
+        disciplinePoints: habit.discipline ? (user.disciplinePoints + (experienceGained/10)) : user.disciplinePoints,
+        socialPoints: habit.social ? (user.socialPoints + (experienceGained/10)) : user.socialPoints,
       })
       .where(eq(users.id, userId))
     
@@ -317,7 +328,12 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
         experienceGained: experienceGained,
         newUserExperience: newExperience,
         newUserLevel: newLevel,
-        leveledUp: newLevel > user.level
+        leveledUp: newLevel > user.level,
+        physicalPoints: habit.physical ? (user.physicalPoints + (experienceGained/10)) : user.physicalPoints,
+        mentalPoints: habit.mental ? (user.mentalPoints + (experienceGained/10)) : user.mentalPoints,
+        spiritualPoints: habit.spiritual ? (user.spiritual + (experienceGained/10)) : user.spiritualPoints,
+        disciplinePoints: habit.discipline ? (user.disciplinePoints + (experienceGained/10)) : user.disciplinePoints,
+        socialPoints: habit.social ? (user.socialPoints + (experienceGained/10)) : user.socialPoints,
       },
       message: 'Habit completed successfully!'
     })

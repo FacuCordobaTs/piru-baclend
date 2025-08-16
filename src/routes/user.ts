@@ -202,7 +202,7 @@ userRoute.get('/stats', async (c) => {
     const user = (c as any).user
     
     // Get user's habits for additional stats
-    const { habits, habitCompletions } = await import('../db/schema')
+    const { habits } = await import('../db/schema')
     const userHabits = await db.select().from(habits)
       .where(eq(habits.userId, user.id))
     
