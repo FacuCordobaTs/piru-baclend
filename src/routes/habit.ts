@@ -447,7 +447,8 @@ habitRoute.get('/:id/stats', async (c) => {
 })
 
 const relapseSchema = z.object({
-  relapseReason: z.string().min(1).max(255)
+  relapseReason: z.string().min(1).max(255),
+  relapseDate: z.date()
 })
 
 habitRoute.post('/relapse', zValidator('json', relapseSchema), async (c) => {
@@ -457,12 +458,12 @@ habitRoute.post('/relapse', zValidator('json', relapseSchema), async (c) => {
     const body = c.req.valid('json')
     await db.insert(relapse).values({
       userId: user.id,
-      relapseDate: new Date(),
-      relapseReason: body.relapseReason
+      relapseReason: body.relapseReason,
+      relapseDate: body.relapseDate
     })
 
     await db.update(users).set({
-      lastRelapse: new Date(),
+      lastRelapse: body.relapseDate,
       currentStreak: 0,
     }).where(eq(users.id, user.id))
 
@@ -470,6 +471,19 @@ habitRoute.post('/relapse', zValidator('json', relapseSchema), async (c) => {
   }
   catch (error) {
     console.error('Error recording relapse:', error)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+habitRoute.get('/relapses', async (c) => {
+  try {
+    const db = drizzle(pool)
+    const user = (c as any).user
+    const relapses = await db.select().from(relapse).where(eq(relapse.userId, user.id)).orderBy(desc(relapse.relapseDate)).limit(10)
+    return c.json({ success: true, data: relapses })
+  }
+  catch (error) {
+    console.error('Error getting relapses:', error)
     return c.json({ error: 'Internal server error' }, 500)
   }
 })
