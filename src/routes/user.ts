@@ -177,7 +177,6 @@ userRoute.put('/streak', zValidator('json', updateStreakSchema), async (c) => {
     
     await db.update(users)
       .set({
-        currentStreak: body.currentStreak,
         longestStreak: newLongestStreak
       })
       .where(eq(users.id, user.id))

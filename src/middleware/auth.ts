@@ -13,7 +13,6 @@ export interface AuthenticatedContext extends Context {
     level: number
     experience: number
     experienceToNext: number
-    currentStreak: number
     longestStreak: number
     avatar?: string
     physicalPoints: number
@@ -53,7 +52,6 @@ export const authMiddleware = async (c: Context, next: Next) => {
       level: user.level || 1,
       experience: user.experience || 0,
       experienceToNext: user.experienceToNext || 100,
-      currentStreak: user.currentStreak || 0,
       longestStreak: user.longestStreak || 0,
       avatar: user.avatar || undefined,
       physicalPoints: user.physicalPoints || 0,

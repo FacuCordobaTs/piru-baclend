@@ -65,11 +65,16 @@ habitRoute.post('/relapse', zValidator('json', relapseSchema), async (c) => {
       relapseReason: body.relapseReason,
       relapseDate: body.relapseDate
     })
+    const lastRelapseDate = new Date(user.lastRelapse);
+    const today = new Date(body.relapseDate);
+    const lastStreak = Math.floor((today.getTime() - lastRelapseDate.getTime()) / (1000 * 60 * 60 * 24));
+
+    const newLongestStreak = user.longestStreak > lastStreak ? user.longestStreak : lastStreak;
 
     await db.update(users).set({
       lastRelapse: body.relapseDate,
-      currentStreak: 0,
-    }).where(eq(users.id, user.id))
+      longestStreak: newLongestStreak
+    }).where(eq(users.id, user.id));
 
     return c.json({ success: true, message: 'Relapse recorded successfully' })
   }

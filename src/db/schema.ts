@@ -10,7 +10,6 @@ export const users = mysqlTable("users", {
     age: int("age").default(1),
     experience: int("experience").default(0),
     experienceToNext: int("experience_to_next").default(100),
-    currentStreak: int("current_streak").default(0),
     longestStreak: int("longest_streak").default(0),
     avatar: varchar("avatar", { length: 255 }),
     physicalPoints: int("phyisical_points").default(0),
