@@ -3,7 +3,7 @@ import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
-import { habits, habitCompletions, users } from '../db/schema'
+import { habits, habitCompletions, users, relapse } from '../db/schema'
 import { eq, and, desc, gte, lt } from 'drizzle-orm'
 import { authMiddleware } from '../middleware/auth'
 
@@ -442,6 +442,33 @@ habitRoute.get('/:id/stats', async (c) => {
     })
   } catch (error) {
     console.error('Error getting habit stats:', error)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+const relapseSchema = z.object({
+  relapseReason: z.string().min(1).max(255)
+})
+
+habitRoute.post('/relapse', zValidator('json', relapseSchema), async (c) => {
+  try {
+    const db = drizzle(pool)
+    const user = (c as any).user
+    const body = c.req.valid('json')
+    await db.insert(relapse).values({
+      userId: user.id,
+      relapseDate: new Date(),
+      relapseReason: body.relapseReason
+    })
+
+    await db.update(habits).set({
+      currentStreak: 0,
+    }).where(eq(habits.userId, user.id))
+
+    return c.json({ success: true, message: 'Relapse recorded successfully' })
+  }
+  catch (error) {
+    console.error('Error recording relapse:', error)
     return c.json({ error: 'Internal server error' }, 500)
   }
 })

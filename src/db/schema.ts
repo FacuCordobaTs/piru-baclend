@@ -43,6 +43,13 @@ export const habits = mysqlTable("habits", {
     social: boolean().default(false),
 });
 
+export const relapse = mysqlTable("relapse", {
+    id: int("id").primaryKey().autoincrement(),
+    userId: int("user_id").notNull().references(() => users.id),
+    relapseDate: timestamp("relapse_date").defaultNow().notNull(),
+    relapseReason: varchar("relapse_reason", { length: 255 }).notNull(),
+});
+
 export const habitCompletions = mysqlTable("habit_completions", {
     id: int("id").primaryKey().autoincrement(),
     habitId: int("habit_id").notNull().references(() => habits.id),
