@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
 import { users, userSettings } from '../db/schema'
-import { eq } from 'drizzle-orm'
+import { desc, eq } from 'drizzle-orm'
 import { authMiddleware } from '../middleware/auth'
 
 const userRoute = new Hono()
@@ -229,6 +229,18 @@ userRoute.get('/stats', async (c) => {
     })
   } catch (error) {
     console.error('Error getting user stats:', error)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+userRoute.get('/leaderboard', async (c) => {
+  try {
+    const db = drizzle(pool)
+    const nofapLeaderboard = await db.select().from(users).orderBy(desc(users.longestStreak)).limit(10)
+    const levelLeaderboard = await db.select().from(users).orderBy(desc(users.level)).limit(10)
+    return c.json({ success: true, data: { nofapLeaderboard, levelLeaderboard } })
+  } catch (error) {
+    console.error('Error getting leaderboard:', error)
     return c.json({ error: 'Internal server error' }, 500)
   }
 })
