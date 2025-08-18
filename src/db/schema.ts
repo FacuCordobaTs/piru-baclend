@@ -1,4 +1,4 @@
-import { mysqlTable, varchar, int, timestamp, text, boolean, json } from "drizzle-orm/mysql-core";
+import { mysqlTable, varchar, int, timestamp, boolean } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
     id: int("id").primaryKey().autoincrement(),
@@ -18,6 +18,7 @@ export const users = mysqlTable("users", {
     spiritualPoints: int("spiritual_points").default(0),
     disciplinePoints: int("discipline_points").default(0),
     socialPoints: int("social_points").default(0),
+    lastRelapse: timestamp("last_relapse").defaultNow().notNull(),
 });
 
 export const habits = mysqlTable("habits", {

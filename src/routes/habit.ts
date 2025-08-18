@@ -461,9 +461,10 @@ habitRoute.post('/relapse', zValidator('json', relapseSchema), async (c) => {
       relapseReason: body.relapseReason
     })
 
-    await db.update(habits).set({
+    await db.update(users).set({
+      lastRelapse: new Date(),
       currentStreak: 0,
-    }).where(eq(habits.userId, user.id))
+    }).where(eq(users.id, user.id))
 
     return c.json({ success: true, message: 'Relapse recorded successfully' })
   }
