@@ -36,7 +36,6 @@ export const habits = mysqlTable("habits", {
     experienceReward: int("experience_reward").default(10),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     reminderTime: varchar("reminder_time", { length: 10 }).default("09:00"),
-    notificationIds: varchar("notification_ids", { length: 1000 }).default("[]"),
     physical: boolean().default(false),
     mental: boolean().default(false),
     spiritual: boolean().default(false),

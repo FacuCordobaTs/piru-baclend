@@ -24,8 +24,7 @@ const convertDaysToArray = (habit: any) => {
       habit.targetFriday || false,
       habit.targetSaturday || false,
       habit.targetSunday || false
-    ],
-    notificationIds: habit.notificationIds ? JSON.parse(habit.notificationIds) : []
+    ]
   }
 }
 
@@ -163,11 +162,11 @@ habitRoute.get('/:id', async (c) => {
 // Create a new habit
 const createHabitSchema = z.object({
   name: z.string().min(1).max(255),
+  description: z.string().optional(),
   targetDays: z.array(z.boolean()),
   experienceReward: z.number().min(1).max(100).default(10),
   reminderTime: z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).default('09:00'),
   categories: z.array(z.boolean()),
-  notificationIds: z.array(z.string()).optional(),
 })
 
 habitRoute.post('/', zValidator('json', createHabitSchema), async (c) => {
@@ -188,7 +187,6 @@ habitRoute.post('/', zValidator('json', createHabitSchema), async (c) => {
       targetSunday:  body.targetDays[6],
       experienceReward: body.experienceReward,
       reminderTime: body.reminderTime,
-      notificationIds: JSON.stringify(body.notificationIds || []),
       physical: body.categories[0],
       mental: body.categories[1],
       spiritual: body.categories[2],
@@ -219,10 +217,10 @@ habitRoute.post('/', zValidator('json', createHabitSchema), async (c) => {
 // Update a habit
 const updateHabitSchema = z.object({
   name: z.string().min(1).max(255).optional(),
+  description: z.string().optional(),
   targetDays: z.array(z.boolean()).optional(),
   experienceReward: z.number().min(1).max(100).optional(),
   reminderTime: z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).optional(),
-  notificationIds: z.array(z.string()).optional(),
   physical: z.boolean().optional(),
   mental: z.boolean().optional(),
   spiritual: z.boolean().optional(),
@@ -252,9 +250,9 @@ habitRoute.put('/:id', zValidator('json', updateHabitSchema), async (c) => {
     
     const updateData: any = {}
     if (body.name !== undefined) updateData.name = body.name
+    if (body.description !== undefined) updateData.description = body.description
     if (body.experienceReward !== undefined) updateData.experienceReward = body.experienceReward
     if (body.reminderTime !== undefined) updateData.reminderTime = body.reminderTime
-    if (body.notificationIds !== undefined) updateData.notificationIds = JSON.stringify(body.notificationIds)
     
     // Handle targetDays array conversion to individual day columns
     if (body.targetDays !== undefined) {
@@ -318,9 +316,6 @@ habitRoute.delete('/:id', async (c) => {
       return c.json({ error: 'Habit not found' }, 404)
     }
     
-    // Get notification IDs to cancel them (frontend will handle this)
-    const habit = convertDaysToArray(existingHabit[0]);
-    
     // Delete habit completions first (due to foreign key constraint)
     await db.delete(habitCompletions)
       .where(eq(habitCompletions.habitId, habitId))
@@ -329,12 +324,7 @@ habitRoute.delete('/:id', async (c) => {
     await db.delete(habits)
       .where(and(eq(habits.id, habitId), eq(habits.userId, userId)))
     
-    // Return notification IDs so frontend can cancel them
-    return c.json({ 
-      success: true, 
-      message: 'Habit deleted successfully',
-      notificationIds: habit.notificationIds || []
-    })
+    return c.json({ success: true, message: 'Habit deleted successfully' })
   } catch (error) {
     console.error('Error deleting habit:', error)
     return c.json({ error: 'Internal server error' }, 500)
@@ -423,11 +413,11 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
         experience: newExperience,
         level: newLevel,
         experienceToNext: newExperienceToNext,
-        physicalPoints: habit.physical ? (user.physicalPoints + (experienceGained/10)) : user.physicalPoints,
-        mentalPoints: habit.mental ? (user.mentalPoints + (experienceGained/10)) : user.mentalPoints,
-        spiritualPoints: habit.spiritual ? (user.spiritual + (experienceGained/10)) : user.spiritualPoints,
-        disciplinePoints: habit.discipline ? (user.disciplinePoints + (experienceGained/10)) : user.disciplinePoints,
-        socialPoints: habit.social ? (user.socialPoints + (experienceGained/10)) : user.socialPoints,
+        physicalPoints: habit.physical ? (user.physicalPoints + (experienceGained/10)) : (user.physicalPoints || 0),
+        mentalPoints: habit.mental ? (user.mentalPoints + (experienceGained/10)) : (user.mentalPoints || 0),
+        spiritualPoints: habit.spiritual ? (user.spiritual + (experienceGained/10)) : (user.spiritualPoints || 0),
+        disciplinePoints: habit.discipline ? (user.disciplinePoints + (experienceGained/10)) : (user.disciplinePoints || 0),
+        socialPoints: habit.social ? (user.socialPoints + (experienceGained/10)) : (user.socialPoints || 0),
       })
       .where(eq(users.id, userId))
     
@@ -441,11 +431,11 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
         newUserExperience: newExperience,
         newUserLevel: newLevel,
         leveledUp: newLevel > user.level,
-        physicalPoints: habit.physical ? (user.physicalPoints + (experienceGained/10)) : user.physicalPoints,
-        mentalPoints: habit.mental ? (user.mentalPoints + (experienceGained/10)) : user.mentalPoints,
-        spiritualPoints: habit.spiritual ? (user.spiritual + (experienceGained/10)) : user.spiritualPoints,
-        disciplinePoints: habit.discipline ? (user.disciplinePoints + (experienceGained/10)) : user.disciplinePoints,
-        socialPoints: habit.social ? (user.socialPoints + (experienceGained/10)) : user.socialPoints,
+        physicalPoints: habit.physical ? (user.physicalPoints + (experienceGained/10)) : (user.physicalPoints || 0),
+        mentalPoints: habit.mental ? (user.mentalPoints + (experienceGained/10)) : (user.mentalPoints || 0),
+        spiritualPoints: habit.spiritual ? (user.spiritual + (experienceGained/10)) : (user.spiritualPoints || 0),
+        disciplinePoints: habit.discipline ? (user.disciplinePoints + (experienceGained/10)) : (user.disciplinePoints || 0),
+        socialPoints: habit.social ? (user.socialPoints + (experienceGained/10)) : (user.socialPoints || 0),
       },
       message: 'Habit completed successfully!'
     })
