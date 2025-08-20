@@ -415,7 +415,7 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
         experienceToNext: newExperienceToNext,
         physicalPoints: habit.physical ? (user.physicalPoints + (experienceGained/10)) : (user.physicalPoints || 0),
         mentalPoints: habit.mental ? (user.mentalPoints + (experienceGained/10)) : (user.mentalPoints || 0),
-        spiritualPoints: habit.spiritual ? (user.spiritual + (experienceGained/10)) : (user.spiritualPoints || 0),
+        spiritualPoints: habit.spiritual ? (user.spiritualPoints + (experienceGained/10)) : (user.spiritualPoints || 0),
         disciplinePoints: habit.discipline ? (user.disciplinePoints + (experienceGained/10)) : (user.disciplinePoints || 0),
         socialPoints: habit.social ? (user.socialPoints + (experienceGained/10)) : (user.socialPoints || 0),
       })
@@ -433,7 +433,7 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
         leveledUp: newLevel > user.level,
         physicalPoints: habit.physical ? (user.physicalPoints + (experienceGained/10)) : (user.physicalPoints || 0),
         mentalPoints: habit.mental ? (user.mentalPoints + (experienceGained/10)) : (user.mentalPoints || 0),
-        spiritualPoints: habit.spiritual ? (user.spiritual + (experienceGained/10)) : (user.spiritualPoints || 0),
+        spiritualPoints: habit.spiritual ? (user.spiritualPoints + (experienceGained/10)) : (user.spiritualPoints || 0),
         disciplinePoints: habit.discipline ? (user.disciplinePoints + (experienceGained/10)) : (user.disciplinePoints || 0),
         socialPoints: habit.social ? (user.socialPoints + (experienceGained/10)) : (user.socialPoints || 0),
       },
