@@ -12,6 +12,22 @@ const habitRoute = new Hono()
 // Apply auth middleware to all routes
 habitRoute.use('*', authMiddleware)
 
+// Helper function to convert individual day columns to targetDays array
+const convertDaysToArray = (habit: any) => {
+  return {
+    ...habit,
+    targetDays: [
+      habit.targetMonday || false,
+      habit.targetTuesday || false,
+      habit.targetWednesday || false,
+      habit.targetThursday || false,
+      habit.targetFriday || false,
+      habit.targetSaturday || false,
+      habit.targetSunday || false
+    ]
+  }
+}
+
 // Get all habits for a user
 habitRoute.get('/', async (c) => {
   try {
@@ -33,9 +49,12 @@ habitRoute.get('/', async (c) => {
           .orderBy(desc(habitCompletions.completedAt))
           .limit(1)   
         if (habitCompletion.length > 0) {
-          newHabits.push({ ...habit, completedToday: (habitCompletion[0].completedAt >= startOfDay && habitCompletion[0].completedAt < endOfDay )})
+          newHabits.push({ 
+            ...convertDaysToArray(habit), 
+            completedToday: (habitCompletion[0].completedAt >= startOfDay && habitCompletion[0].completedAt < endOfDay )
+          })
         } else {
-          newHabits.push({ ...habit, completedToday: false })
+          newHabits.push({ ...convertDaysToArray(habit), completedToday: false })
         }
       }
     }
@@ -129,7 +148,7 @@ habitRoute.get('/:id', async (c) => {
     return c.json({
       success: true,
       data: {
-        habit: habitResult[0],
+        habit: convertDaysToArray(habitResult[0]),
         recentCompletions: completions,
         completedToday: (completions.length > 0 ? completions[0].completedAt >= startOfDay && completions[0].completedAt < endOfDay : false)
       }
@@ -182,7 +201,7 @@ habitRoute.post('/', zValidator('json', createHabitSchema), async (c) => {
       .where(eq(habits.id, habitId))
       .limit(1)
     
-    const habitResult = { ...newHabit[0], completedToday: false }
+    const habitResult = { ...convertDaysToArray(newHabit[0]), completedToday: false }
 
     return c.json({
       success: true,
@@ -199,9 +218,14 @@ habitRoute.post('/', zValidator('json', createHabitSchema), async (c) => {
 const updateHabitSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   description: z.string().optional(),
-  targetDays: z.number().min(1).max(365).optional(),
+  targetDays: z.array(z.boolean()).optional(),
   experienceReward: z.number().min(1).max(100).optional(),
-  reminderTime: z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).optional()
+  reminderTime: z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).optional(),
+  physical: z.boolean().optional(),
+  mental: z.boolean().optional(),
+  spiritual: z.boolean().optional(),
+  discipline: z.boolean().optional(),
+  social: z.boolean().optional()
 })
 
 habitRoute.put('/:id', zValidator('json', updateHabitSchema), async (c) => {
@@ -227,15 +251,45 @@ habitRoute.put('/:id', zValidator('json', updateHabitSchema), async (c) => {
     const updateData: any = {}
     if (body.name !== undefined) updateData.name = body.name
     if (body.description !== undefined) updateData.description = body.description
-    if (body.targetDays !== undefined) updateData.targetDays = body.targetDays
     if (body.experienceReward !== undefined) updateData.experienceReward = body.experienceReward
     if (body.reminderTime !== undefined) updateData.reminderTime = body.reminderTime
+    
+    // Handle targetDays array conversion to individual day columns
+    if (body.targetDays !== undefined) {
+      updateData.targetMonday = body.targetDays[0] || false
+      updateData.targetTuesday = body.targetDays[1] || false
+      updateData.targetWednesday = body.targetDays[2] || false
+      updateData.targetThursday = body.targetDays[3] || false
+      updateData.targetFriday = body.targetDays[4] || false
+      updateData.targetSaturday = body.targetDays[5] || false
+      updateData.targetSunday = body.targetDays[6] || false
+    }
+    
+    // Handle category flags
+    if (body.physical !== undefined) updateData.physical = body.physical
+    if (body.mental !== undefined) updateData.mental = body.mental
+    if (body.spiritual !== undefined) updateData.spiritual = body.spiritual
+    if (body.discipline !== undefined) updateData.discipline = body.discipline
+    if (body.social !== undefined) updateData.social = body.social
     
     await db.update(habits)
       .set(updateData)
       .where(and(eq(habits.id, habitId), eq(habits.userId, userId)))
     
-    return c.json({ success: true, message: 'Habit updated successfully' })
+    // Get the updated habit to return
+    const updatedHabit = await db.select().from(habits)
+      .where(and(eq(habits.id, habitId), eq(habits.userId, userId)))
+      .limit(1)
+    
+    if (!updatedHabit.length) {
+      return c.json({ error: 'Habit not found after update' }, 404)
+    }
+    
+    return c.json({ 
+      success: true, 
+      data: convertDaysToArray(updatedHabit[0]),
+      message: 'Habit updated successfully' 
+    })
   } catch (error) {
     console.error('Error updating habit:', error)
     return c.json({ error: 'Internal server error' }, 500)
