@@ -71,7 +71,7 @@ habitRoute.get('/', async (c) => {
 // Relapse routes (must come before /:id to avoid route conflicts)
 const relapseSchema = z.object({
   relapseReason: z.string().min(1).max(255),
-  relapseDate: z.date()
+  relapseDate: z.string().datetime().transform((dateString) => new Date(dateString))
 })
 
 habitRoute.post('/relapse', zValidator('json', relapseSchema), async (c) => {
@@ -84,11 +84,15 @@ habitRoute.post('/relapse', zValidator('json', relapseSchema), async (c) => {
       relapseReason: body.relapseReason,
       relapseDate: body.relapseDate
     })
-    const lastRelapseDate = new Date(user.lastRelapse);
-    const today = new Date(body.relapseDate);
-    const lastStreak = Math.floor((today.getTime() - lastRelapseDate.getTime()) / (1000 * 60 * 60 * 24));
-
-    const newLongestStreak = user.longestStreak > lastStreak ? user.longestStreak : lastStreak;
+    
+    // Calculate streak only if user has a previous relapse
+    let newLongestStreak = user.longestStreak || 0;
+    if (user.lastRelapse) {
+      const lastRelapseDate = new Date(user.lastRelapse);
+      const today = new Date(body.relapseDate);
+      const lastStreak = Math.floor((today.getTime() - lastRelapseDate.getTime()) / (1000 * 60 * 60 * 24));
+      newLongestStreak = user.longestStreak > lastStreak ? user.longestStreak : lastStreak;
+    }
 
     await db.update(users).set({
       lastRelapse: body.relapseDate,
