@@ -18,6 +18,8 @@ export const users = mysqlTable("users", {
     disciplinePoints: int("discipline_points").default(0),
     socialPoints: int("social_points").default(0),
     lastRelapse: timestamp("last_relapse").defaultNow().notNull(),
+    completedQuiz: boolean().default(false),
+    referalCode: varchar("referal_code", { length: 255 }),
 });
 
 export const habits = mysqlTable("habits", {

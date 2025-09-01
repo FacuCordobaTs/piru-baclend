@@ -51,7 +51,7 @@ const completeQuizSchema = z.object({
   spiritualPoints: z.number().min(1).max(100),
   disciplinePoints:  z.number().min(1).max(100),
   socialPoints:  z.number().min(1).max(100),
- 
+  completedQuiz: z.boolean(),
 })
 
 userRoute.put('/complete-quiz', zValidator('json', completeQuizSchema), async (c) => {
@@ -241,6 +241,25 @@ userRoute.get('/leaderboard', async (c) => {
     return c.json({ success: true, data: { nofapLeaderboard, levelLeaderboard } })
   } catch (error) {
     console.error('Error getting leaderboard:', error)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+const referalSchema = z.object({
+  referalCode: z.string().min(1).max(255)
+})
+
+userRoute.post('/referal', zValidator('json', referalSchema), async (c) => {
+  try {
+    const body = c.req.valid('json')
+    const db = drizzle(pool)
+    const user = (c as any).user
+
+    await db.update(users).set({ referalCode: body.referalCode }).where(eq(users.id, user.id))
+      
+    return c.json({ success: true, data: { referalCode: body.referalCode } })
+  } catch (error) {
+    console.error('Error getting referal:', error)
     return c.json({ error: 'Internal server error' }, 500)
   }
 })

@@ -21,6 +21,8 @@ export interface AuthenticatedContext extends Context {
     disciplinePoints: number
     socialPoints: number
     lastRelapse: Date | null
+    completedQuiz: boolean
+    referalCode: string | null
   }
 }
 
@@ -60,6 +62,8 @@ export const authMiddleware = async (c: Context, next: Next) => {
       disciplinePoints: user.disciplinePoints || 0,
       socialPoints: user.socialPoints || 0,
       lastRelapse: user.lastRelapse || null,
+      completedQuiz: user.completedQuiz || false,
+      referalCode: user.referalCode || null,
     }
 
     await next()
