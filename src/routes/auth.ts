@@ -23,10 +23,11 @@ export const extractToken = (c: any) => {
   return null
 }
 
+// OAuth2Client should use the backend callback URL, not the client redirect URI
 const googleClient = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID!,
   process.env.GOOGLE_CLIENT_SECRET!,
-  process.env.GOOGLE_REDIRECT_URI!
+  `${process.env.API_BASE_URL || 'https://api.piru.app/api'}/auth/google/callback`
 )
 
 export const authRoute = new Hono()
@@ -157,7 +158,21 @@ export const authRoute = new Hono()
       console.log('Redirecting to (with token):', url.toString());
       return c.redirect(url.toString());
   } catch (error: any) {
-      console.error('Google Callback Error:', error);
+      console.error('💥 Google Callback Error:', error);
+      console.error('💥 Error details:', error.message, error.stack);
+      
+      // Check for specific database errors
+      if (error.code === 'ER_DUP_ENTRY') {
+          console.error('💥 Database duplicate entry error');
+          return c.redirect(`${redirectUri}?error=database_duplicate_entry`);
+      } else if (error.code === 'ER_NO_REFERENCED_ROW_2') {
+          console.error('💥 Database foreign key constraint error');
+          return c.redirect(`${redirectUri}?error=database_constraint_error`);
+      } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+          console.error('💥 Database connection error');
+          return c.redirect(`${redirectUri}?error=database_connection_error`);
+      }
+      
       return c.redirect(`${redirectUri}?error=google_callback_failed`);
   }
 })
