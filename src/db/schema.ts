@@ -10,6 +10,7 @@ export const users = mysqlTable("users", {
     age: int("age").default(1),
     experience: int("experience").default(0),
     experienceToNext: int("experience_to_next").default(100),
+    currentStreak: int("current_streak").default(0),
     longestStreak: int("longest_streak").default(0),
     avatar: varchar("avatar", { length: 255 }),
     physicalPoints: int("physical_points").default(0),
@@ -18,7 +19,7 @@ export const users = mysqlTable("users", {
     disciplinePoints: int("discipline_points").default(0),
     socialPoints: int("social_points").default(0),
     lastRelapse: timestamp("last_relapse").defaultNow().notNull(),
-    completedQuiz: boolean().default(false),
+    completedQuiz: boolean("completed_quiz").default(false),
     referalCode: varchar("referal_code", { length: 255 }),
 });
 
