@@ -168,7 +168,7 @@ const createHabitSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().optional(),
   targetDays: z.array(z.boolean()),
-  experienceReward: z.number().min(1).max(100).default(10),
+  experienceReward: z.number().min(1),
   reminderTime: z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).default('09:00'),
   categories: z.array(z.boolean()),
 })
