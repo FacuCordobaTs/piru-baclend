@@ -264,7 +264,7 @@ userRoute.post('/referal', zValidator('json', referalSchema), async (c) => {
   }
 })
 
-userRoute.put('set-to-start-level', async (c) => {
+userRoute.put('/set-to-start-level', async (c) => {
   try {
     const db = drizzle(pool)
     const user = (c as any).user
