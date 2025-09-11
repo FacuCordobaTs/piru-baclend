@@ -264,18 +264,4 @@ userRoute.post('/referal', zValidator('json', referalSchema), async (c) => {
   }
 })
 
-userRoute.put('/set-to-start-level', async (c) => {
-  try {
-    const db = drizzle(pool)
-    const user = (c as any).user
-    
-    await db.update(users).set({ level: 1, experience: 0, experienceToNext: 100, physicalPoints: 0, mentalPoints: 0, spiritualPoints: 0, disciplinePoints: 0, socialPoints: 0 }).where(eq(users.id, user.id))
-    
-    return c.json({ success: true, data: { level: 1, experience: 0, experienceToNext: 100, physicalPoints: 0, mentalPoints: 0, spiritualPoints: 0, disciplinePoints: 0, socialPoints: 0 } })
-  } catch (error) {
-    console.error('Error setting to start level:', error)
-    return c.json({ error: 'Internal server error' }, 500)
-  }
-})
-
 export { userRoute }

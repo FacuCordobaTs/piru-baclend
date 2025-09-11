@@ -36,6 +36,7 @@ export const habits = mysqlTable("habits", {
     targetSunday: boolean("targetSunday").default(false),
     currentStreak: int("current_streak").default(0),
     longestStreak: int("longest_streak").default(0),
+    nextSchedule: timestamp("next_schedule"),
     experienceReward: int("experience_reward").default(10),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     reminderTime: varchar("reminder_time", { length: 10 }).default("09:00"),

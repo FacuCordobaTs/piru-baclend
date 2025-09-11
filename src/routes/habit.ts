@@ -28,6 +28,12 @@ const convertDaysToArray = (habit: any) => {
   }
 }
 
+interface Habit {
+  streak: number;
+  completedToday: boolean;
+}
+
+
 // Get all habits for a user
 habitRoute.get('/', async (c) => {
   try {
@@ -44,20 +50,48 @@ habitRoute.get('/', async (c) => {
         const today = new Date()
         const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate())
         const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1)
+
+        const dayOfWeek = today.getDay()
+        const scheduleDays = [
+          habit.targetSunday,
+          habit.targetMonday,
+          habit.targetTuesday,
+          habit.targetWednesday,
+          habit.targetThursday,
+          habit.targetFriday,
+          habit.targetSaturday,
+        ]
+
+        if (!scheduleDays[dayOfWeek]) {
+          continue
+        }
+
         const habitCompletion = await db.select().from(habitCompletions)
           .where(eq(habitCompletions.habitId, habit.id))
           .orderBy(desc(habitCompletions.completedAt))
-          .limit(1)   
-        if (habitCompletion.length > 0) {
-          newHabits.push({ 
-            ...convertDaysToArray(habit), 
-            completedToday: (habitCompletion[0].completedAt >= startOfDay && habitCompletion[0].completedAt < endOfDay )
-          })
-        } else {
-          newHabits.push({ ...convertDaysToArray(habit), completedToday: false })
+          .limit(1)
+
+        const hasCompletion = habitCompletion.length > 0
+        const lastCompletedAt = hasCompletion ? habitCompletion[0].completedAt : null
+
+        let missedSinceLast = false
+        if (hasCompletion && lastCompletedAt) {
+          const dayAfterLast = new Date(
+            lastCompletedAt.getFullYear(),
+            lastCompletedAt.getMonth(),
+            lastCompletedAt.getDate() + 1
+          )
+          missedSinceLast = Boolean(habit.nextSchedule && habit.nextSchedule > dayAfterLast)
         }
+
+        newHabits.push({
+          ...convertDaysToArray(habit),
+          streak: missedSinceLast ? 0 : (habit.currentStreak || 0),
+          completedToday: Boolean(hasCompletion && lastCompletedAt && lastCompletedAt >= startOfDay && lastCompletedAt < endOfDay)
+        })
       }
     }
+
     return c.json({
       success: true,
       data: newHabits
@@ -127,6 +161,10 @@ habitRoute.get('/:id', async (c) => {
     const userId = (c as any).user.id
     const habitId = parseInt(c.req.param('id'))
     
+
+    const startOfDay = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())
+    const endOfDay = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate() + 1)
+
     if (isNaN(habitId)) {
       return c.json({ error: 'Invalid habit ID' }, 400)
     }
@@ -139,24 +177,42 @@ habitRoute.get('/:id', async (c) => {
       return c.json({ error: 'Habit not found' }, 404)
     }
     
+    const dayOfWeek = new Date().getDay()
+    const scheduleDays = [
+      habitResult[0].targetSunday,
+      habitResult[0].targetMonday,
+      habitResult[0].targetTuesday,
+      habitResult[0].targetWednesday,
+      habitResult[0].targetThursday,
+      habitResult[0].targetFriday,
+      habitResult[0].targetSaturday,
+    ]
+
+    if (!scheduleDays[dayOfWeek]) {
+      return c.json({ error: 'Habit not scheduled for today' }, 400)
+    }
     // Get recent completions for this habit
     const completions = await db.select().from(habitCompletions)
       .where(eq(habitCompletions.habitId, habitId))
       .orderBy(desc(habitCompletions.completedAt))
       .limit(10)
-    
-    const today = new Date()
-    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-    const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1)
-    
-    return c.json({
-      success: true,
-      data: {
-        habit: convertDaysToArray(habitResult[0]),
-        recentCompletions: completions,
-        completedToday: (completions.length > 0 ? completions[0].completedAt >= startOfDay && completions[0].completedAt < endOfDay : false)
+
+    const habit = habitResult[0]
+      if (completions.length == 0 || (habit.nextSchedule && habit.nextSchedule > (new Date(completions[0].completedAt.getFullYear(), completions[0].completedAt.getMonth(), completions[0].completedAt.getDate() + 1)))) {
+        return c.json({ 
+          ...convertDaysToArray(habit),
+          streak: 0,
+          completedToday: false
+        })
       }
-    })
+      else {
+        return c.json({ 
+          ...convertDaysToArray(habit),
+          streak: (habit.currentStreak || 0),
+          completedToday: (completions[0].completedAt >= startOfDay && completions[0].completedAt < endOfDay )
+        })
+      }
+    
   } catch (error) {
     console.error('Error getting habit:', error)
     return c.json({ error: 'Internal server error' }, 500)
@@ -172,6 +228,30 @@ const createHabitSchema = z.object({
   reminderTime: z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).default('09:00'),
   categories: z.array(z.boolean()),
 })
+
+const getNextSchedule = (habit: any, date: Date) => {
+  const dayOfWeek = date.getDay()
+  const scheduleDays = [
+    habit.targetSunday,
+    habit.targetMonday,
+    habit.targetTuesday,
+    habit.targetWednesday,
+    habit.targetThursday,
+    habit.targetFriday,
+    habit.targetSaturday,
+  ]
+
+  let i = dayOfWeek;
+  let j = 0;
+  while (!scheduleDays[i] && j < 7) {
+    i = (i + 1) % 7
+    j++
+  }
+
+  return scheduleDays[i] ? new Date(date.getFullYear(), date.getMonth(), date.getDate() + j) : null
+}
+
+
 
 habitRoute.post('/', zValidator('json', createHabitSchema), async (c) => {
   try {
@@ -190,6 +270,15 @@ habitRoute.post('/', zValidator('json', createHabitSchema), async (c) => {
       targetSaturday:  body.targetDays[5],
       targetSunday:  body.targetDays[6],
       experienceReward: body.experienceReward,
+      nextSchedule: getNextSchedule({
+        targetSunday: body.targetDays[6],
+        targetMonday: body.targetDays[0],
+        targetTuesday: body.targetDays[1],
+        targetWednesday: body.targetDays[2],
+        targetThursday: body.targetDays[3],
+        targetFriday: body.targetDays[4],
+        targetSaturday: body.targetDays[5]
+      }, new Date()),
       reminderTime: body.reminderTime,
       physical: body.categories[0],
       mental: body.categories[1],
@@ -275,7 +364,10 @@ habitRoute.put('/:id', zValidator('json', updateHabitSchema), async (c) => {
     if (body.spiritual !== undefined) updateData.spiritual = body.spiritual
     if (body.discipline !== undefined) updateData.discipline = body.discipline
     if (body.social !== undefined) updateData.social = body.social
-    
+    // Compute next schedule based on merged current + updates to avoid missing fields
+    const scheduleSource = { ...existingHabit[0], ...updateData }
+    updateData.nextSchedule = getNextSchedule(scheduleSource, new Date());
+
     await db.update(habits)
       .set(updateData)
       .where(and(eq(habits.id, habitId), eq(habits.userId, userId)))
@@ -380,21 +472,41 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
       return c.json({ error: 'Habit already completed today' }, 400)
     }
     
-    // Create completion record
+    // Determine if a scheduled day was missed since last completion (fetch BEFORE inserting today's completion)
+    const lastCompletion = await db.select().from(habitCompletions)
+      .where(eq(habitCompletions.habitId, habitId))
+      .orderBy(desc(habitCompletions.completedAt))
+      .limit(1)
+
+    const hasLast = lastCompletion.length > 0
+    const lastAt = hasLast ? lastCompletion[0].completedAt : null
+    let missedSinceLast = false
+    if (hasLast && lastAt) {
+      const dayAfterLast = new Date(
+        lastAt.getFullYear(),
+        lastAt.getMonth(),
+        lastAt.getDate() + 1
+      )
+      missedSinceLast = Boolean(habit.nextSchedule && habit.nextSchedule > dayAfterLast)
+    }
+
+    // Create completion record (now insert today's completion)
     await db.insert(habitCompletions).values({
       habitId: habitId,
       userId: userId,
       mood: body.mood
     })
-    
+
     // Update habit streak
-    const newStreak = (habit.currentStreak || 0) + 1
+    const baseStreak = missedSinceLast ? 0 : (habit.currentStreak || 0)
+    const newStreak = baseStreak + 1
     const newLongestStreak = Math.max(habit.longestStreak || 0, newStreak)
     
     await db.update(habits)
       .set({
         currentStreak: newStreak,
-        longestStreak: newLongestStreak
+        longestStreak: newLongestStreak,
+        nextSchedule: getNextSchedule(habit, new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1))
       })
       .where(eq(habits.id, habitId))
     
@@ -417,11 +529,11 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
         experience: newExperience,
         level: newLevel,
         experienceToNext: newExperienceToNext,
-        physicalPoints: habit.physical ? (user.physicalPoints + (experienceGained/10)) : (user.physicalPoints || 0),
-        mentalPoints: habit.mental ? (user.mentalPoints + (experienceGained/10)) : (user.mentalPoints || 0),
-        spiritualPoints: habit.spiritual ? (user.spiritualPoints + (experienceGained/10)) : (user.spiritualPoints || 0),
-        disciplinePoints: habit.discipline ? (user.disciplinePoints + (experienceGained/10)) : (user.disciplinePoints || 0),
-        socialPoints: habit.social ? (user.socialPoints + (experienceGained/10)) : (user.socialPoints || 0),
+        physicalPoints: habit.physical ? ((user.physicalPoints + (experienceGained/10)) > 100 ? 100 : (user.physicalPoints + (experienceGained/10))) : (user.physicalPoints || 0),
+        mentalPoints: habit.mental ? ((user.mentalPoints + (experienceGained/10)) > 100 ? 100 : (user.mentalPoints + (experienceGained/10))) : (user.mentalPoints || 0),
+        spiritualPoints: habit.spiritual ? ((user.spiritualPoints + (experienceGained/10)) > 100 ? 100 : (user.spiritualPoints + (experienceGained/10))) : (user.spiritualPoints || 0),
+        disciplinePoints: habit.discipline ? ((user.disciplinePoints + (experienceGained/10)) > 100 ? 100 : (user.disciplinePoints + (experienceGained/10))) : (user.disciplinePoints || 0),
+        socialPoints: habit.social ? ((user.socialPoints + (experienceGained/10)) > 100 ? 100 : (user.socialPoints + (experienceGained/10))) : (user.socialPoints || 0),
       })
       .where(eq(users.id, userId))
     
@@ -435,11 +547,11 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
         newUserExperience: newExperience,
         newUserLevel: newLevel,
         leveledUp: newLevel > user.level,
-        physicalPoints: habit.physical ? (user.physicalPoints + (experienceGained/10)) : (user.physicalPoints || 0),
-        mentalPoints: habit.mental ? (user.mentalPoints + (experienceGained/10)) : (user.mentalPoints || 0),
+        physicalPoints: habit.physical ? ((user.physicalPoints + (experienceGained/10)) > 100 ? 100 : (user.physicalPoints + (experienceGained/10))) : (user.physicalPoints || 0),
+        mentalPoints: habit.mental ? ((user.mentalPoints + (experienceGained/10)) > 100 ? 100 : (user.mentalPoints + (experienceGained/10))) : (user.mentalPoints || 0),
         spiritualPoints: habit.spiritual ? (user.spiritualPoints + (experienceGained/10)) : (user.spiritualPoints || 0),
-        disciplinePoints: habit.discipline ? (user.disciplinePoints + (experienceGained/10)) : (user.disciplinePoints || 0),
-        socialPoints: habit.social ? (user.socialPoints + (experienceGained/10)) : (user.socialPoints || 0),
+        disciplinePoints: habit.discipline ? ((user.disciplinePoints + (experienceGained/10)) > 100 ? 100 : (user.disciplinePoints + (experienceGained/10))) : (user.disciplinePoints || 0),
+        socialPoints: habit.social ? ((user.socialPoints + (experienceGained/10)) > 100 ? 100 : (user.socialPoints + (experienceGained/10))) : (user.socialPoints || 0),
       },
       message: 'Habit completed successfully!'
     })
