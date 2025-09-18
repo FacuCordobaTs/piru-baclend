@@ -31,6 +31,9 @@ const googleClient = new OAuth2Client(
 )
 
 export const authRoute = new Hono()
+.options('/beta-signup', async (c) => {
+  return c.text('', 200)
+})
 .get('/google', async (c) => {
   const state = randomBytes(16).toString('hex');
   const redirectUri = c.req.query('redirect_uri') || 'piru://';
