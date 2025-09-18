@@ -69,3 +69,11 @@ export const userSettings = mysqlTable("user_settings", {
     language: varchar("language", { length: 10 }).default("es"),
     createdAt: timestamp("created_at").defaultNow().notNull()
 });
+
+export const betaSignups = mysqlTable("beta_signups", {
+    id: int("id").primaryKey().autoincrement(),
+    email: varchar("email", { length: 255 }).unique().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    status: varchar("status", { length: 20 }).default("pending"), // pending, sent, used
+    notes: varchar("notes", { length: 500 })
+});

@@ -3,7 +3,7 @@ import { OAuth2Client } from 'google-auth-library'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
 import { setCookie, deleteCookie } from 'hono/cookie'
-import { users } from '../db/schema'
+import { users, betaSignups } from '../db/schema'
 import { eq } from 'drizzle-orm'
 import { randomBytes } from 'crypto'
 import * as jwt from 'jsonwebtoken'
@@ -174,5 +174,54 @@ export const authRoute = new Hono()
       }
       
       return c.redirect(`${redirectUri}?error=google_callback_failed`);
+  }
+})
+
+.post('/beta-signup', async (c) => {
+  const db = drizzle(pool)
+  
+  try {
+    const { email } = await c.req.json()
+    
+    if (!email || !email.includes('@')) {
+      return c.json({ error: 'Email inválido' }, 400)
+    }
+
+    // Check if email already exists
+    const existingSignup = await db.select().from(betaSignups)
+      .where(eq(betaSignups.email, email))
+      .limit(1)
+
+    if (existingSignup.length > 0) {
+      return c.json({ 
+        success: true, 
+        message: 'Email ya registrado para la beta',
+        alreadyExists: true 
+      })
+    }
+
+    // Insert new beta signup
+    await db.insert(betaSignups).values({
+      email,
+      status: 'pending'
+    })
+
+    return c.json({ 
+      success: true, 
+      message: 'Email registrado exitosamente para la beta' 
+    })
+
+  } catch (error: any) {
+    console.error('Beta signup error:', error)
+    
+    if (error.code === 'ER_DUP_ENTRY') {
+      return c.json({ 
+        success: true, 
+        message: 'Email ya registrado para la beta',
+        alreadyExists: true 
+      })
+    }
+    
+    return c.json({ error: 'Error interno del servidor' }, 500)
   }
 })
