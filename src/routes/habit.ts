@@ -154,6 +154,68 @@ habitRoute.get('/relapses', async (c) => {
   }
 })
 
+// Weekly completion summary for the current user
+// Returns 7 days starting from the provided start date (expected Monday), or current week if not provided
+habitRoute.get('/summary/weekly', async (c) => {
+  try {
+    const db = drizzle(pool)
+    const userId = (c as any).user.id
+
+    const startParam = c.req.query('start') // expects YYYY-MM-DD (local date)
+    const now = startParam ? new Date(startParam) : new Date()
+
+    // Compute start of week (Monday) in local time
+    const currentDay = now.getDay() // 0 = Sunday, 1 = Monday, ...
+    const diff = currentDay === 0 ? 6 : currentDay - 1
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diff)
+
+    // If startParam provided, use its local midnight as start instead
+    const startOfRange = startParam
+      ? new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      : monday
+    const endOfRange = new Date(startOfRange.getFullYear(), startOfRange.getMonth(), startOfRange.getDate() + 7)
+
+    const completions = await db.select().from(habitCompletions)
+      .where(and(
+        eq(habitCompletions.userId, userId),
+        gte(habitCompletions.completedAt, startOfRange),
+        lt(habitCompletions.completedAt, endOfRange)
+      ))
+
+    // Helper to build YYYY-MM-DD in local time
+    const toLocalDateKey = (d: Date) => {
+      const y = d.getFullYear()
+      const m = (d.getMonth() + 1).toString().padStart(2, '0')
+      const day = d.getDate().toString().padStart(2, '0')
+      return `${y}-${m}-${day}`
+    }
+
+    const completionCountByDay: Record<string, number> = {}
+    for (const comp of completions) {
+      const dateKey = toLocalDateKey(comp.completedAt)
+      completionCountByDay[dateKey] = (completionCountByDay[dateKey] || 0) + 1
+    }
+
+    // Build 7-day array
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(startOfRange)
+      d.setDate(startOfRange.getDate() + i)
+      const key = toLocalDateKey(d)
+      const count = completionCountByDay[key] || 0
+      return {
+        date: key,
+        count,
+        hasCompletion: count > 0
+      }
+    })
+
+    return c.json({ success: true, data: { days } })
+  } catch (error) {
+    console.error('Error getting weekly summary:', error)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
 // Get a specific habit by ID
 habitRoute.get('/:id', async (c) => {
   try {
@@ -524,6 +586,11 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
       newExperienceToNext = Math.floor(user.experienceToNext * 1.5)
     }
 
+    let newGlobalHabitsStreak = user.globalHabitsStreak
+    if (user.lastCompletion < new Date(today.getFullYear(), today.getMonth(), today.getDate())) {
+        newGlobalHabitsStreak += 1
+    }
+
     await db.update(users)
       .set({
         experience: newExperience,
@@ -534,6 +601,8 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
         spiritualPoints: habit.spiritual ? ((user.spiritualPoints + (experienceGained/10)) > 100 ? 100 : (user.spiritualPoints + (experienceGained/10))) : (user.spiritualPoints || 0),
         disciplinePoints: habit.discipline ? ((user.disciplinePoints + (experienceGained/10)) > 100 ? 100 : (user.disciplinePoints + (experienceGained/10))) : (user.disciplinePoints || 0),
         socialPoints: habit.social ? ((user.socialPoints + (experienceGained/10)) > 100 ? 100 : (user.socialPoints + (experienceGained/10))) : (user.socialPoints || 0),
+        globalHabitsStreak: newGlobalHabitsStreak,
+        lastCompletion: new Date(today.getFullYear(), today.getMonth(), today.getDate())
       })
       .where(eq(users.id, userId))
     
@@ -552,6 +621,8 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
         spiritualPoints: habit.spiritual ? (user.spiritualPoints + (experienceGained/10)) : (user.spiritualPoints || 0),
         disciplinePoints: habit.discipline ? ((user.disciplinePoints + (experienceGained/10)) > 100 ? 100 : (user.disciplinePoints + (experienceGained/10))) : (user.disciplinePoints || 0),
         socialPoints: habit.social ? ((user.socialPoints + (experienceGained/10)) > 100 ? 100 : (user.socialPoints + (experienceGained/10))) : (user.socialPoints || 0),
+        globalHabitsStreak: newGlobalHabitsStreak,
+        lastCompletion: new Date(today.getFullYear(), today.getMonth(), today.getDate())
       },
       message: 'Habit completed successfully!'
     })

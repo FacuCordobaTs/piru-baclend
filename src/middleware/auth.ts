@@ -23,6 +23,7 @@ export interface AuthenticatedContext extends Context {
     lastRelapse: Date | null
     completedQuiz: boolean
     referalCode: string | null
+    globalHabitsStreak: number
   }
 }
 
@@ -47,6 +48,11 @@ export const authMiddleware = async (c: Context, next: Next) => {
     }
 
     const user = userResult[0]
+    const lastCompletion = user.lastCompletion ? new Date(user.lastCompletion) : null
+    if (lastCompletion && (Date.now() - lastCompletion.getTime() > 24 * 60 * 60 * 1000)) {
+      user.globalHabitsStreak = 0
+    }
+    
     ;(c as AuthenticatedContext).user = {
       id: user.id,
       email: user.email,
@@ -64,6 +70,7 @@ export const authMiddleware = async (c: Context, next: Next) => {
       lastRelapse: user.lastRelapse || null,
       completedQuiz: user.completedQuiz || false,
       referalCode: user.referalCode || null,
+      globalHabitsStreak: user.globalHabitsStreak || 0,
     }
 
     await next()

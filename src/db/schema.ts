@@ -21,6 +21,8 @@ export const users = mysqlTable("users", {
     lastRelapse: timestamp("last_relapse").defaultNow().notNull(),
     completedQuiz: boolean("completed_quiz").default(false),
     referalCode: varchar("referal_code", { length: 255 }),
+    globalHabitsStreak: int("global_habits_streak").default(0),
+    lastCompletion: timestamp("last_completion").defaultNow().notNull(),
 });
 
 export const habits = mysqlTable("habits", {
