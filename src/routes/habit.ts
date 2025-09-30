@@ -587,7 +587,7 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
     }
 
     let newGlobalHabitsStreak = user.globalHabitsStreak
-    if (user.lastCompletion < new Date(today.getFullYear(), today.getMonth(), today.getDate())) {
+    if (user.lastCompletion < new Date(today.getFullYear(), today.getMonth(), today.getDate()) || user.lastCompletion === null || user.globalHabitsStreak == 0) {
         newGlobalHabitsStreak += 1
     }
 
