@@ -24,6 +24,7 @@ export interface AuthenticatedContext extends Context {
     completedQuiz: boolean
     referalCode: string | null
     globalHabitsStreak: number
+    class: string
   }
 }
 
@@ -71,6 +72,7 @@ export const authMiddleware = async (c: Context, next: Next) => {
       completedQuiz: user.completedQuiz || false,
       referalCode: user.referalCode || null,
       globalHabitsStreak: user.globalHabitsStreak || 0,
+      class: user.class || "Guerrero",
     }
 
     await next()

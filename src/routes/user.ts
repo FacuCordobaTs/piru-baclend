@@ -264,4 +264,21 @@ userRoute.post('/referal', zValidator('json', referalSchema), async (c) => {
   }
 })
 
+const classSchema = z.object({
+  class: z.string().min(1).max(255)
+})
+
+userRoute.post('/class', zValidator('json', classSchema), async (c) => {
+  try {
+    const body = c.req.valid('json')
+    const db = drizzle(pool)
+    const user = (c as any).user
+    await db.update(users).set({ class: body.class }).where(eq(users.id, user.id))
+    return c.json({ success: true, data: { class: body.class } })
+  } catch (error) {
+    console.error('Error getting class:', error)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
 export { userRoute }

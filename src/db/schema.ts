@@ -23,6 +23,7 @@ export const users = mysqlTable("users", {
     referalCode: varchar("referal_code", { length: 255 }),
     globalHabitsStreak: int("global_habits_streak").default(0),
     lastCompletion: timestamp("last_completion").defaultNow().notNull(),
+    class: varchar("class", {length: 255}).default("Guerrero"),
 });
 
 export const habits = mysqlTable("habits", {
