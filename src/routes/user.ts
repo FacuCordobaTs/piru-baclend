@@ -6,6 +6,7 @@ import { pool } from '../db'
 import { users, userSettings } from '../db/schema'
 import { desc, eq } from 'drizzle-orm'
 import { authMiddleware } from '../middleware/auth'
+import { listAchievementsWithStatus } from '../services/achievements'
 
 const userRoute = new Hono()
 
@@ -282,3 +283,15 @@ userRoute.post('/class', zValidator('json', classSchema), async (c) => {
 })
 
 export { userRoute }
+
+// Achievements listing for current user
+userRoute.get('/achievements', async (c) => {
+  try {
+    const userId = (c as any).user.id
+    const data = await listAchievementsWithStatus(userId)
+    return c.json({ success: true, data })
+  } catch (error) {
+    console.error('Error getting achievements:', error)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})

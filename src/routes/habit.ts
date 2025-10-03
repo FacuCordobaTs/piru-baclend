@@ -6,6 +6,7 @@ import { pool } from '../db'
 import { habits, habitCompletions, users, relapse } from '../db/schema'
 import { eq, and, desc, gte, lt } from 'drizzle-orm'
 import { authMiddleware } from '../middleware/auth'
+import { checkAndUnlockOnCompletion } from '../services/achievements'
 
 const habitRoute = new Hono()
 
@@ -605,6 +606,22 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
         lastCompletion: new Date(today.getFullYear(), today.getMonth(), today.getDate())
       })
       .where(eq(users.id, userId))
+
+    // Build updated user snapshot for achievements checking
+    const updatedUser = {
+      id: user.id,
+      level: newLevel,
+      longestStreak: user.longestStreak,
+      globalHabitsStreak: newGlobalHabitsStreak,
+      physicalPoints: habit.physical ? ((user.physicalPoints + (experienceGained/10)) > 100 ? 100 : (user.physicalPoints + (experienceGained/10))) : (user.physicalPoints || 0),
+      mentalPoints: habit.mental ? ((user.mentalPoints + (experienceGained/10)) > 100 ? 100 : (user.mentalPoints + (experienceGained/10))) : (user.mentalPoints || 0),
+      spiritualPoints: habit.spiritual ? ((user.spiritualPoints + (experienceGained/10)) > 100 ? 100 : (user.spiritualPoints + (experienceGained/10))) : (user.spiritualPoints || 0),
+      disciplinePoints: habit.discipline ? ((user.disciplinePoints + (experienceGained/10)) > 100 ? 100 : (user.disciplinePoints + (experienceGained/10))) : (user.disciplinePoints || 0),
+      socialPoints: habit.social ? ((user.socialPoints + (experienceGained/10)) > 100 ? 100 : (user.socialPoints + (experienceGained/10))) : (user.socialPoints || 0),
+    }
+
+    // Check and unlock achievements after completion
+    const { unlocked } = await checkAndUnlockOnCompletion(updatedUser)
     
     return c.json({
       success: true,
@@ -622,7 +639,8 @@ habitRoute.post('/:id/complete', zValidator('json', completeHabitSchema), async 
         disciplinePoints: habit.discipline ? ((user.disciplinePoints + (experienceGained/10)) > 100 ? 100 : (user.disciplinePoints + (experienceGained/10))) : (user.disciplinePoints || 0),
         socialPoints: habit.social ? ((user.socialPoints + (experienceGained/10)) > 100 ? 100 : (user.socialPoints + (experienceGained/10))) : (user.socialPoints || 0),
         globalHabitsStreak: newGlobalHabitsStreak,
-        lastCompletion: new Date(today.getFullYear(), today.getMonth(), today.getDate())
+        lastCompletion: new Date(today.getFullYear(), today.getMonth(), today.getDate()),
+        unlockedAchievements: unlocked.map(u => ({ id: u.id, name: u.name, desc: u.desc, tier: u.tier, points: u.points, category: u.category }))
       },
       message: 'Habit completed successfully!'
     })

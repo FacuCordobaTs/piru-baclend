@@ -80,3 +80,10 @@ export const betaSignups = mysqlTable("beta_signups", {
     status: varchar("status", { length: 20 }).default("pending"), // pending, sent, used
     notes: varchar("notes", { length: 500 })
 });
+
+export const achievements = mysqlTable("achievements", {
+    id: int("id").primaryKey().autoincrement(),
+    userId: int("user_id").notNull().references(() => users.id),
+    achievementId: varchar("achievement_id", { length: 255 }).notNull(),
+    completedAt: timestamp("completed_at").defaultNow().notNull(),
+});
