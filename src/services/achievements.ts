@@ -62,12 +62,13 @@ function getCategoryTitle(category: AchievementCategory): string {
   }
 }
 
-async function getTotals(db: ReturnType<typeof drizzle>, userId: number) {
+// Use a loose type here to avoid mysql2 Pool type mismatch across envs
+async function getTotals(db: any, userId: number) {
   const comps = await db.select().from(habitCompletions).where(eq(habitCompletions.userId, userId))
   const userHabits = await db.select().from(habits).where(eq(habits.userId, userId))
 
   const totalCompletions = comps.length
-  const maxHabitCurrentStreak = userHabits.reduce((max, h) => Math.max(max, h.currentStreak || 0), 0)
+  const maxHabitCurrentStreak = userHabits.reduce((max: number, h: { currentStreak?: number | null }) => Math.max(max, h.currentStreak || 0), 0)
   return { totalCompletions, maxHabitCurrentStreak }
 }
 
@@ -116,7 +117,7 @@ export async function listAchievementsWithStatus(userId: number) {
     }))
   }))
 
-  return { categories }
+  return { categories: result }
 }
 
 export async function checkAndUnlockOnCompletion(userAfter: UserSnapshot): Promise<{ unlocked: AchievementDefinition[] }> {
