@@ -3,7 +3,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { authRoute } from './routes/auth'
 import { userRoute } from './routes/user'
-import { habitRoute } from './routes/habit'
+import { questRoute } from './routes/quest'
 
 // Validate required environment variables
 const requiredEnvVars = [
@@ -47,6 +47,6 @@ app.get('/', (c) => {
 app.basePath('/api')
   .route('/auth', authRoute)
   .route('/user', userRoute)
-  .route('/habits', habitRoute)
+  .route('/quests', questRoute)
   
 export default app

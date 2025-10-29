@@ -2,7 +2,7 @@ import { Context, Next } from 'hono'
 import * as jwt from 'jsonwebtoken'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
-import { users } from '../db/schema'
+import { user as UserTable } from '../db/schema'
 import { eq } from 'drizzle-orm'
 
 export interface AuthenticatedContext extends Context {
@@ -10,21 +10,10 @@ export interface AuthenticatedContext extends Context {
     id: number
     email: string
     name?: string
-    level: number
-    experience: number
-    experienceToNext: number
-    longestStreak: number
+    points?: number
     avatar?: string
-    physicalPoints: number
-    mentalPoints: number
-    spiritualPoints: number
-    disciplinePoints: number
-    socialPoints: number
-    lastRelapse: Date | null
-    completedQuiz: boolean
-    referalCode: string | null
-    globalHabitsStreak: number
-    class: string
+    globalHabitsStreak: number,
+    lastCompletion: Date
   }
 }
 
@@ -42,7 +31,7 @@ export const authMiddleware = async (c: Context, next: Next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret') as { id: number }
     
     const db = drizzle(pool)
-    const userResult = await db.select().from(users).where(eq(users.id, decoded.id)).limit(1)
+    const userResult = await db.select().from(UserTable).where(eq(UserTable.id, decoded.id)).limit(1)
     
     if (!userResult.length) {
       return c.json({ error: 'User not found' }, 401)
@@ -58,21 +47,10 @@ export const authMiddleware = async (c: Context, next: Next) => {
       id: user.id,
       email: user.email,
       name: user.name || undefined,
-      level: user.level || 1,
-      experience: user.experience || 0,
-      experienceToNext: user.experienceToNext || 100,
-      longestStreak: user.longestStreak || 0,
+      points: user.points || 0,
       avatar: user.avatar || undefined,
-      physicalPoints: user.physicalPoints || 0,
-      mentalPoints: user.mentalPoints || 0,
-      spiritualPoints: user.spiritualPoints || 0,
-      disciplinePoints: user.disciplinePoints || 0,
-      socialPoints: user.socialPoints || 0,
-      lastRelapse: user.lastRelapse || null,
-      completedQuiz: user.completedQuiz || false,
-      referalCode: user.referalCode || null,
       globalHabitsStreak: user.globalHabitsStreak || 0,
-      class: user.class || "Guerrero",
+      lastCompletion: user.lastCompletion || null,
     }
 
     await next()

@@ -3,7 +3,7 @@ import { OAuth2Client } from 'google-auth-library'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
 import { setCookie, deleteCookie } from 'hono/cookie'
-import { users, betaSignups } from '../db/schema'
+import { user as UserTable } from '../db/schema'
 import { eq } from 'drizzle-orm'
 import { randomBytes } from 'crypto'
 import * as jwt from 'jsonwebtoken'
@@ -69,7 +69,7 @@ export const authRoute = new Hono()
   deleteCookie(c, 'oauth_state', { path: '/api/auth/google/callback' });
 
   // Decodifica el parámetro state
-  let redirectUri = 'piru://';
+  let redirectUri = 'https://piru.app';
   try {
     if (stateParam) {
       const stateObj = JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8'));
@@ -80,7 +80,7 @@ export const authRoute = new Hono()
     }
   } catch (e) {
     console.error('Error decoding state:', e);
-    redirectUri = 'piru://';
+    redirectUri = 'https://piru.app';
   }
 
   if (!code) {
@@ -115,31 +115,31 @@ export const authRoute = new Hono()
       const email = payload.email;
 
       let user = null;
-      const existingUser = await db.select().from(users)
-          .where(eq(users.email, email))
+      const existingUser = await db.select().from(UserTable)
+          .where(eq(UserTable.email, email))
           .limit(1);
       console.log('Existing user:', existingUser);
 
       if (existingUser.length) {
           user = existingUser[0];
           if (!user.googleId) {
-              await db.update(users)
+              await db.update(UserTable)
               .set({ googleId: googleId }) 
-              .where(eq(users.id, user.id));
+              .where(eq(UserTable.id, user.id));
               user.googleId = googleId; 
           } else if (user.googleId !== googleId) {
               console.error('Email/GoogleID conflict.');
               return c.redirect(`${redirectUri}?error=email_google_conflict`);
           }
       } else {
-          const insertResult = await db.insert(users).values({
+          const insertResult = await db.insert(UserTable).values({
               email,
               googleId,
               createdAt: new Date(),
           });
           const userId = insertResult[0].insertId;
-          const newUserResult = await db.select().from(users)
-          .where(eq(users.id, userId))
+          const newUserResult = await db.select().from(UserTable)
+          .where(eq(UserTable.id, userId))
           .limit(1);
           if (!newUserResult.length) {
               console.error('No se pudo encontrar el usuario de Google recién creado.');
@@ -177,54 +177,5 @@ export const authRoute = new Hono()
       }
       
       return c.redirect(`${redirectUri}?error=google_callback_failed`);
-  }
-})
-
-.post('/beta-signup', async (c) => {
-  const db = drizzle(pool)
-  
-  try {
-    const { email } = await c.req.json()
-    
-    if (!email || !email.includes('@')) {
-      return c.json({ error: 'Email inválido' }, 400)
-    }
-
-    // Check if email already exists
-    const existingSignup = await db.select().from(betaSignups)
-      .where(eq(betaSignups.email, email))
-      .limit(1)
-
-    if (existingSignup.length > 0) {
-      return c.json({ 
-        success: true, 
-        message: 'Email ya registrado para la beta',
-        alreadyExists: true 
-      })
-    }
-
-    // Insert new beta signup
-    await db.insert(betaSignups).values({
-      email,
-      status: 'pending'
-    })
-
-    return c.json({ 
-      success: true, 
-      message: 'Email registrado exitosamente para la beta' 
-    })
-
-  } catch (error: any) {
-    console.error('Beta signup error:', error)
-    
-    if (error.code === 'ER_DUP_ENTRY') {
-      return c.json({ 
-        success: true, 
-        message: 'Email ya registrado para la beta',
-        alreadyExists: true 
-      })
-    }
-    
-    return c.json({ error: 'Error interno del servidor' }, 500)
   }
 })
