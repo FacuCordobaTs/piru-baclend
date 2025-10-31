@@ -153,13 +153,15 @@ export const authRoute = new Hono()
               throw new Error("No se pudo obtener o crear la información del usuario.");
       }
       const token = await createAccessToken({ id: user.id });
-      console.log('Generated JWT token for user:', user.id);
 
-      // For React Native, always include token in redirect URL
-      const url = new URL(redirectUri);
-      url.searchParams.set('token', token as string);
-      console.log('Redirecting to (with token):', url.toString());
-      return c.redirect(url.toString());
+      setCookie(c, 'token', token as string, {
+        path: '/',
+        sameSite: 'None',
+        secure: true,
+        maxAge: 7 * 24 * 60 * 60,
+      });
+      
+      return c.redirect(redirectUri);
   } catch (error: any) {
       console.error('💥 Google Callback Error:', error);
       console.error('💥 Error details:', error.message, error.stack);
