@@ -22,9 +22,7 @@ const requiredEnvVars = [
   'DB_USER',
   'DB_PASSWORD', 
   'DB_NAME',
-  'JWT_SECRET',
-  'GOOGLE_CLIENT_ID',
-  'GOOGLE_CLIENT_SECRET'
+  'JWT_SECRET'
 ];
 
 for (const envVar of requiredEnvVars) {
