@@ -1,183 +1,204 @@
 import { Hono } from 'hono'
-import { OAuth2Client } from 'google-auth-library'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
-import { setCookie, deleteCookie } from 'hono/cookie'
-import { user as UserTable } from '../db/schema'
+import { setCookie } from 'hono/cookie'
+import { restaurante } from '../db/schema'
 import { eq } from 'drizzle-orm'
-import { randomBytes } from 'crypto'
-import * as jwt from 'jsonwebtoken'
+import { createAccessToken } from '../libs/jwt'
+import { zValidator } from '@hono/zod-validator'
+import { z } from 'zod'
+import * as bcrypt from 'bcrypt'
 
-const createAccessToken = (payload: { id: number }) => {
-  return jwt.sign(payload, process.env.JWT_SECRET || 'fallback-secret', { 
-    expiresIn: '7d' 
-  });
-}
+const signUpRestauranteSchema = z.object({
+  email: z.string().email().min(3),
+  password: z.string().min(3),
+  nombre: z.string().min(3),
+});
 
-// Helper function to extract token from request (for API endpoints)
-export const extractToken = (c: any) => {
-  const authHeader = c.req.header('Authorization')
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    return authHeader.substring(7)
-  }
-  return null
-}
+// const signUpUsuarioAdminSchema = z.object({
+//   email: z.string().email().min(3),
+//   password: z.string().min(3),
+//   name: z.string().min(3),
+//   restaurantePassword: z.string().min(3),
+//   restauranteEmail: z.string().email().min(3),
+// });
 
-// OAuth2Client should use the backend callback URL, not the client redirect URI
-const googleClient = new OAuth2Client(
-  process.env.GOOGLE_CLIENT_ID!,
-  process.env.GOOGLE_CLIENT_SECRET!,
-  `${process.env.API_BASE_URL || 'https://api.piru.app/api'}/auth/google/callback`
-)
+const loginRestauranteSchema = z.object({
+  email: z.string().email().min(3),
+  password: z.string().min(3),
+});
+
+// const loginUsuarioAdminSchema = z.object({
+//   email: z.string().email().min(3),
+//   password: z.string().min(3),
+// });
+
 
 export const authRoute = new Hono()
 .options('/beta-signup', async (c) => {
   return c.text('', 200)
 })
-.get('/google', async (c) => {
-  const state = randomBytes(16).toString('hex');
-  const redirectUri = c.req.query('redirect_uri') || 'piru://';
 
-  const stateObj = { state, redirectUri };
-  const stateParam = Buffer.from(JSON.stringify(stateObj)).toString('base64');
-  setCookie(c, 'oauth_state', state, {
-    path: '/api/auth/google/callback',
-    httpOnly: true,
-    maxAge: 600,
-    sameSite: 'None',
-    // secure: process.env.NODE_ENV === 'production',
-    secure: true,
-});
 
-  const authUrl = googleClient.generateAuthUrl({
-    access_type: 'offline',
-    scope: [
-      'https://www.googleapis.com/auth/userinfo.email', 
-      'https://www.googleapis.com/auth/userinfo.profile',
-    ],
-    state: stateParam,
-  })
-
-  return c.redirect(authUrl)
-})
-
-.get('/google/callback', async (c) => {
-  const db = drizzle(pool)
-  const code = c.req.query('code');
-  const stateParam = c.req.query('state');
-  
-  deleteCookie(c, 'oauth_state', { path: '/api/auth/google/callback' });
-
-  // Decodifica el parámetro state
-  let redirectUri = 'https://piru.app';
-  try {
-    if (stateParam) {
-      const stateObj = JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8'));
-      console.log('Decoded stateObj:', stateObj);
-      if (stateObj.redirectUri) {
-        redirectUri = stateObj.redirectUri;
-      }
-    }
-  } catch (e) {
-    console.error('Error decoding state:', e);
-    redirectUri = 'https://piru.app';
-  }
-
-  if (!code) {
-      const error = c.req.query('error');
-      console.error('Google OAuth Error (no code):', error);
-      return c.redirect(`${redirectUri}?error=${error || 'unknown_google_error'}`);
-  }
+.post('/register-restaurante', zValidator("json", signUpRestauranteSchema), async (c) => {
+  const { email, nombre, password } = c.req.valid("json");
+  const db = drizzle(pool);
 
   try {
-      console.log('Getting Google tokens...');
-      const { tokens } = await googleClient.getToken(code);
-      console.log('Google tokens:', tokens);
-      googleClient.setCredentials(tokens); 
-      
-      if (!tokens.id_token) {
-          console.error('No ID token received from Google.');
-          throw new Error("ID token not received from Google.");
+      const existingEmail = await db.select().from(restaurante)
+          .where(eq(restaurante.email, email));
+
+      if (existingEmail.length) {
+          return c.json({ error: 'Email ya utilizado', existingEmail }, 409);
       }
-      console.log('Verifying ID token...');
-      const loginTicket = await googleClient.verifyIdToken({
-          idToken: tokens.id_token,
-          audience: process.env.GOOGLE_CLIENT_ID,
+
+      const passwordHash = await bcrypt.hash(password, 10);
+      await db.insert(restaurante).values({
+          email,
+          nombre,
+          password: passwordHash,
+          createdAt: new Date()
       });
-      const payload = loginTicket.getPayload();
-      console.log('Google payload:', payload);
-      if (!payload || !payload.sub || !payload.email) {
-          console.error('Invalid Google profile payload.');
-          throw new Error('Información de perfil de Google inválida.');
-      }
 
-      const googleId = payload.sub;
-      const email = payload.email;
-
-      let user = null;
-      const existingUser = await db.select().from(UserTable)
-          .where(eq(UserTable.email, email))
+      const newRestaurante = await db.select().from(restaurante)
+          .where(eq(restaurante.email, email))
           .limit(1);
-      console.log('Existing user:', existingUser);
 
-      if (existingUser.length) {
-          user = existingUser[0];
-          if (!user.googleId) {
-              await db.update(UserTable)
-              .set({ googleId: googleId }) 
-              .where(eq(UserTable.id, user.id));
-              user.googleId = googleId; 
-          } else if (user.googleId !== googleId) {
-              console.error('Email/GoogleID conflict.');
-              return c.redirect(`${redirectUri}?error=email_google_conflict`);
-          }
-      } else {
-          const insertResult = await db.insert(UserTable).values({
-              email,
-              googleId,
-              createdAt: new Date(),
-          });
-          const userId = insertResult[0].insertId;
-          const newUserResult = await db.select().from(UserTable)
-          .where(eq(UserTable.id, userId))
-          .limit(1);
-          if (!newUserResult.length) {
-              console.error('No se pudo encontrar el usuario de Google recién creado.');
-              throw new Error("No se pudo encontrar el usuario de Google recién creado.");
-          }
-          user = newUserResult[0];
-      }
-      
-      if (!user) { 
-          console.error('No se pudo obtener o crear la información del usuario.');
-              throw new Error("No se pudo obtener o crear la información del usuario.");
-      }
-      const token = await createAccessToken({ id: user.id });
-
+      const token = await createAccessToken({ id: newRestaurante[0].id });
       setCookie(c, 'token', token as string, {
-        path: '/',
-        sameSite: 'None',
-        secure: true,
-        maxAge: 7 * 24 * 60 * 60,
+          path: '/',
+          sameSite: 'None',
+          secure: true,
+          maxAge: 7 * 24 * 60 * 60,
       });
-      
-      return c.redirect(redirectUri);
+
+      return c.json({ message: 'Restaurante registrado correctamente', newRestaurante, token }, 200);
   } catch (error: any) {
-      console.error('💥 Google Callback Error:', error);
-      console.error('💥 Error details:', error.message, error.stack);
-      
-      // Check for specific database errors
-      if (error.code === 'ER_DUP_ENTRY') {
-          console.error('💥 Database duplicate entry error');
-          return c.redirect(`${redirectUri}?error=database_duplicate_entry`);
-      } else if (error.code === 'ER_NO_REFERENCED_ROW_2') {
-          console.error('💥 Database foreign key constraint error');
-          return c.redirect(`${redirectUri}?error=database_constraint_error`);
-      } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
-          console.error('💥 Database connection error');
-          return c.redirect(`${redirectUri}?error=database_connection_error`);
-      }
-      
-      return c.redirect(`${redirectUri}?error=google_callback_failed`);
+      return c.json({ message: 'Error al registrar el usuario'}, 400);
   }
 })
+.post('/login-restaurante', zValidator("json", loginRestauranteSchema), async (c) => {
+  const { email, password } = c.req.valid("json");
+  const db = drizzle(pool);
+
+  try {
+      const restauranteResult = await db.select().from(restaurante)
+          .where(eq(restaurante.email, email));
+
+      if (!restauranteResult.length) {
+          return c.json({ message: 'Usuario no encontrado' }, 400);
+      }
+
+      if (!restauranteResult[0].password) {
+          return c.json({ message: 'Contraseña no válida' }, 400);
+      }
+      const isMatch = await bcrypt.compare(password, restauranteResult[0].password);
+      if (!isMatch) {
+          return c.json({ message: 'Contraseña incorrecta' }, 400);
+      }
+
+      const token = await createAccessToken({ id: restauranteResult[0].id });
+      setCookie(c, 'token', token as string, {
+          path: '/',
+          sameSite: 'None',
+          secure: true,
+          maxAge: 7 * 24 * 60 * 60,
+      });
+
+      return c.json({ message: 'Inicio de sesión realizado con éxito', restaurante: restauranteResult[0], token }, 200);
+  } catch (error) {
+      return c.json({ error: 'Login failed' }, 500);
+  }
+})
+
+// .post('/login-usuario-admin', zValidator("json", loginUsuarioAdminSchema), async (c) => {
+//   const { email, password } = c.req.valid("json");
+//   const db = drizzle(pool);
+
+//   try {
+//       const usuarioAdminResult = await db.select().from(UsuarioAdminTable)
+//           .where(eq(UsuarioAdminTable.email, email));
+
+//       if (!usuarioAdminResult.length) {
+//           return c.json({ message: 'Usuario admin no encontrado' }, 400);
+//       }
+
+//       if (!usuarioAdminResult[0].password) {
+//           return c.json({ message: 'Contraseña no válida' }, 400);
+//       }
+
+//       const isMatch = await bcrypt.compare(password, usuarioAdminResult[0].password);
+//       if (!isMatch) {
+//           return c.json({ message: 'Contraseña incorrecta' }, 400);
+//       }
+
+//       const token = await createAccessToken({ id: usuarioAdminResult[0].id });
+//       setCookie(c, 'token', token as string, {
+//           path: '/',
+//           sameSite: 'None',
+//           secure: true,
+//           maxAge: 7 * 24 * 60 * 60,
+//       });
+
+//       return c.json({ message: 'Inicio de sesión realizado con éxito', usuarioAdmin: usuarioAdminResult[0], token }, 200);
+//   } catch (error) {
+//       return c.json({ error: 'Login failed' }, 500);
+//   }
+// })
+
+// .post('/register-usuario-admin', zValidator("json", signUpUsuarioAdminSchema), async (c) => {
+//   const { email, name, password  } = c.req.valid("json");
+//   const db = drizzle(pool);
+
+//   try {
+//       const existingEmail = await db.select().from(UsuarioAdminTable)
+//           .where(eq(UsuarioAdminTable.email, email));
+
+//       if (existingEmail.length) {
+//           return c.json({ error: 'Email ya utilizado', existingEmail }, 409);
+//       }
+
+
+//       const restauranteResult = await db.select().from(restaurante)
+//           .where(eq(restaurante.email, restauranteEmail));
+
+//       if (!restauranteResult.length) {
+//           return c.json({ message: 'Restaurante no encontrado' }, 400);
+//       }
+
+//       if (!restauranteResult[0].password) {
+//           return c.json({ message: 'Contraseña no válida' }, 400);
+//       }
+
+//       const isMatch = await bcrypt.compare(restaurantePassword, restauranteResult[0].password);
+//       if (!isMatch) {
+//           return c.json({ message: 'Contraseña incorrecta' }, 400);
+//       }
+
+//       const passwordHash = await bcrypt.hash(password, 10);
+//       await db.insert(UsuarioAdminTable).values({
+//           email,
+//           name,
+//           password: passwordHash,
+//           createdAt: new Date(),
+//           restauranteId: restauranteResult[0].id
+//       });
+
+//       const newUsuarioAdmin = await db.select().from(UsuarioAdminTable)
+//           .where(eq(UsuarioAdminTable.email, email))
+//           .limit(1);
+
+//       const token = await createAccessToken({ id: newUsuarioAdmin[0].id });
+//       setCookie(c, 'token', token as string, {
+//           path: '/',
+//           sameSite: 'None',
+//           secure: true,
+//           maxAge: 7 * 24 * 60 * 60,
+//       });
+
+//       return c.json({ message: 'Usuario admin registrado correctamente', newUsuarioAdmin, token }, 200);
+//   } catch (error) {
+//       return c.json({ error: 'Registro de usuario admin falló' }, 400);
+//   }
+// })
+

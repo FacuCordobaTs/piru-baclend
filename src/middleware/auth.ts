@@ -2,7 +2,7 @@ import { Context, Next } from 'hono'
 import * as jwt from 'jsonwebtoken'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
-import { user as UserTable } from '../db/schema'
+import { usuarioAdmin as UsuarioAdminTable } from '../db/schema'
 import { eq } from 'drizzle-orm'
 
 export interface AuthenticatedContext extends Context {
@@ -10,10 +10,6 @@ export interface AuthenticatedContext extends Context {
     id: number
     email: string
     name?: string
-    points?: number
-    avatar?: string
-    globalHabitsStreak: number,
-    lastCompletion: Date
   }
 }
 
@@ -31,30 +27,22 @@ export const authMiddleware = async (c: Context, next: Next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret') as { id: number }
     
     const db = drizzle(pool)
-    const userResult = await db.select().from(UserTable).where(eq(UserTable.id, decoded.id)).limit(1)
+    const usuarioAdminResult = await db.select().from(UsuarioAdminTable).where(eq(UsuarioAdminTable.id, decoded.id)).limit(1)
     
-    if (!userResult.length) {
-      return c.json({ error: 'User not found' }, 401)
+    if (!usuarioAdminResult.length) {
+      return c.json({ error: 'Usuario admin no encontrado' }, 401)
     }
 
-    const user = userResult[0]
-    const lastCompletion = user.lastCompletion ? new Date(user.lastCompletion) : null
-    if (lastCompletion && (Date.now() - lastCompletion.getTime() > 24 * 60 * 60 * 1000)) {
-      user.globalHabitsStreak = 0
-    }
+    const usuarioAdmin = usuarioAdminResult[0]
     
     ;(c as AuthenticatedContext).user = {
-      id: user.id,
-      email: user.email,
-      name: user.name || undefined,
-      points: user.points || 0,
-      avatar: user.avatar || undefined,
-      globalHabitsStreak: user.globalHabitsStreak || 0,
-      lastCompletion: user.lastCompletion || null,
+      id: usuarioAdmin.id,
+      email: usuarioAdmin.email,
+      name: usuarioAdmin.name,
     }
 
     await next()
   } catch (error) {
-    return c.json({ error: 'Invalid token' }, 401)
+    return c.json({ error: 'Token inválido' }, 401)
   }
 }
