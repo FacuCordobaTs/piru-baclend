@@ -2,14 +2,14 @@ import { Context, Next } from 'hono'
 import * as jwt from 'jsonwebtoken'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
-import { usuarioAdmin as UsuarioAdminTable } from '../db/schema'
+import { restaurante as RestauranteTable } from '../db/schema'
 import { eq } from 'drizzle-orm'
 
 export interface AuthenticatedContext extends Context {
   user: {
     id: number
     email: string
-    name?: string
+    nombre?: string
   }
 }
 
@@ -27,18 +27,18 @@ export const authMiddleware = async (c: Context, next: Next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret') as { id: number }
     
     const db = drizzle(pool)
-    const usuarioAdminResult = await db.select().from(UsuarioAdminTable).where(eq(UsuarioAdminTable.id, decoded.id)).limit(1)
+    const restauranteResult = await db.select().from(RestauranteTable).where(eq(RestauranteTable.id, decoded.id)).limit(1)
     
-    if (!usuarioAdminResult.length) {
-      return c.json({ error: 'Usuario admin no encontrado' }, 401)
+    if (!restauranteResult.length) {
+      return c.json({ error: 'Restaurante no encontrado' }, 401)
     }
 
-    const usuarioAdmin = usuarioAdminResult[0]
+    const restaurante = restauranteResult[0]
     
     ;(c as AuthenticatedContext).user = {
-      id: usuarioAdmin.id,
-      email: usuarioAdmin.email,
-      name: usuarioAdmin.name,
+      id: restaurante.id,
+      email: restaurante.email,
+      nombre: restaurante.nombre,
     }
 
     await next()
