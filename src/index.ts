@@ -132,6 +132,7 @@ app.get(
           console.log('Mensaje recibido:', messageStr);
           const data: WebSocketMessage = JSON.parse(messageStr);
           console.log('Datos:', data);
+          console.log('ws:', ws);
           const mesaId = (ws as any).mesaId;
           const pedidoId = (ws as any).pedidoId;
 
