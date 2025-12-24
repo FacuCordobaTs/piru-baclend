@@ -43,6 +43,10 @@ const mesaRoute = new Hono()
   where(eq(PedidoTable.mesaId, mesa[0].id)).
   orderBy(desc(PedidoTable.createdAt))
   .limit(1)
+  
+  const productos = await db.select()
+  .from(ProductoTable)
+  .where(and(eq(ProductoTable.restauranteId, mesa[0].restauranteId!), eq(ProductoTable.activo, true)))
 
   let pedidoActual = ultimoPedido?.[0];
   if (!pedidoActual || pedidoActual.estado === 'closed') {
@@ -54,9 +58,6 @@ const mesaRoute = new Hono()
     })
     
     // Obtener el pedido recién creado
-    const productos = await db.select()
-    .from(ProductoTable)
-    .where(and(eq(ProductoTable.restauranteId, mesa[0].restauranteId!), eq(ProductoTable.activo, true)))
 
   return c.json({ 
     message: 'Mesa encontrada correctamente', 
@@ -69,7 +70,13 @@ const mesaRoute = new Hono()
   }, 200)
   }
 
-  return c.json({ message: 'Mesa encontrada correctamente', success: true, data: ultimoPedido[0] }, 200)
+  return c.json({ 
+    message: 'Mesa encontrada correctamente', 
+    success: true, 
+    data: {
+      mesa: ultimoPedido[0], 
+      productos: productos
+    } }, 200)
 })
 
 .get('/list', authMiddleware, async (c) => {
