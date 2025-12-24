@@ -42,9 +42,10 @@ app.use('*', cors({
     'http://localhost:4321', // Astro dev server
     'http://localhost:3000', // Alternative dev port
     'http://localhost:5173', // Vite dev server
-    'https://piru.app', // Production domain
+    'https://piru.app', // landing domain
+    'https://admin.piru.app', // Admin domain
+    'https://my.piru.app', // My domain
     'https://www.piru.app', // Production domain with www
-    'https://landing.piru.app', // Landing page subdomain
   ],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
