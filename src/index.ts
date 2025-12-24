@@ -131,10 +131,8 @@ app.get(
           const messageStr = typeof event.data === 'string' ? event.data : event.data.toString();
           console.log('Mensaje recibido:', messageStr);
           const data: WebSocketMessage = JSON.parse(messageStr);
-          console.log('Datos:', data);
-          console.log('ws:', ws);
-          const mesaId = (ws as any).mesaId;
-          const pedidoId = (ws as any).pedidoId;
+          const mesaId = data.payload.mesaId;
+          const pedidoId = data.payload.pedidoId;
 
           if (!mesaId || !pedidoId) {
             console.error('❌ WebSocket sin mesaId o pedidoId');
