@@ -38,7 +38,7 @@ const mesaRoute = new Hono()
     return c.json({ message: 'Mesa no encontrada', success: false }, 404)
   }
 
-  const ultimoPedido = await db.select().
+   let ultimoPedido = await db.select().
   from(PedidoTable).
   where(eq(PedidoTable.mesaId, mesa[0].id)).
   orderBy(desc(PedidoTable.createdAt))
@@ -48,7 +48,7 @@ const mesaRoute = new Hono()
   .from(ProductoTable)
   .where(and(eq(ProductoTable.restauranteId, mesa[0].restauranteId!), eq(ProductoTable.activo, true)))
 
-  let pedidoActual = ultimoPedido?.[0];
+  let pedidoActual = ultimoPedido[0];
   if (!pedidoActual || pedidoActual.estado === 'closed') {
     const nuevoPedido = await db.insert(PedidoTable).values({ 
       mesaId: mesa[0].id,
@@ -58,13 +58,17 @@ const mesaRoute = new Hono()
     })
     
     // Obtener el pedido recién creado
+    ultimoPedido = await db.select().from(PedidoTable).
+    where(eq(PedidoTable.id, Number(nuevoPedido[0].insertId))).
+    orderBy(desc(PedidoTable.createdAt))
+    .limit(1)
 
   return c.json({ 
     message: 'Mesa encontrada correctamente', 
     success: true, 
     data: {
       mesa: mesa[0],
-      pedido: pedidoActual,
+      pedido: ultimoPedido[0], 
       productos: productos
     }
   }, 200)
@@ -74,7 +78,8 @@ const mesaRoute = new Hono()
     message: 'Mesa encontrada correctamente', 
     success: true, 
     data: {
-      mesa: ultimoPedido[0], 
+      mesa: mesa[0], 
+      pedido: ultimoPedido[0], 
       productos: productos
     } }, 200)
 })
