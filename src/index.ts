@@ -129,6 +129,7 @@ app.get(
       async onMessage(event: any, ws: any) {
         try {
           const messageStr = typeof event.data === 'string' ? event.data : event.data.toString();
+          console.log('Mensaje recibido:', messageStr);
           const data: WebSocketMessage = JSON.parse(messageStr);
           const mesaId = (ws as any).mesaId;
           const pedidoId = (ws as any).pedidoId;
