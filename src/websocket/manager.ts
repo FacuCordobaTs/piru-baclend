@@ -30,9 +30,6 @@ class WebSocketManager {
     // Actualizar pedidoId si es diferente (nuevo pedido creado)
     session.pedidoId = pedidoId;
     
-    // Agregar conexión
-    ws.data.clienteId = clienteId;
-    ws.data.mesaId = mesaId;
     session.connections.add(ws);
 
     // Agregar cliente si no existe
@@ -48,23 +45,20 @@ class WebSocketManager {
   }
 
   // Remover cliente
-  removeClient(ws: any) {
-    const mesaId = ws.data?.mesaId;
-    if (!mesaId) return;
-
+  removeClient(mesaId: number, clienteId: string | undefined, ws: any) {
     const session = this.sessions.get(mesaId);
     if (!session) return;
 
     session.connections.delete(ws);
-
-    // Si no quedan conexiones, limpiar sesión después de 5 minutos
+    
+    // Remover cliente de la lista si existe
+    if (clienteId) {
+      session.clientes = session.clientes.filter(c => c.id !== clienteId);
+    }
+    
+    // Si no quedan conexiones, limpiar la sesión
     if (session.connections.size === 0) {
-      setTimeout(() => {
-        const currentSession = this.sessions.get(mesaId);
-        if (currentSession && currentSession.connections.size === 0) {
-          this.sessions.delete(mesaId);
-        }
-      }, 5 * 60 * 1000);
+      this.sessions.delete(mesaId);
     }
   }
 

@@ -131,11 +131,19 @@ app.get(
           const messageStr = typeof event.data === 'string' ? event.data : event.data.toString();
           console.log('Mensaje recibido:', messageStr);
           const data: WebSocketMessage = JSON.parse(messageStr);
-          const mesaId = data.payload.mesaId;
-          const pedidoId = data.payload.pedidoId;
+          
+          // Obtener mesaId y pedidoId del WebSocket (guardados en onOpen)
+          const mesaId = (ws as any).mesaId;
+          const pedidoId = (ws as any).pedidoId;
 
           if (!mesaId || !pedidoId) {
             console.error('❌ WebSocket sin mesaId o pedidoId');
+            ws.send(JSON.stringify({
+              type: 'ERROR',
+              payload: { 
+                message: 'Conexión no inicializada correctamente'
+              }
+            }));
             return;
           }
           
@@ -143,6 +151,9 @@ app.get(
           
           switch(data.type) {
             case 'CLIENTE_CONECTADO':
+              // Guardar clienteId en el WebSocket para poder usarlo en onClose
+              (ws as any).clienteId = data.payload.clienteId;
+              
               const session = await wsManager.addClient(
                 mesaId,
                 pedidoId,
@@ -156,7 +167,10 @@ app.get(
               ws.send(JSON.stringify({
                 type: 'ESTADO_INICIAL',
                 payload: {
-                  ...estadoInicial,
+                  items: estadoInicial.items || [],
+                  pedido: estadoInicial.pedido,
+                  total: estadoInicial.pedido?.total || '0.00',
+                  estado: estadoInicial.pedido?.estado || 'pending',
                   clientes: session.clientes,
                   mesaId,
                   pedidoId
@@ -226,10 +240,15 @@ app.get(
       async onClose(event: any, ws: any) {
         const mesaId = (ws as any).mesaId;
         const clienteId = (ws as any).clienteId;
+
+        if (!mesaId) {
+          console.error('❌ No se pudo obtener mesaId');
+          return;
+        }
+
+        console.log(`👋 Cliente desconectado - Mesa: ${mesaId}, Cliente: ${clienteId || 'desconocido'}`);
         
-        console.log(`👋 Cliente desconectado - Mesa: ${mesaId}`);
-        
-        wsManager.removeClient(ws);
+        wsManager.removeClient(mesaId, clienteId, ws);
         
         // Notificar a otros clientes
         const session = wsManager.getSession(mesaId);
@@ -237,7 +256,7 @@ app.get(
           wsManager.broadcast(mesaId, {
             type: 'CLIENTE_DESCONECTADO',
             payload: {
-              clienteId,
+              clienteId: clienteId,
               clientes: session.clientes
             }
           });
