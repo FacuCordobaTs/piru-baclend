@@ -17,6 +17,9 @@ import type { ServerWebSocket } from "bun";
 // Destructure upgradeWebSocket and websocket from the helper function's return
 const { upgradeWebSocket, websocket } = createBunWebSocket<ServerWebSocket>();
 
+// Map para almacenar datos de cada conexión WebSocket
+const wsDataMap = new WeakMap<any, { mesaId: number; pedidoId: number; qrToken: string; clienteId?: string }>();
+
 // Validate required environment variables
 const requiredEnvVars = [
   'DB_USER',
@@ -118,10 +121,8 @@ app.get(
           return;
         }
 
-        // Guardar datos en el WebSocket
-        (ws as any).mesaId = mesaId;
-        (ws as any).pedidoId = pedidoId;
-        (ws as any).qrToken = qrToken;
+        // Guardar datos en el Map usando WeakMap para evitar memory leaks
+        wsDataMap.set(ws, { mesaId, pedidoId, qrToken });
         
         console.log(`✅ Cliente conectado - QR: ${qrToken}, Mesa: ${mesaId}, Pedido: ${pedidoId}`);
       },
@@ -132,12 +133,10 @@ app.get(
           console.log('Mensaje recibido:', messageStr);
           const data: WebSocketMessage = JSON.parse(messageStr);
           
-          // Obtener mesaId y pedidoId del WebSocket (guardados en onOpen)
-          const mesaId = (ws as any).mesaId;
-          const pedidoId = (ws as any).pedidoId;
-
-          if (!mesaId || !pedidoId) {
-            console.error('❌ WebSocket sin mesaId o pedidoId');
+          // Obtener mesaId y pedidoId del Map
+          const wsData = wsDataMap.get(ws);
+          if (!wsData) {
+            console.error('❌ WebSocket sin datos inicializados');
             ws.send(JSON.stringify({
               type: 'ERROR',
               payload: { 
@@ -147,12 +146,15 @@ app.get(
             return;
           }
           
+          const { mesaId, pedidoId } = wsData;
+
           console.log(`📨 Mensaje recibido - Mesa ${mesaId}:`, data.type);
           
           switch(data.type) {
             case 'CLIENTE_CONECTADO':
-              // Guardar clienteId en el WebSocket para poder usarlo en onClose
-              (ws as any).clienteId = data.payload.clienteId;
+              // Guardar clienteId en el Map
+              wsData.clienteId = data.payload.clienteId;
+              wsDataMap.set(ws, wsData);
               
               const session = await wsManager.addClient(
                 mesaId,
@@ -238,17 +240,20 @@ app.get(
       },
 
       async onClose(event: any, ws: any) {
-        const mesaId = (ws as any).mesaId;
-        const clienteId = (ws as any).clienteId;
-
-        if (!mesaId) {
-          console.error('❌ No se pudo obtener mesaId');
+        const wsData = wsDataMap.get(ws);
+        if (!wsData) {
+          console.error('❌ No se pudo obtener datos del WebSocket');
           return;
         }
+
+        const { mesaId, clienteId } = wsData;
 
         console.log(`👋 Cliente desconectado - Mesa: ${mesaId}, Cliente: ${clienteId || 'desconocido'}`);
         
         wsManager.removeClient(mesaId, clienteId, ws);
+        
+        // Limpiar datos del Map
+        wsDataMap.delete(ws);
         
         // Notificar a otros clientes
         const session = wsManager.getSession(mesaId);
