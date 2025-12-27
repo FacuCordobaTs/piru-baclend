@@ -1,13 +1,13 @@
 // mesa.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { mesa as MesaTable, pedido as PedidoTable, producto as ProductoTable } from '../db/schema'
+import { mesa as MesaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 import UUID = require("uuid-js");
 import { authMiddleware } from '../middleware/auth'
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, ne } from 'drizzle-orm'
 
 const createMesaSchema = z.object({
   nombre: z.string().min(3).max(255),
@@ -92,6 +92,38 @@ const mesaRoute = new Hono()
   .where(eq(MesaTable.restauranteId, restauranteId))
   
   return c.json({ message: 'Mesas encontradas correctamente', success: true, data: mesas }, 200)
+})
+
+.delete('/delete/:id', authMiddleware, async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const id = Number(c.req.param('id'))
+
+  // Verificar que la mesa existe y pertenece al restaurante
+  const mesa = await db.select()
+    .from(MesaTable)
+    .where(and(eq(MesaTable.id, id), eq(MesaTable.restauranteId, restauranteId)))
+  
+  if (!mesa || mesa.length === 0) {
+    return c.json({ message: 'Mesa no encontrada', success: false }, 404)
+  }
+  // Obtener todos los pedidos de la mesa (incluidos los cerrados) para eliminar items
+  const todosLosPedidos = await db.select()
+    .from(PedidoTable)
+    .where(eq(PedidoTable.mesaId, id))
+
+  // Eliminar items de pedido asociados
+  for (const pedido of todosLosPedidos) {
+    await db.delete(ItemPedidoTable).where(eq(ItemPedidoTable.pedidoId, pedido.id))
+  }
+
+  // Eliminar pedidos asociados
+  await db.delete(PedidoTable).where(eq(PedidoTable.mesaId, id))
+
+  // Eliminar la mesa
+  await db.delete(MesaTable).where(and(eq(MesaTable.id, id), eq(MesaTable.restauranteId, restauranteId)))
+  
+  return c.json({ message: 'Mesa eliminada correctamente', success: true }, 200)
 })
 
 export { mesaRoute }
