@@ -112,17 +112,29 @@ app.get(
       console.error('Error al buscar mesa/pedido:', error);
     }
 
+    // Validar que tenemos mesaId y pedidoId antes de crear los handlers
+    if (!mesaId || !pedidoId) {
+      // Retornar handlers que rechazan la conexión
+      return {
+        async onOpen(event: any, ws: any) {
+          console.error('❌ No se pudo establecer mesaId o pedidoId');
+          ws.close(1008, 'Mesa o pedido no encontrado');
+        },
+        async onMessage(event: any, ws: any) {
+          ws.close(1008, 'Mesa o pedido no encontrado');
+        },
+        async onClose(event: any, ws: any) {},
+        async onError(event: any, ws: any) {
+          console.error('❌ WebSocket error:', event);
+        }
+      };
+    }
+
     // Retornar los handlers de WebSocket
     return {
       async onOpen(event: any, ws: any) {
-        if (!mesaId || !pedidoId) {
-          console.error('❌ No se pudo establecer mesaId o pedidoId');
-          ws.close(1008, 'Mesa o pedido no encontrado');
-          return;
-        }
-
         // Guardar datos en el Map usando WeakMap para evitar memory leaks
-        wsDataMap.set(ws, { mesaId, pedidoId, qrToken });
+        wsDataMap.set(ws, { mesaId: mesaId!, pedidoId: pedidoId!, qrToken });
         
         console.log(`✅ Cliente conectado - QR: ${qrToken}, Mesa: ${mesaId}, Pedido: ${pedidoId}`);
       },
@@ -133,10 +145,22 @@ app.get(
           console.log('Mensaje recibido:', messageStr);
           const data: WebSocketMessage = JSON.parse(messageStr);
           
-          // Obtener mesaId y pedidoId del Map
+          // Obtener mesaId y pedidoId del Map, o usar los del closure como fallback
+          let currentMesaId = mesaId!;
+          let currentPedidoId = pedidoId!;
+          
           const wsData = wsDataMap.get(ws);
-          if (!wsData) {
-            console.error('❌ WebSocket sin datos inicializados');
+          if (wsData) {
+            currentMesaId = wsData.mesaId;
+            currentPedidoId = wsData.pedidoId;
+          } else {
+            // Si no está en el Map, usar los valores del closure y guardarlos
+            console.log('⚠️ WebSocket no encontrado en Map, usando valores del closure');
+            wsDataMap.set(ws, { mesaId: currentMesaId, pedidoId: currentPedidoId, qrToken });
+          }
+          
+          if (!currentMesaId || !currentPedidoId) {
+            console.error('❌ No se pudo obtener mesaId o pedidoId');
             ws.send(JSON.stringify({
               type: 'ERROR',
               payload: { 
@@ -145,27 +169,26 @@ app.get(
             }));
             return;
           }
-          
-          const { mesaId, pedidoId } = wsData;
 
-          console.log(`📨 Mensaje recibido - Mesa ${mesaId}:`, data.type);
+          console.log(`📨 Mensaje recibido - Mesa ${currentMesaId}:`, data.type);
           
           switch(data.type) {
             case 'CLIENTE_CONECTADO':
               // Guardar clienteId en el Map
-              wsData.clienteId = data.payload.clienteId;
-              wsDataMap.set(ws, wsData);
+              const updatedWsData = wsDataMap.get(ws) || { mesaId: currentMesaId, pedidoId: currentPedidoId, qrToken };
+              updatedWsData.clienteId = data.payload.clienteId;
+              wsDataMap.set(ws, updatedWsData);
               
               const session = await wsManager.addClient(
-                mesaId,
-                pedidoId,
+                currentMesaId,
+                currentPedidoId,
                 ws,
                 data.payload.clienteId,
                 data.payload.nombre
               );
               
               // Enviar estado inicial
-              const estadoInicial = await wsManager.getEstadoInicial(pedidoId);
+              const estadoInicial = await wsManager.getEstadoInicial(currentPedidoId);
               ws.send(JSON.stringify({
                 type: 'ESTADO_INICIAL',
                 payload: {
@@ -174,15 +197,15 @@ app.get(
                   total: estadoInicial.pedido?.total || '0.00',
                   estado: estadoInicial.pedido?.estado || 'pending',
                   clientes: session.clientes,
-                  mesaId,
-                  pedidoId
+                  mesaId: currentMesaId,
+                  pedidoId: currentPedidoId
                 }
               }));
               
-              console.log(`👤 Cliente "${data.payload.nombre}" unido a mesa ${mesaId}`);
+              console.log(`👤 Cliente "${data.payload.nombre}" unido a mesa ${currentMesaId}`);
               
               // Notificar a otros clientes
-              wsManager.broadcast(mesaId, {
+              wsManager.broadcast(currentMesaId, {
                 type: 'CLIENTE_UNIDO',
                 payload: {
                   cliente: {
@@ -196,12 +219,12 @@ app.get(
               
             case 'AGREGAR_ITEM':
               console.log(`➕ Agregando item - Cliente: ${data.payload.clienteNombre}`);
-              await wsManager.agregarItem(pedidoId, mesaId, data.payload);
+              await wsManager.agregarItem(currentPedidoId, currentMesaId, data.payload);
               break;
               
             case 'ELIMINAR_ITEM':
               console.log(`➖ Eliminando item ${data.payload.itemId}`);
-              await wsManager.eliminarItem(data.payload.itemId, pedidoId, mesaId);
+              await wsManager.eliminarItem(data.payload.itemId, currentPedidoId, currentMesaId);
               break;
               
             case 'ACTUALIZAR_CANTIDAD':
@@ -209,14 +232,14 @@ app.get(
               await wsManager.actualizarCantidad(
                 data.payload.itemId,
                 data.payload.cantidad,
-                pedidoId,
-                mesaId
+                currentPedidoId,
+                currentMesaId
               );
               break;
               
             case 'CONFIRMAR_PEDIDO':
-              console.log(`✅ Confirmando pedido ${pedidoId}`);
-              await wsManager.confirmarPedido(pedidoId, mesaId);
+              console.log(`✅ Confirmando pedido ${currentPedidoId}`);
+              await wsManager.confirmarPedido(currentPedidoId, currentMesaId);
               break;
               
             default:
