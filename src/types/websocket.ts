@@ -16,9 +16,10 @@ export interface ClienteConectado {
   
   export interface WebSocketMessage {
     type: 'CLIENTE_CONECTADO' | 'AGREGAR_ITEM' | 'ELIMINAR_ITEM' | 
-          'ACTUALIZAR_CANTIDAD' | 'CONFIRMAR_PEDIDO' | 'ESTADO_INICIAL' |
-          'PEDIDO_ACTUALIZADO' | 'CLIENTE_UNIDO' | 'CLIENTE_DESCONECTADO' |
-          'ERROR';
+          'ACTUALIZAR_CANTIDAD' | 'CONFIRMAR_PEDIDO' | 'CERRAR_PEDIDO' | 
+          'LLAMAR_MOZO' | 'PAGAR_PEDIDO' | 'ESTADO_INICIAL' |
+          'PEDIDO_ACTUALIZADO' | 'PEDIDO_CONFIRMADO' | 'PEDIDO_CERRADO' |
+          'CLIENTE_UNIDO' | 'CLIENTE_DESCONECTADO' | 'ERROR';
     payload: any;
   }
   

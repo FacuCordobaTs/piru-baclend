@@ -241,6 +241,26 @@ app.get(
               console.log(`✅ Confirmando pedido ${currentPedidoId}`);
               await wsManager.confirmarPedido(currentPedidoId, currentMesaId);
               break;
+
+            case 'CERRAR_PEDIDO':
+              console.log(`🔒 Cerrando pedido ${currentPedidoId}`);
+              await wsManager.cerrarPedido(currentPedidoId, currentMesaId);
+              break;
+
+            case 'LLAMAR_MOZO':
+              console.log(`🔔 Llamando al mozo - Mesa ${currentMesaId}`);
+              wsManager.llamarMozo(currentMesaId, data.payload.clienteNombre || 'Cliente');
+              // Responder solo al cliente que llamó
+              ws.send(JSON.stringify({
+                type: 'MOZO_NOTIFICADO',
+                payload: { message: 'Mozo notificado' }
+              }));
+              break;
+
+            case 'PAGAR_PEDIDO':
+              console.log(`💳 Pagando pedido ${currentPedidoId} - Método: ${data.payload.metodo}`);
+              await wsManager.pagarPedido(currentPedidoId, currentMesaId, data.payload.metodo);
+              break;
               
             default:
               console.warn(`⚠️ Tipo de mensaje desconocido: ${data.type}`);

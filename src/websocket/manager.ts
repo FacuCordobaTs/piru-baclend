@@ -221,14 +221,49 @@ class WebSocketManager {
 
     const estadoActual = await this.getEstadoInicial(pedidoId);
     
+    // Enviar mensaje específico de confirmación
     this.broadcast(mesaId, {
-      type: 'PEDIDO_ACTUALIZADO',
+      type: 'PEDIDO_CONFIRMADO',
       payload: {
         items: estadoActual.items,
-        pedido: estadoActual.pedido,
-        confirmado: true
+        pedido: estadoActual.pedido
       }
     });
+  }
+
+  // Cerrar pedido (cambiar estado a closed)
+  async cerrarPedido(pedidoId: number, mesaId: number) {
+    await this.db
+      .update(PedidoTable)
+      .set({ 
+        estado: 'closed',
+        closedAt: new Date()
+      })
+      .where(eq(PedidoTable.id, pedidoId));
+
+    const estadoActual = await this.getEstadoInicial(pedidoId);
+    
+    this.broadcast(mesaId, {
+      type: 'PEDIDO_CERRADO',
+      payload: {
+        items: estadoActual.items,
+        pedido: estadoActual.pedido
+      }
+    });
+  }
+
+  // Llamar al mozo (solo notificación, no cambia estado)
+  llamarMozo(mesaId: number, clienteNombre: string) {
+    // Esto solo notifica al restaurante, no necesita broadcast a todos los clientes
+    // Por ahora solo retornamos éxito
+    return { success: true, message: 'Mozo notificado' };
+  }
+
+  // Pagar pedido
+  async pagarPedido(pedidoId: number, mesaId: number, metodo: 'efectivo' | 'mercadopago') {
+    // Aquí se podría crear un registro de pago en la tabla pago
+    // Por ahora solo retornamos éxito
+    return { success: true, message: 'Pago registrado' };
   }
 
   getSession(mesaId: number) {
