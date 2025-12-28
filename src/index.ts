@@ -17,8 +17,15 @@ import type { ServerWebSocket } from "bun";
 // Destructure upgradeWebSocket and websocket from the helper function's return
 const { upgradeWebSocket, websocket } = createBunWebSocket<ServerWebSocket>();
 
-// Map para almacenar datos de cada conexión WebSocket
-const wsDataMap = new WeakMap<any, { mesaId: number; pedidoId: number; qrToken: string; clienteId?: string }>();
+// Usar Map normal con ID único por conexión en lugar de WeakMap
+interface WsConnectionData {
+  mesaId: number;
+  pedidoId: number;
+  qrToken: string;
+  clienteId?: string;
+}
+const wsConnections = new Map<string, WsConnectionData>();
+let connectionCounter = 0;
 
 // Validate required environment variables
 const requiredEnvVars = [
@@ -130,34 +137,38 @@ app.get(
       };
     }
 
+    // Generar ID único para esta conexión en el closure
+    const connectionId = `conn-${++connectionCounter}-${Date.now()}`;
+
     // Retornar los handlers de WebSocket
     return {
       async onOpen(event: any, ws: any) {
-        // Guardar datos en el Map usando WeakMap para evitar memory leaks
-        wsDataMap.set(ws, { mesaId: mesaId!, pedidoId: pedidoId!, qrToken });
+        // Guardar datos usando el ID de conexión del closure
+        wsConnections.set(connectionId, { 
+          mesaId: mesaId!, 
+          pedidoId: pedidoId!, 
+          qrToken 
+        });
         
-        console.log(`✅ Cliente conectado - QR: ${qrToken}, Mesa: ${mesaId}, Pedido: ${pedidoId}`);
+        console.log(`✅ Cliente conectado [${connectionId}] - QR: ${qrToken}, Mesa: ${mesaId}, Pedido: ${pedidoId}`);
       },
 
       async onMessage(event: any, ws: any) {
         try {
           const messageStr = typeof event.data === 'string' ? event.data : event.data.toString();
-          console.log('Mensaje recibido:', messageStr);
           const data: WebSocketMessage = JSON.parse(messageStr);
           
-          // Obtener mesaId y pedidoId del Map, o usar los del closure como fallback
-          let currentMesaId = mesaId!;
-          let currentPedidoId = pedidoId!;
+          // Usar el ID de conexión del closure para obtener los datos
+          let wsData = wsConnections.get(connectionId);
           
-          const wsData = wsDataMap.get(ws);
-          if (wsData) {
-            currentMesaId = wsData.mesaId;
-            currentPedidoId = wsData.pedidoId;
-          } else {
-            // Si no está en el Map, usar los valores del closure y guardarlos
-            console.log('⚠️ WebSocket no encontrado en Map, usando valores del closure');
-            wsDataMap.set(ws, { mesaId: currentMesaId, pedidoId: currentPedidoId, qrToken });
+          // Si no existe, crear con los valores del closure
+          if (!wsData) {
+            wsData = { mesaId: mesaId!, pedidoId: pedidoId!, qrToken };
+            wsConnections.set(connectionId, wsData);
           }
+          
+          const currentMesaId = wsData.mesaId;
+          const currentPedidoId = wsData.pedidoId;
           
           if (!currentMesaId || !currentPedidoId) {
             console.error('❌ No se pudo obtener mesaId o pedidoId');
@@ -170,19 +181,13 @@ app.get(
             return;
           }
 
-          console.log(`📨 Mensaje recibido - Mesa ${currentMesaId}:`, data.type);
+          console.log(`📨 [${connectionId}] Mesa ${currentMesaId}:`, data.type);
           
           switch(data.type) {
             case 'CLIENTE_CONECTADO':
-              // Asegurarse de que el WebSocket esté en el Map antes de actualizar
-              let updatedWsData = wsDataMap.get(ws);
-              if (!updatedWsData) {
-                updatedWsData = { mesaId: currentMesaId, pedidoId: currentPedidoId, qrToken };
-                wsDataMap.set(ws, updatedWsData);
-              }
-              // Actualizar clienteId
-              updatedWsData.clienteId = data.payload.clienteId;
-              wsDataMap.set(ws, updatedWsData);
+              // Actualizar clienteId en los datos de conexión
+              wsData.clienteId = data.payload.clienteId;
+              wsConnections.set(connectionId, wsData);
               
               const session = await wsManager.addClient(
                 currentMesaId,
@@ -288,30 +293,19 @@ app.get(
       },
 
       async onClose(event: any, ws: any) {
-        const wsData = wsDataMap.get(ws);
-        
-        // Si no está en el Map, intentar usar los valores del closure como fallback
-        let mesaId: number | null = null;
-        let clienteId: string | undefined = undefined;
+        const wsData = wsConnections.get(connectionId);
         
         if (wsData) {
-          mesaId = wsData.mesaId;
-          clienteId = wsData.clienteId;
-        } else {
-          // Usar valores del closure como fallback
-          console.warn('⚠️ WebSocket no encontrado en Map en onClose, usando valores del closure');
-          mesaId = mesaId || null;
-        }
-
-        if (mesaId) {
-          console.log(`👋 Cliente desconectado - Mesa: ${mesaId}, Cliente: ${clienteId || 'desconocido'}`);
+          const { mesaId: closingMesaId, clienteId } = wsData;
           
-          wsManager.removeClient(mesaId, clienteId, ws);
+          console.log(`👋 [${connectionId}] Cliente desconectado - Mesa: ${closingMesaId}, Cliente: ${clienteId || 'desconocido'}`);
+          
+          wsManager.removeClient(closingMesaId, clienteId, ws);
           
           // Notificar a otros clientes
-          const session = wsManager.getSession(mesaId);
+          const session = wsManager.getSession(closingMesaId);
           if (session) {
-            wsManager.broadcast(mesaId, {
+            wsManager.broadcast(closingMesaId, {
               type: 'CLIENTE_DESCONECTADO',
               payload: {
                 clienteId: clienteId,
@@ -319,11 +313,11 @@ app.get(
               }
             });
           }
-        }
-        
-        // Limpiar datos del Map si existían
-        if (wsData) {
-          wsDataMap.delete(ws);
+          
+          // Limpiar datos del Map
+          wsConnections.delete(connectionId);
+        } else {
+          console.log(`👋 [${connectionId}] Conexión cerrada (sin datos de sesión)`);
         }
       },
 
