@@ -174,8 +174,13 @@ app.get(
           
           switch(data.type) {
             case 'CLIENTE_CONECTADO':
-              // Guardar clienteId en el Map
-              const updatedWsData = wsDataMap.get(ws) || { mesaId: currentMesaId, pedidoId: currentPedidoId, qrToken };
+              // Asegurarse de que el WebSocket esté en el Map antes de actualizar
+              let updatedWsData = wsDataMap.get(ws);
+              if (!updatedWsData) {
+                updatedWsData = { mesaId: currentMesaId, pedidoId: currentPedidoId, qrToken };
+                wsDataMap.set(ws, updatedWsData);
+              }
+              // Actualizar clienteId
               updatedWsData.clienteId = data.payload.clienteId;
               wsDataMap.set(ws, updatedWsData);
               
@@ -284,30 +289,41 @@ app.get(
 
       async onClose(event: any, ws: any) {
         const wsData = wsDataMap.get(ws);
-        if (!wsData) {
-          console.error('❌ No se pudo obtener datos del WebSocket');
-          return;
+        
+        // Si no está en el Map, intentar usar los valores del closure como fallback
+        let mesaId: number | null = null;
+        let clienteId: string | undefined = undefined;
+        
+        if (wsData) {
+          mesaId = wsData.mesaId;
+          clienteId = wsData.clienteId;
+        } else {
+          // Usar valores del closure como fallback
+          console.warn('⚠️ WebSocket no encontrado en Map en onClose, usando valores del closure');
+          mesaId = mesaId || null;
         }
 
-        const { mesaId, clienteId } = wsData;
-
-        console.log(`👋 Cliente desconectado - Mesa: ${mesaId}, Cliente: ${clienteId || 'desconocido'}`);
+        if (mesaId) {
+          console.log(`👋 Cliente desconectado - Mesa: ${mesaId}, Cliente: ${clienteId || 'desconocido'}`);
+          
+          wsManager.removeClient(mesaId, clienteId, ws);
+          
+          // Notificar a otros clientes
+          const session = wsManager.getSession(mesaId);
+          if (session) {
+            wsManager.broadcast(mesaId, {
+              type: 'CLIENTE_DESCONECTADO',
+              payload: {
+                clienteId: clienteId,
+                clientes: session.clientes
+              }
+            });
+          }
+        }
         
-        wsManager.removeClient(mesaId, clienteId, ws);
-        
-        // Limpiar datos del Map
-        wsDataMap.delete(ws);
-        
-        // Notificar a otros clientes
-        const session = wsManager.getSession(mesaId);
-        if (session) {
-          wsManager.broadcast(mesaId, {
-            type: 'CLIENTE_DESCONECTADO',
-            payload: {
-              clienteId: clienteId,
-              clientes: session.clientes
-            }
-          });
+        // Limpiar datos del Map si existían
+        if (wsData) {
+          wsDataMap.delete(ws);
         }
       },
 
