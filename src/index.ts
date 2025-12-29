@@ -13,6 +13,7 @@ import { mesa as MesaTable, pedido as PedidoTable } from './db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { createBunWebSocket } from "hono/bun"; 
 import type { ServerWebSocket } from "bun";
+import { verifyToken } from './libs/jwt';
 
 // Destructure upgradeWebSocket and websocket from the helper function's return
 const { upgradeWebSocket, websocket } = createBunWebSocket<ServerWebSocket>();
@@ -328,6 +329,92 @@ app.get(
   })
 )
 
+// Admin WebSocket endpoint - requires JWT token as query param
+app.get(
+  '/ws/admin',
+  upgradeWebSocket(async (c: any) => {
+    const token = c.req.query('token');
+    let restauranteId: number | null = null;
+    
+    // Verify JWT token
+    if (token) {
+      try {
+        const decoded = await verifyToken(token);
+        restauranteId = decoded.id;
+      } catch (error) {
+        console.error('❌ Invalid admin token:', error);
+      }
+    }
+    
+    if (!restauranteId) {
+      return {
+        async onOpen(event: any, ws: any) {
+          console.error('❌ Admin connection without valid token');
+          ws.close(1008, 'Token inválido o no proporcionado');
+        },
+        async onMessage(event: any, ws: any) {},
+        async onClose(event: any, ws: any) {},
+        async onError(event: any, ws: any) {}
+      };
+    }
+
+    const adminConnectionId = `admin-${restauranteId}-${Date.now()}`;
+
+    return {
+      async onOpen(event: any, ws: any) {
+        console.log(`🔑 Admin WebSocket conectado - Restaurante: ${restauranteId}`);
+        wsManager.addAdminConnection(restauranteId!, ws);
+        
+        // Send initial state of all mesas
+        try {
+          const estadoMesas = await wsManager.getEstadoMesasRestaurante(restauranteId!);
+          ws.send(JSON.stringify({
+            type: 'ADMIN_ESTADO_MESAS',
+            payload: { mesas: estadoMesas }
+          }));
+        } catch (error) {
+          console.error('Error sending initial admin state:', error);
+        }
+      },
+
+      async onMessage(event: any, ws: any) {
+        try {
+          const messageStr = typeof event.data === 'string' ? event.data : event.data.toString();
+          const data = JSON.parse(messageStr);
+          
+          console.log(`📨 Admin [${adminConnectionId}]:`, data.type);
+          
+          // Handle admin-specific messages if needed
+          switch(data.type) {
+            case 'PING':
+              ws.send(JSON.stringify({ type: 'PONG' }));
+              break;
+              
+            case 'REFRESH_MESAS':
+              const estadoMesas = await wsManager.getEstadoMesasRestaurante(restauranteId!);
+              ws.send(JSON.stringify({
+                type: 'ADMIN_ESTADO_MESAS',
+                payload: { mesas: estadoMesas }
+              }));
+              break;
+          }
+        } catch (error) {
+          console.error('Error processing admin message:', error);
+        }
+      },
+
+      async onClose(event: any, ws: any) {
+        console.log(`🔓 Admin WebSocket desconectado - Restaurante: ${restauranteId}`);
+        wsManager.removeAdminConnection(restauranteId!, ws);
+      },
+
+      async onError(event: any, ws: any) {
+        console.error('❌ Admin WebSocket error:', event);
+      }
+    };
+  })
+)
+
 export default {
   port: process.env.PORT || 3000,
   fetch: app.fetch,
@@ -336,3 +423,4 @@ export default {
 
 console.log(`🚀 Servidor iniciado en puerto ${process.env.PORT || 3000}`);
 console.log(`📡 WebSocket disponible en ws://localhost:${process.env.PORT || 3000}/ws/:qrToken`);
+console.log(`🔑 Admin WebSocket disponible en ws://localhost:${process.env.PORT || 3000}/ws/admin?token=JWT_TOKEN`);

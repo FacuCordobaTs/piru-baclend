@@ -1,17 +1,193 @@
 // src/websocket/manager.ts
 import { drizzle } from 'drizzle-orm/mysql2';
-import { eq, and } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import { pool } from '../db';
 import { 
   pedido as PedidoTable, 
   itemPedido as ItemPedidoTable,
-  producto as ProductoTable 
+  producto as ProductoTable,
+  mesa as MesaTable
 } from '../db/schema';
-import { MesaSession, WebSocketMessage, ItemPedidoWS } from '../types/websocket';
+import { MesaSession, WebSocketMessage, ItemPedidoWS, AdminSession, AdminNotification, AdminNotificationType } from '../types/websocket';
 
 class WebSocketManager {
   private sessions: Map<number, MesaSession> = new Map();
+  private adminSessions: Map<number, AdminSession> = new Map(); // restauranteId -> AdminSession
+  private mesaToRestaurante: Map<number, number> = new Map(); // mesaId -> restauranteId
   private db = drizzle(pool);
+
+  // ==================== ADMIN METHODS ====================
+
+  // Registrar conexión de admin
+  addAdminConnection(restauranteId: number, ws: any) {
+    let session = this.adminSessions.get(restauranteId);
+    
+    if (!session) {
+      session = {
+        restauranteId,
+        connections: new Set()
+      };
+      this.adminSessions.set(restauranteId, session);
+    }
+    
+    session.connections.add(ws);
+    console.log(`🔑 Admin conectado - Restaurante: ${restauranteId}, Total conexiones: ${session.connections.size}`);
+    
+    return session;
+  }
+
+  // Remover conexión de admin
+  removeAdminConnection(restauranteId: number, ws: any) {
+    const session = this.adminSessions.get(restauranteId);
+    if (!session) return;
+    
+    session.connections.delete(ws);
+    console.log(`🔓 Admin desconectado - Restaurante: ${restauranteId}, Total conexiones: ${session.connections.size}`);
+    
+    if (session.connections.size === 0) {
+      this.adminSessions.delete(restauranteId);
+    }
+  }
+
+  // Enviar notificación a todos los admins de un restaurante
+  notifyAdmins(restauranteId: number, notification: AdminNotification) {
+    const session = this.adminSessions.get(restauranteId);
+    if (!session) return;
+
+    const message = JSON.stringify({
+      type: 'ADMIN_NOTIFICACION',
+      payload: notification
+    });
+
+    session.connections.forEach((client) => {
+      if (client.readyState === 1) { // OPEN
+        try {
+          client.send(message);
+        } catch (error) {
+          console.error('Error enviando notificación a admin:', error);
+        }
+      }
+    });
+  }
+
+  // Crear notificación helper
+  private createNotification(
+    tipo: AdminNotificationType,
+    mesaId: number,
+    mesaNombre: string,
+    mensaje: string,
+    detalles?: string,
+    pedidoId?: number
+  ): AdminNotification {
+    return {
+      id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      tipo,
+      mesaId,
+      mesaNombre,
+      pedidoId,
+      mensaje,
+      detalles,
+      timestamp: new Date().toISOString(),
+      leida: false
+    };
+  }
+
+  // Obtener estado de todas las mesas de un restaurante
+  async getEstadoMesasRestaurante(restauranteId: number) {
+    const mesas = await this.db.select()
+      .from(MesaTable)
+      .where(eq(MesaTable.restauranteId, restauranteId));
+
+    const mesasConPedido = await Promise.all(mesas.map(async (mesa) => {
+      // Cache mesaId -> restauranteId
+      this.mesaToRestaurante.set(mesa.id, restauranteId);
+
+      const ultimoPedido = await this.db.select()
+        .from(PedidoTable)
+        .where(eq(PedidoTable.mesaId, mesa.id))
+        .orderBy(desc(PedidoTable.createdAt))
+        .limit(1);
+
+      const pedido = ultimoPedido[0] || null;
+      let items: any[] = [];
+      
+      if (pedido) {
+        items = await this.db
+          .select({
+            id: ItemPedidoTable.id,
+            productoId: ItemPedidoTable.productoId,
+            clienteNombre: ItemPedidoTable.clienteNombre,
+            cantidad: ItemPedidoTable.cantidad,
+            precioUnitario: ItemPedidoTable.precioUnitario,
+            nombreProducto: ProductoTable.nombre,
+            imagenUrl: ProductoTable.imagenUrl
+          })
+          .from(ItemPedidoTable)
+          .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
+          .where(eq(ItemPedidoTable.pedidoId, pedido.id));
+      }
+
+      // Get connected clients from session
+      const session = this.sessions.get(mesa.id);
+      const clientesConectados = session?.clientes.filter(
+        c => !c.id.startsWith('admin-') && !c.nombre.includes('Admin')
+      ) || [];
+
+      return {
+        id: mesa.id,
+        nombre: mesa.nombre,
+        qrToken: mesa.qrToken,
+        pedido,
+        items,
+        clientesConectados,
+        totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0)
+      };
+    }));
+
+    return mesasConPedido;
+  }
+
+  // Broadcast estado actualizado a admins
+  async broadcastEstadoToAdmins(mesaId: number) {
+    let restauranteId = this.mesaToRestaurante.get(mesaId);
+    
+    if (!restauranteId) {
+      // Buscar en BD
+      const mesa = await this.db.select()
+        .from(MesaTable)
+        .where(eq(MesaTable.id, mesaId))
+        .limit(1);
+      
+      if (mesa[0]?.restauranteId) {
+        restauranteId = mesa[0].restauranteId;
+        this.mesaToRestaurante.set(mesaId, restauranteId);
+      }
+    }
+
+    if (!restauranteId) return;
+
+    const session = this.adminSessions.get(restauranteId);
+    if (!session || session.connections.size === 0) return;
+
+    const estadoMesas = await this.getEstadoMesasRestaurante(restauranteId);
+    
+    const message = JSON.stringify({
+      type: 'ADMIN_ESTADO_MESAS',
+      payload: { mesas: estadoMesas }
+    });
+
+    session.connections.forEach((client) => {
+      if (client.readyState === 1) {
+        try {
+          client.send(message);
+        } catch (error) {
+          console.error('Error enviando estado a admin:', error);
+        }
+      }
+    });
+  }
+
+  // ==================== MESA/CLIENT METHODS ====================
 
   // Agregar cliente a la sesión de la mesa
   async addClient(mesaId: number, pedidoId: number, ws: any, clienteId: string, nombre: string) {
@@ -32,28 +208,60 @@ class WebSocketManager {
     
     session.connections.add(ws);
 
-    // Agregar cliente si no existe
-    if (!session.clientes.find(c => c.id === clienteId)) {
+    // Agregar cliente si no existe (y no es admin)
+    const isAdmin = clienteId.startsWith('admin-') || nombre.includes('Admin');
+    if (!isAdmin && !session.clientes.find(c => c.id === clienteId)) {
       session.clientes.push({
         id: clienteId,
         nombre,
         socketId: clienteId
       });
+
+      // Notificar a admins
+      const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
+      if (mesa[0]?.restauranteId) {
+        this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
+          'CLIENTE_CONECTADO',
+          mesaId,
+          mesa[0].nombre,
+          `${nombre} se conectó`,
+          `${session.clientes.length} cliente(s) en la mesa`,
+          pedidoId
+        ));
+        this.broadcastEstadoToAdmins(mesaId);
+      }
     }
 
     return session;
   }
 
   // Remover cliente
-  removeClient(mesaId: number, clienteId: string | undefined, ws: any) {
+  async removeClient(mesaId: number, clienteId: string | undefined, ws: any) {
     const session = this.sessions.get(mesaId);
     if (!session) return;
 
     session.connections.delete(ws);
     
     // Remover cliente de la lista si existe
-    if (clienteId) {
+    const isAdmin = clienteId?.startsWith('admin-');
+    if (clienteId && !isAdmin) {
+      const cliente = session.clientes.find(c => c.id === clienteId);
       session.clientes = session.clientes.filter(c => c.id !== clienteId);
+
+      // Notificar a admins
+      if (cliente) {
+        const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
+        if (mesa[0]?.restauranteId) {
+          this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
+            'CLIENTE_DESCONECTADO',
+            mesaId,
+            mesa[0].nombre,
+            `${cliente.nombre} se desconectó`,
+            `${session.clientes.length} cliente(s) en la mesa`
+          ));
+          this.broadcastEstadoToAdmins(mesaId);
+        }
+      }
     }
     
     // Si no quedan conexiones, limpiar la sesión
@@ -229,10 +437,26 @@ class WebSocketManager {
         pedido: estadoActual.pedido
       }
     });
+
+    // Notificar a admins
+    const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
+    if (mesa[0]?.restauranteId) {
+      this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
+        'PEDIDO_CONFIRMADO',
+        mesaId,
+        mesa[0].nombre,
+        `Nuevo pedido confirmado`,
+        `Total: $${estadoActual.pedido?.total || '0.00'} - ${estadoActual.items.length} productos`,
+        pedidoId
+      ));
+      this.broadcastEstadoToAdmins(mesaId);
+    }
   }
 
   // Cerrar pedido (cambiar estado a closed)
   async cerrarPedido(pedidoId: number, mesaId: number) {
+    const estadoAntes = await this.getEstadoInicial(pedidoId);
+    
     await this.db
       .update(PedidoTable)
       .set({ 
@@ -250,24 +474,65 @@ class WebSocketManager {
         pedido: estadoActual.pedido
       }
     });
+
+    // Notificar a admins
+    const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
+    if (mesa[0]?.restauranteId) {
+      this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
+        'PEDIDO_CERRADO',
+        mesaId,
+        mesa[0].nombre,
+        `Pedido cerrado`,
+        `Total: $${estadoAntes.pedido?.total || '0.00'}`,
+        pedidoId
+      ));
+      this.broadcastEstadoToAdmins(mesaId);
+    }
   }
 
-  // Llamar al mozo (solo notificación, no cambia estado)
-  llamarMozo(mesaId: number, clienteNombre: string) {
-    // Esto solo notifica al restaurante, no necesita broadcast a todos los clientes
-    // Por ahora solo retornamos éxito
+  // Llamar al mozo (solo notificación)
+  async llamarMozo(mesaId: number, clienteNombre: string) {
+    // Notificar a admins
+    const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
+    if (mesa[0]?.restauranteId) {
+      this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
+        'LLAMADA_MOZO',
+        mesaId,
+        mesa[0].nombre,
+        `¡Llamada de mozo!`,
+        `${clienteNombre} necesita asistencia`
+      ));
+    }
+    
     return { success: true, message: 'Mozo notificado' };
   }
 
   // Pagar pedido
   async pagarPedido(pedidoId: number, mesaId: number, metodo: 'efectivo' | 'mercadopago') {
-    // Aquí se podría crear un registro de pago en la tabla pago
-    // Por ahora solo retornamos éxito
+    // Notificar a admins
+    const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
+    const estadoActual = await this.getEstadoInicial(pedidoId);
+    
+    if (mesa[0]?.restauranteId) {
+      this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
+        'PAGO_RECIBIDO',
+        mesaId,
+        mesa[0].nombre,
+        `Pago ${metodo === 'efectivo' ? 'en efectivo' : 'con MercadoPago'}`,
+        `Total: $${estadoActual.pedido?.total || '0.00'}`,
+        pedidoId
+      ));
+    }
+    
     return { success: true, message: 'Pago registrado' };
   }
 
   getSession(mesaId: number) {
     return this.sessions.get(mesaId);
+  }
+
+  getAdminSession(restauranteId: number) {
+    return this.adminSessions.get(restauranteId);
   }
 }
 
