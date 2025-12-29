@@ -74,7 +74,95 @@ app.basePath('/api')
   .route('/mesa', mesaRoute)
   .route('/producto', productoRoute)
 
-// WebSocket endpoint usando upgradeWebSocket
+// IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
+// because :qrToken would match "admin" as a token
+app.get(
+  '/ws/admin',
+  upgradeWebSocket(async (c: any) => {
+    const token = c.req.query('token');
+    let restauranteId: number | null = null;
+    
+    // Verify JWT token
+    if (token) {
+      try {
+        const decoded = await verifyToken(token);
+        restauranteId = decoded.id;
+        console.log(`🔑 Admin token válido - Restaurante ID: ${restauranteId}`);
+      } catch (error) {
+        console.error('❌ Invalid admin token:', error);
+      }
+    }
+    
+    if (!restauranteId) {
+      return {
+        async onOpen(event: any, ws: any) {
+          console.error('❌ Admin connection without valid token');
+          ws.close(1008, 'Token inválido o no proporcionado');
+        },
+        async onMessage(event: any, ws: any) {},
+        async onClose(event: any, ws: any) {},
+        async onError(event: any, ws: any) {}
+      };
+    }
+
+    const adminConnectionId = `admin-${restauranteId}-${Date.now()}`;
+
+    return {
+      async onOpen(event: any, ws: any) {
+        console.log(`🔑 Admin WebSocket conectado - Restaurante: ${restauranteId}`);
+        wsManager.addAdminConnection(restauranteId!, ws);
+        
+        // Send initial state of all mesas
+        try {
+          const estadoMesas = await wsManager.getEstadoMesasRestaurante(restauranteId!);
+          ws.send(JSON.stringify({
+            type: 'ADMIN_ESTADO_MESAS',
+            payload: { mesas: estadoMesas }
+          }));
+          console.log(`📊 Estado inicial enviado: ${estadoMesas.length} mesas`);
+        } catch (error) {
+          console.error('Error sending initial admin state:', error);
+        }
+      },
+
+      async onMessage(event: any, ws: any) {
+        try {
+          const messageStr = typeof event.data === 'string' ? event.data : event.data.toString();
+          const data = JSON.parse(messageStr);
+          
+          console.log(`📨 Admin [${adminConnectionId}]:`, data.type);
+          
+          switch(data.type) {
+            case 'PING':
+              ws.send(JSON.stringify({ type: 'PONG' }));
+              break;
+              
+            case 'REFRESH_MESAS':
+              const estadoMesas = await wsManager.getEstadoMesasRestaurante(restauranteId!);
+              ws.send(JSON.stringify({
+                type: 'ADMIN_ESTADO_MESAS',
+                payload: { mesas: estadoMesas }
+              }));
+              break;
+          }
+        } catch (error) {
+          console.error('Error processing admin message:', error);
+        }
+      },
+
+      async onClose(event: any, ws: any) {
+        console.log(`🔓 Admin WebSocket desconectado - Restaurante: ${restauranteId}`);
+        wsManager.removeAdminConnection(restauranteId!, ws);
+      },
+
+      async onError(event: any, ws: any) {
+        console.error('❌ Admin WebSocket error:', event);
+      }
+    };
+  })
+)
+
+// WebSocket endpoint for mesa clients (must come AFTER /ws/admin)
 app.get(
   '/ws/:qrToken',
   upgradeWebSocket(async (c: any) => {
@@ -301,7 +389,8 @@ app.get(
           
           console.log(`👋 [${connectionId}] Cliente desconectado - Mesa: ${closingMesaId}, Cliente: ${clienteId || 'desconocido'}`);
           
-          wsManager.removeClient(closingMesaId, clienteId, ws);
+          // Usar await porque removeClient es async
+          await wsManager.removeClient(closingMesaId, clienteId, ws);
           
           // Notificar a otros clientes
           const session = wsManager.getSession(closingMesaId);
@@ -326,92 +415,6 @@ app.get(
         console.error('❌ WebSocket error:', event);
       }
     }
-  })
-)
-
-// Admin WebSocket endpoint - requires JWT token as query param
-app.get(
-  '/ws/admin',
-  upgradeWebSocket(async (c: any) => {
-    const token = c.req.query('token');
-    let restauranteId: number | null = null;
-    
-    // Verify JWT token
-    if (token) {
-      try {
-        const decoded = await verifyToken(token);
-        restauranteId = decoded.id;
-      } catch (error) {
-        console.error('❌ Invalid admin token:', error);
-      }
-    }
-    
-    if (!restauranteId) {
-      return {
-        async onOpen(event: any, ws: any) {
-          console.error('❌ Admin connection without valid token');
-          ws.close(1008, 'Token inválido o no proporcionado');
-        },
-        async onMessage(event: any, ws: any) {},
-        async onClose(event: any, ws: any) {},
-        async onError(event: any, ws: any) {}
-      };
-    }
-
-    const adminConnectionId = `admin-${restauranteId}-${Date.now()}`;
-
-    return {
-      async onOpen(event: any, ws: any) {
-        console.log(`🔑 Admin WebSocket conectado - Restaurante: ${restauranteId}`);
-        wsManager.addAdminConnection(restauranteId!, ws);
-        
-        // Send initial state of all mesas
-        try {
-          const estadoMesas = await wsManager.getEstadoMesasRestaurante(restauranteId!);
-          ws.send(JSON.stringify({
-            type: 'ADMIN_ESTADO_MESAS',
-            payload: { mesas: estadoMesas }
-          }));
-        } catch (error) {
-          console.error('Error sending initial admin state:', error);
-        }
-      },
-
-      async onMessage(event: any, ws: any) {
-        try {
-          const messageStr = typeof event.data === 'string' ? event.data : event.data.toString();
-          const data = JSON.parse(messageStr);
-          
-          console.log(`📨 Admin [${adminConnectionId}]:`, data.type);
-          
-          // Handle admin-specific messages if needed
-          switch(data.type) {
-            case 'PING':
-              ws.send(JSON.stringify({ type: 'PONG' }));
-              break;
-              
-            case 'REFRESH_MESAS':
-              const estadoMesas = await wsManager.getEstadoMesasRestaurante(restauranteId!);
-              ws.send(JSON.stringify({
-                type: 'ADMIN_ESTADO_MESAS',
-                payload: { mesas: estadoMesas }
-              }));
-              break;
-          }
-        } catch (error) {
-          console.error('Error processing admin message:', error);
-        }
-      },
-
-      async onClose(event: any, ws: any) {
-        console.log(`🔓 Admin WebSocket desconectado - Restaurante: ${restauranteId}`);
-        wsManager.removeAdminConnection(restauranteId!, ws);
-      },
-
-      async onError(event: any, ws: any) {
-        console.error('❌ Admin WebSocket error:', event);
-      }
-    };
   })
 )
 
