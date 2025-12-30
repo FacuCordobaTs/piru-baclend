@@ -404,12 +404,15 @@ class WebSocketManager {
 
   // Confirmar pedido (cambiar estado a preparing)
   async confirmarPedido(pedidoId: number, mesaId: number) {
+    console.log(`✅ [confirmarPedido] INICIO - pedidoId=${pedidoId}, mesaId=${mesaId}`);
+    
     await this.db
       .update(PedidoTable)
       .set({ estado: 'preparing' })
       .where(eq(PedidoTable.id, pedidoId));
 
     const estadoActual = await this.getEstadoInicial(pedidoId);
+    console.log(`✅ [confirmarPedido] Estado actual: total=${estadoActual.pedido?.total}, items=${estadoActual.items.length}`);
     
     // Enviar mensaje específico de confirmación
     this.broadcast(mesaId, {
@@ -423,6 +426,7 @@ class WebSocketManager {
     // Notificar a admins
     const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
     if (mesa[0]?.restauranteId) {
+      console.log(`✅ [confirmarPedido] Enviando notificación a restaurante ${mesa[0].restauranteId}`);
       this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
         'PEDIDO_CONFIRMADO',
         mesaId,
@@ -433,11 +437,16 @@ class WebSocketManager {
       ));
       this.broadcastEstadoToAdmins(mesaId);
     }
+    
+    console.log(`✅ [confirmarPedido] FIN`);
   }
 
   // Cerrar pedido (cambiar estado a closed)
   async cerrarPedido(pedidoId: number, mesaId: number) {
+    console.log(`🔒 [cerrarPedido] INICIO - pedidoId=${pedidoId}, mesaId=${mesaId}`);
+    
     const estadoAntes = await this.getEstadoInicial(pedidoId);
+    console.log(`🔒 [cerrarPedido] Estado antes: total=${estadoAntes.pedido?.total}`);
     
     await this.db
       .update(PedidoTable)
@@ -460,6 +469,7 @@ class WebSocketManager {
     // Notificar a admins
     const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
     if (mesa[0]?.restauranteId) {
+      console.log(`🔒 [cerrarPedido] Enviando notificación a restaurante ${mesa[0].restauranteId}`);
       this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
         'PEDIDO_CERRADO',
         mesaId,
@@ -470,6 +480,8 @@ class WebSocketManager {
       ));
       this.broadcastEstadoToAdmins(mesaId);
     }
+    
+    console.log(`🔒 [cerrarPedido] FIN`);
   }
 
   // Llamar al mozo (solo notificación)
@@ -490,10 +502,40 @@ class WebSocketManager {
   }
 
   // Pagar pedido
-  async pagarPedido(pedidoId: number, mesaId: number, metodo: 'efectivo' | 'mercadopago') {
+  async pagarPedido(pedidoId: number, mesaId: number, metodo: 'efectivo' | 'mercadopago', totalFromClient?: string) {
+    console.log(`💳 [pagarPedido] pedidoId=${pedidoId}, mesaId=${mesaId}, metodo=${metodo}, totalFromClient=${totalFromClient}`);
+    
     // Notificar a admins
     const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
-    const estadoActual = await this.getEstadoInicial(pedidoId);
+    
+    // Obtener el total: primero del cliente, luego del pedido en BD
+    let total = totalFromClient;
+    if (!total || total === '0.00' || total === '0') {
+      const estadoActual = await this.getEstadoInicial(pedidoId);
+      total = estadoActual.pedido?.total || '0.00';
+      console.log(`💳 [pagarPedido] Total from DB: ${total}`);
+    }
+    
+    // Si aún es 0, buscar el último pedido cerrado de esta mesa
+    if (!total || total === '0.00' || total === '0') {
+      const ultimoPedidoCerrado = await this.db
+        .select()
+        .from(PedidoTable)
+        .where(eq(PedidoTable.mesaId, mesaId))
+        .orderBy(desc(PedidoTable.createdAt))
+        .limit(2); // Obtener los 2 últimos (el actual vacío y el anterior cerrado)
+      
+      // Buscar el pedido cerrado con total > 0
+      const pedidoConTotal = ultimoPedidoCerrado.find(p => 
+        parseFloat(p.total || '0') > 0
+      );
+      if (pedidoConTotal) {
+        total = pedidoConTotal.total || '0.00';
+        console.log(`💳 [pagarPedido] Total from last closed order: ${total}`);
+      }
+    }
+    
+    console.log(`💳 [pagarPedido] Final total: ${total}`);
     
     if (mesa[0]?.restauranteId) {
       this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
@@ -501,7 +543,7 @@ class WebSocketManager {
         mesaId,
         mesa[0].nombre,
         `Pago ${metodo === 'efectivo' ? 'en efectivo' : 'con MercadoPago'}`,
-        `Total: $${estadoActual.pedido?.total || '0.00'}`,
+        `Total: $${total}`,
         pedidoId
       ));
     }

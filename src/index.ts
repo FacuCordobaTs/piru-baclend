@@ -357,8 +357,8 @@ app.get(
               break;
 
             case 'PAGAR_PEDIDO':
-              console.log(`💳 Pagando pedido ${currentPedidoId} - Método: ${data.payload.metodo}`);
-              await wsManager.pagarPedido(currentPedidoId, currentMesaId, data.payload.metodo);
+              console.log(`💳 Pagando pedido ${currentPedidoId} - Método: ${data.payload.metodo}, Total del cliente: ${data.payload.total || 'no enviado'}`);
+              await wsManager.pagarPedido(currentPedidoId, currentMesaId, data.payload.metodo, data.payload.total);
               break;
               
             default:
