@@ -1,7 +1,7 @@
 // pedido.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable } from '../db/schema'
+import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable, pago as PagoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { eq, desc, and } from 'drizzle-orm'
@@ -133,6 +133,23 @@ const pedidoRoute = new Hono()
     acc[cliente].push(item)
     return acc
   }, {} as Record<string, typeof items>)
+
+  // Obtener información de pago del pedido
+  const pagos = await db
+    .select({
+      id: PagoTable.id,
+      metodo: PagoTable.metodo,
+      estado: PagoTable.estado,
+      monto: PagoTable.monto,
+      mpPaymentId: PagoTable.mpPaymentId,
+      createdAt: PagoTable.createdAt
+    })
+    .from(PagoTable)
+    .where(eq(PagoTable.pedidoId, pedidoId))
+    .orderBy(desc(PagoTable.createdAt))
+
+  // Determinar el pago principal (el más reciente con estado 'paid', o el más reciente)
+  const pagoPrincipal = pagos.find(p => p.estado === 'paid') || pagos[0] || null
   
   return c.json({ 
     message: 'Pedido encontrado correctamente', 
@@ -141,7 +158,9 @@ const pedidoRoute = new Hono()
       ...pedido[0],
       items,
       itemsPorCliente,
-      totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0)
+      totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0),
+      pago: pagoPrincipal,
+      pagos: pagos // Todos los intentos de pago por si hay múltiples
     }
   }, 200)
 })
