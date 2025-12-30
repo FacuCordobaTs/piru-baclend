@@ -14,11 +14,7 @@ class WebSocketManager {
   private sessions: Map<number, MesaSession> = new Map();
   private adminSessions: Map<number, AdminSession> = new Map(); // restauranteId -> AdminSession
   private mesaToRestaurante: Map<number, number> = new Map(); // mesaId -> restauranteId
-  private recentNotifications: Map<string, number> = new Map(); // key -> timestamp (for deduplication)
   private db = drizzle(pool);
-  
-  // Notification deduplication TTL (5 seconds)
-  private readonly NOTIFICATION_DEDUP_TTL = 5000;
 
   // ==================== ADMIN METHODS ====================
 
@@ -58,38 +54,12 @@ class WebSocketManager {
     const session = this.adminSessions.get(restauranteId);
     if (!session || session.connections.size === 0) return;
 
-    // Deduplication: create a key based on type, mesa, and pedido
-    const dedupKey = `${notification.tipo}-${notification.mesaId}-${notification.pedidoId || 0}`;
-    const now = Date.now();
-    const lastSent = this.recentNotifications.get(dedupKey);
-    
-    // Skip if we sent the same notification recently
-    if (lastSent && (now - lastSent) < this.NOTIFICATION_DEDUP_TTL) {
-      console.log(`⏭️ Notificación duplicada ignorada: ${dedupKey}`);
-      return;
-    }
-    
-    // Track this notification
-    this.recentNotifications.set(dedupKey, now);
-    
-    // Clean up old entries periodically (every 100 notifications)
-    if (this.recentNotifications.size > 100) {
-      const cutoff = now - this.NOTIFICATION_DEDUP_TTL;
-      const keysToDelete: string[] = [];
-      this.recentNotifications.forEach((timestamp, key) => {
-        if (timestamp < cutoff) {
-          keysToDelete.push(key);
-        }
-      });
-      keysToDelete.forEach(key => this.recentNotifications.delete(key));
-    }
-
     const message = JSON.stringify({
       type: 'ADMIN_NOTIFICACION',
       payload: notification
     });
 
-    console.log(`🔔 Enviando notificación: ${notification.tipo} - ${notification.mensaje}`);
+    console.log(`🔔 Enviando notificación a ${session.connections.size} admin(s): ${notification.tipo} - ${notification.mensaje}`);
     
     session.connections.forEach((client) => {
       if (client.readyState === 1) { // OPEN
