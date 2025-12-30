@@ -5,6 +5,7 @@ import { authRoute } from './routes/auth'
 import { restauranteRoute } from './routes/restaruante'
 import { mesaRoute } from './routes/mesa';
 import { productoRoute } from './routes/producto';
+import { pedidoRoute } from './routes/pedido';
 import { wsManager } from './websocket/manager';
 import type { WebSocketMessage } from './types/websocket';
 import { drizzle } from 'drizzle-orm/mysql2';
@@ -73,6 +74,7 @@ app.basePath('/api')
   .route('/restaurante', restauranteRoute)
   .route('/mesa', mesaRoute)
   .route('/producto', productoRoute)
+  .route('/pedido', pedidoRoute)
 
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
 // because :qrToken would match "admin" as a token
