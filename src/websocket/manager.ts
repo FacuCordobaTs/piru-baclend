@@ -14,7 +14,11 @@ class WebSocketManager {
   private sessions: Map<number, MesaSession> = new Map();
   private adminSessions: Map<number, AdminSession> = new Map(); // restauranteId -> AdminSession
   private mesaToRestaurante: Map<number, number> = new Map(); // mesaId -> restauranteId
+  private recentNotifications: Map<string, number> = new Map(); // key -> timestamp (for deduplication)
   private db = drizzle(pool);
+  
+  // Notification deduplication TTL (5 seconds)
+  private readonly NOTIFICATION_DEDUP_TTL = 5000;
 
   // ==================== ADMIN METHODS ====================
 
@@ -52,13 +56,41 @@ class WebSocketManager {
   // Enviar notificación a todos los admins de un restaurante
   notifyAdmins(restauranteId: number, notification: AdminNotification) {
     const session = this.adminSessions.get(restauranteId);
-    if (!session) return;
+    if (!session || session.connections.size === 0) return;
+
+    // Deduplication: create a key based on type, mesa, and pedido
+    const dedupKey = `${notification.tipo}-${notification.mesaId}-${notification.pedidoId || 0}`;
+    const now = Date.now();
+    const lastSent = this.recentNotifications.get(dedupKey);
+    
+    // Skip if we sent the same notification recently
+    if (lastSent && (now - lastSent) < this.NOTIFICATION_DEDUP_TTL) {
+      console.log(`⏭️ Notificación duplicada ignorada: ${dedupKey}`);
+      return;
+    }
+    
+    // Track this notification
+    this.recentNotifications.set(dedupKey, now);
+    
+    // Clean up old entries periodically (every 100 notifications)
+    if (this.recentNotifications.size > 100) {
+      const cutoff = now - this.NOTIFICATION_DEDUP_TTL;
+      const keysToDelete: string[] = [];
+      this.recentNotifications.forEach((timestamp, key) => {
+        if (timestamp < cutoff) {
+          keysToDelete.push(key);
+        }
+      });
+      keysToDelete.forEach(key => this.recentNotifications.delete(key));
+    }
 
     const message = JSON.stringify({
       type: 'ADMIN_NOTIFICACION',
       payload: notification
     });
 
+    console.log(`🔔 Enviando notificación: ${notification.tipo} - ${notification.mensaje}`);
+    
     session.connections.forEach((client) => {
       if (client.readyState === 1) { // OPEN
         try {
@@ -217,26 +249,16 @@ class WebSocketManager {
         socketId: clienteId
       });
 
-      // Notificar a admins
-      const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
-      if (mesa[0]?.restauranteId) {
-        this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
-          'CLIENTE_CONECTADO',
-          mesaId,
-          mesa[0].nombre,
-          `${nombre} se conectó`,
-          `${session.clientes.length} cliente(s) en la mesa`,
-          pedidoId
-        ));
-        this.broadcastEstadoToAdmins(mesaId);
-      }
+      // Solo actualizar estado de mesas para admins (sin notificación)
+      // Las conexiones/desconexiones de clientes no generan notificaciones
+      this.broadcastEstadoToAdmins(mesaId);
     }
 
     return session;
   }
 
   // Remover cliente
-  async removeClient(mesaId: number, clienteId: string | undefined, ws: any) {
+  removeClient(mesaId: number, clienteId: string | undefined, ws: any) {
     const session = this.sessions.get(mesaId);
     if (!session) return;
 
@@ -245,22 +267,12 @@ class WebSocketManager {
     // Remover cliente de la lista si existe
     const isAdmin = clienteId?.startsWith('admin-');
     if (clienteId && !isAdmin) {
-      const cliente = session.clientes.find(c => c.id === clienteId);
+      const clienteExistia = session.clientes.some(c => c.id === clienteId);
       session.clientes = session.clientes.filter(c => c.id !== clienteId);
 
-      // Notificar a admins
-      if (cliente) {
-        const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
-        if (mesa[0]?.restauranteId) {
-          this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
-            'CLIENTE_DESCONECTADO',
-            mesaId,
-            mesa[0].nombre,
-            `${cliente.nombre} se desconectó`,
-            `${session.clientes.length} cliente(s) en la mesa`
-          ));
-          this.broadcastEstadoToAdmins(mesaId);
-        }
+      // Solo actualizar estado de mesas para admins (sin notificación)
+      if (clienteExistia) {
+        this.broadcastEstadoToAdmins(mesaId);
       }
     }
     

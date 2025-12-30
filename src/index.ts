@@ -389,8 +389,7 @@ app.get(
           
           console.log(`👋 [${connectionId}] Cliente desconectado - Mesa: ${closingMesaId}, Cliente: ${clienteId || 'desconocido'}`);
           
-          // Usar await porque removeClient es async
-          await wsManager.removeClient(closingMesaId, clienteId, ws);
+          wsManager.removeClient(closingMesaId, clienteId, ws);
           
           // Notificar a otros clientes
           const session = wsManager.getSession(closingMesaId);
