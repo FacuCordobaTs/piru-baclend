@@ -566,5 +566,67 @@ const pedidoRoute = new Hono()
   }, 200)
 })
 
+// Eliminar pedido completamente
+.delete('/delete/:id', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const pedidoId = Number(c.req.param('id'))
+
+  // Verificar que el pedido pertenece al restaurante
+  const pedido = await db
+    .select()
+    .from(PedidoTable)
+    .where(and(
+      eq(PedidoTable.id, pedidoId),
+      eq(PedidoTable.restauranteId, restauranteId)
+    ))
+    .limit(1)
+
+  if (!pedido || pedido.length === 0) {
+    return c.json({ message: 'Pedido no encontrado', success: false }, 404)
+  }
+
+  const mesaId = pedido[0].mesaId
+
+  try {
+    // Eliminar pagos asociados primero
+    await db
+      .delete(PagoTable)
+      .where(eq(PagoTable.pedidoId, pedidoId))
+
+    // Eliminar items del pedido
+    await db
+      .delete(ItemPedidoTable)
+      .where(eq(ItemPedidoTable.pedidoId, pedidoId))
+
+    // Eliminar el pedido
+    await db
+      .delete(PedidoTable)
+      .where(eq(PedidoTable.id, pedidoId))
+
+    // Notificar a clientes conectados via WebSocket
+    if (mesaId) {
+      wsManager.broadcast(mesaId, {
+        type: 'PEDIDO_ELIMINADO',
+        payload: { pedidoId }
+      })
+      // Notificar a admins
+      wsManager.broadcastEstadoToAdmins(mesaId)
+    }
+
+    return c.json({
+      message: 'Pedido eliminado correctamente',
+      success: true
+    }, 200)
+  } catch (error) {
+    console.error('Error al eliminar pedido:', error)
+    return c.json({ 
+      message: 'Error al eliminar el pedido', 
+      success: false,
+      error: (error as Error).message 
+    }, 500)
+  }
+})
+
 export { pedidoRoute }
 
