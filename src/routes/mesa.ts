@@ -1,7 +1,7 @@
 // mesa.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { mesa as MesaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable } from '../db/schema'
+import { mesa as MesaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable, restaurante as RestauranteTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
@@ -38,6 +38,13 @@ const mesaRoute = new Hono()
     return c.json({ message: 'Mesa no encontrada', success: false }, 404)
   }
 
+  // Obtener información del restaurante (nombre e imagen)
+  const restaurante = await db.select({
+    id: RestauranteTable.id,
+    nombre: RestauranteTable.nombre,
+    imagenUrl: RestauranteTable.imagenUrl,
+  }).from(RestauranteTable).where(eq(RestauranteTable.id, mesa[0].restauranteId!)).limit(1)
+
    let ultimoPedido = await db.select().
   from(PedidoTable).
   where(eq(PedidoTable.mesaId, mesa[0].id)).
@@ -69,7 +76,8 @@ const mesaRoute = new Hono()
     data: {
       mesa: mesa[0],
       pedido: ultimoPedido[0], 
-      productos: productos
+      productos: productos,
+      restaurante: restaurante[0] || null
     }
   }, 200)
   }
@@ -80,7 +88,8 @@ const mesaRoute = new Hono()
     data: {
       mesa: mesa[0], 
       pedido: ultimoPedido[0], 
-      productos: productos
+      productos: productos,
+      restaurante: restaurante[0] || null
     } }, 200)
 })
 
