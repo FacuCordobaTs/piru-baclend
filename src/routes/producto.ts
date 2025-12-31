@@ -111,6 +111,23 @@ const productoRoute = new Hono()
 
 .use('*', authMiddleware)
 
+// Obtener todos los productos del restaurante
+.get('/', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  
+  const productos = await db
+    .select()
+    .from(ProductoTable)
+    .where(eq(ProductoTable.restauranteId, restauranteId))
+  
+  return c.json({ 
+    message: 'Productos obtenidos correctamente', 
+    success: true, 
+    productos 
+  }, 200)
+})
+
 .post('/create', zValidator('json', createProductSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
