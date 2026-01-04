@@ -15,6 +15,13 @@ export const restaurante = mysqlTable("restaurante", {
     mercadoPagoPrivateKey: varchar("mercado_pago_private_key", { length: 255 }),
 });
 
+export const categoria = mysqlTable("categoria", {
+    id: int("id").primaryKey().autoincrement(),
+    restauranteId: int("restaurante_id").references(() => restaurante.id),
+    nombre: varchar("nombre", { length: 255 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const mesa = mysqlTable("mesa", {
     id: int("id").primaryKey().autoincrement(),
     nombre: varchar("nombre", { length: 255 }).notNull(),
@@ -26,6 +33,7 @@ export const mesa = mysqlTable("mesa", {
 export const producto = mysqlTable("producto", {
     id: int("id").primaryKey().autoincrement(),
     restauranteId: int("restaurante_id").references(() => restaurante.id),
+    categoriaId: int("categoria_id").references(() => categoria.id),
     nombre: varchar("nombre", { length: 255 }).notNull(),
     descripcion: varchar("descripcion", { length: 255 }),
     precio: decimal("precio", { precision: 10, scale: 2 }).notNull(),

@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { producto as ProductoTable } from '../db/schema'
+import { producto as ProductoTable, categoria as CategoriaTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
@@ -97,6 +97,7 @@ const createProductSchema = z.object({
   descripcion: z.string().min(3).max(255),
   precio: z.number().min(0),
   image: z.string().min(10),
+  categoriaId: z.number().optional(),
 });
 
 const updateProductSchema = z.object({
@@ -105,6 +106,7 @@ const updateProductSchema = z.object({
   descripcion: z.string().min(3).max(255).optional(),
   precio: z.number().min(0).optional(),
   image: z.string().min(10).optional(),
+  categoriaId: z.number().optional(),
 });
 
 const productoRoute = new Hono()
@@ -117,21 +119,61 @@ const productoRoute = new Hono()
   const restauranteId = (c as any).user.id
   
   const productos = await db
-    .select()
+    .select({
+      id: ProductoTable.id,
+      restauranteId: ProductoTable.restauranteId,
+      categoriaId: ProductoTable.categoriaId,
+      nombre: ProductoTable.nombre,
+      descripcion: ProductoTable.descripcion,
+      precio: ProductoTable.precio,
+      activo: ProductoTable.activo,
+      imagenUrl: ProductoTable.imagenUrl,
+      createdAt: ProductoTable.createdAt,
+      categoria: {
+        id: CategoriaTable.id,
+        nombre: CategoriaTable.nombre,
+      }
+    })
     .from(ProductoTable)
+    .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
     .where(eq(ProductoTable.restauranteId, restauranteId))
+  
+  // Transformar los resultados para incluir categoria como string
+  const productosConCategoria = productos.map(p => ({
+    ...p,
+    categoria: p.categoria?.nombre || null,
+  }))
   
   return c.json({ 
     message: 'Productos obtenidos correctamente', 
     success: true, 
-    productos 
+    productos: productosConCategoria
   }, 200)
 })
 
 .post('/create', zValidator('json', createProductSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre, descripcion, precio, image } = c.req.valid('json')
+  const { nombre, descripcion, precio, image, categoriaId } = c.req.valid('json')
+
+  // Validar que la categoría pertenece al restaurante si se proporciona
+  if (categoriaId) {
+    const categoria = await db
+      .select()
+      .from(CategoriaTable)
+      .where(and(
+        eq(CategoriaTable.id, categoriaId),
+        eq(CategoriaTable.restauranteId, restauranteId)
+      ))
+      .limit(1)
+    
+    if (categoria.length === 0) {
+      return c.json({ 
+        message: 'Categoría no encontrada o no pertenece al restaurante', 
+        success: false 
+      }, 400)
+    }
+  }
 
   let newImageUrl: string | undefined;
 
@@ -157,6 +199,7 @@ const productoRoute = new Hono()
     precio: precio.toString(),
     imagenUrl: newImageUrl,
     restauranteId,
+    categoriaId: categoriaId || null,
   })
   return c.json({ message: 'Producto creado correctamente', success: true, data: product }, 200)
 })
@@ -164,7 +207,31 @@ const productoRoute = new Hono()
 .put('/update', zValidator('json', updateProductSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { id, nombre, descripcion, precio, image } = c.req.valid('json')
+  const { id, nombre, descripcion, precio, image, categoriaId } = c.req.valid('json')
+  
+  // Validar que la categoría pertenece al restaurante si se proporciona
+  if (categoriaId !== undefined) {
+    if (categoriaId === null) {
+      // Permitir establecer categoriaId a null
+    } else {
+      const categoria = await db
+        .select()
+        .from(CategoriaTable)
+        .where(and(
+          eq(CategoriaTable.id, categoriaId),
+          eq(CategoriaTable.restauranteId, restauranteId)
+        ))
+        .limit(1)
+      
+      if (categoria.length === 0) {
+        return c.json({ 
+          message: 'Categoría no encontrada o no pertenece al restaurante', 
+          success: false 
+        }, 400)
+      }
+    }
+  }
+  
   let newImageUrl: string | undefined;
 
   if (image) {
@@ -188,6 +255,7 @@ const productoRoute = new Hono()
   if (descripcion) updateData.descripcion = descripcion;
   if (precio) updateData.precio = precio;
   if (newImageUrl) updateData.imagenUrl = newImageUrl;
+  if (categoriaId !== undefined) updateData.categoriaId = categoriaId;
   if (Object.keys(updateData).length === 0) {
     return c.json({ message: 'No se proporcionaron datos para actualizar', success: false }, 400)
   }

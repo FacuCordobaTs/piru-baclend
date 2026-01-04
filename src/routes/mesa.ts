@@ -1,7 +1,7 @@
 // mesa.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { mesa as MesaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable, restaurante as RestauranteTable } from '../db/schema'
+import { mesa as MesaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable, restaurante as RestauranteTable, categoria as CategoriaTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
@@ -51,9 +51,31 @@ const mesaRoute = new Hono()
   orderBy(desc(PedidoTable.createdAt))
   .limit(1)
   
-  const productos = await db.select()
-  .from(ProductoTable)
-  .where(and(eq(ProductoTable.restauranteId, mesa[0].restauranteId!), eq(ProductoTable.activo, true)))
+  const productos = await db
+    .select({
+      id: ProductoTable.id,
+      restauranteId: ProductoTable.restauranteId,
+      categoriaId: ProductoTable.categoriaId,
+      nombre: ProductoTable.nombre,
+      descripcion: ProductoTable.descripcion,
+      precio: ProductoTable.precio,
+      activo: ProductoTable.activo,
+      imagenUrl: ProductoTable.imagenUrl,
+      createdAt: ProductoTable.createdAt,
+      categoria: {
+        id: CategoriaTable.id,
+        nombre: CategoriaTable.nombre,
+      }
+    })
+    .from(ProductoTable)
+    .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
+    .where(and(eq(ProductoTable.restauranteId, mesa[0].restauranteId!), eq(ProductoTable.activo, true)))
+  
+  // Transformar los resultados para incluir categoria como string
+  const productosConCategoria = productos.map(p => ({
+    ...p,
+    categoria: p.categoria?.nombre || null,
+  }))
 
   let pedidoActual = ultimoPedido[0];
   if (!pedidoActual || pedidoActual.estado === 'closed') {
@@ -76,7 +98,7 @@ const mesaRoute = new Hono()
     data: {
       mesa: mesa[0],
       pedido: ultimoPedido[0], 
-      productos: productos,
+      productos: productosConCategoria,
       restaurante: restaurante[0] || null
     }
   }, 200)
@@ -88,7 +110,7 @@ const mesaRoute = new Hono()
     data: {
       mesa: mesa[0], 
       pedido: ultimoPedido[0], 
-      productos: productos,
+      productos: productosConCategoria,
       restaurante: restaurante[0] || null
     } }, 200)
 })
