@@ -1,10 +1,10 @@
 // pedido.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable, pago as PagoTable } from '../db/schema'
+import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable, pago as PagoTable, ingrediente as IngredienteTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
-import { eq, desc, and } from 'drizzle-orm'
+import { eq, desc, and, inArray } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
@@ -63,7 +63,7 @@ const pedidoRoute = new Hono()
 
   // Para cada pedido, obtener los items
   const pedidosConItems = await Promise.all(pedidos.map(async (pedido) => {
-    const items = await db
+    const itemsRaw = await db
       .select({
         id: ItemPedidoTable.id,
         productoId: ItemPedidoTable.productoId,
@@ -71,11 +71,37 @@ const pedidoRoute = new Hono()
         cantidad: ItemPedidoTable.cantidad,
         precioUnitario: ItemPedidoTable.precioUnitario,
         nombreProducto: ProductoTable.nombre,
-        imagenUrl: ProductoTable.imagenUrl
+        imagenUrl: ProductoTable.imagenUrl,
+        ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos
       })
       .from(ItemPedidoTable)
       .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
       .where(eq(ItemPedidoTable.pedidoId, pedido.id))
+
+    // Obtener nombres de ingredientes excluidos para cada item
+    const items = await Promise.all(
+      itemsRaw.map(async (item) => {
+        let ingredientesExcluidosNombres: string[] = []
+        
+        if (item.ingredientesExcluidos && Array.isArray(item.ingredientesExcluidos) && item.ingredientesExcluidos.length > 0) {
+          const ingredientes = await db
+            .select({
+              id: IngredienteTable.id,
+              nombre: IngredienteTable.nombre,
+            })
+            .from(IngredienteTable)
+            .where(inArray(IngredienteTable.id, item.ingredientesExcluidos as number[]))
+          
+          ingredientesExcluidosNombres = ingredientes.map(ing => ing.nombre)
+        }
+
+        return {
+          ...item,
+          ingredientesExcluidos: item.ingredientesExcluidos || [],
+          ingredientesExcluidosNombres
+        }
+      })
+    )
 
     return {
       ...pedido,
@@ -127,7 +153,7 @@ const pedidoRoute = new Hono()
   }
 
   // Obtener items del pedido
-  const items = await db
+  const itemsRaw = await db
     .select({
       id: ItemPedidoTable.id,
       productoId: ItemPedidoTable.productoId,
@@ -136,11 +162,53 @@ const pedidoRoute = new Hono()
       precioUnitario: ItemPedidoTable.precioUnitario,
       nombreProducto: ProductoTable.nombre,
       imagenUrl: ProductoTable.imagenUrl,
-      descripcion: ProductoTable.descripcion
+      descripcion: ProductoTable.descripcion,
+      ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos
     })
     .from(ItemPedidoTable)
     .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
     .where(eq(ItemPedidoTable.pedidoId, pedidoId))
+
+  // Helper para parsear JSON si viene como string
+  const parseJsonField = (value: any): number[] | null => {
+    if (!value) return null
+    if (Array.isArray(value)) return value
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value)
+        return Array.isArray(parsed) ? parsed : null
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
+
+  // Obtener nombres de ingredientes excluidos para cada item
+  const items = await Promise.all(
+    itemsRaw.map(async (item) => {
+      let ingredientesExcluidosNombres: string[] = []
+      const ingredientesExcluidosParsed = parseJsonField(item.ingredientesExcluidos)
+      
+      if (ingredientesExcluidosParsed && ingredientesExcluidosParsed.length > 0) {
+        const ingredientes = await db
+          .select({
+            id: IngredienteTable.id,
+            nombre: IngredienteTable.nombre,
+          })
+          .from(IngredienteTable)
+          .where(inArray(IngredienteTable.id, ingredientesExcluidosParsed))
+        
+        ingredientesExcluidosNombres = ingredientes.map(ing => ing.nombre)
+      }
+
+      return {
+        ...item,
+        ingredientesExcluidos: ingredientesExcluidosParsed || [],
+        ingredientesExcluidosNombres
+      }
+    })
+  )
 
   // Agrupar items por cliente
   const itemsPorCliente = items.reduce((acc, item) => {

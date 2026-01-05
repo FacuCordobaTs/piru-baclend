@@ -203,7 +203,7 @@ const mesaRoute = new Hono()
 
     // Si hay pedido, obtener sus items con info del producto
     if (pedidoActual) {
-      items = await db
+      const itemsRaw = await db
         .select({
           id: ItemPedidoTable.id,
           productoId: ItemPedidoTable.productoId,
@@ -211,11 +211,53 @@ const mesaRoute = new Hono()
           cantidad: ItemPedidoTable.cantidad,
           precioUnitario: ItemPedidoTable.precioUnitario,
           nombreProducto: ProductoTable.nombre,
-          imagenUrl: ProductoTable.imagenUrl
+          imagenUrl: ProductoTable.imagenUrl,
+          ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos
         })
         .from(ItemPedidoTable)
         .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
         .where(eq(ItemPedidoTable.pedidoId, pedidoActual.id))
+
+      // Helper para parsear JSON si viene como string
+      const parseJsonField = (value: any): number[] | null => {
+        if (!value) return null
+        if (Array.isArray(value)) return value
+        if (typeof value === 'string') {
+          try {
+            const parsed = JSON.parse(value)
+            return Array.isArray(parsed) ? parsed : null
+          } catch {
+            return null
+          }
+        }
+        return null
+      }
+
+      // Obtener nombres de ingredientes excluidos para cada item
+      items = await Promise.all(
+        itemsRaw.map(async (item) => {
+          let ingredientesExcluidosNombres: string[] = []
+          const ingredientesExcluidosParsed = parseJsonField(item.ingredientesExcluidos)
+          
+          if (ingredientesExcluidosParsed && ingredientesExcluidosParsed.length > 0) {
+            const ingredientes = await db
+              .select({
+                id: IngredienteTable.id,
+                nombre: IngredienteTable.nombre,
+              })
+              .from(IngredienteTable)
+              .where(inArray(IngredienteTable.id, ingredientesExcluidosParsed))
+            
+            ingredientesExcluidosNombres = ingredientes.map(ing => ing.nombre)
+          }
+
+          return {
+            ...item,
+            ingredientesExcluidos: ingredientesExcluidosParsed || [],
+            ingredientesExcluidosNombres
+          }
+        })
+      )
     }
 
     return {

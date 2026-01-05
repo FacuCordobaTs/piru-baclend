@@ -115,7 +115,7 @@ class WebSocketManager {
       let items: any[] = [];
       
       if (pedido) {
-        items = await this.db
+        const itemsRaw = await this.db
           .select({
             id: ItemPedidoTable.id,
             productoId: ItemPedidoTable.productoId,
@@ -129,6 +129,48 @@ class WebSocketManager {
           .from(ItemPedidoTable)
           .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
           .where(eq(ItemPedidoTable.pedidoId, pedido.id));
+
+        // Helper para parsear JSON si viene como string
+        const parseJsonField = (value: any): number[] | null => {
+          if (!value) return null
+          if (Array.isArray(value)) return value
+          if (typeof value === 'string') {
+            try {
+              const parsed = JSON.parse(value)
+              return Array.isArray(parsed) ? parsed : null
+            } catch {
+              return null
+            }
+          }
+          return null
+        }
+
+        // Obtener nombres de ingredientes excluidos para cada item
+        items = await Promise.all(
+          itemsRaw.map(async (item) => {
+            let ingredientesExcluidosNombres: string[] = []
+            const ingredientesExcluidosParsed = parseJsonField(item.ingredientesExcluidos)
+            
+            if (ingredientesExcluidosParsed && ingredientesExcluidosParsed.length > 0) {
+              const { inArray } = await import('drizzle-orm')
+              const ingredientes = await this.db
+                .select({
+                  id: IngredienteTable.id,
+                  nombre: IngredienteTable.nombre,
+                })
+                .from(IngredienteTable)
+                .where(inArray(IngredienteTable.id, ingredientesExcluidosParsed))
+              
+              ingredientesExcluidosNombres = ingredientes.map(ing => ing.nombre)
+            }
+
+            return {
+              ...item,
+              ingredientesExcluidos: ingredientesExcluidosParsed || [],
+              ingredientesExcluidosNombres
+            }
+          })
+        )
       }
 
       // Get connected clients from session
@@ -294,35 +336,39 @@ class WebSocketManager {
       (items || []).map(async (item) => {
         let ingredientesExcluidosNombres: string[] = []
         
-        if (item.ingredientesExcluidos && Array.isArray(item.ingredientesExcluidos) && item.ingredientesExcluidos.length > 0) {
+        // Helper para parsear JSON si viene como string
+        const parseJsonField = (value: any): number[] | null => {
+          if (!value) return null
+          if (Array.isArray(value)) return value
+          if (typeof value === 'string') {
+            try {
+              const parsed = JSON.parse(value)
+              return Array.isArray(parsed) ? parsed : null
+            } catch {
+              return null
+            }
+          }
+          return null
+        }
+
+        const ingredientesExcluidosParsed = parseJsonField(item.ingredientesExcluidos)
+        
+        if (ingredientesExcluidosParsed && ingredientesExcluidosParsed.length > 0) {
+          const { inArray } = await import('drizzle-orm')
           const ingredientes = await this.db
             .select({
               id: IngredienteTable.id,
               nombre: IngredienteTable.nombre,
             })
             .from(IngredienteTable)
-            .where(eq(IngredienteTable.id, item.ingredientesExcluidos[0] as number))
+            .where(inArray(IngredienteTable.id, ingredientesExcluidosParsed))
           
-          // Si hay múltiples IDs, obtener todos
-          if (item.ingredientesExcluidos.length > 1) {
-            const { inArray } = await import('drizzle-orm')
-            const todosIngredientes = await this.db
-              .select({
-                id: IngredienteTable.id,
-                nombre: IngredienteTable.nombre,
-              })
-              .from(IngredienteTable)
-              .where(inArray(IngredienteTable.id, item.ingredientesExcluidos as number[]))
-            
-            ingredientesExcluidosNombres = todosIngredientes.map(ing => ing.nombre)
-          } else if (ingredientes.length > 0) {
-            ingredientesExcluidosNombres = [ingredientes[0].nombre]
-          }
+          ingredientesExcluidosNombres = ingredientes.map(ing => ing.nombre)
         }
 
         return {
           ...item,
-          ingredientesExcluidos: item.ingredientesExcluidos || [],
+          ingredientesExcluidos: ingredientesExcluidosParsed || [],
           ingredientesExcluidosNombres
         }
       })
@@ -372,9 +418,26 @@ class WebSocketManager {
       .where(eq(ItemPedidoTable.id, Number(result[0].insertId)))
       .limit(1);
 
+    // Helper para parsear JSON si viene como string
+    const parseJsonField = (value: any): number[] | null => {
+      if (!value) return null
+      if (Array.isArray(value)) return value
+      if (typeof value === 'string') {
+        try {
+          const parsed = JSON.parse(value)
+          return Array.isArray(parsed) ? parsed : null
+        } catch {
+          return null
+        }
+      }
+      return null
+    }
+
     // Obtener nombres de ingredientes excluidos
     let ingredientesExcluidosNombres: string[] = []
-    if (item.ingredientesExcluidos && item.ingredientesExcluidos.length > 0) {
+    const ingredientesExcluidosParsed = parseJsonField(itemCompleto[0].ingredientesExcluidos)
+    
+    if (ingredientesExcluidosParsed && ingredientesExcluidosParsed.length > 0) {
       const { inArray } = await import('drizzle-orm')
       const ingredientes = await this.db
         .select({
@@ -382,14 +445,14 @@ class WebSocketManager {
           nombre: IngredienteTable.nombre,
         })
         .from(IngredienteTable)
-        .where(inArray(IngredienteTable.id, item.ingredientesExcluidos))
+        .where(inArray(IngredienteTable.id, ingredientesExcluidosParsed))
       
       ingredientesExcluidosNombres = ingredientes.map(ing => ing.nombre)
     }
 
     const itemCompletoConNombres = {
       ...itemCompleto[0],
-      ingredientesExcluidos: item.ingredientesExcluidos || [],
+      ingredientesExcluidos: ingredientesExcluidosParsed || [],
       ingredientesExcluidosNombres
     }
 
