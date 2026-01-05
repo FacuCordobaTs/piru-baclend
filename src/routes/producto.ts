@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { producto as ProductoTable, categoria as CategoriaTable } from '../db/schema'
+import { producto as ProductoTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
@@ -98,6 +98,7 @@ const createProductSchema = z.object({
   precio: z.number().min(0),
   image: z.string().min(10),
   categoriaId: z.number().optional(),
+  ingredienteIds: z.array(z.number().int().positive()).optional(),
 });
 
 const updateProductSchema = z.object({
@@ -107,6 +108,7 @@ const updateProductSchema = z.object({
   precio: z.number().min(0).optional(),
   image: z.string().min(10).optional(),
   categoriaId: z.number().optional(),
+  ingredienteIds: z.array(z.number().int().positive()).optional(),
 });
 
 const productoRoute = new Hono()
@@ -138,23 +140,37 @@ const productoRoute = new Hono()
     .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
     .where(eq(ProductoTable.restauranteId, restauranteId))
   
-  // Transformar los resultados para incluir categoria como string
-  const productosConCategoria = productos.map(p => ({
-    ...p,
-    categoria: p.categoria?.nombre || null,
-  }))
+  // Obtener ingredientes para cada producto
+  const productosConIngredientes = await Promise.all(
+    productos.map(async (p) => {
+      const ingredientes = await db
+        .select({
+          id: IngredienteTable.id,
+          nombre: IngredienteTable.nombre,
+        })
+        .from(ProductoIngredienteTable)
+        .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
+        .where(eq(ProductoIngredienteTable.productoId, p.id))
+
+      return {
+        ...p,
+        categoria: p.categoria?.nombre || null,
+        ingredientes: ingredientes,
+      }
+    })
+  )
   
   return c.json({ 
     message: 'Productos obtenidos correctamente', 
     success: true, 
-    productos: productosConCategoria
+    productos: productosConIngredientes
   }, 200)
 })
 
 .post('/create', zValidator('json', createProductSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre, descripcion, precio, image, categoriaId } = c.req.valid('json')
+  const { nombre, descripcion, precio, image, categoriaId, ingredienteIds } = c.req.valid('json')
 
   // Validar que la categoría pertenece al restaurante si se proporciona
   if (categoriaId) {
@@ -201,13 +217,40 @@ const productoRoute = new Hono()
     restauranteId,
     categoriaId: categoriaId || null,
   })
+
+  const productoId = Number(product[0].insertId)
+
+  // Asociar ingredientes si se proporcionaron
+  if (ingredienteIds && ingredienteIds.length > 0) {
+    // Verificar que todos los ingredientes pertenecen al restaurante
+    const ingredientes = await db
+      .select()
+      .from(IngredienteTable)
+      .where(and(
+        eq(IngredienteTable.restauranteId, restauranteId)
+      ))
+
+    const ingredientesValidos = ingredientes
+      .filter(ing => ingredienteIds.includes(ing.id))
+      .map(ing => ing.id)
+
+    if (ingredientesValidos.length > 0) {
+      await db.insert(ProductoIngredienteTable).values(
+        ingredientesValidos.map(ingredienteId => ({
+          productoId,
+          ingredienteId,
+        }))
+      )
+    }
+  }
+
   return c.json({ message: 'Producto creado correctamente', success: true, data: product }, 200)
 })
   
 .put('/update', zValidator('json', updateProductSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { id, nombre, descripcion, precio, image, categoriaId } = c.req.valid('json')
+  const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds } = c.req.valid('json')
   
   // Validar que la categoría pertenece al restaurante si se proporciona
   if (categoriaId !== undefined) {
@@ -259,12 +302,43 @@ const productoRoute = new Hono()
   if (Object.keys(updateData).length === 0) {
     return c.json({ message: 'No se proporcionaron datos para actualizar', success: false }, 400)
   }
-  const product = 
   await db.update(ProductoTable)
   .set(updateData)
   .where(and(eq(ProductoTable.id, id), eq(ProductoTable.restauranteId, restauranteId)))
 
-  return c.json({ message: 'Producto actualizado correctamente', success: true, data: product }, 200)
+  // Actualizar ingredientes si se proporcionaron
+  if (ingredienteIds !== undefined) {
+    // Eliminar relaciones existentes
+    await db
+      .delete(ProductoIngredienteTable)
+      .where(eq(ProductoIngredienteTable.productoId, id))
+
+    // Crear nuevas relaciones si hay ingredientes
+    if (ingredienteIds.length > 0) {
+      // Verificar que todos los ingredientes pertenecen al restaurante
+      const ingredientes = await db
+        .select()
+        .from(IngredienteTable)
+        .where(and(
+          eq(IngredienteTable.restauranteId, restauranteId)
+        ))
+
+      const ingredientesValidos = ingredientes
+        .filter(ing => ingredienteIds.includes(ing.id))
+        .map(ing => ing.id)
+
+      if (ingredientesValidos.length > 0) {
+        await db.insert(ProductoIngredienteTable).values(
+          ingredientesValidos.map(ingredienteId => ({
+            productoId: id,
+            ingredienteId,
+          }))
+        )
+      }
+    }
+  }
+
+  return c.json({ message: 'Producto actualizado correctamente', success: true }, 200)
 })
 
 .delete('/delete/:id', async (c) => {

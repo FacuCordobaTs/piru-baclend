@@ -1,5 +1,5 @@
 // schema.ts
-import { mysqlTable, varchar, int, timestamp, boolean, decimal, mysqlEnum } from "drizzle-orm/mysql-core";
+import { mysqlTable, varchar, int, timestamp, boolean, decimal, mysqlEnum, json } from "drizzle-orm/mysql-core";
 
 
 export const restaurante = mysqlTable("restaurante", {
@@ -42,6 +42,20 @@ export const producto = mysqlTable("producto", {
     createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const ingrediente = mysqlTable("ingrediente", {
+    id: int("id").primaryKey().autoincrement(),
+    restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+    nombre: varchar("nombre", { length: 255 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const productoIngrediente = mysqlTable("producto_ingrediente", {
+    id: int("id").primaryKey().autoincrement(),
+    productoId: int("producto_id").references(() => producto.id).notNull(),
+    ingredienteId: int("ingrediente_id").references(() => ingrediente.id).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const pedido = mysqlTable("pedido", {
     id: int("id").primaryKey().autoincrement(),
     restauranteId: int("restaurante_id").references(() => restaurante.id),
@@ -59,6 +73,7 @@ export const itemPedido = mysqlTable('item_pedido', {
     clienteNombre: varchar('cliente_nombre', { length: 100 }).notNull(),
     cantidad: int('cantidad').default(1),
     precioUnitario: decimal('precio_unitario', { precision: 10, scale: 2 }).notNull(),
+    ingredientesExcluidos: json('ingredientes_excluidos'), // Array de IDs de ingredientes excluidos
 });
 
 export const pago = mysqlTable('pago', {

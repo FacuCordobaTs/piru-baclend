@@ -12,6 +12,7 @@ export interface ItemPedidoWS {
   cantidad: number;
   precioUnitario: string;
   nombreProducto?: string;
+  ingredientesExcluidos?: number[]; // Array de IDs de ingredientes excluidos
 }
 
 export interface WebSocketMessage {

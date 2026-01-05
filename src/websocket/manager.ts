@@ -6,7 +6,8 @@ import {
   pedido as PedidoTable, 
   itemPedido as ItemPedidoTable,
   producto as ProductoTable,
-  mesa as MesaTable
+  mesa as MesaTable,
+  ingrediente as IngredienteTable
 } from '../db/schema';
 import { MesaSession, WebSocketMessage, ItemPedidoWS, AdminSession, AdminNotification, AdminNotificationType } from '../types/websocket';
 
@@ -122,7 +123,8 @@ class WebSocketManager {
             cantidad: ItemPedidoTable.cantidad,
             precioUnitario: ItemPedidoTable.precioUnitario,
             nombreProducto: ProductoTable.nombre,
-            imagenUrl: ProductoTable.imagenUrl
+            imagenUrl: ProductoTable.imagenUrl,
+            ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos
           })
           .from(ItemPedidoTable)
           .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
@@ -280,11 +282,51 @@ class WebSocketManager {
         cantidad: ItemPedidoTable.cantidad,
         precioUnitario: ItemPedidoTable.precioUnitario,
         nombreProducto: ProductoTable.nombre,
-        imagenUrl: ProductoTable.imagenUrl
+        imagenUrl: ProductoTable.imagenUrl,
+        ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos
       })
       .from(ItemPedidoTable)
       .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
       .where(eq(ItemPedidoTable.pedidoId, pedidoId));
+
+    // Obtener nombres de ingredientes excluidos para cada item
+    const itemsConIngredientes = await Promise.all(
+      (items || []).map(async (item) => {
+        let ingredientesExcluidosNombres: string[] = []
+        
+        if (item.ingredientesExcluidos && Array.isArray(item.ingredientesExcluidos) && item.ingredientesExcluidos.length > 0) {
+          const ingredientes = await this.db
+            .select({
+              id: IngredienteTable.id,
+              nombre: IngredienteTable.nombre,
+            })
+            .from(IngredienteTable)
+            .where(eq(IngredienteTable.id, item.ingredientesExcluidos[0] as number))
+          
+          // Si hay múltiples IDs, obtener todos
+          if (item.ingredientesExcluidos.length > 1) {
+            const { inArray } = await import('drizzle-orm')
+            const todosIngredientes = await this.db
+              .select({
+                id: IngredienteTable.id,
+                nombre: IngredienteTable.nombre,
+              })
+              .from(IngredienteTable)
+              .where(inArray(IngredienteTable.id, item.ingredientesExcluidos as number[]))
+            
+            ingredientesExcluidosNombres = todosIngredientes.map(ing => ing.nombre)
+          } else if (ingredientes.length > 0) {
+            ingredientesExcluidosNombres = [ingredientes[0].nombre]
+          }
+        }
+
+        return {
+          ...item,
+          ingredientesExcluidos: item.ingredientesExcluidos || [],
+          ingredientesExcluidosNombres
+        }
+      })
+    )
 
     const pedidoInfo = await this.db
       .select()
@@ -294,7 +336,7 @@ class WebSocketManager {
 
     return {
       pedido: pedidoInfo[0] || null,
-      items: items || []
+      items: itemsConIngredientes || []
     };
   }
 
@@ -306,7 +348,8 @@ class WebSocketManager {
       productoId: item.productoId,
       clienteNombre: item.clienteNombre,
       cantidad: item.cantidad,
-      precioUnitario: item.precioUnitario
+      precioUnitario: item.precioUnitario,
+      ingredientesExcluidos: item.ingredientesExcluidos || null
     });
 
     // Recalcular total del pedido
@@ -321,12 +364,34 @@ class WebSocketManager {
         cantidad: ItemPedidoTable.cantidad,
         precioUnitario: ItemPedidoTable.precioUnitario,
         nombreProducto: ProductoTable.nombre,
-        imagenUrl: ProductoTable.imagenUrl
+        imagenUrl: ProductoTable.imagenUrl,
+        ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos
       })
       .from(ItemPedidoTable)
       .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
       .where(eq(ItemPedidoTable.id, Number(result[0].insertId)))
       .limit(1);
+
+    // Obtener nombres de ingredientes excluidos
+    let ingredientesExcluidosNombres: string[] = []
+    if (item.ingredientesExcluidos && item.ingredientesExcluidos.length > 0) {
+      const { inArray } = await import('drizzle-orm')
+      const ingredientes = await this.db
+        .select({
+          id: IngredienteTable.id,
+          nombre: IngredienteTable.nombre,
+        })
+        .from(IngredienteTable)
+        .where(inArray(IngredienteTable.id, item.ingredientesExcluidos))
+      
+      ingredientesExcluidosNombres = ingredientes.map(ing => ing.nombre)
+    }
+
+    const itemCompletoConNombres = {
+      ...itemCompleto[0],
+      ingredientesExcluidos: item.ingredientesExcluidos || [],
+      ingredientesExcluidosNombres
+    }
 
     // Broadcast a toda la mesa
     const estadoActual = await this.getEstadoInicial(pedidoId);
@@ -335,11 +400,11 @@ class WebSocketManager {
       payload: {
         items: estadoActual.items,
         pedido: estadoActual.pedido,
-        nuevoItem: itemCompleto[0]
+        nuevoItem: itemCompletoConNombres
       }
     });
 
-    return itemCompleto[0];
+    return itemCompletoConNombres;
   }
 
   // Eliminar item del pedido
