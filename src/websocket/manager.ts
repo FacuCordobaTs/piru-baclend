@@ -467,6 +467,26 @@ class WebSocketManager {
       }
     });
 
+    // Si el pedido está confirmado (preparing o delivered), notificar a admins
+    if (estadoActual.pedido && (estadoActual.pedido.estado === 'preparing' || estadoActual.pedido.estado === 'delivered')) {
+      const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
+      if (mesa[0]?.restauranteId) {
+        const nombreProducto = itemCompletoConNombres.nombreProducto || 'Producto';
+        const cantidad = itemCompletoConNombres.cantidad || 1;
+        const clienteNombre = itemCompletoConNombres.clienteNombre || 'Cliente';
+        
+        this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
+          'PRODUCTO_AGREGADO',
+          mesaId,
+          mesa[0].nombre,
+          `Nuevo producto agregado`,
+          `${clienteNombre} agregó ${cantidad}x ${nombreProducto}`,
+          pedidoId
+        ));
+        this.broadcastEstadoToAdmins(mesaId);
+      }
+    }
+
     return itemCompletoConNombres;
   }
 

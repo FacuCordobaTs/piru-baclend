@@ -41,7 +41,8 @@ export type AdminNotificationType =
   | 'CLIENTE_CONECTADO'
   | 'CLIENTE_DESCONECTADO'
   | 'LLAMADA_MOZO'
-  | 'PAGO_RECIBIDO';
+  | 'PAGO_RECIBIDO'
+  | 'PRODUCTO_AGREGADO';
 
 export interface AdminNotification {
   id: string;
