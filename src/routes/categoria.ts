@@ -135,28 +135,34 @@ const categoriaRoute = new Hono()
     }, 404)
   }
 
-  // Verificar si hay productos usando esta categoría
+  // Contar productos usando esta categoría
   const productosConCategoria = await db
     .select()
     .from(ProductoTable)
     .where(eq(ProductoTable.categoriaId, id))
-    .limit(1)
 
-  if (productosConCategoria.length > 0) {
-    return c.json({ 
-      message: 'No se puede eliminar la categoría porque tiene productos asociados', 
-      success: false 
-    }, 400)
+  const cantidadProductos = productosConCategoria.length
+
+  // Actualizar todos los productos de esta categoría a "sin categoría"
+  if (cantidadProductos > 0) {
+    await db
+      .update(ProductoTable)
+      .set({ categoriaId: null })
+      .where(eq(ProductoTable.categoriaId, id))
   }
 
+  // Eliminar la categoría
   await db
     .delete(CategoriaTable)
     .where(and(eq(CategoriaTable.id, id), eq(CategoriaTable.restauranteId, restauranteId)))
     
   return c.json({ 
-    message: 'Categoría eliminada correctamente', 
+    message: cantidadProductos > 0 
+      ? `Categoría eliminada. ${cantidadProductos} producto(s) movido(s) a "Sin categoría"` 
+      : 'Categoría eliminada correctamente', 
     success: true, 
-    data: categoria 
+    data: categoria,
+    productosActualizados: cantidadProductos
   }, 200)
 })
 
