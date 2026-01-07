@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { producto as ProductoTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable } from '../db/schema'
+import { producto as ProductoTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, itemPedido as ItemPedidoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
@@ -109,6 +109,7 @@ const updateProductSchema = z.object({
   image: z.string().min(10).optional(),
   categoriaId: z.number().optional(),
   ingredienteIds: z.array(z.number().int().positive()).optional(),
+  activo: z.boolean().optional(),
 });
 
 const productoRoute = new Hono()
@@ -250,7 +251,7 @@ const productoRoute = new Hono()
 .put('/update', zValidator('json', updateProductSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds } = c.req.valid('json')
+  const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, activo } = c.req.valid('json')
   
   // Validar que la categoría pertenece al restaurante si se proporciona
   if (categoriaId !== undefined) {
@@ -299,6 +300,7 @@ const productoRoute = new Hono()
   if (precio) updateData.precio = precio;
   if (newImageUrl) updateData.imagenUrl = newImageUrl;
   if (categoriaId !== undefined) updateData.categoriaId = categoriaId;
+  if (activo !== undefined) updateData.activo = activo;
   if (Object.keys(updateData).length === 0) {
     return c.json({ message: 'No se proporcionaron datos para actualizar', success: false }, 400)
   }
@@ -350,6 +352,17 @@ const productoRoute = new Hono()
   if (!product || product.length === 0) {
     return c.json({ message: 'Producto no encontrado', success: false }, 404)
   }
+
+  // Verificar si hay items de pedido asociados
+  const itemsAsociados = await db.select().from(ItemPedidoTable).where(eq(ItemPedidoTable.productoId, id)).limit(1)
+  
+  if (itemsAsociados && itemsAsociados.length > 0) {
+    return c.json({ 
+      message: 'No se puede eliminar el producto porque tiene pedidos asociados. Desactívalo en su lugar.', 
+      success: false 
+    }, 400)
+  }
+
   if (product[0].imagenUrl) {
     await deleteImage(product[0].imagenUrl);
   }
