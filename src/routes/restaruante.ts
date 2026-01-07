@@ -104,7 +104,8 @@ restauranteRoute.get('/profile', async (c) => {
   const restauranteId = (c as any).user.id
   const restaurante = await db.select().from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId))
   const mesas = await db.select().from(MesaTable).where(eq(MesaTable.restauranteId, restauranteId))
-  const productos = await db.select().from(ProductoTable).where(and(eq(ProductoTable.restauranteId, restauranteId), eq(ProductoTable.activo, true)))
+  // Obtener TODOS los productos (activos e inactivos) para el admin
+  const productos = await db.select().from(ProductoTable).where(eq(ProductoTable.restauranteId, restauranteId))
 
   try {
     return c.json({ message: 'Profile retrieved successfully', success: true, data: { restaurante, mesas, productos } }, 200)
