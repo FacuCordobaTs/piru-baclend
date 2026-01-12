@@ -29,12 +29,12 @@ mercadopagoRoute.get('/callback', async (c) => {
 
   if (!code || !state) {
     console.error('❌ MP Callback: Faltan code o state')
-    return c.redirect(`${ADMIN_URL}/perfil?mp_status=error&mp_error=missing_params`)
+    return c.redirect(`${ADMIN_URL}/dashboard/perfil?mp_status=error&mp_error=missing_params`)
   }
 
   if (!MP_CLIENT_ID || !MP_CLIENT_SECRET) {
     console.error('❌ MP Callback: Faltan credenciales de MercadoPago')
-    return c.redirect(`${ADMIN_URL}/perfil?mp_status=error&mp_error=config_error`)
+    return c.redirect(`${ADMIN_URL}/dashboard/perfil?mp_status=error&mp_error=config_error`)
   }
 
   try {
@@ -55,7 +55,7 @@ mercadopagoRoute.get('/callback', async (c) => {
 
     if (!response.ok) {
       console.error('❌ Error al intercambiar código con MP:', data)
-      return c.redirect(`${ADMIN_URL}/perfil?mp_status=error&mp_error=oauth_failed`)
+      return c.redirect(`${ADMIN_URL}/dashboard/perfil?mp_status=error&mp_error=oauth_failed`)
     }
 
     // Guardar las credenciales en la DB del restaurante correspondiente
@@ -72,10 +72,10 @@ mercadopagoRoute.get('/callback', async (c) => {
     console.log(`✅ Restaurante ${state} vinculado con MercadoPago exitosamente`)
 
     // Redirigir al admin con éxito
-    return c.redirect(`${ADMIN_URL}/perfil?mp_status=success`)
+    return c.redirect(`${ADMIN_URL}/dashboard/perfil?mp_status=success`)
   } catch (error) {
     console.error('❌ Error en callback de MercadoPago:', error)
-    return c.redirect(`${ADMIN_URL}/perfil?mp_status=error&mp_error=server_error`)
+    return c.redirect(`${ADMIN_URL}/dashboard/perfil?mp_status=error&mp_error=server_error`)
   }
 })
 
