@@ -10,7 +10,7 @@ import { wsManager } from '../websocket/manager'
 const MP_CLIENT_ID = process.env.MP_CLIENT_ID
 const MP_CLIENT_SECRET = process.env.MP_CLIENT_SECRET
 const MP_REDIRECT_URI = process.env.MP_REDIRECT_URI || 'https://api.piru.app/api/mp/callback'
-const MP_MARKETPLACE_FEE = Number(process.env.MP_MARKETPLACE_FEE) || 0 // Tu comisión en pesos
+const MP_MARKETPLACE_FEE = 0 // Tu comisión en pesos
 const ADMIN_URL = process.env.ADMIN_URL || 'https://admin.piru.app'
 // Token de acceso de la plataforma (Piru) para consultar webhooks
 const MP_PLATFORM_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN
