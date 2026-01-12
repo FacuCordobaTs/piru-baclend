@@ -21,9 +21,28 @@ export interface WebSocketMessage {
         'LLAMAR_MOZO' | 'PAGAR_PEDIDO' | 'ESTADO_INICIAL' |
         'PEDIDO_ACTUALIZADO' | 'PEDIDO_CONFIRMADO' | 'PEDIDO_CERRADO' |
         'CLIENTE_UNIDO' | 'CLIENTE_DESCONECTADO' | 'ERROR' |
+        // Confirmación grupal
+        'INICIAR_CONFIRMACION' | 'USUARIO_CONFIRMO' | 'USUARIO_CANCELO' |
+        'CONFIRMACION_INICIADA' | 'CONFIRMACION_ACTUALIZADA' | 'CONFIRMACION_CANCELADA' |
         // Admin message types
         'ADMIN_CONECTADO' | 'ADMIN_NOTIFICACION' | 'ADMIN_ESTADO_MESAS';
   payload: any;
+}
+
+// Estado de confirmación de cada cliente
+export interface ConfirmacionCliente {
+  clienteId: string;
+  nombre: string;
+  confirmado: boolean;
+}
+
+// Estado del proceso de confirmación grupal
+export interface ConfirmacionGrupal {
+  activa: boolean;
+  iniciadaPor: string; // clienteId del que inició
+  iniciadaPorNombre: string;
+  confirmaciones: ConfirmacionCliente[];
+  timestamp: string;
 }
 
 export interface MesaSession {
@@ -31,6 +50,7 @@ export interface MesaSession {
   pedidoId: number;
   clientes: ClienteConectado[];
   connections: Set<any>;
+  confirmacionGrupal?: ConfirmacionGrupal;
 }
 
 // Admin notification types

@@ -345,8 +345,29 @@ app.get(
               break;
               
             case 'CONFIRMAR_PEDIDO':
-              console.log(`✅ Confirmando pedido ${currentPedidoId}`);
-              await wsManager.confirmarPedido(currentPedidoId, currentMesaId);
+              // Mantener compatibilidad: si solo hay un cliente, confirmar directamente
+              const sessionForConfirm = wsManager.getSession(currentMesaId);
+              if (sessionForConfirm && sessionForConfirm.clientes.length <= 1) {
+                console.log(`✅ Confirmando pedido ${currentPedidoId} (cliente único)`);
+                await wsManager.confirmarPedido(currentPedidoId, currentMesaId);
+              } else {
+                console.log(`⚠️ CONFIRMAR_PEDIDO ignorado - usar INICIAR_CONFIRMACION para múltiples clientes`);
+              }
+              break;
+
+            case 'INICIAR_CONFIRMACION':
+              console.log(`🔔 Iniciando confirmación grupal - Mesa ${currentMesaId}, Cliente: ${data.payload.clienteNombre}`);
+              wsManager.iniciarConfirmacion(currentMesaId, data.payload.clienteId, data.payload.clienteNombre);
+              break;
+
+            case 'USUARIO_CONFIRMO':
+              console.log(`✅ Usuario confirmó - Mesa ${currentMesaId}, Cliente: ${data.payload.clienteId}`);
+              wsManager.usuarioConfirma(currentMesaId, data.payload.clienteId);
+              break;
+
+            case 'USUARIO_CANCELO':
+              console.log(`❌ Usuario canceló - Mesa ${currentMesaId}, Cliente: ${data.payload.clienteNombre}`);
+              wsManager.usuarioCancela(currentMesaId, data.payload.clienteId, data.payload.clienteNombre);
               break;
 
             case 'CERRAR_PEDIDO':

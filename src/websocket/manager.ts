@@ -284,6 +284,11 @@ class WebSocketManager {
       const clienteExistia = session.clientes.some(c => c.id === clienteId);
       session.clientes = session.clientes.filter(c => c.id !== clienteId);
 
+      // Si hay una confirmación grupal activa, actualizar
+      if (clienteExistia && session.confirmacionGrupal?.activa) {
+        this.actualizarConfirmacionPorDesconexion(mesaId, clienteId);
+      }
+
       // Solo actualizar estado de mesas para admins (sin notificación)
       if (clienteExistia) {
         this.broadcastEstadoToAdmins(mesaId);
@@ -697,6 +702,161 @@ class WebSocketManager {
     }
     
     return { success: true, message: 'Pago registrado' };
+  }
+
+  // ==================== CONFIRMACIÓN GRUPAL ====================
+
+  // Iniciar proceso de confirmación grupal
+  iniciarConfirmacion(mesaId: number, clienteId: string, clienteNombre: string) {
+    const session = this.sessions.get(mesaId);
+    if (!session) {
+      console.error('❌ [iniciarConfirmacion] Sesión no encontrada para mesa:', mesaId);
+      return null;
+    }
+
+    // Si ya hay una confirmación activa, no iniciar otra
+    if (session.confirmacionGrupal?.activa) {
+      console.log('⚠️ [iniciarConfirmacion] Ya hay una confirmación activa');
+      return session.confirmacionGrupal;
+    }
+
+    // Crear estado de confirmación para cada cliente conectado
+    const confirmaciones = session.clientes.map(c => ({
+      clienteId: c.id,
+      nombre: c.nombre,
+      confirmado: c.id === clienteId // El que inicia ya confirma automáticamente
+    }));
+
+    session.confirmacionGrupal = {
+      activa: true,
+      iniciadaPor: clienteId,
+      iniciadaPorNombre: clienteNombre,
+      confirmaciones,
+      timestamp: new Date().toISOString()
+    };
+
+    console.log(`🔔 [iniciarConfirmacion] ${clienteNombre} inició confirmación en mesa ${mesaId}`);
+    console.log(`   Clientes: ${confirmaciones.map(c => `${c.nombre}(${c.confirmado ? '✓' : '○'})`).join(', ')}`);
+
+    // Notificar a todos los clientes
+    this.broadcast(mesaId, {
+      type: 'CONFIRMACION_INICIADA',
+      payload: {
+        confirmacionGrupal: session.confirmacionGrupal
+      }
+    });
+
+    // Verificar si solo hay un cliente (confirmar automáticamente)
+    this.verificarConfirmacionCompleta(mesaId);
+
+    return session.confirmacionGrupal;
+  }
+
+  // Usuario confirma su parte
+  usuarioConfirma(mesaId: number, clienteId: string) {
+    const session = this.sessions.get(mesaId);
+    if (!session || !session.confirmacionGrupal?.activa) {
+      console.error('❌ [usuarioConfirma] No hay confirmación activa');
+      return null;
+    }
+
+    const confirmacion = session.confirmacionGrupal.confirmaciones.find(c => c.clienteId === clienteId);
+    if (confirmacion) {
+      confirmacion.confirmado = true;
+      console.log(`✅ [usuarioConfirma] ${confirmacion.nombre} confirmó en mesa ${mesaId}`);
+    }
+
+    // Notificar actualización a todos
+    this.broadcast(mesaId, {
+      type: 'CONFIRMACION_ACTUALIZADA',
+      payload: {
+        confirmacionGrupal: session.confirmacionGrupal
+      }
+    });
+
+    // Verificar si todos confirmaron
+    this.verificarConfirmacionCompleta(mesaId);
+
+    return session.confirmacionGrupal;
+  }
+
+  // Usuario cancela (cancela para todos)
+  usuarioCancela(mesaId: number, clienteId: string, clienteNombre: string) {
+    const session = this.sessions.get(mesaId);
+    if (!session || !session.confirmacionGrupal?.activa) {
+      console.error('❌ [usuarioCancela] No hay confirmación activa');
+      return;
+    }
+
+    console.log(`❌ [usuarioCancela] ${clienteNombre} canceló la confirmación en mesa ${mesaId}`);
+
+    // Limpiar estado de confirmación
+    session.confirmacionGrupal = undefined;
+
+    // Notificar a todos que se canceló
+    this.broadcast(mesaId, {
+      type: 'CONFIRMACION_CANCELADA',
+      payload: {
+        canceladoPor: clienteNombre
+      }
+    });
+  }
+
+  // Verificar si todos confirmaron
+  private async verificarConfirmacionCompleta(mesaId: number) {
+    const session = this.sessions.get(mesaId);
+    if (!session || !session.confirmacionGrupal?.activa) return;
+
+    const { confirmaciones } = session.confirmacionGrupal;
+    const todosConfirmaron = confirmaciones.every(c => c.confirmado);
+
+    console.log(`🔍 [verificarConfirmacion] Mesa ${mesaId}: ${confirmaciones.filter(c => c.confirmado).length}/${confirmaciones.length} confirmaron`);
+
+    if (todosConfirmaron) {
+      console.log(`🎉 [verificarConfirmacion] ¡Todos confirmaron! Confirmando pedido...`);
+      
+      // Limpiar estado de confirmación
+      session.confirmacionGrupal = undefined;
+
+      // Confirmar el pedido
+      await this.confirmarPedido(session.pedidoId, mesaId);
+    }
+  }
+
+  // Cuando un cliente se desconecta, actualizar la confirmación grupal
+  actualizarConfirmacionPorDesconexion(mesaId: number, clienteId: string) {
+    const session = this.sessions.get(mesaId);
+    if (!session || !session.confirmacionGrupal?.activa) return;
+
+    // Remover al cliente de las confirmaciones pendientes
+    session.confirmacionGrupal.confirmaciones = session.confirmacionGrupal.confirmaciones.filter(
+      c => c.clienteId !== clienteId
+    );
+
+    console.log(`👋 [actualizarConfirmacionPorDesconexion] Cliente ${clienteId} removido de confirmación`);
+
+    // Si no quedan clientes, cancelar la confirmación
+    if (session.confirmacionGrupal.confirmaciones.length === 0) {
+      session.confirmacionGrupal = undefined;
+      this.broadcast(mesaId, {
+        type: 'CONFIRMACION_CANCELADA',
+        payload: {
+          canceladoPor: 'Sistema (sin clientes)'
+        }
+      });
+      return;
+    }
+
+    // Notificar actualización
+    this.broadcast(mesaId, {
+      type: 'CONFIRMACION_ACTUALIZADA',
+      payload: {
+        confirmacionGrupal: session.confirmacionGrupal
+      }
+    });
+
+    // Verificar si los restantes ya confirmaron
+    this.verificarConfirmacionCompleta(mesaId);
   }
 
   getSession(mesaId: number) {
