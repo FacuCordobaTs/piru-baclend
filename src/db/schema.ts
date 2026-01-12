@@ -11,8 +11,15 @@ export const restaurante = mysqlTable("restaurante", {
     telefono: varchar("telefono", { length: 255 }),
     imagenUrl: varchar("imagen_url", { length: 255 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    // Campos legacy (se pueden eliminar después de migrar)
     mercadoPagoPublicKey: varchar("mercado_pago_public_key", { length: 255 }),
     mercadoPagoPrivateKey: varchar("mercado_pago_private_key", { length: 255 }),
+    // Campos OAuth de MercadoPago para Marketplace
+    mpAccessToken: varchar("mp_access_token", { length: 512 }),
+    mpPublicKey: varchar("mp_public_key", { length: 255 }),
+    mpRefreshToken: varchar("mp_refresh_token", { length: 512 }),
+    mpUserId: varchar("mp_user_id", { length: 50 }),
+    mpConnected: boolean("mp_connected").default(false),
 });
 
 export const categoria = mysqlTable("categoria", {

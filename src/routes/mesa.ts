@@ -38,11 +38,12 @@ const mesaRoute = new Hono()
     return c.json({ message: 'Mesa no encontrada', success: false }, 404)
   }
 
-  // Obtener información del restaurante (nombre e imagen)
+  // Obtener información del restaurante (nombre, imagen y estado de MP)
   const restaurante = await db.select({
     id: RestauranteTable.id,
     nombre: RestauranteTable.nombre,
     imagenUrl: RestauranteTable.imagenUrl,
+    mpConnected: RestauranteTable.mpConnected,
   }).from(RestauranteTable).where(eq(RestauranteTable.id, mesa[0].restauranteId!)).limit(1)
 
    let ultimoPedido = await db.select().
