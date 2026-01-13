@@ -1,7 +1,7 @@
 // mesa.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { mesa as MesaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable, restaurante as RestauranteTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable } from '../db/schema'
+import { mesa as MesaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable, restaurante as RestauranteTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, pago as PagoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
@@ -10,7 +10,7 @@ import { authMiddleware } from '../middleware/auth'
 import { and, desc, eq, ne, inArray } from 'drizzle-orm'
 
 const createMesaSchema = z.object({
-  nombre: z.string().min(3).max(255),
+  nombre: z.string().max(255),
 })
 
 const mesaRoute = new Hono()
@@ -153,14 +153,20 @@ const mesaRoute = new Hono()
   if (!mesa || mesa.length === 0) {
     return c.json({ message: 'Mesa no encontrada', success: false }, 404)
   }
-  // Obtener todos los pedidos de la mesa (incluidos los cerrados) para eliminar items
+  // Obtener todos los pedidos de la mesa (incluidos los cerrados) para eliminar items y pagos
   const todosLosPedidos = await db.select()
     .from(PedidoTable)
     .where(eq(PedidoTable.mesaId, id))
 
-  // Eliminar items de pedido asociados
-  for (const pedido of todosLosPedidos) {
-    await db.delete(ItemPedidoTable).where(eq(ItemPedidoTable.pedidoId, pedido.id))
+  // Si hay pedidos, obtener sus IDs para eliminar pagos e items asociados
+  if (todosLosPedidos.length > 0) {
+    const pedidoIds = todosLosPedidos.map(pedido => pedido.id)
+
+    // Eliminar pagos asociados a estos pedidos
+    await db.delete(PagoTable).where(inArray(PagoTable.pedidoId, pedidoIds))
+
+    // Eliminar items de pedido asociados
+    await db.delete(ItemPedidoTable).where(inArray(ItemPedidoTable.pedidoId, pedidoIds))
   }
 
   // Eliminar pedidos asociados

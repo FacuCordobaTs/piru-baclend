@@ -658,13 +658,12 @@ class WebSocketManager {
   async pagarPedido(pedidoId: number, mesaId: number, metodo: 'efectivo' | 'mercadopago', totalFromClient?: string) {
     console.log(`💳 [pagarPedido] pedidoId=${pedidoId}, mesaId=${mesaId}, metodo=${metodo}, totalFromClient=${totalFromClient}`);
     
-    // Notificar a admins
-    const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
+    // Obtener el estado actual del pedido
+    const estadoActual = await this.getEstadoInicial(pedidoId);
     
     // Obtener el total: primero del cliente, luego del pedido en BD
     let total = totalFromClient;
     if (!total || total === '0.00' || total === '0') {
-      const estadoActual = await this.getEstadoInicial(pedidoId);
       total = estadoActual.pedido?.total || '0.00';
       console.log(`💳 [pagarPedido] Total from DB: ${total}`);
     }
@@ -690,6 +689,19 @@ class WebSocketManager {
     
     console.log(`💳 [pagarPedido] Final total: ${total}`);
     
+    // Broadcast a todos los clientes de la mesa para redirigir a factura
+    this.broadcast(mesaId, {
+      type: 'PEDIDO_PAGADO',
+      payload: {
+        items: estadoActual.items,
+        pedido: estadoActual.pedido,
+        metodo: metodo,
+        total: total
+      }
+    });
+    
+    // Notificar a admins
+    const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
     if (mesa[0]?.restauranteId) {
       this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
         'PAGO_RECIBIDO',
@@ -699,6 +711,7 @@ class WebSocketManager {
         `Total: $${total}`,
         pedidoId
       ));
+      this.broadcastEstadoToAdmins(mesaId);
     }
     
     return { success: true, message: 'Pago registrado' };
