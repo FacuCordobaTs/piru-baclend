@@ -663,14 +663,17 @@ class WebSocketManager {
     
     // Obtener el total: primero del cliente, luego del pedido en BD
     let total = totalFromClient;
+    let pedidoIdParaNotificacion = pedidoId; // ID del pedido para la notificación
+    
     if (!total || total === '0.00' || total === '0') {
       total = estadoActual.pedido?.total || '0.00';
       console.log(`💳 [pagarPedido] Total from DB: ${total}`);
     }
     
     // Si aún es 0, buscar el último pedido cerrado de esta mesa
+    // (esto pasa cuando el cliente se reconectó y tiene el pedidoId del nuevo pedido vacío)
     if (!total || total === '0.00' || total === '0') {
-      const ultimoPedidoCerrado = await this.db
+      const ultimosPedidos = await this.db
         .select()
         .from(PedidoTable)
         .where(eq(PedidoTable.mesaId, mesaId))
@@ -678,16 +681,17 @@ class WebSocketManager {
         .limit(2); // Obtener los 2 últimos (el actual vacío y el anterior cerrado)
       
       // Buscar el pedido cerrado con total > 0
-      const pedidoConTotal = ultimoPedidoCerrado.find(p => 
+      const pedidoConTotal = ultimosPedidos.find(p => 
         parseFloat(p.total || '0') > 0
       );
       if (pedidoConTotal) {
         total = pedidoConTotal.total || '0.00';
-        console.log(`💳 [pagarPedido] Total from last closed order: ${total}`);
+        pedidoIdParaNotificacion = pedidoConTotal.id; // Usar el ID del pedido correcto
+        console.log(`💳 [pagarPedido] Total from last closed order ${pedidoConTotal.id}: ${total}`);
       }
     }
     
-    console.log(`💳 [pagarPedido] Final total: ${total}`);
+    console.log(`💳 [pagarPedido] Final total: ${total}, pedidoId para notificación: ${pedidoIdParaNotificacion}`);
     
     // Broadcast a todos los clientes de la mesa para redirigir a factura
     this.broadcast(mesaId, {
@@ -709,7 +713,7 @@ class WebSocketManager {
         mesa[0].nombre,
         `Pago ${metodo === 'efectivo' ? 'en efectivo' : 'con MercadoPago'}`,
         `Total: $${total}`,
-        pedidoId
+        pedidoIdParaNotificacion // Usar el ID del pedido correcto
       ));
       this.broadcastEstadoToAdmins(mesaId);
     }
