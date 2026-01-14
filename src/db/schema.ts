@@ -81,6 +81,7 @@ export const itemPedido = mysqlTable('item_pedido', {
     cantidad: int('cantidad').default(1),
     precioUnitario: decimal('precio_unitario', { precision: 10, scale: 2 }).notNull(),
     ingredientesExcluidos: json('ingredientes_excluidos'), // Array de IDs de ingredientes excluidos
+    postConfirmacion: boolean('post_confirmacion').default(false), // true si se agregó después de confirmar el pedido
 });
 
 export const pago = mysqlTable('pago', {
@@ -91,4 +92,17 @@ export const pago = mysqlTable('pago', {
     monto: decimal('monto', { precision: 10, scale: 2 }).notNull(),
     mpPaymentId: varchar('mp_payment_id', { length: 255 }),
     createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const notificacion = mysqlTable('notificacion', {
+    id: varchar('id', { length: 50 }).primaryKey(), // Format: notif-timestamp-random
+    restauranteId: int('restaurante_id').references(() => restaurante.id).notNull(),
+    tipo: mysqlEnum('tipo', ['NUEVO_PEDIDO', 'PEDIDO_CONFIRMADO', 'PEDIDO_CERRADO', 'LLAMADA_MOZO', 'PAGO_RECIBIDO', 'PRODUCTO_AGREGADO']).notNull(),
+    mesaId: int('mesa_id').references(() => mesa.id),
+    mesaNombre: varchar('mesa_nombre', { length: 255 }),
+    pedidoId: int('pedido_id'),
+    mensaje: varchar('mensaje', { length: 500 }).notNull(),
+    detalles: varchar('detalles', { length: 500 }),
+    timestamp: timestamp('timestamp').defaultNow().notNull(),
+    leida: boolean('leida').default(false).notNull(),
 });

@@ -7,7 +7,8 @@ import {
   itemPedido as ItemPedidoTable,
   producto as ProductoTable,
   mesa as MesaTable,
-  ingrediente as IngredienteTable
+  ingrediente as IngredienteTable,
+  notificacion as NotificacionTable
 } from '../db/schema';
 import { MesaSession, WebSocketMessage, ItemPedidoWS, AdminSession, AdminNotification, AdminNotificationType } from '../types/websocket';
 
@@ -50,8 +51,27 @@ class WebSocketManager {
     }
   }
 
-  // Enviar notificación a todos los admins de un restaurante
-  notifyAdmins(restauranteId: number, notification: AdminNotification) {
+  // Enviar notificación a todos los admins de un restaurante y guardar en BD
+  async notifyAdmins(restauranteId: number, notification: AdminNotification) {
+    // Guardar notificación en la base de datos
+    try {
+      await this.db.insert(NotificacionTable).values({
+        id: notification.id,
+        restauranteId,
+        tipo: notification.tipo,
+        mesaId: notification.mesaId,
+        mesaNombre: notification.mesaNombre,
+        pedidoId: notification.pedidoId,
+        mensaje: notification.mensaje,
+        detalles: notification.detalles,
+        leida: false
+      });
+      console.log(`💾 Notificación guardada en BD: ${notification.id}`);
+    } catch (error) {
+      console.error('Error guardando notificación en BD:', error);
+    }
+
+    // Enviar a admins conectados
     const session = this.adminSessions.get(restauranteId);
     if (!session || session.connections.size === 0) return;
 
@@ -71,6 +91,18 @@ class WebSocketManager {
         }
       }
     });
+  }
+
+  // Obtener notificaciones del restaurante desde la BD
+  async getNotificacionesRestaurante(restauranteId: number) {
+    const notificaciones = await this.db
+      .select()
+      .from(NotificacionTable)
+      .where(eq(NotificacionTable.restauranteId, restauranteId))
+      .orderBy(desc(NotificacionTable.timestamp))
+      .limit(100);
+    
+    return notificaciones;
   }
 
   // Crear notificación helper
@@ -124,7 +156,8 @@ class WebSocketManager {
             precioUnitario: ItemPedidoTable.precioUnitario,
             nombreProducto: ProductoTable.nombre,
             imagenUrl: ProductoTable.imagenUrl,
-            ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos
+            ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
+            postConfirmacion: ItemPedidoTable.postConfirmacion
           })
           .from(ItemPedidoTable)
           .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
@@ -167,7 +200,8 @@ class WebSocketManager {
             return {
               ...item,
               ingredientesExcluidos: ingredientesExcluidosParsed || [],
-              ingredientesExcluidosNombres
+              ingredientesExcluidosNombres,
+              postConfirmacion: item.postConfirmacion || false
             }
           })
         )
@@ -330,7 +364,8 @@ class WebSocketManager {
         precioUnitario: ItemPedidoTable.precioUnitario,
         nombreProducto: ProductoTable.nombre,
         imagenUrl: ProductoTable.imagenUrl,
-        ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos
+        ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
+        postConfirmacion: ItemPedidoTable.postConfirmacion
       })
       .from(ItemPedidoTable)
       .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
@@ -374,7 +409,8 @@ class WebSocketManager {
         return {
           ...item,
           ingredientesExcluidos: ingredientesExcluidosParsed || [],
-          ingredientesExcluidosNombres
+          ingredientesExcluidosNombres,
+          postConfirmacion: item.postConfirmacion || false
         }
       })
     )
@@ -393,6 +429,15 @@ class WebSocketManager {
 
   // Agregar item al pedido
   async agregarItem(pedidoId: number, mesaId: number, item: ItemPedidoWS) {
+    // Verificar estado del pedido para determinar si es post-confirmación
+    const pedidoActual = await this.db
+      .select({ estado: PedidoTable.estado })
+      .from(PedidoTable)
+      .where(eq(PedidoTable.id, pedidoId))
+      .limit(1);
+    
+    const isPostConfirmacion = pedidoActual[0]?.estado === 'preparing' || pedidoActual[0]?.estado === 'delivered';
+    
     // Insertar en la BD
     const result = await this.db.insert(ItemPedidoTable).values({
       pedidoId,
@@ -400,7 +445,8 @@ class WebSocketManager {
       clienteNombre: item.clienteNombre,
       cantidad: item.cantidad,
       precioUnitario: item.precioUnitario,
-      ingredientesExcluidos: item.ingredientesExcluidos || null
+      ingredientesExcluidos: item.ingredientesExcluidos || null,
+      postConfirmacion: isPostConfirmacion
     });
 
     // Recalcular total del pedido
@@ -416,7 +462,8 @@ class WebSocketManager {
         precioUnitario: ItemPedidoTable.precioUnitario,
         nombreProducto: ProductoTable.nombre,
         imagenUrl: ProductoTable.imagenUrl,
-        ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos
+        ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
+        postConfirmacion: ItemPedidoTable.postConfirmacion
       })
       .from(ItemPedidoTable)
       .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
@@ -458,7 +505,8 @@ class WebSocketManager {
     const itemCompletoConNombres = {
       ...itemCompleto[0],
       ingredientesExcluidos: ingredientesExcluidosParsed || [],
-      ingredientesExcluidosNombres
+      ingredientesExcluidosNombres,
+      postConfirmacion: itemCompleto[0].postConfirmacion || false
     }
 
     // Broadcast a toda la mesa

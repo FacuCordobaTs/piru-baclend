@@ -9,6 +9,7 @@ import { pedidoRoute } from './routes/pedido';
 import { categoriaRoute } from './routes/categoria';
 import { ingredienteRoute } from './routes/ingrediente';
 import { mercadopagoRoute } from './routes/mercadopago';
+import { notificacionRoute } from './routes/notificacion';
 import { wsManager } from './websocket/manager';
 import type { WebSocketMessage } from './types/websocket';
 import { drizzle } from 'drizzle-orm/mysql2';
@@ -81,6 +82,7 @@ app.basePath('/api')
   .route('/categoria', categoriaRoute)
   .route('/ingrediente', ingredienteRoute)
   .route('/mp', mercadopagoRoute)
+  .route('/notificacion', notificacionRoute)
 
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
 // because :qrToken would match "admin" as a token
@@ -128,6 +130,14 @@ app.get(
             payload: { mesas: estadoMesas }
           }));
           console.log(`📊 Estado inicial enviado: ${estadoMesas.length} mesas`);
+          
+          // Send saved notifications from database
+          const notificaciones = await wsManager.getNotificacionesRestaurante(restauranteId!);
+          ws.send(JSON.stringify({
+            type: 'ADMIN_NOTIFICACIONES_INICIAL',
+            payload: { notificaciones }
+          }));
+          console.log(`🔔 Notificaciones iniciales enviadas: ${notificaciones.length}`);
         } catch (error) {
           console.error('Error sending initial admin state:', error);
         }
