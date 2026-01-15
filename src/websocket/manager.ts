@@ -924,6 +924,82 @@ class WebSocketManager {
     this.verificarConfirmacionCompleta(mesaId);
   }
 
+  // Notificar subtotales pagados (split payment)
+  async notificarSubtotalesPagados(
+    pedidoId: number, 
+    mesaId: number, 
+    clientesPagados: string[],
+    todosSubtotales: Array<{
+      clienteNombre: string
+      monto: string
+      estado: string
+      metodo: string | null
+    }>
+  ) {
+    console.log(`💳 [notificarSubtotalesPagados] pedidoId=${pedidoId}, mesaId=${mesaId}, clientes=${clientesPagados.join(', ')}`);
+    
+    // Broadcast a todos los clientes de la mesa
+    this.broadcast(mesaId, {
+      type: 'SUBTOTALES_ACTUALIZADOS',
+      payload: {
+        pedidoId,
+        clientesPagados,
+        todosSubtotales
+      }
+    });
+    
+    // Notificar a admins
+    const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
+    if (mesa[0]?.restauranteId) {
+      // Calcular el total pagado
+      const totalPagado = todosSubtotales
+        .filter(s => s.estado === 'paid')
+        .reduce((sum, s) => sum + parseFloat(s.monto), 0);
+
+      const metodo = todosSubtotales.find(s => 
+        clientesPagados.includes(s.clienteNombre) && s.estado === 'paid'
+      )?.metodo || 'efectivo';
+
+      this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
+        'PAGO_RECIBIDO',
+        mesaId,
+        mesa[0].nombre,
+        `Pago parcial ${metodo === 'efectivo' ? 'en efectivo' : 'con MercadoPago'}`,
+        `${clientesPagados.join(', ')} pagó su parte. Total pagado: $${totalPagado.toFixed(2)}`,
+        pedidoId
+      ));
+
+      // También enviar actualización específica de subtotales a admins
+      const session = this.adminSessions.get(mesa[0].restauranteId);
+      if (session && session.connections.size > 0) {
+        const message = JSON.stringify({
+          type: 'ADMIN_SUBTOTALES_ACTUALIZADOS',
+          payload: {
+            pedidoId,
+            mesaId,
+            mesaNombre: mesa[0].nombre,
+            clientesPagados,
+            todosSubtotales
+          }
+        });
+
+        session.connections.forEach((client) => {
+          if (client.readyState === 1) {
+            try {
+              client.send(message);
+            } catch (error) {
+              console.error('Error enviando actualización de subtotales a admin:', error);
+            }
+          }
+        });
+      }
+
+      this.broadcastEstadoToAdmins(mesaId);
+    }
+    
+    return { success: true, message: 'Subtotales notificados' };
+  }
+
   getSession(mesaId: number) {
     return this.sessions.get(mesaId);
   }

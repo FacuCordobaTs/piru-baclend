@@ -94,6 +94,20 @@ export const pago = mysqlTable('pago', {
     createdAt: timestamp('created_at').defaultNow(),
 });
 
+// Tabla para trackear pagos de subtotales individuales (split payment)
+export const pagoSubtotal = mysqlTable('pago_subtotal', {
+    id: int('id').primaryKey().autoincrement(),
+    pedidoId: int('pedido_id').notNull(),
+    pagoId: int('pago_id'), // Referencia al pago principal (puede ser null si es pago en efectivo)
+    clienteNombre: varchar('cliente_nombre', { length: 100 }).notNull(),
+    monto: decimal('monto', { precision: 10, scale: 2 }).notNull(),
+    estado: mysqlEnum('estado', ['pending', 'paid', 'failed']).default('pending'),
+    metodo: mysqlEnum('metodo', ['efectivo', 'mercadopago']).notNull(),
+    mpPaymentId: varchar('mp_payment_id', { length: 255 }), // Para identificar el pago en webhook
+    mpPreferenceId: varchar('mp_preference_id', { length: 255 }), // ID de la preferencia creada
+    createdAt: timestamp('created_at').defaultNow(),
+});
+
 export const notificacion = mysqlTable('notificacion', {
     id: varchar('id', { length: 50 }).primaryKey(), // Format: notif-timestamp-random
     restauranteId: int('restaurante_id').references(() => restaurante.id).notNull(),
