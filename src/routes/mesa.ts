@@ -8,6 +8,7 @@ import { zValidator } from '@hono/zod-validator'
 import UUID = require("uuid-js");
 import { authMiddleware } from '../middleware/auth'
 import { and, desc, eq, ne, inArray } from 'drizzle-orm'
+import { wsManager } from '../websocket/manager'
 
 const createMesaSchema = z.object({
   nombre: z.string().max(255),
@@ -332,6 +333,79 @@ const mesaRoute = new Hono()
       mesa: mesa[0],
       pedido: pedidoActual,
       items
+    }
+  }, 200)
+})
+
+// Resetear mesa: cierra el pedido actual y crea uno nuevo vacío
+.post('/:id/reset', authMiddleware, async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const mesaId = Number(c.req.param('id'))
+  
+  // Verificar que la mesa existe y pertenece al restaurante
+  const mesa = await db.select()
+    .from(MesaTable)
+    .where(and(eq(MesaTable.id, mesaId), eq(MesaTable.restauranteId, restauranteId)))
+  
+  if (!mesa || mesa.length === 0) {
+    return c.json({ message: 'Mesa no encontrada', success: false }, 404)
+  }
+
+  // Obtener el último pedido de esta mesa
+  const ultimoPedido = await db.select()
+    .from(PedidoTable)
+    .where(eq(PedidoTable.mesaId, mesaId))
+    .orderBy(desc(PedidoTable.createdAt))
+    .limit(1)
+
+  let pedidoAnteriorId: number | null = null
+
+  // Si hay un pedido activo (no cerrado), cerrarlo
+  if (ultimoPedido[0] && ultimoPedido[0].estado !== 'closed') {
+    pedidoAnteriorId = ultimoPedido[0].id
+    
+    await db
+      .update(PedidoTable)
+      .set({ 
+        estado: 'closed',
+        closedAt: new Date()
+      })
+      .where(eq(PedidoTable.id, ultimoPedido[0].id))
+    
+    console.log(`🔒 Pedido ${ultimoPedido[0].id} cerrado por reset de mesa`)
+  }
+
+  // Crear nuevo pedido vacío
+  const nuevoPedido = await db.insert(PedidoTable).values({
+    mesaId,
+    restauranteId,
+    estado: 'pending',
+    total: '0.00'
+  })
+
+  const nuevoPedidoId = Number(nuevoPedido[0].insertId)
+  console.log(`🆕 Nuevo pedido ${nuevoPedidoId} creado para mesa ${mesaId}`)
+
+  // Notificar a clientes conectados via WebSocket
+  wsManager.broadcast(mesaId, {
+    type: 'MESA_RESETEADA',
+    payload: { 
+      pedidoAnteriorId,
+      nuevoPedidoId,
+      mensaje: 'La mesa ha sido reseteada por el administrador'
+    }
+  })
+
+  // Notificar a admins
+  wsManager.broadcastEstadoToAdmins(mesaId)
+
+  return c.json({ 
+    message: 'Mesa reseteada correctamente', 
+    success: true,
+    data: {
+      pedidoAnteriorId,
+      nuevoPedidoId
     }
   }, 200)
 })
