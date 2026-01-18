@@ -203,15 +203,15 @@ app.get(
 
       mesaId = mesa[0].id;
 
-      // Buscar o crear pedido activo
+      // Buscar último pedido
       const ultimoPedido = await db.select()
         .from(PedidoTable)
         .where(eq(PedidoTable.mesaId, mesaId))
         .orderBy(desc(PedidoTable.createdAt))
         .limit(1);
 
-      if (!ultimoPedido || ultimoPedido.length === 0 || ultimoPedido[0].estado === 'closed') {
-        // Crear nuevo pedido
+      if (!ultimoPedido || ultimoPedido.length === 0) {
+        // No hay pedidos, crear uno nuevo
         const nuevoPedido = await db.insert(PedidoTable).values({
           mesaId: mesaId,
           restauranteId: mesa[0].restauranteId!,
@@ -219,7 +219,25 @@ app.get(
           total: '0.00'
         });
         pedidoId = Number(nuevoPedido[0].insertId);
+      } else if (ultimoPedido[0].estado === 'closed') {
+        // El último pedido está cerrado, verificar si todos pagaron
+        const todosPagaron = await wsManager.verificarTodosPagaron(ultimoPedido[0].id);
+        
+        if (todosPagaron) {
+          // Todos pagaron, crear nuevo pedido
+          const nuevoPedido = await db.insert(PedidoTable).values({
+            mesaId: mesaId,
+            restauranteId: mesa[0].restauranteId!,
+            estado: 'pending',
+            total: '0.00'
+          });
+          pedidoId = Number(nuevoPedido[0].insertId);
+        } else {
+          // Aún falta pagar, usar el pedido cerrado
+          pedidoId = ultimoPedido[0].id;
+        }
       } else {
+        // Hay un pedido activo (pending, preparing, delivered)
         pedidoId = ultimoPedido[0].id;
       }
     } catch (error) {

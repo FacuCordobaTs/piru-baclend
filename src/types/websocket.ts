@@ -20,12 +20,13 @@ export interface WebSocketMessage {
         'ACTUALIZAR_CANTIDAD' | 'CONFIRMAR_PEDIDO' | 'CERRAR_PEDIDO' | 
         'LLAMAR_MOZO' | 'PAGAR_PEDIDO' | 'ESTADO_INICIAL' |
         'PEDIDO_ACTUALIZADO' | 'PEDIDO_CONFIRMADO' | 'PEDIDO_CERRADO' |
+        'PEDIDO_PAGADO' | 'SUBTOTALES_ACTUALIZADOS' |
         'CLIENTE_UNIDO' | 'CLIENTE_DESCONECTADO' | 'ERROR' |
         // Confirmación grupal
         'INICIAR_CONFIRMACION' | 'USUARIO_CONFIRMO' | 'USUARIO_CANCELO' |
         'CONFIRMACION_INICIADA' | 'CONFIRMACION_ACTUALIZADA' | 'CONFIRMACION_CANCELADA' |
         // Admin message types
-        'ADMIN_CONECTADO' | 'ADMIN_NOTIFICACION' | 'ADMIN_ESTADO_MESAS';
+        'ADMIN_CONECTADO' | 'ADMIN_NOTIFICACION' | 'ADMIN_ESTADO_MESAS' | 'ADMIN_SUBTOTALES_ACTUALIZADOS';
   payload: any;
 }
 
@@ -53,13 +54,11 @@ export interface MesaSession {
   confirmacionGrupal?: ConfirmacionGrupal;
 }
 
-// Admin notification types
+// Admin notification types (debe coincidir con el enum en schema.ts)
 export type AdminNotificationType = 
   | 'NUEVO_PEDIDO'
   | 'PEDIDO_CONFIRMADO' 
   | 'PEDIDO_CERRADO'
-  | 'CLIENTE_CONECTADO'
-  | 'CLIENTE_DESCONECTADO'
   | 'LLAMADA_MOZO'
   | 'PAGO_RECIBIDO'
   | 'PRODUCTO_AGREGADO';

@@ -1,6 +1,6 @@
 // src/websocket/manager.ts
 import { drizzle } from 'drizzle-orm/mysql2';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, and } from 'drizzle-orm';
 import { pool } from '../db';
 import { 
   pedido as PedidoTable, 
@@ -8,7 +8,8 @@ import {
   producto as ProductoTable,
   mesa as MesaTable,
   ingrediente as IngredienteTable,
-  notificacion as NotificacionTable
+  notificacion as NotificacionTable,
+  pagoSubtotal as PagoSubtotalTable
 } from '../db/schema';
 import { MesaSession, WebSocketMessage, ItemPedidoWS, AdminSession, AdminNotification, AdminNotificationType } from '../types/websocket';
 
@@ -58,7 +59,7 @@ class WebSocketManager {
       await this.db.insert(NotificacionTable).values({
         id: notification.id,
         restauranteId,
-        tipo: notification.tipo,
+        tipo: notification.tipo as 'NUEVO_PEDIDO' | 'PEDIDO_CONFIRMADO' | 'PEDIDO_CERRADO' | 'LLAMADA_MOZO' | 'PAGO_RECIBIDO' | 'PRODUCTO_AGREGADO',
         mesaId: notification.mesaId,
         mesaNombre: notification.mesaNombre,
         pedidoId: notification.pedidoId,
@@ -213,6 +214,12 @@ class WebSocketManager {
         c => !c.id.startsWith('admin-') && !c.nombre.includes('Admin')
       ) || [];
 
+      // Si el pedido está cerrado, verificar si todos pagaron
+      let todosPagaron = false;
+      if (pedido && pedido.estado === 'closed') {
+        todosPagaron = await this.verificarTodosPagaron(pedido.id);
+      }
+
       return {
         id: mesa.id,
         nombre: mesa.nombre,
@@ -220,7 +227,8 @@ class WebSocketManager {
         pedido,
         items,
         clientesConectados,
-        totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0)
+        totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0),
+        todosPagaron // Información adicional para el admin
       };
     }));
 
@@ -1006,6 +1014,67 @@ class WebSocketManager {
 
   getAdminSession(restauranteId: number) {
     return this.adminSessions.get(restauranteId);
+  }
+
+  // Verificar si todos los clientes de un pedido cerrado ya pagaron
+  async verificarTodosPagaron(pedidoId: number): Promise<boolean> {
+    try {
+      // Obtener todos los items del pedido para calcular subtotales por cliente
+      const items = await this.db
+        .select({
+          clienteNombre: ItemPedidoTable.clienteNombre,
+          cantidad: ItemPedidoTable.cantidad,
+          precioUnitario: ItemPedidoTable.precioUnitario,
+        })
+        .from(ItemPedidoTable)
+        .where(eq(ItemPedidoTable.pedidoId, pedidoId));
+
+      if (items.length === 0) {
+        // Si no hay items, no hay nada que pagar, así que "todos pagaron"
+        return true;
+      }
+
+      // Calcular subtotal por cliente
+      const subtotalesPorCliente: Record<string, number> = {};
+      for (const item of items) {
+        if (!subtotalesPorCliente[item.clienteNombre]) {
+          subtotalesPorCliente[item.clienteNombre] = 0;
+        }
+        subtotalesPorCliente[item.clienteNombre] += parseFloat(item.precioUnitario) * (item.cantidad || 1);
+      }
+
+      // Obtener todos los pagos de subtotales pagados para este pedido
+      const pagosSubtotales = await this.db
+        .select()
+        .from(PagoSubtotalTable)
+        .where(and(
+          eq(PagoSubtotalTable.pedidoId, pedidoId),
+          eq(PagoSubtotalTable.estado, 'paid')
+        ));
+
+      // Calcular total pagado por cliente
+      const pagadoPorCliente: Record<string, number> = {};
+      for (const pago of pagosSubtotales) {
+        if (!pagadoPorCliente[pago.clienteNombre]) {
+          pagadoPorCliente[pago.clienteNombre] = 0;
+        }
+        pagadoPorCliente[pago.clienteNombre] += parseFloat(pago.monto);
+      }
+
+      // Verificar que cada cliente haya pagado al menos su subtotal (con margen de redondeo)
+      for (const [clienteNombre, subtotal] of Object.entries(subtotalesPorCliente)) {
+        const pagado = pagadoPorCliente[clienteNombre] || 0;
+        // Permitir pequeña diferencia por redondeo (0.01)
+        if (pagado < subtotal - 0.01) {
+          return false; // Al menos un cliente no pagó completamente
+        }
+      }
+
+      return true; // Todos pagaron
+    } catch (error) {
+      console.error('Error verificando si todos pagaron:', error);
+      return false; // En caso de error, asumir que no todos pagaron
+    }
   }
 }
 

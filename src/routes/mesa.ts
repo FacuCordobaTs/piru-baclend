@@ -1,7 +1,7 @@
 // mesa.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { mesa as MesaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable, restaurante as RestauranteTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, pago as PagoTable } from '../db/schema'
+import { mesa as MesaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable, restaurante as RestauranteTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, pago as PagoTable, pagoSubtotal as PagoSubtotalTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
@@ -94,7 +94,9 @@ const mesaRoute = new Hono()
   )
 
   let pedidoActual = ultimoPedido[0];
-  if (!pedidoActual || pedidoActual.estado === 'closed') {
+  
+  if (!pedidoActual) {
+    // No hay pedidos, crear uno nuevo
     const nuevoPedido = await db.insert(PedidoTable).values({ 
       mesaId: mesa[0].id,
       restauranteId: mesa[0].restauranteId,
@@ -107,17 +109,82 @@ const mesaRoute = new Hono()
     where(eq(PedidoTable.id, Number(nuevoPedido[0].insertId))).
     orderBy(desc(PedidoTable.createdAt))
     .limit(1)
+    
+    pedidoActual = ultimoPedido[0];
+  } else if (pedidoActual.estado === 'closed') {
+    // El último pedido está cerrado, verificar si todos pagaron
+    const items = await db
+      .select({
+        clienteNombre: ItemPedidoTable.clienteNombre,
+        cantidad: ItemPedidoTable.cantidad,
+        precioUnitario: ItemPedidoTable.precioUnitario,
+      })
+      .from(ItemPedidoTable)
+      .where(eq(ItemPedidoTable.pedidoId, pedidoActual.id));
 
-  return c.json({ 
-    message: 'Mesa encontrada correctamente', 
-    success: true, 
-    data: {
-      mesa: mesa[0],
-      pedido: ultimoPedido[0], 
-      productos: productosConIngredientes,
-      restaurante: restaurante[0] || null
+    let todosPagaron = false;
+    
+    if (items.length === 0) {
+      // Si no hay items, no hay nada que pagar
+      todosPagaron = true;
+    } else {
+      // Calcular subtotal por cliente
+      const subtotalesPorCliente: Record<string, number> = {};
+      for (const item of items) {
+        if (!subtotalesPorCliente[item.clienteNombre]) {
+          subtotalesPorCliente[item.clienteNombre] = 0;
+        }
+        subtotalesPorCliente[item.clienteNombre] += parseFloat(item.precioUnitario) * (item.cantidad || 1);
+      }
+
+      // Obtener todos los pagos de subtotales pagados
+      const pagosSubtotales = await db
+        .select()
+        .from(PagoSubtotalTable)
+        .where(and(
+          eq(PagoSubtotalTable.pedidoId, pedidoActual.id),
+          eq(PagoSubtotalTable.estado, 'paid')
+        ));
+
+      // Calcular total pagado por cliente
+      const pagadoPorCliente: Record<string, number> = {};
+      for (const pago of pagosSubtotales) {
+        if (!pagadoPorCliente[pago.clienteNombre]) {
+          pagadoPorCliente[pago.clienteNombre] = 0;
+        }
+        pagadoPorCliente[pago.clienteNombre] += parseFloat(pago.monto);
+      }
+
+      // Verificar que cada cliente haya pagado al menos su subtotal
+      todosPagaron = true;
+      for (const [clienteNombre, subtotal] of Object.entries(subtotalesPorCliente)) {
+        const pagado = pagadoPorCliente[clienteNombre] || 0;
+        // Permitir pequeña diferencia por redondeo (0.01)
+        if (pagado < subtotal - 0.01) {
+          todosPagaron = false;
+          break;
+        }
+      }
     }
-  }, 200)
+    
+    if (todosPagaron) {
+      // Todos pagaron, crear nuevo pedido
+      const nuevoPedido = await db.insert(PedidoTable).values({ 
+        mesaId: mesa[0].id,
+        restauranteId: mesa[0].restauranteId,
+        estado: 'pending',
+        total: '0.00'
+      })
+      
+      // Obtener el pedido recién creado
+      ultimoPedido = await db.select().from(PedidoTable).
+      where(eq(PedidoTable.id, Number(nuevoPedido[0].insertId))).
+      orderBy(desc(PedidoTable.createdAt))
+      .limit(1)
+      
+      pedidoActual = ultimoPedido[0];
+    }
+    // Si no todos pagaron, usar el pedido cerrado actual
   }
 
   return c.json({ 
