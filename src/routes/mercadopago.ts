@@ -243,7 +243,7 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
         items: mpItems,
         marketplace_fee: MP_MARKETPLACE_FEE, // Tu ganancia como marketplace
         back_urls: {
-          success: `${baseUrl}/pago-cerrado`,
+          success: `https://my.piru.app/pedido-cerrado`,
           failure: `${baseUrl}/pago-fallido?pedido_id=${pedidoId}`,
           pending: `${baseUrl}/pago-pendiente?pedido_id=${pedidoId}`
         },
