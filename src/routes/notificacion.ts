@@ -81,6 +81,21 @@ const notificacionRoute = new Hono()
   }, 200)
 })
 
+// Eliminar todas las notificaciones (debe ir ANTES de /:id para que Hono la encuentre)
+.delete('/all', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  await db
+    .delete(NotificacionTable)
+    .where(eq(NotificacionTable.restauranteId, restauranteId))
+
+  return c.json({ 
+    message: 'Todas las notificaciones eliminadas', 
+    success: true 
+  }, 200)
+})
+
 // Eliminar una notificación
 .delete('/:id', async (c) => {
   const db = drizzle(pool)
@@ -113,21 +128,6 @@ const notificacionRoute = new Hono()
 
   return c.json({ 
     message: 'Notificación eliminada correctamente', 
-    success: true 
-  }, 200)
-})
-
-// Eliminar todas las notificaciones
-.delete('/all', async (c) => {
-  const db = drizzle(pool)
-  const restauranteId = (c as any).user.id
-
-  await db
-    .delete(NotificacionTable)
-    .where(eq(NotificacionTable.restauranteId, restauranteId))
-
-  return c.json({ 
-    message: 'Todas las notificaciones eliminadas', 
     success: true 
   }, 200)
 })
