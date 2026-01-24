@@ -208,24 +208,33 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
 })
 
 // Toggle modo carrito
-const toggleCarritoSchema = z.object({
-  esCarrito: z.boolean()
-})
-
-restauranteRoute.put('/toggle-carrito', zValidator('json', toggleCarritoSchema), async (c) => {
+restauranteRoute.put('/toggle-carrito', async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { esCarrito } = c.req.valid('json')
 
   try {
-    await db.update(RestauranteTable)
-      .set({ esCarrito })
+    // Obtener el estado actual
+    const [restaurante] = await db.select({ esCarrito: RestauranteTable.esCarrito })
+      .from(RestauranteTable)
       .where(eq(RestauranteTable.id, restauranteId))
 
+    if (!restaurante) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    // Toggle
+    const nuevoEstado = !restaurante.esCarrito
+
+    await db.update(RestauranteTable)
+      .set({ esCarrito: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    console.log(`🛒 Modo carrito ${nuevoEstado ? 'activado' : 'desactivado'} para restaurante ${restauranteId}`)
+
     return c.json({
-      message: esCarrito ? 'Modo carrito activado' : 'Modo restaurante activado',
+      message: nuevoEstado ? 'Modo carrito activado' : 'Modo restaurante activado',
       success: true,
-      data: { esCarrito }
+      esCarrito: nuevoEstado
     }, 200)
 
   } catch (error) {
