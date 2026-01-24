@@ -86,7 +86,7 @@ mercadopagoRoute.get('/callback', async (c) => {
  */
 mercadopagoRoute.post('/crear-preferencia', async (c) => {
   const db = drizzle(pool)
-  
+
   try {
     const body = await c.req.json()
     const { pedidoId, qrToken, clientesAPagar } = body
@@ -169,8 +169,8 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
 
       if (subtotalesExistentes.length > 0) {
         const clientesYaPagados = subtotalesExistentes.map(s => s.clienteNombre)
-        return c.json({ 
-          success: false, 
+        return c.json({
+          success: false,
           error: `Los siguientes clientes ya pagaron: ${clientesYaPagados.join(', ')}`,
           clientesYaPagados
         }, 400)
@@ -197,7 +197,7 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
     }
 
     // Filtrar items según si es split payment o pago total
-    const itemsAPagar = isSplitPayment 
+    const itemsAPagar = isSplitPayment
       ? items.filter(item => clientesAPagar.includes(item.clienteNombre))
       : items
 
@@ -207,7 +207,7 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
 
     // Construir items para MercadoPago
     const mpItems = itemsAPagar.map(item => ({
-      title: isSplitPayment 
+      title: isSplitPayment
         ? `${item.nombreProducto || `Producto #${item.productoId}`} (${item.clienteNombre})`
         : item.nombreProducto || `Producto #${item.productoId}`,
       quantity: item.cantidad || 1,
@@ -222,7 +222,7 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
 
     // URLs de retorno
     const baseUrl = qrToken ? `https://my.piru.app/mesa/${qrToken}` : 'https://my.piru.app'
-    
+
     // Construir external_reference
     // Para split payment: piru-pedido-{id}-split-{base64(clientes)}
     // Para pago total: piru-pedido-{id}
@@ -292,7 +292,7 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
     }
 
     // Devolver el init_point (URL de pago)
-    return c.json({ 
+    return c.json({
       success: true,
       url_pago: preference.init_point,
       preference_id: preference.id,
@@ -347,15 +347,15 @@ mercadopagoRoute.get('/estado', authMiddleware, async (c) => {
       mpConnected: RestauranteTable.mpConnected,
       mpUserId: RestauranteTable.mpUserId,
     })
-    .from(RestauranteTable)
-    .where(eq(RestauranteTable.id, restauranteId))
-    .limit(1)
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
 
     if (!restaurante || restaurante.length === 0) {
       return c.json({ success: false, error: 'Restaurante no encontrado' }, 404)
     }
 
-    return c.json({ 
+    return c.json({
       success: true,
       mpConnected: restaurante[0].mpConnected || false,
       mpUserId: restaurante[0].mpUserId || null
@@ -374,12 +374,12 @@ mercadopagoRoute.get('/estado', authMiddleware, async (c) => {
  */
 mercadopagoRoute.post('/webhook', async (c) => {
   const db = drizzle(pool)
-  
+
   try {
     // MercadoPago puede enviar datos en query params o body
     const query = c.req.query()
     let body: any = {}
-    
+
     try {
       body = await c.req.json()
     } catch {
@@ -419,7 +419,7 @@ mercadopagoRoute.post('/webhook', async (c) => {
     }
 
     const paymentData = await paymentResponse.json()
-    
+
     // Extraer información relevante
     const externalReference = paymentData.external_reference
     const status = paymentData.status // approved, rejected, pending, etc.
@@ -456,7 +456,7 @@ mercadopagoRoute.post('/webhook', async (c) => {
     } else {
       pedidoId = parseInt(externalReference.replace('piru-pedido-', ''), 10)
     }
-    
+
     if (isNaN(pedidoId)) {
       console.error(`❌ [Webhook] No se pudo parsear pedidoId de: ${externalReference}`)
       return c.json({ status: 'error', message: 'Invalid external reference' })
@@ -482,7 +482,7 @@ mercadopagoRoute.post('/webhook', async (c) => {
       .from(MesaTable)
       .where(eq(MesaTable.id, mesaId))
       .limit(1)
-    
+
     const mesaNombre = mesa[0]?.nombre || `Mesa ${mesaId}`
 
     // Determinar estado del pago
@@ -537,7 +537,7 @@ mercadopagoRoute.post('/webhook', async (c) => {
               eq(ItemPedidoTable.pedidoId, pedidoId),
               eq(ItemPedidoTable.clienteNombre, cliente)
             ))
-          
+
           const subtotal = itemsCliente.reduce((sum, item) => {
             return sum + (parseFloat(item.precioUnitario) * (item.cantidad || 1))
           }, 0)
@@ -557,7 +557,7 @@ mercadopagoRoute.post('/webhook', async (c) => {
       // Si el pago fue aprobado, notificar por WebSocket
       if (status === 'approved') {
         console.log(`🔔 [Webhook] Notificando pago de subtotales a restaurante ${restauranteId}`)
-        
+
         // Obtener todos los subtotales del pedido para enviar estado actualizado
         const todosSubtotales = await db.select()
           .from(PagoSubtotalTable)
@@ -575,7 +575,7 @@ mercadopagoRoute.post('/webhook', async (c) => {
             metodo: s.metodo
           }))
         )
-        
+
         console.log(`✅ [Webhook] Notificación de split payment enviada - Clientes: ${clientesPagados.join(', ')} en ${mesaNombre}`)
       }
     } else {
@@ -617,16 +617,16 @@ mercadopagoRoute.post('/webhook', async (c) => {
       // Si el pago fue aprobado, notificar al admin por WebSocket
       if (status === 'approved') {
         console.log(`🔔 [Webhook] Notificando pago aprobado a restaurante ${restauranteId}`)
-        
+
         // Usar el mismo método que usa pagarPedido en el websocket manager
         // Esto enviará la notificación PAGO_RECIBIDO al admin
         await wsManager.pagarPedido(
-          pedidoId, 
-          mesaId, 
-          'mercadopago', 
+          pedidoId,
+          mesaId,
+          'mercadopago',
           String(transactionAmount || pedidoData.total)
         )
-        
+
         console.log(`✅ [Webhook] Notificación enviada - Pago de $${transactionAmount} en ${mesaNombre}`)
       }
     }
@@ -673,7 +673,7 @@ mercadopagoRoute.get('/subtotales/:pedidoId', async (c) => {
 
     // Calcular subtotal por cliente
     const subtotalesPorCliente: Record<string, { subtotal: number, pagado: boolean, metodo?: string }> = {}
-    
+
     for (const item of items) {
       if (!subtotalesPorCliente[item.clienteNombre]) {
         subtotalesPorCliente[item.clienteNombre] = { subtotal: 0, pagado: false }
@@ -702,7 +702,7 @@ mercadopagoRoute.get('/subtotales/:pedidoId', async (c) => {
     const totalPagado = resultado.filter(r => r.pagado).reduce((sum, r) => sum + parseFloat(r.subtotal), 0)
     const totalPendiente = totalPedido - totalPagado
 
-    return c.json({ 
+    return c.json({
       success: true,
       subtotales: resultado,
       resumen: {
@@ -724,7 +724,7 @@ mercadopagoRoute.get('/subtotales/:pedidoId', async (c) => {
  */
 mercadopagoRoute.post('/pagar-efectivo', async (c) => {
   const db = drizzle(pool)
-  
+
   try {
     const body = await c.req.json()
     const { pedidoId, clientesAPagar, qrToken } = body
@@ -764,8 +764,8 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
 
     if (subtotalesYaPagados.length > 0) {
       const clientesYaPagados = subtotalesYaPagados.map(s => s.clienteNombre)
-      return c.json({ 
-        success: false, 
+      return c.json({
+        success: false,
         error: `Los siguientes clientes ya pagaron: ${clientesYaPagados.join(', ')}`,
         clientesYaPagados
       }, 400)
@@ -797,16 +797,17 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
           eq(PagoSubtotalTable.estado, 'pending')
         ))
 
-      // Insertar nuevo registro de pago en efectivo (directamente como pagado)
+      // Insertar nuevo registro de pago en efectivo como PENDIENTE DE CONFIRMACIÓN
+      // El admin debe confirmar que recibió el dinero físicamente
       await db.insert(PagoSubtotalTable).values({
         pedidoId,
         clienteNombre: cliente,
         monto: subtotal.toFixed(2),
-        estado: 'paid',
+        estado: 'pending_cash',
         metodo: 'efectivo'
       })
 
-      console.log(`✅ Pago en efectivo registrado: cliente=${cliente}, monto=${subtotal.toFixed(2)}`)
+      console.log(`⏳ Pago en efectivo pendiente de confirmación: cliente=${cliente}, monto=${subtotal.toFixed(2)}`)
     }
 
     // Obtener todos los subtotales actualizados
@@ -827,15 +828,114 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
       }))
     )
 
-    console.log(`✅ Pago en efectivo completado para clientes: ${clientesAPagar.join(', ')}`)
+    console.log(`⏳ Cliente(s) seleccionaron pago en efectivo (pendiente confirmación): ${clientesAPagar.join(', ')}`)
 
-    return c.json({ 
-      success: true, 
-      message: 'Pago en efectivo registrado correctamente',
-      clientesPagados: clientesAPagar
+    return c.json({
+      success: true,
+      message: 'Pago en efectivo registrado. El cajero debe confirmar el pago.',
+      clientesPendientes: clientesAPagar
     })
   } catch (error) {
     console.error('❌ Error registrando pago en efectivo:', error)
+    return c.json({ success: false, error: 'Error interno del servidor' }, 500)
+  }
+})
+
+/**
+ * Confirmar pago en efectivo (solo admin)
+ * El admin confirma que el cliente pagó físicamente
+ */
+mercadopagoRoute.post('/confirmar-efectivo', authMiddleware, async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const body = await c.req.json()
+    const { pedidoId, clienteNombre } = body
+
+    if (!pedidoId) {
+      return c.json({ success: false, error: 'pedidoId es requerido' }, 400)
+    }
+
+    if (!clienteNombre) {
+      return c.json({ success: false, error: 'clienteNombre es requerido' }, 400)
+    }
+
+    // Verificar que el pedido pertenece al restaurante del admin
+    const pedido = await db.select()
+      .from(PedidoTable)
+      .where(and(
+        eq(PedidoTable.id, pedidoId),
+        eq(PedidoTable.restauranteId, restauranteId)
+      ))
+      .limit(1)
+
+    if (!pedido || pedido.length === 0) {
+      return c.json({ success: false, error: 'Pedido no encontrado o no pertenece a este restaurante' }, 404)
+    }
+
+    const mesaId = pedido[0].mesaId!
+
+    // Buscar el registro de pago en estado pending_cash
+    const pagoSubtotal = await db.select()
+      .from(PagoSubtotalTable)
+      .where(and(
+        eq(PagoSubtotalTable.pedidoId, pedidoId),
+        eq(PagoSubtotalTable.clienteNombre, clienteNombre),
+        eq(PagoSubtotalTable.estado, 'pending_cash')
+      ))
+      .limit(1)
+
+    if (!pagoSubtotal || pagoSubtotal.length === 0) {
+      // Verificar si ya está pagado
+      const yaPagado = await db.select()
+        .from(PagoSubtotalTable)
+        .where(and(
+          eq(PagoSubtotalTable.pedidoId, pedidoId),
+          eq(PagoSubtotalTable.clienteNombre, clienteNombre),
+          eq(PagoSubtotalTable.estado, 'paid')
+        ))
+        .limit(1)
+
+      if (yaPagado.length > 0) {
+        return c.json({ success: false, error: 'Este cliente ya tiene su pago confirmado' }, 400)
+      }
+
+      return c.json({ success: false, error: 'No hay pago en efectivo pendiente para este cliente' }, 404)
+    }
+
+    // Actualizar estado a 'paid'
+    await db.update(PagoSubtotalTable)
+      .set({ estado: 'paid' })
+      .where(eq(PagoSubtotalTable.id, pagoSubtotal[0].id))
+
+    console.log(`✅ Pago en efectivo CONFIRMADO por admin: cliente=${clienteNombre}, monto=${pagoSubtotal[0].monto}`)
+
+    // Obtener todos los subtotales actualizados
+    const todosSubtotales = await db.select()
+      .from(PagoSubtotalTable)
+      .where(eq(PagoSubtotalTable.pedidoId, pedidoId))
+
+    // Notificar via WebSocket a clientes y admin
+    await wsManager.notificarSubtotalesPagados(
+      pedidoId,
+      mesaId,
+      [clienteNombre],
+      todosSubtotales.map(s => ({
+        clienteNombre: s.clienteNombre,
+        monto: s.monto,
+        estado: s.estado || 'pending',
+        metodo: s.metodo
+      }))
+    )
+
+    return c.json({
+      success: true,
+      message: 'Pago en efectivo confirmado correctamente',
+      clienteConfirmado: clienteNombre
+    })
+  } catch (error) {
+    console.error('❌ Error confirmando pago en efectivo:', error)
     return c.json({ success: false, error: 'Error interno del servidor' }, 500)
   }
 })
@@ -853,9 +953,9 @@ mercadopagoRoute.post('/refresh-token', authMiddleware, async (c) => {
       mpRefreshToken: RestauranteTable.mpRefreshToken,
       mpConnected: RestauranteTable.mpConnected,
     })
-    .from(RestauranteTable)
-    .where(eq(RestauranteTable.id, restauranteId))
-    .limit(1)
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
 
     if (!restaurante || restaurante.length === 0) {
       return c.json({ success: false, error: 'Restaurante no encontrado' }, 404)
@@ -866,7 +966,7 @@ mercadopagoRoute.post('/refresh-token', authMiddleware, async (c) => {
     }
 
     const nuevoToken = await refrescarTokenRestaurante(restauranteId, restaurante[0].mpRefreshToken)
-    
+
     if (!nuevoToken) {
       return c.json({ success: false, error: 'No se pudo refrescar el token' }, 500)
     }
