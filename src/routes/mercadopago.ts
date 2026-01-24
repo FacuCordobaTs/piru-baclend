@@ -18,6 +18,55 @@ const MP_PLATFORM_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN
 const mercadopagoRoute = new Hono()
 
 /**
+ * Helper función para obtener los subtotales completos de un pedido
+ * Incluye TODOS los clientes (con y sin registro de pago)
+ */
+async function getSubtotalesCompletos(pedidoId: number) {
+  const db = drizzle(pool)
+
+  // Obtener todos los registros de pago del pedido
+  const pagos = await db.select()
+    .from(PagoSubtotalTable)
+    .where(eq(PagoSubtotalTable.pedidoId, pedidoId))
+
+  // Obtener items del pedido para calcular subtotales por cliente
+  const items = await db
+    .select({
+      clienteNombre: ItemPedidoTable.clienteNombre,
+      cantidad: ItemPedidoTable.cantidad,
+      precioUnitario: ItemPedidoTable.precioUnitario,
+    })
+    .from(ItemPedidoTable)
+    .where(eq(ItemPedidoTable.pedidoId, pedidoId))
+
+  // Calcular subtotal por cliente (TODOS los clientes del pedido)
+  const subtotalesPorCliente: Record<string, { monto: number, estado: string, metodo: string | null }> = {}
+
+  for (const item of items) {
+    if (!subtotalesPorCliente[item.clienteNombre]) {
+      subtotalesPorCliente[item.clienteNombre] = { monto: 0, estado: 'pending', metodo: null }
+    }
+    subtotalesPorCliente[item.clienteNombre].monto += parseFloat(item.precioUnitario) * (item.cantidad || 1)
+  }
+
+  // Actualizar con datos de pagos existentes
+  for (const pago of pagos) {
+    if (subtotalesPorCliente[pago.clienteNombre]) {
+      subtotalesPorCliente[pago.clienteNombre].estado = pago.estado || 'pending'
+      subtotalesPorCliente[pago.clienteNombre].metodo = pago.metodo
+    }
+  }
+
+  // Convertir a array
+  return Object.entries(subtotalesPorCliente).map(([clienteNombre, data]) => ({
+    clienteNombre,
+    monto: data.monto.toFixed(2),
+    estado: data.estado,
+    metodo: data.metodo
+  }))
+}
+
+/**
  * Callback OAuth de MercadoPago
  * Esta ruta recibe el código de autorización después de que el restaurante
  * autoriza a Piru a cobrar en su nombre
@@ -558,22 +607,15 @@ mercadopagoRoute.post('/webhook', async (c) => {
       if (status === 'approved') {
         console.log(`🔔 [Webhook] Notificando pago de subtotales a restaurante ${restauranteId}`)
 
-        // Obtener todos los subtotales del pedido para enviar estado actualizado
-        const todosSubtotales = await db.select()
-          .from(PagoSubtotalTable)
-          .where(eq(PagoSubtotalTable.pedidoId, pedidoId))
+        // Obtener todos los subtotales del pedido para enviar estado actualizado (incluyendo clientes sin registro)
+        const todosSubtotales = await getSubtotalesCompletos(pedidoId)
 
         // Notificar via WebSocket a clientes y admin
         await wsManager.notificarSubtotalesPagados(
           pedidoId,
           mesaId,
           clientesPagados,
-          todosSubtotales.map(s => ({
-            clienteNombre: s.clienteNombre,
-            monto: s.monto,
-            estado: s.estado || 'pending',
-            metodo: s.metodo
-          }))
+          todosSubtotales
         )
 
         console.log(`✅ [Webhook] Notificación de split payment enviada - Clientes: ${clientesPagados.join(', ')} en ${mesaNombre}`)
@@ -672,20 +714,23 @@ mercadopagoRoute.get('/subtotales/:pedidoId', async (c) => {
       .where(eq(ItemPedidoTable.pedidoId, pedidoId))
 
     // Calcular subtotal por cliente
-    const subtotalesPorCliente: Record<string, { subtotal: number, pagado: boolean, metodo?: string }> = {}
+    const subtotalesPorCliente: Record<string, { subtotal: number, pagado: boolean, metodo?: string, estado?: string }> = {}
 
     for (const item of items) {
       if (!subtotalesPorCliente[item.clienteNombre]) {
-        subtotalesPorCliente[item.clienteNombre] = { subtotal: 0, pagado: false }
+        subtotalesPorCliente[item.clienteNombre] = { subtotal: 0, pagado: false, estado: 'pending' }
       }
       subtotalesPorCliente[item.clienteNombre].subtotal += parseFloat(item.precioUnitario) * (item.cantidad || 1)
     }
 
-    // Marcar los que ya fueron pagados
+    // Marcar los que ya fueron pagados o tienen pending_cash
     for (const subtotal of subtotales) {
-      if (subtotal.estado === 'paid' && subtotalesPorCliente[subtotal.clienteNombre]) {
-        subtotalesPorCliente[subtotal.clienteNombre].pagado = true
+      if (subtotalesPorCliente[subtotal.clienteNombre]) {
+        // Guardar el estado real (pending_cash, paid, failed, etc.)
+        subtotalesPorCliente[subtotal.clienteNombre].estado = subtotal.estado || 'pending'
         subtotalesPorCliente[subtotal.clienteNombre].metodo = subtotal.metodo || undefined
+        // Solo marcar como pagado si estado es 'paid'
+        subtotalesPorCliente[subtotal.clienteNombre].pagado = subtotal.estado === 'paid'
       }
     }
 
@@ -694,7 +739,8 @@ mercadopagoRoute.get('/subtotales/:pedidoId', async (c) => {
       clienteNombre: cliente,
       subtotal: data.subtotal.toFixed(2),
       pagado: data.pagado,
-      metodo: data.metodo
+      metodo: data.metodo,
+      estado: data.estado || 'pending'
     }))
 
     // Calcular totales
@@ -810,22 +856,15 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
       console.log(`⏳ Pago en efectivo pendiente de confirmación: cliente=${cliente}, monto=${subtotal.toFixed(2)}`)
     }
 
-    // Obtener todos los subtotales actualizados
-    const todosSubtotales = await db.select()
-      .from(PagoSubtotalTable)
-      .where(eq(PagoSubtotalTable.pedidoId, pedidoId))
+    // Obtener todos los subtotales actualizados (incluyendo clientes sin registro de pago)
+    const todosSubtotales = await getSubtotalesCompletos(pedidoId)
 
     // Notificar via WebSocket
     await wsManager.notificarSubtotalesPagados(
       pedidoId,
       mesaId,
       clientesAPagar,
-      todosSubtotales.map(s => ({
-        clienteNombre: s.clienteNombre,
-        monto: s.monto,
-        estado: s.estado || 'pending',
-        metodo: s.metodo
-      }))
+      todosSubtotales
     )
 
     console.log(`⏳ Cliente(s) seleccionaron pago en efectivo (pendiente confirmación): ${clientesAPagar.join(', ')}`)
@@ -911,22 +950,15 @@ mercadopagoRoute.post('/confirmar-efectivo', authMiddleware, async (c) => {
 
     console.log(`✅ Pago en efectivo CONFIRMADO por admin: cliente=${clienteNombre}, monto=${pagoSubtotal[0].monto}`)
 
-    // Obtener todos los subtotales actualizados
-    const todosSubtotales = await db.select()
-      .from(PagoSubtotalTable)
-      .where(eq(PagoSubtotalTable.pedidoId, pedidoId))
+    // Obtener todos los subtotales actualizados (incluyendo clientes sin registro de pago)
+    const todosSubtotales = await getSubtotalesCompletos(pedidoId)
 
     // Notificar via WebSocket a clientes y admin
     await wsManager.notificarSubtotalesPagados(
       pedidoId,
       mesaId,
       [clienteNombre],
-      todosSubtotales.map(s => ({
-        clienteNombre: s.clienteNombre,
-        monto: s.monto,
-        estado: s.estado || 'pending',
-        metodo: s.metodo
-      }))
+      todosSubtotales
     )
 
     return c.json({
