@@ -2,8 +2,8 @@
 import { drizzle } from 'drizzle-orm/mysql2';
 import { eq, desc, and } from 'drizzle-orm';
 import { pool } from '../db';
-import { 
-  pedido as PedidoTable, 
+import {
+  pedido as PedidoTable,
   itemPedido as ItemPedidoTable,
   producto as ProductoTable,
   mesa as MesaTable,
@@ -24,7 +24,7 @@ class WebSocketManager {
   // Registrar conexión de admin
   addAdminConnection(restauranteId: number, ws: any) {
     let session = this.adminSessions.get(restauranteId);
-    
+
     if (!session) {
       session = {
         restauranteId,
@@ -32,10 +32,10 @@ class WebSocketManager {
       };
       this.adminSessions.set(restauranteId, session);
     }
-    
+
     session.connections.add(ws);
     console.log(`🔑 Admin conectado - Restaurante: ${restauranteId}, Total conexiones: ${session.connections.size}`);
-    
+
     return session;
   }
 
@@ -43,10 +43,10 @@ class WebSocketManager {
   removeAdminConnection(restauranteId: number, ws: any) {
     const session = this.adminSessions.get(restauranteId);
     if (!session) return;
-    
+
     session.connections.delete(ws);
     console.log(`🔓 Admin desconectado - Restaurante: ${restauranteId}, Total conexiones: ${session.connections.size}`);
-    
+
     if (session.connections.size === 0) {
       this.adminSessions.delete(restauranteId);
     }
@@ -82,7 +82,7 @@ class WebSocketManager {
     });
 
     console.log(`🔔 Enviando notificación a ${session.connections.size} admin(s): ${notification.tipo} - ${notification.mensaje}`);
-    
+
     session.connections.forEach((client) => {
       if (client.readyState === 1) { // OPEN
         try {
@@ -102,7 +102,7 @@ class WebSocketManager {
       .where(eq(NotificacionTable.restauranteId, restauranteId))
       .orderBy(desc(NotificacionTable.timestamp))
       .limit(100);
-    
+
     return notificaciones;
   }
 
@@ -146,7 +146,7 @@ class WebSocketManager {
 
       const pedido = ultimoPedido[0] || null;
       let items: any[] = [];
-      
+
       if (pedido) {
         const itemsRaw = await this.db
           .select({
@@ -184,7 +184,7 @@ class WebSocketManager {
           itemsRaw.map(async (item) => {
             let ingredientesExcluidosNombres: string[] = []
             const ingredientesExcluidosParsed = parseJsonField(item.ingredientesExcluidos)
-            
+
             if (ingredientesExcluidosParsed && ingredientesExcluidosParsed.length > 0) {
               const { inArray } = await import('drizzle-orm')
               const ingredientes = await this.db
@@ -194,7 +194,7 @@ class WebSocketManager {
                 })
                 .from(IngredienteTable)
                 .where(inArray(IngredienteTable.id, ingredientesExcluidosParsed))
-              
+
               ingredientesExcluidosNombres = ingredientes.map(ing => ing.nombre)
             }
 
@@ -224,7 +224,10 @@ class WebSocketManager {
         id: mesa.id,
         nombre: mesa.nombre,
         qrToken: mesa.qrToken,
-        pedido,
+        pedido: pedido ? {
+          ...pedido,
+          nombrePedido: pedido.nombrePedido || null
+        } : null,
         items,
         clientesConectados,
         totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0),
@@ -238,14 +241,14 @@ class WebSocketManager {
   // Broadcast estado actualizado a admins
   async broadcastEstadoToAdmins(mesaId: number) {
     let restauranteId = this.mesaToRestaurante.get(mesaId);
-    
+
     if (!restauranteId) {
       // Buscar en BD
       const mesa = await this.db.select()
         .from(MesaTable)
         .where(eq(MesaTable.id, mesaId))
         .limit(1);
-      
+
       if (mesa[0]?.restauranteId) {
         restauranteId = mesa[0].restauranteId;
         this.mesaToRestaurante.set(mesaId, restauranteId);
@@ -258,7 +261,7 @@ class WebSocketManager {
     if (!session || session.connections.size === 0) return;
 
     const estadoMesas = await this.getEstadoMesasRestaurante(restauranteId);
-    
+
     const message = JSON.stringify({
       type: 'ADMIN_ESTADO_MESAS',
       payload: { mesas: estadoMesas }
@@ -293,7 +296,7 @@ class WebSocketManager {
 
     // Actualizar pedidoId si es diferente (nuevo pedido creado)
     session.pedidoId = pedidoId;
-    
+
     session.connections.add(ws);
 
     // Agregar cliente si no existe (y no es admin)
@@ -305,6 +308,9 @@ class WebSocketManager {
         socketId: clienteId
       });
 
+      // Verificar si es modo carrito y asignar nombrePedido si es el primer cliente
+      await this.asignarNombrePedidoSiCarrito(mesaId, pedidoId, nombre);
+
       // Solo actualizar estado de mesas para admins (sin notificación)
       // Las conexiones/desconexiones de clientes no generan notificaciones
       this.broadcastEstadoToAdmins(mesaId);
@@ -313,13 +319,89 @@ class WebSocketManager {
     return session;
   }
 
+  // Asignar nombre al pedido si es modo carrito y aún no tiene nombre
+  private async asignarNombrePedidoSiCarrito(mesaId: number, pedidoId: number, nombreCliente: string) {
+    try {
+      // Obtener la mesa para saber el restaurante
+      const mesa = await this.db.select()
+        .from(MesaTable)
+        .where(eq(MesaTable.id, mesaId))
+        .limit(1);
+
+      if (!mesa[0]?.restauranteId) return;
+
+      // Importamos restaurante table
+      const { restaurante: RestauranteTable } = await import('../db/schema');
+
+      // Verificar si el restaurante está en modo carrito
+      const restaurante = await this.db.select({
+        esCarrito: RestauranteTable.esCarrito
+      })
+        .from(RestauranteTable)
+        .where(eq(RestauranteTable.id, mesa[0].restauranteId))
+        .limit(1);
+
+      if (!restaurante[0]?.esCarrito) return;
+
+      // Verificar si el pedido ya tiene nombre asignado
+      const pedido = await this.db.select({
+        nombrePedido: PedidoTable.nombrePedido
+      })
+        .from(PedidoTable)
+        .where(eq(PedidoTable.id, pedidoId))
+        .limit(1);
+
+      if (pedido[0]?.nombrePedido) return; // Ya tiene nombre
+
+      // Asignar el nombre del primer cliente al pedido
+      await this.db.update(PedidoTable)
+        .set({ nombrePedido: nombreCliente })
+        .where(eq(PedidoTable.id, pedidoId));
+
+      console.log(`🛒 [Carrito] Pedido ${pedidoId} asignado a "${nombreCliente}"`);
+
+      // Notificar a todos los clientes conectados sobre el nombre del pedido
+      this.broadcast(mesaId, {
+        type: 'NOMBRE_PEDIDO_ASIGNADO',
+        payload: {
+          nombrePedido: nombreCliente,
+          pedidoId
+        }
+      } as any);
+
+    } catch (error) {
+      console.error('Error asignando nombre de pedido en modo carrito:', error);
+    }
+  }
+
+  // Marcar pedido como listo para retirar (modo carrito)
+  async marcarPedidoListo(pedidoId: number, mesaId: number) {
+    try {
+      console.log(`🛒 [Carrito] Pedido ${pedidoId} marcado como LISTO para retirar`);
+
+      // Broadcast a todos los clientes conectados
+      this.broadcast(mesaId, {
+        type: 'PEDIDO_LISTO_PARA_RETIRAR',
+        payload: {
+          pedidoId
+        }
+      } as any);
+
+      // También notificar a los admins
+      this.broadcastEstadoToAdmins(mesaId);
+
+    } catch (error) {
+      console.error('Error marcando pedido como listo:', error);
+    }
+  }
+
   // Remover cliente
   removeClient(mesaId: number, clienteId: string | undefined, ws: any) {
     const session = this.sessions.get(mesaId);
     if (!session) return;
 
     session.connections.delete(ws);
-    
+
     // Remover cliente de la lista si existe
     const isAdmin = clienteId?.startsWith('admin-');
     if (clienteId && !isAdmin) {
@@ -336,7 +418,7 @@ class WebSocketManager {
         this.broadcastEstadoToAdmins(mesaId);
       }
     }
-    
+
     // Si no quedan conexiones, limpiar la sesión
     if (session.connections.size === 0) {
       this.sessions.delete(mesaId);
@@ -349,7 +431,7 @@ class WebSocketManager {
     if (!session) return;
 
     const messageStr = JSON.stringify(message);
-    
+
     session.connections.forEach((client) => {
       if (client !== excludeWs && client.readyState === 1) { // 1 = OPEN
         try {
@@ -383,7 +465,7 @@ class WebSocketManager {
     const itemsConIngredientes = await Promise.all(
       (items || []).map(async (item) => {
         let ingredientesExcluidosNombres: string[] = []
-        
+
         // Helper para parsear JSON si viene como string
         const parseJsonField = (value: any): number[] | null => {
           if (!value) return null
@@ -400,7 +482,7 @@ class WebSocketManager {
         }
 
         const ingredientesExcluidosParsed = parseJsonField(item.ingredientesExcluidos)
-        
+
         if (ingredientesExcluidosParsed && ingredientesExcluidosParsed.length > 0) {
           const { inArray } = await import('drizzle-orm')
           const ingredientes = await this.db
@@ -410,7 +492,7 @@ class WebSocketManager {
             })
             .from(IngredienteTable)
             .where(inArray(IngredienteTable.id, ingredientesExcluidosParsed))
-          
+
           ingredientesExcluidosNombres = ingredientes.map(ing => ing.nombre)
         }
 
@@ -443,9 +525,9 @@ class WebSocketManager {
       .from(PedidoTable)
       .where(eq(PedidoTable.id, pedidoId))
       .limit(1);
-    
+
     const isPostConfirmacion = pedidoActual[0]?.estado === 'preparing' || pedidoActual[0]?.estado === 'delivered';
-    
+
     // Insertar en la BD
     const result = await this.db.insert(ItemPedidoTable).values({
       pedidoId,
@@ -496,7 +578,7 @@ class WebSocketManager {
     // Obtener nombres de ingredientes excluidos
     let ingredientesExcluidosNombres: string[] = []
     const ingredientesExcluidosParsed = parseJsonField(itemCompleto[0].ingredientesExcluidos)
-    
+
     if (ingredientesExcluidosParsed && ingredientesExcluidosParsed.length > 0) {
       const { inArray } = await import('drizzle-orm')
       const ingredientes = await this.db
@@ -506,7 +588,7 @@ class WebSocketManager {
         })
         .from(IngredienteTable)
         .where(inArray(IngredienteTable.id, ingredientesExcluidosParsed))
-      
+
       ingredientesExcluidosNombres = ingredientes.map(ing => ing.nombre)
     }
 
@@ -535,7 +617,7 @@ class WebSocketManager {
         const nombreProducto = itemCompletoConNombres.nombreProducto || 'Producto';
         const cantidad = itemCompletoConNombres.cantidad || 1;
         const clienteNombre = itemCompletoConNombres.clienteNombre || 'Cliente';
-        
+
         this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
           'PRODUCTO_AGREGADO',
           mesaId,
@@ -614,7 +696,7 @@ class WebSocketManager {
   // Confirmar pedido (cambiar estado a preparing)
   async confirmarPedido(pedidoId: number, mesaId: number) {
     console.log(`✅ [confirmarPedido] INICIO - pedidoId=${pedidoId}, mesaId=${mesaId}`);
-    
+
     await this.db
       .update(PedidoTable)
       .set({ estado: 'preparing' })
@@ -622,7 +704,7 @@ class WebSocketManager {
 
     const estadoActual = await this.getEstadoInicial(pedidoId);
     console.log(`✅ [confirmarPedido] Estado actual: total=${estadoActual.pedido?.total}, items=${estadoActual.items.length}`);
-    
+
     // Enviar mensaje específico de confirmación
     this.broadcast(mesaId, {
       type: 'PEDIDO_CONFIRMADO',
@@ -646,27 +728,27 @@ class WebSocketManager {
       ));
       this.broadcastEstadoToAdmins(mesaId);
     }
-    
+
     console.log(`✅ [confirmarPedido] FIN`);
   }
 
   // Cerrar pedido (cambiar estado a closed)
   async cerrarPedido(pedidoId: number, mesaId: number) {
     console.log(`🔒 [cerrarPedido] INICIO - pedidoId=${pedidoId}, mesaId=${mesaId}`);
-    
+
     const estadoAntes = await this.getEstadoInicial(pedidoId);
     console.log(`🔒 [cerrarPedido] Estado antes: total=${estadoAntes.pedido?.total}`);
-    
+
     await this.db
       .update(PedidoTable)
-      .set({ 
+      .set({
         estado: 'closed',
         closedAt: new Date()
       })
       .where(eq(PedidoTable.id, pedidoId));
 
     const estadoActual = await this.getEstadoInicial(pedidoId);
-    
+
     this.broadcast(mesaId, {
       type: 'PEDIDO_CERRADO',
       payload: {
@@ -689,7 +771,7 @@ class WebSocketManager {
       ));
       this.broadcastEstadoToAdmins(mesaId);
     }
-    
+
     console.log(`🔒 [cerrarPedido] FIN`);
   }
 
@@ -706,26 +788,26 @@ class WebSocketManager {
         `${clienteNombre} necesita asistencia`
       ));
     }
-    
+
     return { success: true, message: 'Mozo notificado' };
   }
 
   // Pagar pedido
   async pagarPedido(pedidoId: number, mesaId: number, metodo: 'efectivo' | 'mercadopago', totalFromClient?: string) {
     console.log(`💳 [pagarPedido] pedidoId=${pedidoId}, mesaId=${mesaId}, metodo=${metodo}, totalFromClient=${totalFromClient}`);
-    
+
     // Obtener el estado actual del pedido
     const estadoActual = await this.getEstadoInicial(pedidoId);
-    
+
     // Obtener el total: primero del cliente, luego del pedido en BD
     let total = totalFromClient;
     let pedidoIdParaNotificacion = pedidoId; // ID del pedido para la notificación
-    
+
     if (!total || total === '0.00' || total === '0') {
       total = estadoActual.pedido?.total || '0.00';
       console.log(`💳 [pagarPedido] Total from DB: ${total}`);
     }
-    
+
     // Si aún es 0, buscar el último pedido cerrado de esta mesa
     // (esto pasa cuando el cliente se reconectó y tiene el pedidoId del nuevo pedido vacío)
     if (!total || total === '0.00' || total === '0') {
@@ -735,9 +817,9 @@ class WebSocketManager {
         .where(eq(PedidoTable.mesaId, mesaId))
         .orderBy(desc(PedidoTable.createdAt))
         .limit(2); // Obtener los 2 últimos (el actual vacío y el anterior cerrado)
-      
+
       // Buscar el pedido cerrado con total > 0
-      const pedidoConTotal = ultimosPedidos.find(p => 
+      const pedidoConTotal = ultimosPedidos.find(p =>
         parseFloat(p.total || '0') > 0
       );
       if (pedidoConTotal) {
@@ -746,9 +828,9 @@ class WebSocketManager {
         console.log(`💳 [pagarPedido] Total from last closed order ${pedidoConTotal.id}: ${total}`);
       }
     }
-    
+
     console.log(`💳 [pagarPedido] Final total: ${total}, pedidoId para notificación: ${pedidoIdParaNotificacion}`);
-    
+
     // Broadcast a todos los clientes de la mesa para redirigir a factura
     this.broadcast(mesaId, {
       type: 'PEDIDO_PAGADO',
@@ -759,7 +841,7 @@ class WebSocketManager {
         total: total
       }
     });
-    
+
     // Notificar a admins
     const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
     if (mesa[0]?.restauranteId) {
@@ -773,7 +855,7 @@ class WebSocketManager {
       ));
       this.broadcastEstadoToAdmins(mesaId);
     }
-    
+
     return { success: true, message: 'Pago registrado' };
   }
 
@@ -887,7 +969,7 @@ class WebSocketManager {
 
     if (todosConfirmaron) {
       console.log(`🎉 [verificarConfirmacion] ¡Todos confirmaron! Confirmando pedido...`);
-      
+
       // Limpiar estado de confirmación
       session.confirmacionGrupal = undefined;
 
@@ -934,8 +1016,8 @@ class WebSocketManager {
 
   // Notificar subtotales pagados (split payment)
   async notificarSubtotalesPagados(
-    pedidoId: number, 
-    mesaId: number, 
+    pedidoId: number,
+    mesaId: number,
     clientesPagados: string[],
     todosSubtotales: Array<{
       clienteNombre: string
@@ -945,7 +1027,7 @@ class WebSocketManager {
     }>
   ) {
     console.log(`💳 [notificarSubtotalesPagados] pedidoId=${pedidoId}, mesaId=${mesaId}, clientes=${clientesPagados.join(', ')}`);
-    
+
     // Broadcast a todos los clientes de la mesa
     this.broadcast(mesaId, {
       type: 'SUBTOTALES_ACTUALIZADOS',
@@ -955,7 +1037,7 @@ class WebSocketManager {
         todosSubtotales
       }
     });
-    
+
     // Notificar a admins
     const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
     if (mesa[0]?.restauranteId) {
@@ -964,7 +1046,7 @@ class WebSocketManager {
         .filter(s => s.estado === 'paid')
         .reduce((sum, s) => sum + parseFloat(s.monto), 0);
 
-      const metodo = todosSubtotales.find(s => 
+      const metodo = todosSubtotales.find(s =>
         clientesPagados.includes(s.clienteNombre) && s.estado === 'paid'
       )?.metodo || 'efectivo';
 
@@ -1004,7 +1086,7 @@ class WebSocketManager {
 
       this.broadcastEstadoToAdmins(mesaId);
     }
-    
+
     return { success: true, message: 'Subtotales notificados' };
   }
 

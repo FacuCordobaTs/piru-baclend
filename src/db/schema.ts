@@ -10,6 +10,7 @@ export const restaurante = mysqlTable("restaurante", {
     direccion: varchar("direccion", { length: 255 }),
     telefono: varchar("telefono", { length: 255 }),
     imagenUrl: varchar("imagen_url", { length: 255 }),
+    esCarrito: boolean("es_carrito").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     // Campos legacy (se pueden eliminar después de migrar)
     mercadoPagoPublicKey: varchar("mercado_pago_public_key", { length: 255 }),
@@ -67,6 +68,7 @@ export const pedido = mysqlTable("pedido", {
     id: int("id").primaryKey().autoincrement(),
     restauranteId: int("restaurante_id").references(() => restaurante.id),
     mesaId: int("mesa_id").references(() => mesa.id),
+    nombrePedido: varchar("nombre_pedido", { length: 255 }),
     estado: mysqlEnum('estado', ['pending', 'preparing', 'delivered', 'closed']).default('pending'),
     total: decimal("total", { precision: 10, scale: 2 }).default('0.00'),
     createdAt: timestamp("created_at").defaultNow().notNull(),

@@ -129,7 +129,7 @@ restauranteRoute.post('/complete-profile', zValidator('json', completeProfileSch
     console.error('Error completing profile:', error)
     return c.json({ message: 'Error completing profile', error: (error as Error).message }, 500)
   }
-  
+
 })
 
 // Actualizar perfil del restaurante
@@ -151,7 +151,7 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
 
     // Preparar datos a actualizar
     const updateData: { [key: string]: any } = {}
-    
+
     if (nombre !== undefined) updateData.nombre = nombre
     if (direccion !== undefined) updateData.direccion = direccion
     if (telefono !== undefined) updateData.telefono = telefono
@@ -166,7 +166,7 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
           // Validar tamaño
           const base64Data = image.replace(/^data:image\/\w+;base64,/, "")
           const buffer = Buffer.from(base64Data, "base64")
-          
+
           if (buffer.byteLength <= MAX_FILE_SIZE) {
             // Eliminar imagen anterior si existe
             if (currentRestaurante[0].imagenUrl) {
@@ -195,8 +195,8 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
       .where(eq(RestauranteTable.id, restauranteId))
       .limit(1)
 
-    return c.json({ 
-      message: 'Perfil actualizado correctamente', 
+    return c.json({
+      message: 'Perfil actualizado correctamente',
       success: true,
       data: updatedRestaurante[0]
     }, 200)
@@ -204,6 +204,33 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
   } catch (error) {
     console.error('Error updating profile:', error)
     return c.json({ message: 'Error al actualizar perfil', error: (error as Error).message, success: false }, 500)
+  }
+})
+
+// Toggle modo carrito
+const toggleCarritoSchema = z.object({
+  esCarrito: z.boolean()
+})
+
+restauranteRoute.put('/toggle-carrito', zValidator('json', toggleCarritoSchema), async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const { esCarrito } = c.req.valid('json')
+
+  try {
+    await db.update(RestauranteTable)
+      .set({ esCarrito })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({
+      message: esCarrito ? 'Modo carrito activado' : 'Modo restaurante activado',
+      success: true,
+      data: { esCarrito }
+    }, 200)
+
+  } catch (error) {
+    console.error('Error updating carrito mode:', error)
+    return c.json({ message: 'Error al cambiar modo carrito', error: (error as Error).message, success: false }, 500)
   }
 })
 

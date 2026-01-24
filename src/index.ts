@@ -16,7 +16,7 @@ import { drizzle } from 'drizzle-orm/mysql2';
 import { pool } from './db';
 import { mesa as MesaTable, pedido as PedidoTable } from './db/schema';
 import { eq, desc } from 'drizzle-orm';
-import { createBunWebSocket } from "hono/bun"; 
+import { createBunWebSocket } from "hono/bun";
 import type { ServerWebSocket } from "bun";
 import { verifyToken } from './libs/jwt';
 
@@ -36,7 +36,7 @@ let connectionCounter = 0;
 // Validate required environment variables
 const requiredEnvVars = [
   'DB_USER',
-  'DB_PASSWORD', 
+  'DB_PASSWORD',
   'DB_NAME',
   'JWT_SECRET'
 ];
@@ -91,7 +91,7 @@ app.get(
   upgradeWebSocket(async (c: any) => {
     const token = c.req.query('token');
     let restauranteId: number | null = null;
-    
+
     // Verify JWT token
     if (token) {
       try {
@@ -102,16 +102,16 @@ app.get(
         console.error('❌ Invalid admin token:', error);
       }
     }
-    
+
     if (!restauranteId) {
       return {
         async onOpen(event: any, ws: any) {
           console.error('❌ Admin connection without valid token');
           ws.close(1008, 'Token inválido o no proporcionado');
         },
-        async onMessage(event: any, ws: any) {},
-        async onClose(event: any, ws: any) {},
-        async onError(event: any, ws: any) {}
+        async onMessage(event: any, ws: any) { },
+        async onClose(event: any, ws: any) { },
+        async onError(event: any, ws: any) { }
       };
     }
 
@@ -121,7 +121,7 @@ app.get(
       async onOpen(event: any, ws: any) {
         console.log(`🔑 Admin WebSocket conectado - Restaurante: ${restauranteId}`);
         wsManager.addAdminConnection(restauranteId!, ws);
-        
+
         // Send initial state of all mesas
         try {
           const estadoMesas = await wsManager.getEstadoMesasRestaurante(restauranteId!);
@@ -130,7 +130,7 @@ app.get(
             payload: { mesas: estadoMesas }
           }));
           console.log(`📊 Estado inicial enviado: ${estadoMesas.length} mesas`);
-          
+
           // Send saved notifications from database
           const notificaciones = await wsManager.getNotificacionesRestaurante(restauranteId!);
           ws.send(JSON.stringify({
@@ -147,20 +147,32 @@ app.get(
         try {
           const messageStr = typeof event.data === 'string' ? event.data : event.data.toString();
           const data = JSON.parse(messageStr);
-          
+
           console.log(`📨 Admin [${adminConnectionId}]:`, data.type);
-          
-          switch(data.type) {
+
+          switch (data.type) {
             case 'PING':
               ws.send(JSON.stringify({ type: 'PONG' }));
               break;
-              
+
             case 'REFRESH_MESAS':
               const estadoMesas = await wsManager.getEstadoMesasRestaurante(restauranteId!);
               ws.send(JSON.stringify({
                 type: 'ADMIN_ESTADO_MESAS',
                 payload: { mesas: estadoMesas }
               }));
+              break;
+
+            case 'MARCAR_PEDIDO_LISTO':
+              // Modo carrito: marcar pedido como listo para retirar
+              const { pedidoId, mesaId } = data.payload;
+              if (pedidoId && mesaId) {
+                await wsManager.marcarPedidoListo(pedidoId, mesaId);
+                ws.send(JSON.stringify({
+                  type: 'PEDIDO_LISTO_CONFIRMADO',
+                  payload: { pedidoId, mesaId }
+                }));
+              }
               break;
           }
         } catch (error) {
@@ -186,11 +198,11 @@ app.get(
   upgradeWebSocket(async (c: any) => {
     const db = drizzle(pool);
     const qrToken = c.req.param('qrToken');
-    
+
     // Buscar mesa y pedido antes de establecer la conexión
     let mesaId: number | null = null;
     let pedidoId: number | null = null;
-    
+
     try {
       const mesa = await db.select()
         .from(MesaTable)
@@ -222,7 +234,7 @@ app.get(
       } else if (ultimoPedido[0].estado === 'closed') {
         // El último pedido está cerrado, verificar si todos pagaron
         const todosPagaron = await wsManager.verificarTodosPagaron(ultimoPedido[0].id);
-        
+
         if (todosPagaron) {
           // Todos pagaron, crear nuevo pedido
           const nuevoPedido = await db.insert(PedidoTable).values({
@@ -255,7 +267,7 @@ app.get(
         async onMessage(event: any, ws: any) {
           ws.close(1008, 'Mesa o pedido no encontrado');
         },
-        async onClose(event: any, ws: any) {},
+        async onClose(event: any, ws: any) { },
         async onError(event: any, ws: any) {
           console.error('❌ WebSocket error:', event);
         }
@@ -269,12 +281,12 @@ app.get(
     return {
       async onOpen(event: any, ws: any) {
         // Guardar datos usando el ID de conexión del closure
-        wsConnections.set(connectionId, { 
-          mesaId: mesaId!, 
-          pedidoId: pedidoId!, 
-          qrToken 
+        wsConnections.set(connectionId, {
+          mesaId: mesaId!,
+          pedidoId: pedidoId!,
+          qrToken
         });
-        
+
         console.log(`✅ Cliente conectado [${connectionId}] - QR: ${qrToken}, Mesa: ${mesaId}, Pedido: ${pedidoId}`);
       },
 
@@ -282,24 +294,24 @@ app.get(
         try {
           const messageStr = typeof event.data === 'string' ? event.data : event.data.toString();
           const data: WebSocketMessage = JSON.parse(messageStr);
-          
+
           // Usar el ID de conexión del closure para obtener los datos
           let wsData = wsConnections.get(connectionId);
-          
+
           // Si no existe, crear con los valores del closure
           if (!wsData) {
             wsData = { mesaId: mesaId!, pedidoId: pedidoId!, qrToken };
             wsConnections.set(connectionId, wsData);
           }
-          
+
           const currentMesaId = wsData.mesaId;
           const currentPedidoId = wsData.pedidoId;
-          
+
           if (!currentMesaId || !currentPedidoId) {
             console.error('❌ No se pudo obtener mesaId o pedidoId');
             ws.send(JSON.stringify({
               type: 'ERROR',
-              payload: { 
+              payload: {
                 message: 'Conexión no inicializada correctamente'
               }
             }));
@@ -307,13 +319,13 @@ app.get(
           }
 
           console.log(`📨 [${connectionId}] Mesa ${currentMesaId}:`, data.type);
-          
-          switch(data.type) {
+
+          switch (data.type) {
             case 'CLIENTE_CONECTADO':
               // Actualizar clienteId en los datos de conexión
               wsData.clienteId = data.payload.clienteId;
               wsConnections.set(connectionId, wsData);
-              
+
               const session = await wsManager.addClient(
                 currentMesaId,
                 currentPedidoId,
@@ -321,7 +333,7 @@ app.get(
                 data.payload.clienteId,
                 data.payload.nombre
               );
-              
+
               // Enviar estado inicial
               const estadoInicial = await wsManager.getEstadoInicial(currentPedidoId);
               ws.send(JSON.stringify({
@@ -336,9 +348,9 @@ app.get(
                   pedidoId: currentPedidoId
                 }
               }));
-              
+
               console.log(`👤 Cliente "${data.payload.nombre}" unido a mesa ${currentMesaId}`);
-              
+
               // Notificar a otros clientes
               wsManager.broadcast(currentMesaId, {
                 type: 'CLIENTE_UNIDO',
@@ -351,17 +363,17 @@ app.get(
                 }
               }, ws);
               break;
-              
+
             case 'AGREGAR_ITEM':
               console.log(`➕ Agregando item - Cliente: ${data.payload.clienteNombre}`);
               await wsManager.agregarItem(currentPedidoId, currentMesaId, data.payload);
               break;
-              
+
             case 'ELIMINAR_ITEM':
               console.log(`➖ Eliminando item ${data.payload.itemId}`);
               await wsManager.eliminarItem(data.payload.itemId, currentPedidoId, currentMesaId);
               break;
-              
+
             case 'ACTUALIZAR_CANTIDAD':
               console.log(`🔄 Actualizando cantidad - Item ${data.payload.itemId}: ${data.payload.cantidad}`);
               await wsManager.actualizarCantidad(
@@ -371,7 +383,7 @@ app.get(
                 currentMesaId
               );
               break;
-              
+
             case 'CONFIRMAR_PEDIDO':
               // Mantener compatibilidad: si solo hay un cliente, confirmar directamente
               const sessionForConfirm = wsManager.getSession(currentMesaId);
@@ -417,17 +429,17 @@ app.get(
               console.log(`💳 Pagando pedido ${currentPedidoId} - Método: ${data.payload.metodo}, Total del cliente: ${data.payload.total || 'no enviado'}`);
               await wsManager.pagarPedido(currentPedidoId, currentMesaId, data.payload.metodo, data.payload.total);
               break;
-              
+
             default:
               console.warn(`⚠️ Tipo de mensaje desconocido: ${data.type}`);
           }
         } catch (error) {
           console.error('❌ Error procesando mensaje WebSocket:', error);
-          
+
           try {
             ws.send(JSON.stringify({
               type: 'ERROR',
-              payload: { 
+              payload: {
                 message: 'Error procesando solicitud',
                 error: error instanceof Error ? error.message : 'Unknown error'
               }
@@ -440,14 +452,14 @@ app.get(
 
       async onClose(event: any, ws: any) {
         const wsData = wsConnections.get(connectionId);
-        
+
         if (wsData) {
           const { mesaId: closingMesaId, clienteId } = wsData;
-          
+
           console.log(`👋 [${connectionId}] Cliente desconectado - Mesa: ${closingMesaId}, Cliente: ${clienteId || 'desconocido'}`);
-          
+
           wsManager.removeClient(closingMesaId, clienteId, ws);
-          
+
           // Notificar a otros clientes
           const session = wsManager.getSession(closingMesaId);
           if (session) {
@@ -459,7 +471,7 @@ app.get(
               }
             });
           }
-          
+
           // Limpiar datos del Map
           wsConnections.delete(connectionId);
         } else {
