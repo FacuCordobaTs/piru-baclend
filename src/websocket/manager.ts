@@ -1119,10 +1119,18 @@ class WebSocketManager {
       // Calcular subtotal por cliente
       const subtotalesPorCliente: Record<string, number> = {};
       for (const item of items) {
-        if (!subtotalesPorCliente[item.clienteNombre]) {
-          subtotalesPorCliente[item.clienteNombre] = 0;
+        // Para items de Mozo, usamos el ID único del item como clave
+        // Para otros clientes, usamos el nombre del cliente
+        let key = item.clienteNombre;
+        if (key === 'Mozo') {
+          // IMPORTANTE: Esta clave debe coincidir con la usada en crear-preferencia y pago-efectivo
+          key = `Mozo:item:${item.id}`; // Nota: id del ItemPedido
         }
-        subtotalesPorCliente[item.clienteNombre] += parseFloat(item.precioUnitario) * (item.cantidad || 1);
+
+        if (!subtotalesPorCliente[key]) {
+          subtotalesPorCliente[key] = 0;
+        }
+        subtotalesPorCliente[key] += parseFloat(item.precioUnitario) * (item.cantidad || 1);
       }
 
       // Obtener todos los pagos de subtotales pagados para este pedido
