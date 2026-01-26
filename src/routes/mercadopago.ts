@@ -18,8 +18,27 @@ const MP_PLATFORM_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN
 const mercadopagoRoute = new Hono()
 
 /**
+ * Constants for Mozo item identification
+ * Mozo items are stored in pagoSubtotal with clienteNombre format: "Mozo:item:{itemId}"
+ */
+const MOZO_ITEM_PREFIX = 'Mozo:item:'
+
+function isMozoItemKey(key: string): boolean {
+  return key.startsWith(MOZO_ITEM_PREFIX)
+}
+
+function getMozoItemId(key: string): number | null {
+  if (!isMozoItemKey(key)) return null
+  return parseInt(key.replace(MOZO_ITEM_PREFIX, ''), 10)
+}
+
+function createMozoItemKey(itemId: number): string {
+  return `${MOZO_ITEM_PREFIX}${itemId}`
+}
+
+/**
  * Helper función para obtener los subtotales completos de un pedido
- * Incluye TODOS los clientes (con y sin registro de pago)
+ * Incluye TODOS los clientes (con y sin registro de pago) + items individuales de Mozo
  */
 async function getSubtotalesCompletos(pedidoId: number) {
   const db = drizzle(pool)
@@ -32,6 +51,7 @@ async function getSubtotalesCompletos(pedidoId: number) {
   // Obtener items del pedido para calcular subtotales por cliente
   const items = await db
     .select({
+      id: ItemPedidoTable.id,
       clienteNombre: ItemPedidoTable.clienteNombre,
       cantidad: ItemPedidoTable.cantidad,
       precioUnitario: ItemPedidoTable.precioUnitario,
@@ -39,31 +59,66 @@ async function getSubtotalesCompletos(pedidoId: number) {
     .from(ItemPedidoTable)
     .where(eq(ItemPedidoTable.pedidoId, pedidoId))
 
-  // Calcular subtotal por cliente (TODOS los clientes del pedido)
+  // Calcular subtotal por cliente (TODOS los clientes excepto Mozo)
   const subtotalesPorCliente: Record<string, { monto: number, estado: string, metodo: string | null }> = {}
 
+  // Separate tracking for individual Mozo items
+  const mozoItems: Array<{ itemId: number, monto: number, estado: string, metodo: string | null }> = []
+
   for (const item of items) {
-    if (!subtotalesPorCliente[item.clienteNombre]) {
-      subtotalesPorCliente[item.clienteNombre] = { monto: 0, estado: 'pending', metodo: null }
+    if (item.clienteNombre === 'Mozo') {
+      // Track Mozo items individually
+      mozoItems.push({
+        itemId: item.id,
+        monto: parseFloat(item.precioUnitario) * (item.cantidad || 1),
+        estado: 'pending',
+        metodo: null
+      })
+    } else {
+      // Regular client - group by name
+      if (!subtotalesPorCliente[item.clienteNombre]) {
+        subtotalesPorCliente[item.clienteNombre] = { monto: 0, estado: 'pending', metodo: null }
+      }
+      subtotalesPorCliente[item.clienteNombre].monto += parseFloat(item.precioUnitario) * (item.cantidad || 1)
     }
-    subtotalesPorCliente[item.clienteNombre].monto += parseFloat(item.precioUnitario) * (item.cantidad || 1)
   }
 
   // Actualizar con datos de pagos existentes
   for (const pago of pagos) {
-    if (subtotalesPorCliente[pago.clienteNombre]) {
+    if (isMozoItemKey(pago.clienteNombre)) {
+      // This is an individual Mozo item payment
+      const itemId = getMozoItemId(pago.clienteNombre)
+      const mozoItem = mozoItems.find(m => m.itemId === itemId)
+      if (mozoItem) {
+        mozoItem.estado = pago.estado || 'pending'
+        mozoItem.metodo = pago.metodo
+      }
+    } else if (subtotalesPorCliente[pago.clienteNombre]) {
+      // Regular client payment
       subtotalesPorCliente[pago.clienteNombre].estado = pago.estado || 'pending'
       subtotalesPorCliente[pago.clienteNombre].metodo = pago.metodo
     }
   }
 
   // Convertir a array
-  return Object.entries(subtotalesPorCliente).map(([clienteNombre, data]) => ({
+  const clienteSubtotales = Object.entries(subtotalesPorCliente).map(([clienteNombre, data]) => ({
     clienteNombre,
     monto: data.monto.toFixed(2),
     estado: data.estado,
     metodo: data.metodo
   }))
+
+  // Add Mozo items with their special format
+  const mozoSubtotales = mozoItems.map(item => ({
+    clienteNombre: createMozoItemKey(item.itemId),
+    monto: item.monto.toFixed(2),
+    estado: item.estado,
+    metodo: item.metodo,
+    itemId: item.itemId,
+    isMozoItem: true
+  }))
+
+  return [...clienteSubtotales, ...mozoSubtotales]
 }
 
 /**
@@ -132,21 +187,25 @@ mercadopagoRoute.get('/callback', async (c) => {
  * Crear preferencia de pago para MercadoPago
  * Esta ruta crea un link de pago usando el access_token del restaurante
  * Soporta pago completo o split payment (pago por subtotales de clientes específicos)
+ * También soporta pago de items individuales de Mozo mediante mozoItemIds
  */
 mercadopagoRoute.post('/crear-preferencia', async (c) => {
   const db = drizzle(pool)
 
   try {
     const body = await c.req.json()
-    const { pedidoId, qrToken, clientesAPagar } = body
+    const { pedidoId, qrToken, clientesAPagar, mozoItemIds } = body
     // clientesAPagar: string[] - array de nombres de clientes cuyos subtotales se van a pagar
-    // Si está vacío o no se envía, se paga el total del pedido
+    // mozoItemIds: number[] - array of item_pedido IDs for individual Mozo items
+    // Si ambos están vacíos, se paga el total del pedido
 
     if (!pedidoId) {
       return c.json({ success: false, error: 'pedidoId es requerido' }, 400)
     }
 
-    const isSplitPayment = clientesAPagar && Array.isArray(clientesAPagar) && clientesAPagar.length > 0
+    const hasClientes = clientesAPagar && Array.isArray(clientesAPagar) && clientesAPagar.length > 0
+    const hasMozoItems = mozoItemIds && Array.isArray(mozoItemIds) && mozoItemIds.length > 0
+    const isSplitPayment = hasClientes || hasMozoItems
 
     // Obtener el pedido con sus items
     const pedido = await db.select()
@@ -215,14 +274,33 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
       return c.json({ success: false, error: 'El pedido no tiene items' }, 400)
     }
 
-    // Si es split payment, verificar que los clientes no estén ya pagados
-    if (isSplitPayment) {
+    // Build list of all clienteNombre keys to check (including Mozo:item:X format)
+    const allKeysToCheck: string[] = []
+
+    // Add regular client names (excluding "Mozo" since those are handled via mozoItemIds)
+    if (hasClientes) {
+      for (const cliente of clientesAPagar) {
+        if (cliente !== 'Mozo') {
+          allKeysToCheck.push(cliente)
+        }
+      }
+    }
+
+    // Add Mozo item keys
+    if (hasMozoItems) {
+      for (const itemId of mozoItemIds) {
+        allKeysToCheck.push(createMozoItemKey(itemId))
+      }
+    }
+
+    // Si es split payment, verificar que los clientes/items no estén ya pagados
+    if (isSplitPayment && allKeysToCheck.length > 0) {
       const subtotalesExistentes = await db
         .select()
         .from(PagoSubtotalTable)
         .where(and(
           eq(PagoSubtotalTable.pedidoId, pedidoId),
-          inArray(PagoSubtotalTable.clienteNombre, clientesAPagar),
+          inArray(PagoSubtotalTable.clienteNombre, allKeysToCheck),
           eq(PagoSubtotalTable.estado, 'paid')
         ))
 
@@ -230,7 +308,7 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
         const clientesYaPagados = subtotalesExistentes.map(s => s.clienteNombre)
         return c.json({
           success: false,
-          error: `Los siguientes clientes ya pagaron: ${clientesYaPagados.join(', ')}`,
+          error: `Los siguientes ya fueron pagados: ${clientesYaPagados.join(', ')}`,
           clientesYaPagados
         }, 400)
       }
@@ -241,7 +319,7 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
         .from(PagoSubtotalTable)
         .where(and(
           eq(PagoSubtotalTable.pedidoId, pedidoId),
-          inArray(PagoSubtotalTable.clienteNombre, clientesAPagar),
+          inArray(PagoSubtotalTable.clienteNombre, allKeysToCheck),
           eq(PagoSubtotalTable.estado, 'pending')
         ))
 
@@ -256,18 +334,36 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
     }
 
     // Filtrar items según si es split payment o pago total
-    const itemsAPagar = isSplitPayment
-      ? items.filter(item => clientesAPagar.includes(item.clienteNombre))
-      : items
+    let itemsAPagar = items
+
+    if (isSplitPayment) {
+      itemsAPagar = []
+
+      // Add items from selected clients (but not "Mozo" - those come via mozoItemIds)
+      if (hasClientes) {
+        const clienteItems = items.filter(item =>
+          clientesAPagar.includes(item.clienteNombre) && item.clienteNombre !== 'Mozo'
+        )
+        itemsAPagar.push(...clienteItems)
+      }
+
+      // Add specific Mozo items by ID
+      if (hasMozoItems) {
+        const mozoItemsToAdd = items.filter(item =>
+          item.clienteNombre === 'Mozo' && mozoItemIds.includes(item.id)
+        )
+        itemsAPagar.push(...mozoItemsToAdd)
+      }
+    }
 
     if (itemsAPagar.length === 0) {
-      return c.json({ success: false, error: 'No hay items para los clientes seleccionados' }, 400)
+      return c.json({ success: false, error: 'No hay items para pagar' }, 400)
     }
 
     // Construir items para MercadoPago
     const mpItems = itemsAPagar.map(item => ({
       title: isSplitPayment
-        ? `${item.nombreProducto || `Producto #${item.productoId}`} (${item.clienteNombre})`
+        ? `${item.nombreProducto || `Producto #${item.productoId}`} (${item.clienteNombre === 'Mozo' ? 'Mozo' : item.clienteNombre})`
         : item.nombreProducto || `Producto #${item.productoId}`,
       quantity: item.cantidad || 1,
       currency_id: 'ARS',
@@ -283,12 +379,17 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
     const baseUrl = qrToken ? `https://my.piru.app/mesa/${qrToken}` : 'https://my.piru.app'
 
     // Construir external_reference
-    // Para split payment: piru-pedido-{id}-split-{base64(clientes)}
-    // Para pago total: piru-pedido-{id}
+    // Format: piru-pedido-{id} for full payment
+    // Format: piru-pedido-{id}-split-{base64} for split payment
+    // The base64 encodes: { clients: string[], mozoItems: number[] }
     let externalReference = `piru-pedido-${pedidoId}`
     if (isSplitPayment) {
-      const clientesBase64 = Buffer.from(JSON.stringify(clientesAPagar)).toString('base64')
-      externalReference = `piru-pedido-${pedidoId}-split-${clientesBase64}`
+      const splitData = {
+        clients: hasClientes ? clientesAPagar.filter((c: string) => c !== 'Mozo') : [],
+        mozoItems: hasMozoItems ? mozoItemIds : []
+      }
+      const splitBase64 = Buffer.from(JSON.stringify(splitData)).toString('base64')
+      externalReference = `piru-pedido-${pedidoId}-split-${splitBase64}`
     }
 
     // Crear preferencia usando el TOKEN DEL RESTAURANTE (validado/refrescado)
@@ -322,32 +423,57 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
       return c.json({ success: false, error: 'Error al crear preferencia de pago' }, 500)
     }
 
-    console.log(`✅ Preferencia de pago creada: ${preference.id} para pedido ${pedidoId}${isSplitPayment ? ` (split: ${clientesAPagar.join(', ')})` : ''}`)
+    console.log(`✅ Preferencia de pago creada: ${preference.id} para pedido ${pedidoId}${isSplitPayment ? ` (split)` : ''}`)
 
-    // Si es split payment, crear registros en pago_subtotal para cada cliente
+    // Si es split payment, crear registros en pago_subtotal para cada cliente e item de Mozo
     if (isSplitPayment) {
-      // Calcular subtotal por cliente
-      const subtotalesPorCliente = clientesAPagar.map(cliente => {
-        const itemsCliente = itemsAPagar.filter(item => item.clienteNombre === cliente)
-        const subtotal = itemsCliente.reduce((sum, item) => {
-          return sum + (parseFloat(item.precioUnitario) * (item.cantidad || 1))
-        }, 0)
-        return { cliente, subtotal }
-      })
+      const registeredKeys: string[] = []
 
-      // Insertar registros de pago_subtotal
-      for (const { cliente, subtotal } of subtotalesPorCliente) {
-        await db.insert(PagoSubtotalTable).values({
-          pedidoId,
-          clienteNombre: cliente,
-          monto: subtotal.toFixed(2),
-          estado: 'pending',
-          metodo: 'mercadopago',
-          mpPreferenceId: preference.id
-        })
+      // Register regular clients (not Mozo)
+      if (hasClientes) {
+        const regularClients = clientesAPagar.filter((c: string) => c !== 'Mozo')
+        for (const cliente of regularClients) {
+          const itemsCliente = itemsAPagar.filter(item => item.clienteNombre === cliente)
+          const subtotal = itemsCliente.reduce((sum, item) => {
+            return sum + (parseFloat(item.precioUnitario) * (item.cantidad || 1))
+          }, 0)
+
+          if (subtotal > 0) {
+            await db.insert(PagoSubtotalTable).values({
+              pedidoId,
+              clienteNombre: cliente,
+              monto: subtotal.toFixed(2),
+              estado: 'pending',
+              metodo: 'mercadopago',
+              mpPreferenceId: preference.id
+            })
+            registeredKeys.push(cliente)
+          }
+        }
       }
 
-      console.log(`📝 Registros de pago_subtotal creados para clientes: ${clientesAPagar.join(', ')}`)
+      // Register individual Mozo items
+      if (hasMozoItems) {
+        for (const itemId of mozoItemIds) {
+          const item = itemsAPagar.find(i => i.id === itemId && i.clienteNombre === 'Mozo')
+          if (!item) continue
+
+          const subtotal = parseFloat(item.precioUnitario) * (item.cantidad || 1)
+          const mozoKey = createMozoItemKey(itemId)
+
+          await db.insert(PagoSubtotalTable).values({
+            pedidoId,
+            clienteNombre: mozoKey,
+            monto: subtotal.toFixed(2),
+            estado: 'pending',
+            metodo: 'mercadopago',
+            mpPreferenceId: preference.id
+          })
+          registeredKeys.push(mozoKey)
+        }
+      }
+
+      console.log(`📝 Registros de pago_subtotal creados: ${registeredKeys.join(', ')}`)
     }
 
     // Devolver el init_point (URL de pago)
@@ -357,7 +483,7 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
       preference_id: preference.id,
       total: totalPago.toFixed(2),
       isSplitPayment,
-      clientesPagando: isSplitPayment ? clientesAPagar : null
+      clientesPagando: isSplitPayment ? allKeysToCheck : null
     })
   } catch (error) {
     console.error('❌ Error creando preferencia de pago:', error)
@@ -494,22 +620,37 @@ mercadopagoRoute.post('/webhook', async (c) => {
     }
 
     // Detectar si es un split payment
-    // Formato split: piru-pedido-{id}-split-{base64(clientes)}
-    // Formato normal: piru-pedido-{id}
+    // New format: piru-pedido-{id}-split-{base64({clients: [], mozoItems: []})}
+    // Legacy format: piru-pedido-{id}-split-{base64([clientNames])}
+    // Full payment format: piru-pedido-{id}
     const isSplitPayment = externalReference.includes('-split-')
     let pedidoId: number
     let clientesPagados: string[] = []
+    let mozoItemsPagados: number[] = []
 
     if (isSplitPayment) {
       // Parsear referencia de split payment
       const parts = externalReference.split('-split-')
       pedidoId = parseInt(parts[0].replace('piru-pedido-', ''), 10)
       try {
-        const clientesBase64 = parts[1]
-        clientesPagados = JSON.parse(Buffer.from(clientesBase64, 'base64').toString('utf-8'))
-        console.log(`🔀 [Webhook] Split payment detectado - Clientes: ${clientesPagados.join(', ')}`)
+        const dataBase64 = parts[1]
+        const parsedData = JSON.parse(Buffer.from(dataBase64, 'base64').toString('utf-8'))
+
+        // Check if it's the new format or legacy format
+        if (parsedData && typeof parsedData === 'object' && !Array.isArray(parsedData)) {
+          // New format: { clients: [], mozoItems: [] }
+          clientesPagados = parsedData.clients || []
+          mozoItemsPagados = parsedData.mozoItems || []
+          console.log(`🔀 [Webhook] Split payment (new format) - Clients: ${clientesPagados.join(', ')}, MozoItems: ${mozoItemsPagados.join(', ')}`)
+        } else if (Array.isArray(parsedData)) {
+          // Legacy format: ['client1', 'client2']
+          clientesPagados = parsedData
+          console.log(`🔀 [Webhook] Split payment (legacy) - Clientes: ${clientesPagados.join(', ')}`)
+        } else {
+          throw new Error('Unknown split payment format')
+        }
       } catch (e) {
-        console.error(`❌ [Webhook] Error parseando clientes del split payment: ${e}`)
+        console.error(`❌ [Webhook] Error parseando split payment: ${e}`)
         return c.json({ status: 'error', message: 'Invalid split reference' })
       }
     } else {
@@ -554,28 +695,34 @@ mercadopagoRoute.post('/webhook', async (c) => {
 
     if (isSplitPayment) {
       // ============ SPLIT PAYMENT ============
+      // Build list of all keys to update (clients + Mozo item keys)
+      const allKeysToUpdate: string[] = [...clientesPagados]
+      for (const itemId of mozoItemsPagados) {
+        allKeysToUpdate.push(createMozoItemKey(itemId))
+      }
+
       // Verificar si los subtotales ya fueron pagados
       const subtotalesExistentes = await db.select()
         .from(PagoSubtotalTable)
         .where(and(
           eq(PagoSubtotalTable.pedidoId, pedidoId),
-          inArray(PagoSubtotalTable.clienteNombre, clientesPagados),
+          inArray(PagoSubtotalTable.clienteNombre, allKeysToUpdate),
           eq(PagoSubtotalTable.estado, 'paid')
         ))
 
       if (subtotalesExistentes.length > 0 && status === 'approved') {
-        console.log(`⏭️ [Webhook] Subtotales ya pagados para clientes: ${subtotalesExistentes.map(s => s.clienteNombre).join(', ')}`)
+        console.log(`⏭️ [Webhook] Subtotales ya pagados: ${subtotalesExistentes.map(s => s.clienteNombre).join(', ')}`)
         return c.json({ status: 'already_processed' })
       }
 
-      // Actualizar registros de pago_subtotal
-      for (const cliente of clientesPagados) {
-        // Buscar el registro pendiente más reciente para este cliente
+      // Actualizar registros de pago_subtotal para cada key
+      for (const key of allKeysToUpdate) {
+        // Buscar el registro pendiente más reciente
         const subtotalPendiente = await db.select()
           .from(PagoSubtotalTable)
           .where(and(
             eq(PagoSubtotalTable.pedidoId, pedidoId),
-            eq(PagoSubtotalTable.clienteNombre, cliente),
+            eq(PagoSubtotalTable.clienteNombre, key),
             eq(PagoSubtotalTable.estado, 'pending')
           ))
           .limit(1)
@@ -587,29 +734,54 @@ mercadopagoRoute.post('/webhook', async (c) => {
               mpPaymentId: String(paymentId)
             })
             .where(eq(PagoSubtotalTable.id, subtotalPendiente[0].id))
-          console.log(`✅ [Webhook] Subtotal actualizado: cliente=${cliente}, estado=${estadoPago}`)
+          console.log(`✅ [Webhook] Subtotal actualizado: key=${key}, estado=${estadoPago}`)
         } else {
-          // Si no hay registro pendiente, crear uno nuevo (por si acaso)
-          const itemsCliente = await db.select()
-            .from(ItemPedidoTable)
-            .where(and(
-              eq(ItemPedidoTable.pedidoId, pedidoId),
-              eq(ItemPedidoTable.clienteNombre, cliente)
-            ))
+          // Si no hay registro pendiente, crear uno nuevo (fallback)
+          // For regular clients, calculate from items
+          // For Mozo items, use the Mozo:item:X format
+          let subtotal = 0
 
-          const subtotal = itemsCliente.reduce((sum, item) => {
-            return sum + (parseFloat(item.precioUnitario) * (item.cantidad || 1))
-          }, 0)
+          if (isMozoItemKey(key)) {
+            // Individual Mozo item
+            const itemId = getMozoItemId(key)
+            if (itemId) {
+              const item = await db.select()
+                .from(ItemPedidoTable)
+                .where(and(
+                  eq(ItemPedidoTable.pedidoId, pedidoId),
+                  eq(ItemPedidoTable.id, itemId)
+                ))
+                .limit(1)
 
-          await db.insert(PagoSubtotalTable).values({
-            pedidoId,
-            clienteNombre: cliente,
-            monto: subtotal.toFixed(2),
-            estado: estadoPago,
-            metodo: 'mercadopago',
-            mpPaymentId: String(paymentId)
-          })
-          console.log(`✅ [Webhook] Nuevo subtotal creado: cliente=${cliente}, estado=${estadoPago}`)
+              if (item.length > 0) {
+                subtotal = parseFloat(item[0].precioUnitario) * (item[0].cantidad || 1)
+              }
+            }
+          } else {
+            // Regular client
+            const itemsCliente = await db.select()
+              .from(ItemPedidoTable)
+              .where(and(
+                eq(ItemPedidoTable.pedidoId, pedidoId),
+                eq(ItemPedidoTable.clienteNombre, key)
+              ))
+
+            subtotal = itemsCliente.reduce((sum, item) => {
+              return sum + (parseFloat(item.precioUnitario) * (item.cantidad || 1))
+            }, 0)
+          }
+
+          if (subtotal > 0) {
+            await db.insert(PagoSubtotalTable).values({
+              pedidoId,
+              clienteNombre: key,
+              monto: subtotal.toFixed(2),
+              estado: estadoPago,
+              metodo: 'mercadopago',
+              mpPaymentId: String(paymentId)
+            })
+            console.log(`✅ [Webhook] Nuevo subtotal creado: key=${key}, estado=${estadoPago}`)
+          }
         }
       }
 
@@ -624,11 +796,11 @@ mercadopagoRoute.post('/webhook', async (c) => {
         await wsManager.notificarSubtotalesPagados(
           pedidoId,
           mesaId,
-          clientesPagados,
+          allKeysToUpdate,
           todosSubtotales
         )
 
-        console.log(`✅ [Webhook] Notificación de split payment enviada - Clientes: ${clientesPagados.join(', ')} en ${mesaNombre}`)
+        console.log(`✅ [Webhook] Notificación de split payment enviada - Keys: ${allKeysToUpdate.join(', ')} en ${mesaNombre}`)
       }
     } else {
       // ============ PAGO COMPLETO (LEGACY) ============
@@ -698,6 +870,7 @@ mercadopagoRoute.post('/webhook', async (c) => {
 /**
  * Obtener estado de subtotales de un pedido
  * Usado para saber qué clientes ya pagaron su parte
+ * Ahora incluye items individuales de Mozo con su estado de pago
  */
 mercadopagoRoute.get('/subtotales/:pedidoId', async (c) => {
   const db = drizzle(pool)
@@ -713,45 +886,99 @@ mercadopagoRoute.get('/subtotales/:pedidoId', async (c) => {
       .from(PagoSubtotalTable)
       .where(eq(PagoSubtotalTable.pedidoId, pedidoId))
 
-    // Obtener items del pedido para calcular subtotales por cliente
+    // Obtener items del pedido con nombres de productos
     const items = await db
       .select({
+        id: ItemPedidoTable.id,
         clienteNombre: ItemPedidoTable.clienteNombre,
         cantidad: ItemPedidoTable.cantidad,
         precioUnitario: ItemPedidoTable.precioUnitario,
+        nombreProducto: ProductoTable.nombre,
       })
       .from(ItemPedidoTable)
+      .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
       .where(eq(ItemPedidoTable.pedidoId, pedidoId))
 
-    // Calcular subtotal por cliente
+    // Calcular subtotal por cliente (EXCEPTO Mozo - se manejan individualmente)
     const subtotalesPorCliente: Record<string, { subtotal: number, pagado: boolean, metodo?: string, estado?: string }> = {}
 
+    // Track individual Mozo items
+    const mozoItems: Array<{
+      itemId: number,
+      subtotal: number,
+      pagado: boolean,
+      metodo?: string,
+      estado: string,
+      nombreProducto: string,
+      cantidad: number
+    }> = []
+
     for (const item of items) {
-      if (!subtotalesPorCliente[item.clienteNombre]) {
-        subtotalesPorCliente[item.clienteNombre] = { subtotal: 0, pagado: false, estado: 'pending' }
+      const itemTotal = parseFloat(item.precioUnitario) * (item.cantidad || 1)
+
+      if (item.clienteNombre === 'Mozo') {
+        // Track Mozo items individually
+        mozoItems.push({
+          itemId: item.id,
+          subtotal: itemTotal,
+          pagado: false,
+          estado: 'pending',
+          nombreProducto: item.nombreProducto || `Producto #${item.id}`,
+          cantidad: item.cantidad || 1
+        })
+      } else {
+        // Regular client - group by name
+        if (!subtotalesPorCliente[item.clienteNombre]) {
+          subtotalesPorCliente[item.clienteNombre] = { subtotal: 0, pagado: false, estado: 'pending' }
+        }
+        subtotalesPorCliente[item.clienteNombre].subtotal += itemTotal
       }
-      subtotalesPorCliente[item.clienteNombre].subtotal += parseFloat(item.precioUnitario) * (item.cantidad || 1)
     }
 
     // Marcar los que ya fueron pagados o tienen pending_cash
     for (const subtotal of subtotales) {
-      if (subtotalesPorCliente[subtotal.clienteNombre]) {
-        // Guardar el estado real (pending_cash, paid, failed, etc.)
+      if (isMozoItemKey(subtotal.clienteNombre)) {
+        // This is an individual Mozo item payment
+        const itemId = getMozoItemId(subtotal.clienteNombre)
+        const mozoItem = mozoItems.find(m => m.itemId === itemId)
+        if (mozoItem) {
+          mozoItem.estado = subtotal.estado || 'pending'
+          mozoItem.metodo = subtotal.metodo || undefined
+          mozoItem.pagado = subtotal.estado === 'paid'
+        }
+      } else if (subtotalesPorCliente[subtotal.clienteNombre]) {
+        // Regular client payment
         subtotalesPorCliente[subtotal.clienteNombre].estado = subtotal.estado || 'pending'
         subtotalesPorCliente[subtotal.clienteNombre].metodo = subtotal.metodo || undefined
-        // Solo marcar como pagado si estado es 'paid'
         subtotalesPorCliente[subtotal.clienteNombre].pagado = subtotal.estado === 'paid'
       }
     }
 
-    // Convertir a array
-    const resultado = Object.entries(subtotalesPorCliente).map(([cliente, data]) => ({
+    // Convertir clientes regulares a array
+    const resultadoClientes = Object.entries(subtotalesPorCliente).map(([cliente, data]) => ({
       clienteNombre: cliente,
       subtotal: data.subtotal.toFixed(2),
       pagado: data.pagado,
       metodo: data.metodo,
       estado: data.estado || 'pending'
     }))
+
+    // Convertir Mozo items a array con su formato especial
+    const resultadoMozoItems = mozoItems.map(item => ({
+      clienteNombre: createMozoItemKey(item.itemId),
+      subtotal: item.subtotal.toFixed(2),
+      pagado: item.pagado,
+      metodo: item.metodo,
+      estado: item.estado,
+      // Extra fields for Mozo items
+      isMozoItem: true,
+      itemId: item.itemId,
+      nombreProducto: item.nombreProducto,
+      cantidad: item.cantidad
+    }))
+
+    // Combine results
+    const resultado = [...resultadoClientes, ...resultadoMozoItems]
 
     // Calcular totales
     const totalPedido = resultado.reduce((sum, r) => sum + parseFloat(r.subtotal), 0)
@@ -760,7 +987,8 @@ mercadopagoRoute.get('/subtotales/:pedidoId', async (c) => {
 
     return c.json({
       success: true,
-      subtotales: resultado,
+      subtotales: resultadoClientes,
+      mozoItems: resultadoMozoItems,
       resumen: {
         totalPedido: totalPedido.toFixed(2),
         totalPagado: totalPagado.toFixed(2),
@@ -777,20 +1005,25 @@ mercadopagoRoute.get('/subtotales/:pedidoId', async (c) => {
 /**
  * Pagar subtotales en efectivo
  * Registra el pago de uno o más clientes como efectivo
+ * También soporta pago de items individuales de Mozo mediante mozoItemIds
  */
 mercadopagoRoute.post('/pagar-efectivo', async (c) => {
   const db = drizzle(pool)
 
   try {
     const body = await c.req.json()
-    const { pedidoId, clientesAPagar, qrToken } = body
+    const { pedidoId, clientesAPagar, mozoItemIds, qrToken } = body
+    // mozoItemIds: number[] - array of item_pedido IDs for individual Mozo items to pay
 
     if (!pedidoId) {
       return c.json({ success: false, error: 'pedidoId es requerido' }, 400)
     }
 
-    if (!clientesAPagar || !Array.isArray(clientesAPagar) || clientesAPagar.length === 0) {
-      return c.json({ success: false, error: 'clientesAPagar es requerido' }, 400)
+    const hasClientes = clientesAPagar && Array.isArray(clientesAPagar) && clientesAPagar.length > 0
+    const hasMozoItems = mozoItemIds && Array.isArray(mozoItemIds) && mozoItemIds.length > 0
+
+    if (!hasClientes && !hasMozoItems) {
+      return c.json({ success: false, error: 'clientesAPagar o mozoItemIds es requerido' }, 400)
     }
 
     // Verificar que el pedido existe y está cerrado
@@ -798,6 +1031,10 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
       .from(PedidoTable)
       .where(eq(PedidoTable.id, pedidoId))
       .limit(1)
+
+    if (!pedido || pedido.length === 0) {
+      return c.json({ success: false, error: 'Pedido no encontrado' }, 404)
+    }
 
     // 2. Obtener restaurante para verificar si es carrito
     const restaurante = await db.select()
@@ -822,12 +1059,20 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
 
     const mesaId = pedido[0].mesaId!
 
-    // Verificar que los clientes no estén ya pagados
+    // Build list of all clienteNombre keys to check (including Mozo:item:X format)
+    const allKeysToCheck: string[] = [...(clientesAPagar || [])]
+    if (hasMozoItems) {
+      for (const itemId of mozoItemIds) {
+        allKeysToCheck.push(createMozoItemKey(itemId))
+      }
+    }
+
+    // Verificar que los clientes/items no estén ya pagados
     const subtotalesYaPagados = await db.select()
       .from(PagoSubtotalTable)
       .where(and(
         eq(PagoSubtotalTable.pedidoId, pedidoId),
-        inArray(PagoSubtotalTable.clienteNombre, clientesAPagar),
+        inArray(PagoSubtotalTable.clienteNombre, allKeysToCheck),
         eq(PagoSubtotalTable.estado, 'paid')
       ))
 
@@ -835,7 +1080,7 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
       const clientesYaPagados = subtotalesYaPagados.map(s => s.clienteNombre)
       return c.json({
         success: false,
-        error: `Los siguientes clientes ya pagaron: ${clientesYaPagados.join(', ')}`,
+        error: `Los siguientes ya fueron pagados: ${clientesYaPagados.join(', ')}`,
         clientesYaPagados
       }, 400)
     }
@@ -843,6 +1088,7 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
     // Obtener items del pedido para calcular subtotales
     const items = await db
       .select({
+        id: ItemPedidoTable.id,
         clienteNombre: ItemPedidoTable.clienteNombre,
         cantidad: ItemPedidoTable.cantidad,
         precioUnitario: ItemPedidoTable.precioUnitario,
@@ -850,33 +1096,76 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
       .from(ItemPedidoTable)
       .where(eq(ItemPedidoTable.pedidoId, pedidoId))
 
+    // Track all keys that get registered for payment
+    const registeredKeys: string[] = []
+
     // Calcular y registrar subtotales por cliente
-    for (const cliente of clientesAPagar) {
-      const itemsCliente = items.filter(item => item.clienteNombre === cliente)
-      const subtotal = itemsCliente.reduce((sum, item) => {
-        return sum + (parseFloat(item.precioUnitario) * (item.cantidad || 1))
-      }, 0)
+    if (hasClientes) {
+      for (const cliente of clientesAPagar) {
+        // Skip "Mozo" - those are handled individually via mozoItemIds
+        if (cliente === 'Mozo') continue
 
-      // Marcar cualquier registro pendiente anterior como fallido
-      await db.update(PagoSubtotalTable)
-        .set({ estado: 'failed' })
-        .where(and(
-          eq(PagoSubtotalTable.pedidoId, pedidoId),
-          eq(PagoSubtotalTable.clienteNombre, cliente),
-          eq(PagoSubtotalTable.estado, 'pending')
-        ))
+        const itemsCliente = items.filter(item => item.clienteNombre === cliente)
+        const subtotal = itemsCliente.reduce((sum, item) => {
+          return sum + (parseFloat(item.precioUnitario) * (item.cantidad || 1))
+        }, 0)
 
-      // Insertar nuevo registro de pago en efectivo como PENDIENTE DE CONFIRMACIÓN
-      // El admin debe confirmar que recibió el dinero físicamente
-      await db.insert(PagoSubtotalTable).values({
-        pedidoId,
-        clienteNombre: cliente,
-        monto: subtotal.toFixed(2),
-        estado: 'pending_cash',
-        metodo: 'efectivo'
-      })
+        // Marcar cualquier registro pendiente anterior como fallido
+        await db.update(PagoSubtotalTable)
+          .set({ estado: 'failed' })
+          .where(and(
+            eq(PagoSubtotalTable.pedidoId, pedidoId),
+            eq(PagoSubtotalTable.clienteNombre, cliente),
+            eq(PagoSubtotalTable.estado, 'pending')
+          ))
 
-      console.log(`⏳ Pago en efectivo pendiente de confirmación: cliente=${cliente}, monto=${subtotal.toFixed(2)}`)
+        // Insertar nuevo registro de pago en efectivo como PENDIENTE DE CONFIRMACIÓN
+        await db.insert(PagoSubtotalTable).values({
+          pedidoId,
+          clienteNombre: cliente,
+          monto: subtotal.toFixed(2),
+          estado: 'pending_cash',
+          metodo: 'efectivo'
+        })
+
+        registeredKeys.push(cliente)
+        console.log(`⏳ Pago en efectivo pendiente de confirmación: cliente=${cliente}, monto=${subtotal.toFixed(2)}`)
+      }
+    }
+
+    // Handle individual Mozo item payments
+    if (hasMozoItems) {
+      for (const itemId of mozoItemIds) {
+        const item = items.find(i => i.id === itemId && i.clienteNombre === 'Mozo')
+        if (!item) {
+          console.log(`⚠️ Mozo item ${itemId} not found, skipping`)
+          continue
+        }
+
+        const subtotal = parseFloat(item.precioUnitario) * (item.cantidad || 1)
+        const mozoKey = createMozoItemKey(itemId)
+
+        // Marcar cualquier registro pendiente anterior como fallido
+        await db.update(PagoSubtotalTable)
+          .set({ estado: 'failed' })
+          .where(and(
+            eq(PagoSubtotalTable.pedidoId, pedidoId),
+            eq(PagoSubtotalTable.clienteNombre, mozoKey),
+            eq(PagoSubtotalTable.estado, 'pending')
+          ))
+
+        // Insertar nuevo registro de pago en efectivo para este item específico
+        await db.insert(PagoSubtotalTable).values({
+          pedidoId,
+          clienteNombre: mozoKey,
+          monto: subtotal.toFixed(2),
+          estado: 'pending_cash',
+          metodo: 'efectivo'
+        })
+
+        registeredKeys.push(mozoKey)
+        console.log(`⏳ Pago en efectivo pendiente de confirmación: mozoItem=${itemId}, monto=${subtotal.toFixed(2)}`)
+      }
     }
 
     // Obtener todos los subtotales actualizados (incluyendo clientes sin registro de pago)
@@ -886,16 +1175,16 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
     await wsManager.notificarSubtotalesPagados(
       pedidoId,
       mesaId,
-      clientesAPagar,
+      registeredKeys,
       todosSubtotales
     )
 
-    console.log(`⏳ Cliente(s) seleccionaron pago en efectivo (pendiente confirmación): ${clientesAPagar.join(', ')}`)
+    console.log(`⏳ Pago(s) en efectivo registrado(s) (pendiente confirmación): ${registeredKeys.join(', ')}`)
 
     return c.json({
       success: true,
       message: 'Pago en efectivo registrado. El cajero debe confirmar el pago.',
-      clientesPendientes: clientesAPagar
+      clientesPendientes: registeredKeys
     })
   } catch (error) {
     console.error('❌ Error registrando pago en efectivo:', error)
