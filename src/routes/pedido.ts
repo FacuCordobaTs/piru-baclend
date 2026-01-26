@@ -581,6 +581,43 @@ const pedidoRoute = new Hono()
     }, 200)
   })
 
+  // Actualizar estado de un item
+  .put('/:id/items/:itemId/estado', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const pedidoId = Number(c.req.param('id'))
+    const itemId = Number(c.req.param('itemId'))
+    const body = await c.req.json()
+    const { estado } = body
+
+    const validEstados = ['pending', 'preparing', 'delivered', 'served', 'cancelled']
+    if (!validEstados.includes(estado)) {
+      return c.json({ message: 'Estado inválido', success: false }, 400)
+    }
+
+    // Verificar que el pedido pertenece al restaurante
+    const pedido = await db
+      .select()
+      .from(PedidoTable)
+      .where(and(
+        eq(PedidoTable.id, pedidoId),
+        eq(PedidoTable.restauranteId, restauranteId)
+      ))
+      .limit(1)
+
+    if (!pedido || pedido.length === 0) {
+      return c.json({ message: 'Pedido no encontrado', success: false }, 404)
+    }
+
+    // Usar wsManager para actualizar el estado del item
+    await wsManager.actualizarEstadoItem(itemId, estado, pedidoId, pedido[0].mesaId!)
+
+    return c.json({
+      message: 'Estado de item actualizado correctamente',
+      success: true
+    }, 200)
+  })
+
   // Confirmar pedido (cambiar a 'preparing')
   .post('/:id/confirmar', async (c) => {
     const db = drizzle(pool)

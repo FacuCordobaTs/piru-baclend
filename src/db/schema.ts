@@ -83,6 +83,7 @@ export const itemPedido = mysqlTable('item_pedido', {
     cantidad: int('cantidad').default(1),
     precioUnitario: decimal('precio_unitario', { precision: 10, scale: 2 }).notNull(),
     ingredientesExcluidos: json('ingredientes_excluidos'), // Array de IDs de ingredientes excluidos
+    estado: mysqlEnum('estado', ['pending', 'preparing', 'delivered', 'served', 'cancelled']).default('pending'),
     postConfirmacion: boolean('post_confirmacion').default(false), // true si se agregó después de confirmar el pedido
 });
 

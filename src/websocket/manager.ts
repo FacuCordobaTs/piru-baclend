@@ -13,6 +13,9 @@ import {
 } from '../db/schema';
 import { MesaSession, WebSocketMessage, ItemPedidoWS, AdminSession, AdminNotification, AdminNotificationType } from '../types/websocket';
 
+// Definir tipo para estado de item
+type ItemEstado = 'pending' | 'preparing' | 'delivered' | 'served' | 'cancelled';
+
 class WebSocketManager {
   private sessions: Map<number, MesaSession> = new Map();
   private adminSessions: Map<number, AdminSession> = new Map(); // restauranteId -> AdminSession
@@ -158,7 +161,8 @@ class WebSocketManager {
             nombreProducto: ProductoTable.nombre,
             imagenUrl: ProductoTable.imagenUrl,
             ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
-            postConfirmacion: ItemPedidoTable.postConfirmacion
+            postConfirmacion: ItemPedidoTable.postConfirmacion,
+            estado: ItemPedidoTable.estado
           })
           .from(ItemPedidoTable)
           .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
@@ -202,7 +206,8 @@ class WebSocketManager {
               ...item,
               ingredientesExcluidos: ingredientesExcluidosParsed || [],
               ingredientesExcluidosNombres,
-              postConfirmacion: item.postConfirmacion || false
+              postConfirmacion: item.postConfirmacion || false,
+              estado: item.estado || 'pending'
             }
           })
         )
@@ -455,7 +460,8 @@ class WebSocketManager {
         nombreProducto: ProductoTable.nombre,
         imagenUrl: ProductoTable.imagenUrl,
         ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
-        postConfirmacion: ItemPedidoTable.postConfirmacion
+        postConfirmacion: ItemPedidoTable.postConfirmacion,
+        estado: ItemPedidoTable.estado
       })
       .from(ItemPedidoTable)
       .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
@@ -500,7 +506,8 @@ class WebSocketManager {
           ...item,
           ingredientesExcluidos: ingredientesExcluidosParsed || [],
           ingredientesExcluidosNombres,
-          postConfirmacion: item.postConfirmacion || false
+          postConfirmacion: item.postConfirmacion || false,
+          estado: item.estado || 'pending'
         }
       })
     )
@@ -536,7 +543,8 @@ class WebSocketManager {
       cantidad: item.cantidad,
       precioUnitario: item.precioUnitario,
       ingredientesExcluidos: item.ingredientesExcluidos || null,
-      postConfirmacion: isPostConfirmacion
+      postConfirmacion: isPostConfirmacion,
+      estado: isPostConfirmacion ? 'preparing' : 'pending'
     });
 
     // Recalcular total del pedido
@@ -553,7 +561,8 @@ class WebSocketManager {
         nombreProducto: ProductoTable.nombre,
         imagenUrl: ProductoTable.imagenUrl,
         ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
-        postConfirmacion: ItemPedidoTable.postConfirmacion
+        postConfirmacion: ItemPedidoTable.postConfirmacion,
+        estado: ItemPedidoTable.estado
       })
       .from(ItemPedidoTable)
       .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
@@ -596,7 +605,8 @@ class WebSocketManager {
       ...itemCompleto[0],
       ingredientesExcluidos: ingredientesExcluidosParsed || [],
       ingredientesExcluidosNombres,
-      postConfirmacion: itemCompleto[0].postConfirmacion || false
+      postConfirmacion: itemCompleto[0].postConfirmacion || false,
+      estado: itemCompleto[0].estado || 'pending'
     }
 
     // Broadcast a toda la mesa
@@ -676,6 +686,40 @@ class WebSocketManager {
     });
   }
 
+  // Actualizar estado de un item
+  async actualizarEstadoItem(itemId: number, estado: string, pedidoId: number, mesaId: number) {
+    if (mesaId) {
+      if (!this.mesaToRestaurante.has(mesaId)) {
+        const restauranteId = await this.getRestauranteIdFromMesa(mesaId);
+        if (restauranteId) this.mesaToRestaurante.set(mesaId, restauranteId);
+      }
+    }
+
+    await this.db
+      .update(ItemPedidoTable)
+      .set({ estado: estado as any })
+      .where(eq(ItemPedidoTable.id, itemId));
+
+    const estadoActual = await this.getEstadoInicial(pedidoId);
+    this.broadcast(mesaId, {
+      type: 'PEDIDO_ACTUALIZADO',
+      payload: {
+        items: estadoActual.items,
+        pedido: estadoActual.pedido,
+        itemActualizadoId: itemId
+      }
+    });
+
+    // Notificar admin
+    this.broadcastEstadoToAdmins(mesaId);
+  }
+
+  // Método auxiliar para obtener restauranteId
+  private async getRestauranteIdFromMesa(mesaId: number): Promise<number | null> {
+    const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
+    return mesa[0]?.restauranteId || null;
+  }
+
   // Recalcular el total del pedido
   private async recalcularTotal(pedidoId: number) {
     const items = await this.db
@@ -701,6 +745,15 @@ class WebSocketManager {
       .update(PedidoTable)
       .set({ estado: 'preparing' })
       .where(eq(PedidoTable.id, pedidoId));
+
+    // También actualizar el estado de todos los items pendientes a preparing
+    await this.db
+      .update(ItemPedidoTable)
+      .set({ estado: 'preparing' })
+      .where(and(
+        eq(ItemPedidoTable.pedidoId, pedidoId),
+        eq(ItemPedidoTable.estado, 'pending')
+      ));
 
     const estadoActual = await this.getEstadoInicial(pedidoId);
     console.log(`✅ [confirmarPedido] Estado actual: total=${estadoActual.pedido?.total}, items=${estadoActual.items.length}`);
