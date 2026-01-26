@@ -526,7 +526,7 @@ class WebSocketManager {
       .where(eq(PedidoTable.id, pedidoId))
       .limit(1);
 
-    const isPostConfirmacion = pedidoActual[0]?.estado === 'preparing' || pedidoActual[0]?.estado === 'delivered';
+    const isPostConfirmacion = ['preparing', 'delivered', 'served'].includes(pedidoActual[0]?.estado || '');
 
     // Insertar en la BD
     const result = await this.db.insert(ItemPedidoTable).values({
@@ -611,7 +611,7 @@ class WebSocketManager {
     });
 
     // Si el pedido está confirmado (preparing o delivered), notificar a admins
-    if (estadoActual.pedido && (estadoActual.pedido.estado === 'preparing' || estadoActual.pedido.estado === 'delivered')) {
+    if (estadoActual.pedido && ['preparing', 'delivered', 'served'].includes(estadoActual.pedido.estado || '')) {
       const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
       if (mesa[0]?.restauranteId) {
         const nombreProducto = itemCompletoConNombres.nombreProducto || 'Producto';
@@ -1109,7 +1109,7 @@ class WebSocketManager {
           precioUnitario: ItemPedidoTable.precioUnitario,
         })
         .from(ItemPedidoTable)
-        .where(eq(ItemPedidoTable.pedidoId, pedidoId));
+        .where(eq(ItemPedidoTable.pedidoId, pedidoId)) as any;
 
       if (items.length === 0) {
         // Si no hay items, no hay nada que pagar, así que "todos pagaron"

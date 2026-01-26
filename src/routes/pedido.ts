@@ -265,7 +265,7 @@ const pedidoRoute = new Hono()
     const body = await c.req.json()
     const { estado } = body
 
-    const validEstados = ['pending', 'preparing', 'delivered', 'closed']
+    const validEstados = ['pending', 'preparing', 'delivered', 'served', 'closed']
     if (!validEstados.includes(estado)) {
       return c.json({ message: 'Estado inválido', success: false }, 400)
     }

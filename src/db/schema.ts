@@ -69,7 +69,7 @@ export const pedido = mysqlTable("pedido", {
     restauranteId: int("restaurante_id").references(() => restaurante.id),
     mesaId: int("mesa_id").references(() => mesa.id),
     nombrePedido: varchar("nombre_pedido", { length: 255 }),
-    estado: mysqlEnum('estado', ['pending', 'preparing', 'delivered', 'closed']).default('pending'),
+    estado: mysqlEnum('estado', ['pending', 'preparing', 'delivered', 'served', 'closed']).default('pending'),
     total: decimal("total", { precision: 10, scale: 2 }).default('0.00'),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     closedAt: timestamp("closed_at"),
