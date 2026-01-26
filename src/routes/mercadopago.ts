@@ -160,12 +160,7 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
 
     const pedidoData = pedido[0]
 
-    // Verificar que el pedido esté cerrado (listo para pagar)
-    if (pedidoData.estado !== 'closed') {
-      return c.json({ success: false, error: 'El pedido debe estar cerrado para pagarlo' }, 400)
-    }
-
-    // Obtener el restaurante con su access_token
+    // 2. Obtener el restaurante PRIMERO para saber si es carrito
     const restaurante = await db.select()
       .from(RestauranteTable)
       .where(eq(RestauranteTable.id, pedidoData.restauranteId!))
@@ -176,6 +171,21 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
     }
 
     const restauranteData = restaurante[0]
+
+    // 3. Validar estado del pedido según tipo de restaurante
+    const esCarrito = restauranteData.esCarrito === true;
+
+    if (esCarrito) {
+      // En carrito se puede pagar si está preparing, delivered o closed
+      if (pedidoData.estado === 'pending') {
+        return c.json({ success: false, error: 'El pedido debe estar confirmado para pagarlo' }, 400)
+      }
+    } else {
+      // En restaurante normal, DEBE estar cerrado
+      if (pedidoData.estado !== 'closed') {
+        return c.json({ success: false, error: 'El pedido debe estar cerrado para pagarlo' }, 400)
+      }
+    }
 
     if (!restauranteData.mpAccessToken || !restauranteData.mpConnected) {
       return c.json({ success: false, error: 'Restaurante no configurado para pagos con MercadoPago' }, 400)
@@ -789,12 +799,25 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
       .where(eq(PedidoTable.id, pedidoId))
       .limit(1)
 
-    if (!pedido || pedido.length === 0) {
-      return c.json({ success: false, error: 'Pedido no encontrado' }, 404)
-    }
+    // 2. Obtener restaurante para verificar si es carrito
+    const restaurante = await db.select()
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, pedido[0].restauranteId!))
+      .limit(1)
 
-    if (pedido[0].estado !== 'closed') {
-      return c.json({ success: false, error: 'El pedido debe estar cerrado para pagarlo' }, 400)
+    const esCarrito = restaurante[0]?.esCarrito === true;
+
+    // 3. Validar estado
+    if (esCarrito) {
+      // En carrito se puede pagar si NO está pendiente (preparing, delivered, closed ok)
+      if (pedido[0].estado === 'pending') {
+        return c.json({ success: false, error: 'El pedido debe estar confirmado para pagarlo' }, 400)
+      }
+    } else {
+      // En restaurante normal, DEBE estar cerrado
+      if (pedido[0].estado !== 'closed') {
+        return c.json({ success: false, error: 'El pedido debe estar cerrado para pagarlo' }, 400)
+      }
     }
 
     const mesaId = pedido[0].mesaId!
