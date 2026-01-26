@@ -305,6 +305,13 @@ const pedidoRoute = new Hono()
           pedido: estadoActual.pedido
         }
       })
+
+      // Si el estado es 'delivered', también notificar que el pedido está listo
+      // Esto es especialmente importante para el modo Carrito
+      if (estado === 'delivered') {
+        await wsManager.marcarPedidoListo(pedidoId, pedido[0].mesaId)
+      }
+
       // Notificar a admins
       wsManager.broadcastEstadoToAdmins(pedido[0].mesaId)
     }
