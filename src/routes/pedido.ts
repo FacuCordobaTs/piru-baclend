@@ -74,7 +74,8 @@ const pedidoRoute = new Hono()
           nombreProducto: ProductoTable.nombre,
           imagenUrl: ProductoTable.imagenUrl,
           ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
-          postConfirmacion: ItemPedidoTable.postConfirmacion
+          postConfirmacion: ItemPedidoTable.postConfirmacion,
+          estado: ItemPedidoTable.estado
         })
         .from(ItemPedidoTable)
         .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
@@ -101,7 +102,8 @@ const pedidoRoute = new Hono()
             ...item,
             ingredientesExcluidos: item.ingredientesExcluidos || [],
             ingredientesExcluidosNombres,
-            postConfirmacion: item.postConfirmacion || false
+            postConfirmacion: item.postConfirmacion || false,
+            estado: item.estado || 'pending'
           }
         })
       )
@@ -168,7 +170,8 @@ const pedidoRoute = new Hono()
         imagenUrl: ProductoTable.imagenUrl,
         descripcion: ProductoTable.descripcion,
         ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
-        postConfirmacion: ItemPedidoTable.postConfirmacion
+        postConfirmacion: ItemPedidoTable.postConfirmacion,
+        estado: ItemPedidoTable.estado
       })
       .from(ItemPedidoTable)
       .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
@@ -211,7 +214,8 @@ const pedidoRoute = new Hono()
           ...item,
           ingredientesExcluidos: ingredientesExcluidosParsed || [],
           ingredientesExcluidosNombres,
-          postConfirmacion: item.postConfirmacion || false
+          postConfirmacion: item.postConfirmacion || false,
+          estado: item.estado || 'pending'
         }
       })
     )
