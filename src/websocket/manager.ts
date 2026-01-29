@@ -620,9 +620,11 @@ class WebSocketManager {
       }
     });
 
-    // Si el pedido está confirmado (preparing o delivered), notificar a admins
+    // Obtener info de la mesa para notificar admins
+    const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
+
+    // Si el pedido está confirmado (preparing o delivered), enviar notificación push
     if (estadoActual.pedido && ['preparing', 'delivered', 'served'].includes(estadoActual.pedido.estado || '')) {
-      const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
       if (mesa[0]?.restauranteId) {
         const nombreProducto = itemCompletoConNombres.nombreProducto || 'Producto';
         const cantidad = itemCompletoConNombres.cantidad || 1;
@@ -636,9 +638,11 @@ class WebSocketManager {
           `${clienteNombre} agregó ${cantidad}x ${nombreProducto}`,
           pedidoId
         ));
-        this.broadcastEstadoToAdmins(mesaId);
       }
     }
+
+    // SIEMPRE actualizar estado de mesas para admins (incluyendo pedidos pending)
+    this.broadcastEstadoToAdmins(mesaId);
 
     return itemCompletoConNombres;
   }
@@ -660,6 +664,9 @@ class WebSocketManager {
         itemEliminadoId: itemId
       }
     });
+
+    // Notificar a admins
+    this.broadcastEstadoToAdmins(mesaId);
   }
 
   // Actualizar cantidad de un item
@@ -684,6 +691,9 @@ class WebSocketManager {
         pedido: estadoActual.pedido
       }
     });
+
+    // Notificar a admins
+    this.broadcastEstadoToAdmins(mesaId);
   }
 
   // Actualizar estado de un item
