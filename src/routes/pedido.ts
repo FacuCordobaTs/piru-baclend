@@ -18,7 +18,7 @@ const addItemSchema = z.object({
   productoId: z.number().int().positive(),
   cantidad: z.number().int().positive().default(1),
   clienteNombre: z.string().default('Mozo'),
-  ingredientesExcluidos: z.array(z.number()).int().positive().optional()
+  ingredientesExcluidos: z.array(z.number().int().positive()).optional()
 })
 
 const updateItemSchema = z.object({
