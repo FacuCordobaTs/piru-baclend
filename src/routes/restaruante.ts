@@ -243,4 +243,40 @@ restauranteRoute.put('/toggle-carrito', async (c) => {
   }
 })
 
+// Toggle modo split payment
+restauranteRoute.put('/toggle-split-payment', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    // Obtener el estado actual
+    const [restaurante] = await db.select({ splitPayment: RestauranteTable.splitPayment })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!restaurante) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    // Toggle
+    const nuevoEstado = !restaurante.splitPayment
+
+    await db.update(RestauranteTable)
+      .set({ splitPayment: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    console.log(`💳 Split Payment ${nuevoEstado ? 'activado' : 'desactivado'} para restaurante ${restauranteId}`)
+
+    return c.json({
+      message: nuevoEstado ? 'Split Payment activado' : 'Split Payment desactivado',
+      success: true,
+      splitPayment: nuevoEstado
+    }, 200)
+
+  } catch (error) {
+    console.error('Error updating split payment mode:', error)
+    return c.json({ message: 'Error al cambiar modo split payment', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 export { restauranteRoute }
