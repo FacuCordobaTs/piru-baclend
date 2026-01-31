@@ -10,13 +10,14 @@ export interface AuthenticatedContext extends Context {
     id: number
     email: string
     nombre?: string
+    splitPayment?: boolean
   }
 }
 
 export const authMiddleware = async (c: Context, next: Next) => {
   // For React Native apps, we only use Authorization header
   const authHeader = c.req.header('Authorization')
-  
+
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return c.json({ error: 'Authorization header required' }, 401)
   }
@@ -25,21 +26,22 @@ export const authMiddleware = async (c: Context, next: Next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret') as { id: number }
-    
+
     const db = drizzle(pool)
     const restauranteResult = await db.select().from(RestauranteTable).where(eq(RestauranteTable.id, decoded.id)).limit(1)
-    
+
     if (!restauranteResult.length) {
       return c.json({ error: 'Restaurante no encontrado' }, 401)
     }
 
     const restaurante = restauranteResult[0]
-    
-    ;(c as AuthenticatedContext).user = {
-      id: restaurante.id,
-      email: restaurante.email,
-      nombre: restaurante.nombre,
-    }
+
+      ; (c as AuthenticatedContext).user = {
+        id: restaurante.id,
+        email: restaurante.email,
+        nombre: restaurante.nombre,
+        splitPayment: restaurante.splitPayment,
+      }
 
     await next()
   } catch (error) {

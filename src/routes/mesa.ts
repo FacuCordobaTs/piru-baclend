@@ -46,6 +46,7 @@ const mesaRoute = new Hono()
       imagenUrl: RestauranteTable.imagenUrl,
       mpConnected: RestauranteTable.mpConnected,
       esCarrito: RestauranteTable.esCarrito,
+      splitPayment: RestauranteTable.splitPayment,
     }).from(RestauranteTable).where(eq(RestauranteTable.id, mesa[0].restauranteId!)).limit(1)
 
     let ultimoPedido = await db.select().

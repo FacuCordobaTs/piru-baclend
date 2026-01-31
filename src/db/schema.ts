@@ -21,6 +21,7 @@ export const restaurante = mysqlTable("restaurante", {
     mpRefreshToken: varchar("mp_refresh_token", { length: 512 }),
     mpUserId: varchar("mp_user_id", { length: 50 }),
     mpConnected: boolean("mp_connected").default(false),
+    splitPayment: boolean("split_payment").default(true).notNull(),
 });
 
 export const categoria = mysqlTable("categoria", {
