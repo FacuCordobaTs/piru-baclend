@@ -17,7 +17,8 @@ const createManualSchema = z.object({
 const addItemSchema = z.object({
   productoId: z.number().int().positive(),
   cantidad: z.number().int().positive().default(1),
-  clienteNombre: z.string().default('Mozo')
+  clienteNombre: z.string().default('Mozo'),
+  ingredientesExcluidos: z.array(z.number()).int().positive().optional()
 })
 
 const updateItemSchema = z.object({
@@ -426,7 +427,7 @@ const pedidoRoute = new Hono()
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))
-    const { productoId, cantidad, clienteNombre } = c.req.valid('json')
+    const { productoId, cantidad, clienteNombre, ingredientesExcluidos } = c.req.valid('json')
 
     // Verificar que el pedido pertenece al restaurante
     const pedido = await db
@@ -469,7 +470,8 @@ const pedidoRoute = new Hono()
       productoId,
       cantidad,
       clienteNombre,
-      precioUnitario: producto[0].precio
+      precioUnitario: producto[0].precio,
+      ingredientesExcluidos
     })
 
     // Notificar a admins
