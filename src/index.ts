@@ -73,6 +73,19 @@ app.get('/', (c) => {
   return c.text('Piru API - Servidor corriendo correctamente')
 })
 
+// index.ts
+
+app.get('/qz/certificate', async (c) => {
+  try {
+    // Leemos el archivo y lo devolvemos tal cual, sin trim ni modificaciones
+    const cert = await Bun.file('digital-certificate.txt').text();
+    return c.text(cert);
+  } catch (error) {
+    console.error("Error leyendo certificado:", error);
+    return c.text("Error reading certificate", 500);
+  }
+});
+
 app.post('/qz/sign', async (c) => {
   try {
     // 1. Leemos el mensaje que envía QZ Tray
