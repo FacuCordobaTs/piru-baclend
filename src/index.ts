@@ -73,22 +73,36 @@ app.get('/', (c) => {
   return c.text('Piru API - Servidor corriendo correctamente')
 })
 
+
 app.post('/qz/sign', async (c) => {
   try {
-    const body = await c.req.text();
-    // Assuming private-key.pem is in the root where Bun is running
+    const requestData = await c.req.text();
+    // LEER CLAVE
     const privateKey = await Bun.file('private-key.pem').text();
 
-    const sign = createSign('SHA512');
-    sign.update(body);
-    const signature = sign.sign(privateKey, 'base64');
+    console.log("--- DEBUG QZ SIGN ---");
+    console.log("1. Dato a firmar:", requestData);
+    console.log("2. Longitud Clave Privada:", privateKey.length);
+    console.log("3. Inicio Clave:", privateKey.substring(0, 30).replace(/\n/g, ' '));
+
+    if (!requestData) {
+      console.error("ERROR: No llegó texto para firmar");
+      return c.text("Empty body", 400);
+    }
+
+    const signer = createSign('SHA512');
+    signer.update(requestData);
+    signer.end();
+
+    const signature = signer.sign(privateKey, 'base64');
+    console.log("4. Firma generada (inicio):", signature.substring(0, 20));
 
     return c.text(signature);
   } catch (error) {
-    console.error('Error signing QZ Tray request:', error);
-    return c.text('Error signing request', 500);
+    console.error("ERROR CRÍTICO QZ:", error);
+    return c.text("Error signing message", 500);
   }
-})
+});
 
 // API Routes
 app.basePath('/api')
