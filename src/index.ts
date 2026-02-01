@@ -73,20 +73,14 @@ app.get('/', (c) => {
   return c.text('Piru API - Servidor corriendo correctamente')
 })
 
-
 app.post('/qz/sign', async (c) => {
   try {
-    const requestData = await c.req.text();
-    // LEER CLAVE
-    const privateKey = await Bun.file('private-key.pem').text();
-
-    console.log("--- DEBUG QZ SIGN ---");
-    console.log("1. Dato a firmar:", requestData);
-    console.log("2. Longitud Clave Privada:", privateKey.length);
-    console.log("3. Inicio Clave:", privateKey.substring(0, 30).replace(/\n/g, ' '));
+    // 1. LIMPIEZA: Usamos .trim() para borrar espacios/enters al final
+    const requestData = (await c.req.text()).trim();
+    const rawKey = await Bun.file('private-key.pem').text();
+    const privateKey = rawKey.trim();
 
     if (!requestData) {
-      console.error("ERROR: No llegó texto para firmar");
       return c.text("Empty body", 400);
     }
 
@@ -95,8 +89,8 @@ app.post('/qz/sign', async (c) => {
     signer.end();
 
     const signature = signer.sign(privateKey, 'base64');
-    console.log("4. Firma generada (inicio):", signature.substring(0, 20));
 
+    // Devolvemos solo la firma
     return c.text(signature);
   } catch (error) {
     console.error("ERROR CRÍTICO QZ:", error);
