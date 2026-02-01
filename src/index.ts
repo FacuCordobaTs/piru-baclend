@@ -75,23 +75,28 @@ app.get('/', (c) => {
 
 app.post('/qz/sign', async (c) => {
   try {
-    // 1. LIMPIEZA: Usamos .trim() para borrar espacios/enters al final
+    // Limpiar el dato recibido
     const requestData = (await c.req.text()).trim();
-    const rawKey = await Bun.file('private-key.pem').text();
-    const privateKey = rawKey.trim();
 
     if (!requestData) {
+      console.error("ERROR: No llegó texto para firmar");
       return c.text("Empty body", 400);
     }
 
+    // Leer la clave privada y limpiarla
+    const privateKeyContent = await Bun.file('private-key.pem').text();
+    const privateKey = privateKeyContent.trim();
+
+    // Crear la firma
     const signer = createSign('SHA512');
     signer.update(requestData);
     signer.end();
 
     const signature = signer.sign(privateKey, 'base64');
 
-    // Devolvemos solo la firma
-    return c.text(signature);
+    // Retornar la firma limpia (sin espacios/enters extras)
+    return c.text(signature.trim());
+
   } catch (error) {
     console.error("ERROR CRÍTICO QZ:", error);
     return c.text("Error signing message", 500);
