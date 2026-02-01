@@ -80,7 +80,7 @@ app.post('/qz/sign', async (c) => {
 
     // 2. Leemos la clave privada del archivo
     // Asegúrate que 'private-key.pem' esté en la misma carpeta donde corres el comando bun
-    const privateKey = await Bun.file('private-key.pem').text();
+    const privateKey = (await Bun.file('private-key.pem').text()).trim();
 
     if (!requestData) {
       return c.text("Error: Empty body", 400);
