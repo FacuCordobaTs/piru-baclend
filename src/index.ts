@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { createSign } from 'node:crypto';
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { authRoute } from './routes/auth'
@@ -70,6 +71,23 @@ app.use('*', cors({
 
 app.get('/', (c) => {
   return c.text('Piru API - Servidor corriendo correctamente')
+})
+
+app.post('/qz/sign', async (c) => {
+  try {
+    const body = await c.req.text();
+    // Assuming private-key.pem is in the root where Bun is running
+    const privateKey = await Bun.file('private-key.pem').text();
+
+    const sign = createSign('SHA512');
+    sign.update(body);
+    const signature = sign.sign(privateKey, 'base64');
+
+    return c.text(signature);
+  } catch (error) {
+    console.error('Error signing QZ Tray request:', error);
+    return c.text('Error signing request', 500);
+  }
 })
 
 // API Routes
