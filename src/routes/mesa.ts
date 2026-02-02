@@ -117,6 +117,7 @@ const mesaRoute = new Hono()
       // El último pedido está cerrado, verificar si todos pagaron
       const items = await db
         .select({
+          id: ItemPedidoTable.id,
           clienteNombre: ItemPedidoTable.clienteNombre,
           cantidad: ItemPedidoTable.cantidad,
           precioUnitario: ItemPedidoTable.precioUnitario,
@@ -130,42 +131,50 @@ const mesaRoute = new Hono()
         // Si no hay items, no hay nada que pagar
         todosPagaron = true;
       } else {
-        // Calcular subtotal por cliente
+        // Separar clientes regulares de items de Mozo
+        // Los items de Mozo se trackean individualmente con clave "Mozo:item:{id}"
         const subtotalesPorCliente: Record<string, number> = {};
+        const mozoItems: { id: number; monto: number }[] = [];
+
         for (const item of items) {
-          if (!subtotalesPorCliente[item.clienteNombre]) {
-            subtotalesPorCliente[item.clienteNombre] = 0;
+          if (item.clienteNombre === 'Mozo') {
+            // Trackear items de Mozo individualmente
+            mozoItems.push({
+              id: item.id,
+              monto: parseFloat(item.precioUnitario) * (item.cantidad || 1)
+            });
+          } else {
+            // Cliente regular - agrupar por nombre
+            if (!subtotalesPorCliente[item.clienteNombre]) {
+              subtotalesPorCliente[item.clienteNombre] = 0;
+            }
+            subtotalesPorCliente[item.clienteNombre] += parseFloat(item.precioUnitario) * (item.cantidad || 1);
           }
-          subtotalesPorCliente[item.clienteNombre] += parseFloat(item.precioUnitario) * (item.cantidad || 1);
         }
 
-        // Obtener todos los pagos de subtotales pagados
-        const pagosSubtotales = await db
-          .select()
-          .from(PagoSubtotalTable)
-          .where(and(
-            eq(PagoSubtotalTable.pedidoId, pedidoActual.id),
-            eq(PagoSubtotalTable.estado, 'paid')
-          ));
-
-        // Calcular total pagado por cliente
-        const pagadoPorCliente: Record<string, number> = {};
-        for (const pago of pagosSubtotales) {
-          if (!pagadoPorCliente[pago.clienteNombre]) {
-            pagadoPorCliente[pago.clienteNombre] = 0;
-          }
-          pagadoPorCliente[pago.clienteNombre] += parseFloat(pago.monto);
+        // Construir lista de todas las claves a verificar (clientes + Mozo:item:{id})
+        const allKeysToCheck: string[] = Object.keys(subtotalesPorCliente);
+        for (const mozoItem of mozoItems) {
+          allKeysToCheck.push(`Mozo:item:${mozoItem.id}`);
         }
 
-        // Verificar que cada cliente haya pagado al menos su subtotal
-        todosPagaron = true;
-        for (const [clienteNombre, subtotal] of Object.entries(subtotalesPorCliente)) {
-          const pagado = pagadoPorCliente[clienteNombre] || 0;
-          // Permitir pequeña diferencia por redondeo (0.01)
-          if (pagado < subtotal - 0.01) {
-            todosPagaron = false;
-            break;
-          }
+        // Si no hay claves a verificar (no debería pasar si hay items), asumir pagado
+        if (allKeysToCheck.length === 0) {
+          todosPagaron = true;
+        } else {
+          // Obtener todos los pagos de subtotales pagados
+          const pagosSubtotales = await db
+            .select()
+            .from(PagoSubtotalTable)
+            .where(and(
+              eq(PagoSubtotalTable.pedidoId, pedidoActual.id),
+              eq(PagoSubtotalTable.estado, 'paid'),
+              inArray(PagoSubtotalTable.clienteNombre, allKeysToCheck)
+            ));
+
+          // Verificar que cada clave tenga un pago
+          const paidKeys = new Set(pagosSubtotales.map(p => p.clienteNombre));
+          todosPagaron = allKeysToCheck.every(key => paidKeys.has(key));
         }
       }
 
