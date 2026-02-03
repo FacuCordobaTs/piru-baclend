@@ -56,19 +56,22 @@ const app = new Hono()
 // Configure CORS
 app.use('*', cors({
   origin: [
-    'http://localhost:4321', // Astro dev server
-    'http://localhost:3000', // Alternative dev port
-    'http://localhost:5173', // Vite dev server
-    'https://piru.app', // landing domain
-    'https://admin.piru.app', // Admin domain
-    'https://my.piru.app', // My domain
-    'https://www.piru.app', // Production domain with www
+    'http://localhost:4321',
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'https://piru.app',
+    'https://admin.piru.app',
+    'https://my.piru.app',
+    'https://www.piru.app',
+    // 👇 AGREGA ESTOS PARA TAURI DESKTOP 👇
+    'tauri://localhost',        // Protocolo estándar de Tauri en Windows/Linux (antiguo/custom)
+    'https://tauri.localhost',  // Protocolo estándar de Tauri v2 en Windows
+    'http://tauri.localhost',   // Variación posible
   ],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
+  allowHeaders: ['Content-Type', 'Authorization', 'Upgrade-Insecure-Requests'], // Agregué Upgrade-Insecure-Requests por si acaso
   credentials: true,
 }))
-
 app.get('/', (c) => {
   return c.text('Piru API - Servidor corriendo correctamente')
 })
