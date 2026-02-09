@@ -124,3 +124,27 @@ export const notificacion = mysqlTable('notificacion', {
     timestamp: timestamp('timestamp').defaultNow().notNull(),
     leida: boolean('leida').default(false).notNull(),
 });
+
+// Pedido de delivery (sin mesa, con dirección)
+export const pedidoDelivery = mysqlTable("pedido_delivery", {
+    id: int("id").primaryKey().autoincrement(),
+    restauranteId: int("restaurante_id").references(() => restaurante.id),
+    direccion: varchar("direccion", { length: 500 }).notNull(),
+    nombreCliente: varchar("nombre_cliente", { length: 255 }),
+    telefono: varchar("telefono", { length: 50 }),
+    estado: mysqlEnum('estado', ['pending', 'preparing', 'ready', 'delivered', 'cancelled']).default('pending'),
+    total: decimal("total", { precision: 10, scale: 2 }).default('0.00'),
+    notas: varchar("notas", { length: 500 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    deliveredAt: timestamp("delivered_at"),
+});
+
+// Items del pedido de delivery
+export const itemPedidoDelivery = mysqlTable('item_pedido_delivery', {
+    id: int('id').primaryKey().autoincrement(),
+    pedidoDeliveryId: int('pedido_delivery_id').notNull(),
+    productoId: int('producto_id').notNull(),
+    cantidad: int('cantidad').default(1),
+    precioUnitario: decimal('precio_unitario', { precision: 10, scale: 2 }).notNull(),
+    ingredientesExcluidos: json('ingredientes_excluidos'),
+});
