@@ -270,7 +270,7 @@ const pedidoRoute = new Hono()
     const body = await c.req.json()
     const { estado } = body
 
-    const validEstados = ['pending', 'preparing', 'delivered', 'served', 'closed']
+    const validEstados = ['pending', 'preparing', 'delivered', 'served', 'closed', 'archived']
     if (!validEstados.includes(estado)) {
       return c.json({ message: 'Estado inválido', success: false }, 400)
     }
@@ -291,7 +291,7 @@ const pedidoRoute = new Hono()
 
     // Actualizar estado
     const updateData: any = { estado }
-    if (estado === 'closed') {
+    if (estado === 'closed' || estado === 'archived') {
       updateData.closedAt = new Date()
     }
 
@@ -384,7 +384,7 @@ const pedidoRoute = new Hono()
       .orderBy(desc(PedidoTable.createdAt))
       .limit(1)
 
-    if (pedidoEnCurso && pedidoEnCurso.length > 0 && pedidoEnCurso[0].estado !== 'closed') {
+    if (pedidoEnCurso && pedidoEnCurso.length > 0 && pedidoEnCurso[0].estado !== 'closed' && pedidoEnCurso[0].estado !== 'archived') {
       return c.json({
         message: 'Ya existe un pedido en curso para esta mesa',
         success: true,
@@ -443,8 +443,8 @@ const pedidoRoute = new Hono()
       return c.json({ message: 'Pedido no encontrado', success: false }, 404)
     }
 
-    if (pedido[0].estado === 'closed') {
-      return c.json({ message: 'No se puede agregar items a un pedido cerrado', success: false }, 400)
+    if (pedido[0].estado === 'closed' || pedido[0].estado === 'archived') {
+      return c.json({ message: 'No se puede agregar items a un pedido cerrado o archivado', success: false }, 400)
     }
 
     // Obtener el producto para el precio
@@ -505,8 +505,8 @@ const pedidoRoute = new Hono()
       return c.json({ message: 'Pedido no encontrado', success: false }, 404)
     }
 
-    if (pedido[0].estado === 'closed') {
-      return c.json({ message: 'No se puede eliminar items de un pedido cerrado', success: false }, 400)
+    if (pedido[0].estado === 'closed' || pedido[0].estado === 'archived') {
+      return c.json({ message: 'No se puede eliminar items de un pedido cerrado o archivado', success: false }, 400)
     }
 
     // Verificar que el item pertenece al pedido
@@ -557,8 +557,8 @@ const pedidoRoute = new Hono()
       return c.json({ message: 'Pedido no encontrado', success: false }, 404)
     }
 
-    if (pedido[0].estado === 'closed') {
-      return c.json({ message: 'No se puede modificar items de un pedido cerrado', success: false }, 400)
+    if (pedido[0].estado === 'closed' || pedido[0].estado === 'archived') {
+      return c.json({ message: 'No se puede modificar items de un pedido cerrado o archivado', success: false }, 400)
     }
 
     // Verificar que el item pertenece al pedido
@@ -677,8 +677,8 @@ const pedidoRoute = new Hono()
       return c.json({ message: 'Pedido no encontrado', success: false }, 404)
     }
 
-    if (pedido[0].estado === 'closed') {
-      return c.json({ message: 'El pedido ya está cerrado', success: false }, 400)
+    if (pedido[0].estado === 'closed' || pedido[0].estado === 'archived') {
+      return c.json({ message: 'El pedido ya está cerrado o archivado', success: false }, 400)
     }
 
     // Usar wsManager para cerrar (esto notifica a clientes y admins)

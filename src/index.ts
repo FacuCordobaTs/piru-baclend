@@ -282,6 +282,15 @@ app.get(
           total: '0.00'
         });
         pedidoId = Number(nuevoPedido[0].insertId);
+      } else if (ultimoPedido[0].estado === 'archived') {
+        // El último pedido está archivado, crear uno nuevo directamente
+        const nuevoPedido = await db.insert(PedidoTable).values({
+          mesaId: mesaId,
+          restauranteId: mesa[0].restauranteId!,
+          estado: 'pending',
+          total: '0.00'
+        });
+        pedidoId = Number(nuevoPedido[0].insertId);
       } else if (ultimoPedido[0].estado === 'closed') {
         // El último pedido está cerrado, verificar si todos pagaron
         const todosPagaron = await wsManager.verificarTodosPagaron(ultimoPedido[0].id);

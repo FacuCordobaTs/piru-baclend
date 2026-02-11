@@ -219,9 +219,9 @@ class WebSocketManager {
         c => !c.id.startsWith('admin-') && !c.nombre.includes('Admin')
       ) || [];
 
-      // Si el pedido está cerrado, verificar si todos pagaron
+      // Si el pedido está cerrado o archivado, verificar si todos pagaron
       let todosPagaron = false;
-      if (pedido && pedido.estado === 'closed') {
+      if (pedido && (pedido.estado === 'closed' || pedido.estado === 'archived')) {
         todosPagaron = await this.verificarTodosPagaron(pedido.id);
       }
 

@@ -113,6 +113,22 @@ const mesaRoute = new Hono()
         .limit(1)
 
       pedidoActual = ultimoPedido[0];
+    } else if (pedidoActual.estado === 'archived') {
+      // El último pedido está archivado, siempre crear uno nuevo
+      const nuevoPedido = await db.insert(PedidoTable).values({
+        mesaId: mesa[0].id,
+        restauranteId: mesa[0].restauranteId,
+        estado: 'pending',
+        total: '0.00'
+      })
+
+      // Obtener el pedido recién creado
+      ultimoPedido = await db.select().from(PedidoTable).
+        where(eq(PedidoTable.id, Number(nuevoPedido[0].insertId))).
+        orderBy(desc(PedidoTable.createdAt))
+        .limit(1)
+
+      pedidoActual = ultimoPedido[0];
     } else if (pedidoActual.estado === 'closed') {
       // El último pedido está cerrado, verificar si todos pagaron
       const items = await db
@@ -443,8 +459,8 @@ const mesaRoute = new Hono()
 
     let pedidoAnteriorId: number | null = null
 
-    // Si hay un pedido activo (no cerrado), cerrarlo
-    if (ultimoPedido[0] && ultimoPedido[0].estado !== 'closed') {
+    // Si hay un pedido activo (no cerrado ni archivado), cerrarlo
+    if (ultimoPedido[0] && ultimoPedido[0].estado !== 'closed' && ultimoPedido[0].estado !== 'archived') {
       pedidoAnteriorId = ultimoPedido[0].id
 
       await db

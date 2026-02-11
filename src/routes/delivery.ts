@@ -27,7 +27,7 @@ const createDeliverySchema = z.object({
 })
 
 const updateEstadoSchema = z.object({
-    estado: z.enum(['pending', 'preparing', 'ready', 'delivered', 'cancelled'])
+    estado: z.enum(['pending', 'preparing', 'ready', 'delivered', 'cancelled', 'archived'])
 })
 
 const deliveryRoute = new Hono()
