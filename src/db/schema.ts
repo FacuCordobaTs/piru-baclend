@@ -1,5 +1,5 @@
 // schema.ts
-import { mysqlTable, varchar, int, timestamp, boolean, decimal, mysqlEnum, json } from "drizzle-orm/mysql-core";
+import { mysqlTable, varchar, int, timestamp, boolean, decimal, mysqlEnum, json, uniqueIndex } from "drizzle-orm/mysql-core";
 
 
 export const restaurante = mysqlTable("restaurante", {
@@ -64,6 +64,17 @@ export const productoIngrediente = mysqlTable("producto_ingrediente", {
     ingredienteId: int("ingrediente_id").references(() => ingrediente.id).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// Etiquetas de productos (únicas por restaurante, asociadas a un solo producto)
+export const etiqueta = mysqlTable("etiqueta", {
+    id: int("id").primaryKey().autoincrement(),
+    restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+    productoId: int("producto_id").references(() => producto.id).notNull(),
+    nombre: varchar("nombre", { length: 100 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+    uniqueIndex("unique_restaurante_nombre").on(table.restauranteId, table.nombre),
+]);
 
 export const pedido = mysqlTable("pedido", {
     id: int("id").primaryKey().autoincrement(),

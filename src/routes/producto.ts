@@ -1,11 +1,11 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { producto as ProductoTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, itemPedido as ItemPedidoTable } from '../db/schema'
+import { producto as ProductoTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, itemPedido as ItemPedidoTable, etiqueta as EtiquetaTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, inArray, like } from 'drizzle-orm'
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import UUID = require("uuid-js");
 
@@ -99,6 +99,7 @@ const createProductSchema = z.object({
   image: z.string().min(10).optional(),
   categoriaId: z.number().optional(),
   ingredienteIds: z.array(z.number().int().positive()).optional(),
+  etiquetas: z.array(z.string().min(1).max(100)).optional(),
 });
 
 const updateProductSchema = z.object({
@@ -110,6 +111,7 @@ const updateProductSchema = z.object({
   categoriaId: z.number().optional(),
   ingredienteIds: z.array(z.number().int().positive()).optional(),
   activo: z.boolean().optional(),
+  etiquetas: z.array(z.string().min(1).max(100)).optional(),
 });
 
 const productoRoute = new Hono()
@@ -141,22 +143,32 @@ const productoRoute = new Hono()
       .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
       .where(eq(ProductoTable.restauranteId, restauranteId))
 
-    // Obtener ingredientes para cada producto
-    const productosConIngredientes = await Promise.all(
+    // Obtener ingredientes y etiquetas para cada producto
+    const productosConDetalles = await Promise.all(
       productos.map(async (p) => {
-        const ingredientes = await db
-          .select({
-            id: IngredienteTable.id,
-            nombre: IngredienteTable.nombre,
-          })
-          .from(ProductoIngredienteTable)
-          .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
-          .where(eq(ProductoIngredienteTable.productoId, p.id))
+        const [ingredientes, etiquetas] = await Promise.all([
+          db
+            .select({
+              id: IngredienteTable.id,
+              nombre: IngredienteTable.nombre,
+            })
+            .from(ProductoIngredienteTable)
+            .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
+            .where(eq(ProductoIngredienteTable.productoId, p.id)),
+          db
+            .select({
+              id: EtiquetaTable.id,
+              nombre: EtiquetaTable.nombre,
+            })
+            .from(EtiquetaTable)
+            .where(eq(EtiquetaTable.productoId, p.id)),
+        ])
 
         return {
           ...p,
           categoria: p.categoria?.nombre || null,
           ingredientes: ingredientes,
+          etiquetas: etiquetas,
         }
       })
     )
@@ -164,14 +176,14 @@ const productoRoute = new Hono()
     return c.json({
       message: 'Productos obtenidos correctamente',
       success: true,
-      productos: productosConIngredientes
+      productos: productosConDetalles
     }, 200)
   })
 
   .post('/create', zValidator('json', createProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds } = c.req.valid('json')
+    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, etiquetas } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId) {
@@ -245,13 +257,44 @@ const productoRoute = new Hono()
       }
     }
 
+    // Asociar etiquetas si se proporcionaron
+    if (etiquetas && etiquetas.length > 0) {
+      const etiquetasNormalizadas = [...new Set(etiquetas.map(e => e.trim().toLowerCase()))]
+
+      // Verificar que ninguna etiqueta ya existe para otro producto del restaurante
+      const etiquetasExistentes = await db
+        .select()
+        .from(EtiquetaTable)
+        .where(and(
+          eq(EtiquetaTable.restauranteId, restauranteId),
+          inArray(EtiquetaTable.nombre, etiquetasNormalizadas)
+        ))
+
+      if (etiquetasExistentes.length > 0) {
+        const nombresOcupados = etiquetasExistentes.map(e => e.nombre)
+        return c.json({
+          message: `Las siguientes etiquetas ya están en uso por otro producto: ${nombresOcupados.join(', ')}`,
+          success: false,
+          etiquetasDuplicadas: nombresOcupados,
+        }, 400)
+      }
+
+      await db.insert(EtiquetaTable).values(
+        etiquetasNormalizadas.map(nombre => ({
+          restauranteId,
+          productoId,
+          nombre,
+        }))
+      )
+    }
+
     return c.json({ message: 'Producto creado correctamente', success: true, data: product }, 200)
   })
 
   .put('/update', zValidator('json', updateProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, activo } = c.req.valid('json')
+    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, activo, etiquetas } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId !== undefined) {
@@ -340,7 +383,159 @@ const productoRoute = new Hono()
       }
     }
 
+    // Actualizar etiquetas si se proporcionaron
+    if (etiquetas !== undefined) {
+      // Eliminar etiquetas existentes del producto
+      await db
+        .delete(EtiquetaTable)
+        .where(eq(EtiquetaTable.productoId, id))
+
+      // Crear nuevas etiquetas si hay
+      if (etiquetas.length > 0) {
+        const etiquetasNormalizadas = [...new Set(etiquetas.map(e => e.trim().toLowerCase()))]
+
+        // Verificar que ninguna etiqueta ya existe para OTRO producto del restaurante
+        const etiquetasExistentes = await db
+          .select()
+          .from(EtiquetaTable)
+          .where(and(
+            eq(EtiquetaTable.restauranteId, restauranteId),
+            inArray(EtiquetaTable.nombre, etiquetasNormalizadas)
+          ))
+
+        if (etiquetasExistentes.length > 0) {
+          const nombresOcupados = etiquetasExistentes.map(e => e.nombre)
+          return c.json({
+            message: `Las siguientes etiquetas ya están en uso por otro producto: ${nombresOcupados.join(', ')}`,
+            success: false,
+            etiquetasDuplicadas: nombresOcupados,
+          }, 400)
+        }
+
+        await db.insert(EtiquetaTable).values(
+          etiquetasNormalizadas.map(nombre => ({
+            restauranteId,
+            productoId: id,
+            nombre,
+          }))
+        )
+      }
+    }
+
     return c.json({ message: 'Producto actualizado correctamente', success: true }, 200)
+  })
+
+  // Buscar productos por etiqueta
+  .get('/buscar-etiqueta', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const query = c.req.query('q')
+
+    if (!query || query.trim().length === 0) {
+      return c.json({ message: 'Se requiere un término de búsqueda', success: false }, 400)
+    }
+
+    const termino = query.trim().toLowerCase()
+
+    // Buscar etiquetas que coincidan
+    const etiquetasEncontradas = await db
+      .select({
+        productoId: EtiquetaTable.productoId,
+        etiquetaNombre: EtiquetaTable.nombre,
+      })
+      .from(EtiquetaTable)
+      .where(and(
+        eq(EtiquetaTable.restauranteId, restauranteId),
+        like(EtiquetaTable.nombre, `%${termino}%`)
+      ))
+
+    if (etiquetasEncontradas.length === 0) {
+      return c.json({ message: 'No se encontraron productos con esa etiqueta', success: true, productos: [] }, 200)
+    }
+
+    const productoIds = [...new Set(etiquetasEncontradas.map(e => e.productoId))]
+
+    const productos = await db
+      .select({
+        id: ProductoTable.id,
+        restauranteId: ProductoTable.restauranteId,
+        categoriaId: ProductoTable.categoriaId,
+        nombre: ProductoTable.nombre,
+        descripcion: ProductoTable.descripcion,
+        precio: ProductoTable.precio,
+        activo: ProductoTable.activo,
+        imagenUrl: ProductoTable.imagenUrl,
+        createdAt: ProductoTable.createdAt,
+        categoria: {
+          id: CategoriaTable.id,
+          nombre: CategoriaTable.nombre,
+        }
+      })
+      .from(ProductoTable)
+      .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
+      .where(and(
+        eq(ProductoTable.restauranteId, restauranteId),
+        inArray(ProductoTable.id, productoIds)
+      ))
+
+    const productosConDetalles = await Promise.all(
+      productos.map(async (p) => {
+        const [ingredientes, etiquetas] = await Promise.all([
+          db
+            .select({
+              id: IngredienteTable.id,
+              nombre: IngredienteTable.nombre,
+            })
+            .from(ProductoIngredienteTable)
+            .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
+            .where(eq(ProductoIngredienteTable.productoId, p.id)),
+          db
+            .select({
+              id: EtiquetaTable.id,
+              nombre: EtiquetaTable.nombre,
+            })
+            .from(EtiquetaTable)
+            .where(eq(EtiquetaTable.productoId, p.id)),
+        ])
+
+        return {
+          ...p,
+          categoria: p.categoria?.nombre || null,
+          ingredientes,
+          etiquetas,
+        }
+      })
+    )
+
+    return c.json({
+      message: 'Productos encontrados',
+      success: true,
+      productos: productosConDetalles,
+    }, 200)
+  })
+
+  // Obtener todas las etiquetas del restaurante
+  .get('/etiquetas', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+
+    const etiquetas = await db
+      .select({
+        id: EtiquetaTable.id,
+        nombre: EtiquetaTable.nombre,
+        productoId: EtiquetaTable.productoId,
+        productoNombre: ProductoTable.nombre,
+      })
+      .from(EtiquetaTable)
+      .innerJoin(ProductoTable, eq(EtiquetaTable.productoId, ProductoTable.id))
+      .where(eq(EtiquetaTable.restauranteId, restauranteId))
+      .orderBy(EtiquetaTable.nombre)
+
+    return c.json({
+      message: 'Etiquetas obtenidas correctamente',
+      success: true,
+      etiquetas,
+    }, 200)
   })
 
   .delete('/delete/:id', async (c) => {
@@ -366,6 +561,13 @@ const productoRoute = new Hono()
     if (product[0].imagenUrl) {
       await deleteImage(product[0].imagenUrl);
     }
+
+    // Eliminar etiquetas del producto
+    await db.delete(EtiquetaTable).where(eq(EtiquetaTable.productoId, id))
+
+    // Eliminar relaciones de ingredientes del producto
+    await db.delete(ProductoIngredienteTable).where(eq(ProductoIngredienteTable.productoId, id))
+
     await db.delete(ProductoTable).where(and(eq(ProductoTable.id, id), eq(ProductoTable.restauranteId, restauranteId)))
     return c.json({ message: 'Producto eliminado correctamente', success: true, data: product }, 200)
   })
