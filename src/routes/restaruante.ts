@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { restaurante as RestauranteTable, mesa as MesaTable, producto as ProductoTable } from '../db/schema'
+import { restaurante as RestauranteTable, mesa as MesaTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
@@ -102,18 +102,68 @@ const updateProfileSchema = z.object({
 restauranteRoute.get('/profile', async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const restaurante = await db.select().from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId))
-  const mesas = await db.select().from(MesaTable).where(eq(MesaTable.restauranteId, restauranteId))
-  // Obtener TODOS los productos (activos e inactivos) para el admin
-  const productos = await db.select().from(ProductoTable).where(eq(ProductoTable.restauranteId, restauranteId))
 
   try {
+    const restaurante = await db.select().from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId))
+    const mesas = await db.select().from(MesaTable).where(eq(MesaTable.restauranteId, restauranteId))
+
+    // Obtener TODOS los productos (activos e inactivos) con categoría
+    const productosRaw = await db
+      .select({
+        id: ProductoTable.id,
+        restauranteId: ProductoTable.restauranteId,
+        categoriaId: ProductoTable.categoriaId,
+        nombre: ProductoTable.nombre,
+        descripcion: ProductoTable.descripcion,
+        precio: ProductoTable.precio,
+        activo: ProductoTable.activo,
+        imagenUrl: ProductoTable.imagenUrl,
+        createdAt: ProductoTable.createdAt,
+        categoriaNombre: CategoriaTable.nombre,
+      })
+      .from(ProductoTable)
+      .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
+      .where(eq(ProductoTable.restauranteId, restauranteId))
+
+    // Obtener todas las etiquetas del restaurante en una sola query
+    const todasEtiquetas = await db
+      .select({
+        id: EtiquetaTable.id,
+        nombre: EtiquetaTable.nombre,
+        productoId: EtiquetaTable.productoId,
+      })
+      .from(EtiquetaTable)
+      .where(eq(EtiquetaTable.restauranteId, restauranteId))
+
+    // Agrupar etiquetas por productoId
+    const etiquetasPorProducto = new Map<number, Array<{ id: number; nombre: string }>>()
+    for (const et of todasEtiquetas) {
+      if (!etiquetasPorProducto.has(et.productoId)) {
+        etiquetasPorProducto.set(et.productoId, [])
+      }
+      etiquetasPorProducto.get(et.productoId)!.push({ id: et.id, nombre: et.nombre })
+    }
+
+    // Enriquecer productos con categoría y etiquetas
+    const productos = productosRaw.map((p) => ({
+      id: p.id,
+      restauranteId: p.restauranteId,
+      categoriaId: p.categoriaId,
+      nombre: p.nombre,
+      descripcion: p.descripcion,
+      precio: p.precio,
+      activo: p.activo,
+      imagenUrl: p.imagenUrl,
+      createdAt: p.createdAt,
+      categoria: p.categoriaNombre || null,
+      etiquetas: etiquetasPorProducto.get(p.id) || [],
+    }))
+
     return c.json({ message: 'Profile retrieved successfully', success: true, data: { restaurante, mesas, productos } }, 200)
   } catch (error) {
     console.error('Error getting profile:', error)
     return c.json({ message: 'Error getting profile', error: (error as Error).message }, 500)
   }
-
 })
 
 restauranteRoute.post('/complete-profile', zValidator('json', completeProfileSchema), async (c) => {
