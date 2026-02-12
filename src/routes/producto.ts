@@ -5,7 +5,7 @@ import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { eq, and, inArray, like } from 'drizzle-orm'
+import { eq, and, inArray, like, notInArray, isNull, sql } from 'drizzle-orm'
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import UUID = require("uuid-js");
 
@@ -90,6 +90,75 @@ async function deleteImage(imageUrl: string): Promise<void> {
   } catch (error: any) {
     console.error(`Error al eliminar objeto de R2 (${imageUrl}):`, error);
   }
+}
+
+/**
+ * Genera una etiqueta automática única basada en las iniciales del producto.
+ * 
+ * Lógica:
+ * - Producto multi-palabra ("Pizza Muzzarela") → iniciales: "PM"
+ * - Producto una sola palabra + tiene categoría ("Muzzarela" cat "Pizza") → inicial categoría + inicial producto: "PM"
+ * - Producto una sola palabra sin categoría ("Muzzarela") → primeras 2 letras: "MU"
+ * 
+ * Si hay colisión, expande con más letras de la última palabra: PM → PMU → PMUZ
+ * Si sigue habiendo colisión, agrega números: PM2, PM3, PM4...
+ */
+function generarEtiquetaAutomatica(
+  productoNombre: string,
+  categoriaNombre: string | null,
+  etiquetasExistentes: Set<string>
+): string {
+  const palabras = productoNombre.trim().split(/\s+/).filter(p => p.length > 0)
+
+  if (palabras.length === 0) return 'prod'
+
+  let base: string
+  let ultimaPalabra: string
+  let letrasUsadas: number // cuántas letras de ultimaPalabra ya están en base
+
+  if (palabras.length >= 2) {
+    // Multi-palabra: inicial de cada palabra
+    base = palabras.map(p => p[0]).join('').toUpperCase()
+    ultimaPalabra = palabras[palabras.length - 1].toUpperCase()
+    letrasUsadas = 1
+  } else if (categoriaNombre && categoriaNombre.trim().length > 0) {
+    // Una palabra + categoría: inicial categoría + inicial producto
+    base = (categoriaNombre.trim()[0] + palabras[0][0]).toUpperCase()
+    ultimaPalabra = palabras[0].toUpperCase()
+    letrasUsadas = 1
+  } else {
+    // Una palabra sin categoría: primeras 2 letras
+    base = palabras[0].substring(0, Math.min(2, palabras[0].length)).toUpperCase()
+    ultimaPalabra = palabras[0].toUpperCase()
+    letrasUsadas = Math.min(2, palabras[0].length)
+  }
+
+  // Intentar con la base directa
+  if (!etiquetasExistentes.has(base.toLowerCase())) {
+    return base.toLowerCase()
+  }
+
+  // Expandir con más letras de la última palabra (hasta 4 extras)
+  let candidato = base
+  for (let i = letrasUsadas; i < ultimaPalabra.length && i < letrasUsadas + 4; i++) {
+    candidato = candidato + ultimaPalabra[i]
+    if (!etiquetasExistentes.has(candidato.toLowerCase())) {
+      return candidato.toLowerCase()
+    }
+  }
+
+  // Fallback: agregar números incrementales a la base
+  let counter = 2
+  while (counter <= 999) {
+    const numCandidato = `${base}${counter}`.toLowerCase()
+    if (!etiquetasExistentes.has(numCandidato)) {
+      return numCandidato
+    }
+    counter++
+  }
+
+  // Ultra fallback (prácticamente imposible de alcanzar)
+  return `${base}${Date.now()}`.toLowerCase()
 }
 
 const createProductSchema = z.object({
@@ -257,38 +326,55 @@ const productoRoute = new Hono()
       }
     }
 
-    // Asociar etiquetas si se proporcionaron
+    // Obtener todas las etiquetas existentes del restaurante para validar unicidad
+    const todasEtiquetas = await db
+      .select({ nombre: EtiquetaTable.nombre })
+      .from(EtiquetaTable)
+      .where(eq(EtiquetaTable.restauranteId, restauranteId))
+    const etiquetasExistentesSet = new Set(todasEtiquetas.map(e => e.nombre))
+
+    // Generar etiqueta automática por iniciales
+    let categoriaNombre: string | null = null
+    if (categoriaId) {
+      const cat = await db
+        .select({ nombre: CategoriaTable.nombre })
+        .from(CategoriaTable)
+        .where(eq(CategoriaTable.id, categoriaId))
+        .limit(1)
+      categoriaNombre = cat.length > 0 ? cat[0].nombre : null
+    }
+
+    const etiquetaAuto = generarEtiquetaAutomatica(nombre, categoriaNombre, etiquetasExistentesSet)
+    etiquetasExistentesSet.add(etiquetaAuto)
+
+    const etiquetasAInsertar: { restauranteId: number, productoId: number, nombre: string }[] = [
+      { restauranteId, productoId, nombre: etiquetaAuto }
+    ]
+
+    // Asociar etiquetas manuales adicionales si se proporcionaron
     if (etiquetas && etiquetas.length > 0) {
       const etiquetasNormalizadas = [...new Set(etiquetas.map(e => e.trim().toLowerCase()))]
 
-      // Verificar que ninguna etiqueta ya existe para otro producto del restaurante
-      const etiquetasExistentes = await db
-        .select()
-        .from(EtiquetaTable)
-        .where(and(
-          eq(EtiquetaTable.restauranteId, restauranteId),
-          inArray(EtiquetaTable.nombre, etiquetasNormalizadas)
-        ))
+      // Filtrar las que ya existen (incluyendo la auto-generada)
+      const duplicadas = etiquetasNormalizadas.filter(e => etiquetasExistentesSet.has(e))
+      const nuevas = etiquetasNormalizadas.filter(e => !etiquetasExistentesSet.has(e))
 
-      if (etiquetasExistentes.length > 0) {
-        const nombresOcupados = etiquetasExistentes.map(e => e.nombre)
+      if (duplicadas.length > 0) {
         return c.json({
-          message: `Las siguientes etiquetas ya están en uso por otro producto: ${nombresOcupados.join(', ')}`,
+          message: `Las siguientes etiquetas ya están en uso: ${duplicadas.join(', ')}`,
           success: false,
-          etiquetasDuplicadas: nombresOcupados,
+          etiquetasDuplicadas: duplicadas,
         }, 400)
       }
 
-      await db.insert(EtiquetaTable).values(
-        etiquetasNormalizadas.map(nombre => ({
-          restauranteId,
-          productoId,
-          nombre,
-        }))
-      )
+      nuevas.forEach(nombre => {
+        etiquetasAInsertar.push({ restauranteId, productoId, nombre })
+      })
     }
 
-    return c.json({ message: 'Producto creado correctamente', success: true, data: product }, 200)
+    await db.insert(EtiquetaTable).values(etiquetasAInsertar)
+
+    return c.json({ message: 'Producto creado correctamente', success: true, data: product, etiquetaAutoGenerada: etiquetaAuto }, 200)
   })
 
   .put('/update', zValidator('json', updateProductSchema), async (c) => {
@@ -535,6 +621,88 @@ const productoRoute = new Hono()
       message: 'Etiquetas obtenidas correctamente',
       success: true,
       etiquetas,
+    }, 200)
+  })
+
+  // Asignar etiquetas automáticas a todos los productos que no tengan ninguna
+  .post('/backfill-etiquetas', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+
+    // Obtener IDs de productos que YA tienen al menos una etiqueta
+    const productosConEtiqueta = await db
+      .select({ productoId: EtiquetaTable.productoId })
+      .from(EtiquetaTable)
+      .where(eq(EtiquetaTable.restauranteId, restauranteId))
+    const idsConEtiqueta = new Set(productosConEtiqueta.map(e => e.productoId))
+
+    // Obtener todos los productos del restaurante con su categoría
+    const todosProductos = await db
+      .select({
+        id: ProductoTable.id,
+        nombre: ProductoTable.nombre,
+        categoriaId: ProductoTable.categoriaId,
+        categoriaNombre: CategoriaTable.nombre,
+      })
+      .from(ProductoTable)
+      .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
+      .where(eq(ProductoTable.restauranteId, restauranteId))
+
+    // Filtrar los que NO tienen etiqueta
+    const productosSinEtiqueta = todosProductos.filter(p => !idsConEtiqueta.has(p.id))
+
+    if (productosSinEtiqueta.length === 0) {
+      return c.json({
+        message: 'Todos los productos ya tienen etiquetas asignadas',
+        success: true,
+        asignadas: 0,
+      }, 200)
+    }
+
+    // Obtener todas las etiquetas existentes para validar unicidad
+    const todasEtiquetas = await db
+      .select({ nombre: EtiquetaTable.nombre })
+      .from(EtiquetaTable)
+      .where(eq(EtiquetaTable.restauranteId, restauranteId))
+    const etiquetasExistentesSet = new Set(todasEtiquetas.map(e => e.nombre))
+
+    // Generar e insertar etiqueta para cada producto sin etiqueta
+    const etiquetasGeneradas: { productoId: number, productoNombre: string, etiqueta: string }[] = []
+    const valoresAInsertar: { restauranteId: number, productoId: number, nombre: string }[] = []
+
+    for (const producto of productosSinEtiqueta) {
+      const etiquetaAuto = generarEtiquetaAutomatica(
+        producto.nombre,
+        producto.categoriaNombre ?? null,
+        etiquetasExistentesSet
+      )
+
+      // Agregar al set para que la siguiente iteración la vea como ocupada
+      etiquetasExistentesSet.add(etiquetaAuto)
+
+      valoresAInsertar.push({
+        restauranteId,
+        productoId: producto.id,
+        nombre: etiquetaAuto,
+      })
+
+      etiquetasGeneradas.push({
+        productoId: producto.id,
+        productoNombre: producto.nombre,
+        etiqueta: etiquetaAuto,
+      })
+    }
+
+    // Insertar todas las etiquetas en batch
+    if (valoresAInsertar.length > 0) {
+      await db.insert(EtiquetaTable).values(valoresAInsertar)
+    }
+
+    return c.json({
+      message: `Se asignaron etiquetas a ${etiquetasGeneradas.length} producto(s)`,
+      success: true,
+      asignadas: etiquetasGeneradas.length,
+      etiquetas: etiquetasGeneradas,
     }, 200)
   })
 
