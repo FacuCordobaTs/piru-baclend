@@ -22,6 +22,7 @@ export const restaurante = mysqlTable("restaurante", {
     mpUserId: varchar("mp_user_id", { length: 50 }),
     mpConnected: boolean("mp_connected").default(false),
     splitPayment: boolean("split_payment").default(true).notNull(),
+    itemTracking: boolean("item_tracking").default(true).notNull(),
 });
 
 export const categoria = mysqlTable("categoria", {

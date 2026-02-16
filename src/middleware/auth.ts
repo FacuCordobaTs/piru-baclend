@@ -11,6 +11,7 @@ export interface AuthenticatedContext extends Context {
     email: string
     nombre?: string
     splitPayment?: boolean
+    itemTracking?: boolean
   }
 }
 
@@ -41,6 +42,7 @@ export const authMiddleware = async (c: Context, next: Next) => {
         email: restaurante.email,
         nombre: restaurante.nombre,
         splitPayment: restaurante.splitPayment,
+        itemTracking: restaurante.itemTracking,
       }
 
     await next()

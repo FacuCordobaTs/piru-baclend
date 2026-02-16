@@ -329,4 +329,40 @@ restauranteRoute.put('/toggle-split-payment', async (c) => {
   }
 })
 
+// Toggle seguimiento de items (item tracking)
+restauranteRoute.put('/toggle-item-tracking', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    // Obtener el estado actual
+    const [restaurante] = await db.select({ itemTracking: RestauranteTable.itemTracking })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!restaurante) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    // Toggle
+    const nuevoEstado = !restaurante.itemTracking
+
+    await db.update(RestauranteTable)
+      .set({ itemTracking: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    console.log(`📋 Item Tracking ${nuevoEstado ? 'activado' : 'desactivado'} para restaurante ${restauranteId}`)
+
+    return c.json({
+      message: nuevoEstado ? 'Seguimiento de items activado' : 'Seguimiento de items desactivado',
+      success: true,
+      itemTracking: nuevoEstado
+    }, 200)
+
+  } catch (error) {
+    console.error('Error updating item tracking mode:', error)
+    return c.json({ message: 'Error al cambiar seguimiento de items', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 export { restauranteRoute }
