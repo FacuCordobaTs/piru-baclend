@@ -69,7 +69,7 @@ export const authRoute = new Hono()
           path: '/',
           sameSite: 'None',
           secure: true,
-          maxAge: 7 * 24 * 60 * 60,
+          maxAge: 365 * 24 * 60 * 60,
       });
 
       return c.json({ message: 'Restaurante registrado correctamente', newRestaurante, token }, 200);
@@ -102,7 +102,7 @@ export const authRoute = new Hono()
           path: '/',
           sameSite: 'None',
           secure: true,
-          maxAge: 7 * 24 * 60 * 60,
+          maxAge: 365 * 24 * 60 * 60,
       });
 
       return c.json({ message: 'Inicio de sesión realizado con éxito', restaurante: restauranteResult[0], token }, 200);
