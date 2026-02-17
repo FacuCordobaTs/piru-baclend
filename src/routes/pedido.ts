@@ -760,12 +760,38 @@ const pedidoRoute = new Hono()
     const restauranteId = (c as any).user.id
     const fechaStr = c.req.query('fecha') // YYYY-MM-DD format
 
-    // If no date provided, use today
-    const fecha = fechaStr ? new Date(fechaStr + 'T00:00:00') : new Date()
-    const startOfDay = new Date(fecha)
-    startOfDay.setHours(0, 0, 0, 0)
-    const endOfDay = new Date(fecha)
-    endOfDay.setHours(23, 59, 59, 999)
+    console.log(`📊 Cierre de turno - restauranteId: ${restauranteId}, fecha: ${fechaStr || 'hoy'}`)
+
+    if (!restauranteId || isNaN(Number(restauranteId))) {
+      return c.json({ message: 'restauranteId inválido', success: false }, 400)
+    }
+
+    // Build date range
+    let startOfDay: Date
+    let endOfDay: Date
+
+    if (fechaStr) {
+      // Validate YYYY-MM-DD format
+      const dateMatch = fechaStr.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+      if (!dateMatch) {
+        return c.json({ message: 'Formato de fecha inválido. Use YYYY-MM-DD', success: false }, 400)
+      }
+      const [, yearStr, monthStr, dayStr] = dateMatch
+      startOfDay = new Date(Number(yearStr), Number(monthStr) - 1, Number(dayStr), 0, 0, 0, 0)
+      endOfDay = new Date(Number(yearStr), Number(monthStr) - 1, Number(dayStr), 23, 59, 59, 999)
+    } else {
+      startOfDay = new Date()
+      startOfDay.setHours(0, 0, 0, 0)
+      endOfDay = new Date()
+      endOfDay.setHours(23, 59, 59, 999)
+    }
+
+    // Validate dates are valid
+    if (isNaN(startOfDay.getTime()) || isNaN(endOfDay.getTime())) {
+      return c.json({ message: 'Fecha inválida', success: false }, 400)
+    }
+
+    console.log(`📊 Date range: ${startOfDay.toISOString()} - ${endOfDay.toISOString()}`)
 
     try {
       // 1. Get all mesa pedidos for the date
@@ -963,7 +989,7 @@ const pedidoRoute = new Hono()
       return c.json({
         success: true,
         data: {
-          fecha: startOfDay.toISOString().split('T')[0],
+          fecha: fechaStr || `${startOfDay.getFullYear()}-${String(startOfDay.getMonth() + 1).padStart(2, '0')}-${String(startOfDay.getDate()).padStart(2, '0')}`,
           pedidosMesa: mesaPedidosConItems,
           pedidosDelivery: deliveryPedidosConItems,
           pedidosTakeaway: takeawayPedidosConItems,
