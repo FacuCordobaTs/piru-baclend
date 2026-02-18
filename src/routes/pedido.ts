@@ -757,12 +757,14 @@ const pedidoRoute = new Hono()
   // Obtener resumen de ventas del día (cierre de turno)
   .get('/cierre-turno', async (c) => {
     const db = drizzle(pool)
-    const restauranteId = (c as any).user.id
+    const rawId = (c as any).user?.id
+    const restauranteId = Number(rawId)
     const fechaStr = c.req.query('fecha') // YYYY-MM-DD format
 
-    console.log(`📊 Cierre de turno - restauranteId: ${restauranteId}, fecha: ${fechaStr || 'hoy'}`)
+    console.log(`📊 Cierre de turno - rawId: ${rawId}, restauranteId: ${restauranteId}, type: ${typeof rawId}, fecha: ${fechaStr || 'hoy'}`)
 
-    if (!restauranteId || isNaN(Number(restauranteId))) {
+    if (!rawId || isNaN(restauranteId)) {
+      console.error(`❌ Cierre de turno - restauranteId inválido: rawId=${rawId}, parsed=${restauranteId}`)
       return c.json({ message: 'restauranteId inválido', success: false }, 400)
     }
 
