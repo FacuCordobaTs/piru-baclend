@@ -128,6 +128,276 @@ const pedidoRoute = new Hono()
     }, 200)
   })
 
+  // ==================== CIERRE DE TURNO ====================
+  // IMPORTANTE: Esta ruta DEBE estar ANTES de /:id para que no sea capturada como un ID
+
+  // Obtener resumen de ventas del día (cierre de turno)
+  .get('/cierre-turno', async (c) => {
+    const db = drizzle(pool)
+    const rawId = (c as any).user?.id
+    const restauranteId = Number(rawId)
+    const fechaStr = c.req.query('fecha') // YYYY-MM-DD format
+
+    console.log(`📊 Cierre de turno - rawId: ${rawId}, restauranteId: ${restauranteId}, type: ${typeof rawId}, fecha: ${fechaStr || 'hoy'}`)
+
+    if (!rawId || isNaN(restauranteId)) {
+      console.error(`❌ Cierre de turno - restauranteId inválido: rawId=${rawId}, parsed=${restauranteId}`)
+      return c.json({ message: 'restauranteId inválido', success: false }, 400)
+    }
+
+    // Build date range
+    let startOfDay: Date
+    let endOfDay: Date
+
+    if (fechaStr) {
+      // Validate YYYY-MM-DD format
+      const dateMatch = fechaStr.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+      if (!dateMatch) {
+        return c.json({ message: 'Formato de fecha inválido. Use YYYY-MM-DD', success: false }, 400)
+      }
+      const [, yearStr, monthStr, dayStr] = dateMatch
+      startOfDay = new Date(Number(yearStr), Number(monthStr) - 1, Number(dayStr), 0, 0, 0, 0)
+      endOfDay = new Date(Number(yearStr), Number(monthStr) - 1, Number(dayStr), 23, 59, 59, 999)
+    } else {
+      startOfDay = new Date()
+      startOfDay.setHours(0, 0, 0, 0)
+      endOfDay = new Date()
+      endOfDay.setHours(23, 59, 59, 999)
+    }
+
+    // Validate dates are valid
+    if (isNaN(startOfDay.getTime()) || isNaN(endOfDay.getTime())) {
+      return c.json({ message: 'Fecha inválida', success: false }, 400)
+    }
+
+    console.log(`📊 Date range: ${startOfDay.toISOString()} - ${endOfDay.toISOString()}`)
+
+    try {
+      // 1. Get all mesa pedidos for the date
+      const mesaPedidos = await db
+        .select({
+          id: PedidoTable.id,
+          mesaId: PedidoTable.mesaId,
+          nombrePedido: PedidoTable.nombrePedido,
+          estado: PedidoTable.estado,
+          total: PedidoTable.total,
+          createdAt: PedidoTable.createdAt,
+          closedAt: PedidoTable.closedAt,
+          mesaNombre: MesaTable.nombre,
+        })
+        .from(PedidoTable)
+        .leftJoin(MesaTable, eq(PedidoTable.mesaId, MesaTable.id))
+        .where(and(
+          eq(PedidoTable.restauranteId, restauranteId),
+          gte(PedidoTable.createdAt, startOfDay),
+          lt(PedidoTable.createdAt, endOfDay)
+        ))
+        .orderBy(desc(PedidoTable.createdAt))
+
+      // Get items for mesa pedidos
+      const mesaPedidosConItems = await Promise.all(mesaPedidos.map(async (pedido) => {
+        const items = await db
+          .select({
+            id: ItemPedidoTable.id,
+            productoId: ItemPedidoTable.productoId,
+            clienteNombre: ItemPedidoTable.clienteNombre,
+            cantidad: ItemPedidoTable.cantidad,
+            precioUnitario: ItemPedidoTable.precioUnitario,
+            nombreProducto: ProductoTable.nombre,
+            estado: ItemPedidoTable.estado,
+          })
+          .from(ItemPedidoTable)
+          .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
+          .where(eq(ItemPedidoTable.pedidoId, pedido.id))
+
+        return {
+          ...pedido,
+          tipo: 'mesa' as const,
+          items,
+          totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0)
+        }
+      }))
+
+      // 2. Get all delivery pedidos for the date
+      const deliveryPedidos = await db
+        .select({
+          id: PedidoDeliveryTable.id,
+          direccion: PedidoDeliveryTable.direccion,
+          nombreCliente: PedidoDeliveryTable.nombreCliente,
+          telefono: PedidoDeliveryTable.telefono,
+          estado: PedidoDeliveryTable.estado,
+          total: PedidoDeliveryTable.total,
+          notas: PedidoDeliveryTable.notas,
+          createdAt: PedidoDeliveryTable.createdAt,
+          deliveredAt: PedidoDeliveryTable.deliveredAt,
+        })
+        .from(PedidoDeliveryTable)
+        .where(and(
+          eq(PedidoDeliveryTable.restauranteId, restauranteId),
+          gte(PedidoDeliveryTable.createdAt, startOfDay),
+          lt(PedidoDeliveryTable.createdAt, endOfDay)
+        ))
+        .orderBy(desc(PedidoDeliveryTable.createdAt))
+
+      const deliveryPedidosConItems = await Promise.all(deliveryPedidos.map(async (pedido) => {
+        const items = await db
+          .select({
+            id: ItemPedidoDeliveryTable.id,
+            productoId: ItemPedidoDeliveryTable.productoId,
+            cantidad: ItemPedidoDeliveryTable.cantidad,
+            precioUnitario: ItemPedidoDeliveryTable.precioUnitario,
+            nombreProducto: ProductoTable.nombre,
+          })
+          .from(ItemPedidoDeliveryTable)
+          .leftJoin(ProductoTable, eq(ItemPedidoDeliveryTable.productoId, ProductoTable.id))
+          .where(eq(ItemPedidoDeliveryTable.pedidoDeliveryId, pedido.id))
+
+        return {
+          ...pedido,
+          tipo: 'delivery' as const,
+          items,
+          totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0)
+        }
+      }))
+
+      // 3. Get all takeaway pedidos for the date
+      const takeawayPedidos = await db
+        .select({
+          id: PedidoTakeawayTable.id,
+          nombreCliente: PedidoTakeawayTable.nombreCliente,
+          telefono: PedidoTakeawayTable.telefono,
+          estado: PedidoTakeawayTable.estado,
+          total: PedidoTakeawayTable.total,
+          notas: PedidoTakeawayTable.notas,
+          createdAt: PedidoTakeawayTable.createdAt,
+          deliveredAt: PedidoTakeawayTable.deliveredAt,
+        })
+        .from(PedidoTakeawayTable)
+        .where(and(
+          eq(PedidoTakeawayTable.restauranteId, restauranteId),
+          gte(PedidoTakeawayTable.createdAt, startOfDay),
+          lt(PedidoTakeawayTable.createdAt, endOfDay)
+        ))
+        .orderBy(desc(PedidoTakeawayTable.createdAt))
+
+      const takeawayPedidosConItems = await Promise.all(takeawayPedidos.map(async (pedido) => {
+        const items = await db
+          .select({
+            id: ItemPedidoTakeawayTable.id,
+            productoId: ItemPedidoTakeawayTable.productoId,
+            cantidad: ItemPedidoTakeawayTable.cantidad,
+            precioUnitario: ItemPedidoTakeawayTable.precioUnitario,
+            nombreProducto: ProductoTable.nombre,
+          })
+          .from(ItemPedidoTakeawayTable)
+          .leftJoin(ProductoTable, eq(ItemPedidoTakeawayTable.productoId, ProductoTable.id))
+          .where(eq(ItemPedidoTakeawayTable.pedidoTakeawayId, pedido.id))
+
+        return {
+          ...pedido,
+          tipo: 'takeaway' as const,
+          items,
+          totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0)
+        }
+      }))
+
+      // 4. Get available dates (distinct dates that have orders) - last 90 days
+      const ninetyDaysAgo = new Date()
+      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90)
+
+      const [mesaDates, deliveryDates, takeawayDates] = await Promise.all([
+        db.select({ fecha: sql<string>`DATE(${PedidoTable.createdAt})` })
+          .from(PedidoTable)
+          .where(and(
+            eq(PedidoTable.restauranteId, restauranteId),
+            gte(PedidoTable.createdAt, ninetyDaysAgo)
+          ))
+          .groupBy(sql`DATE(${PedidoTable.createdAt})`),
+        db.select({ fecha: sql<string>`DATE(${PedidoDeliveryTable.createdAt})` })
+          .from(PedidoDeliveryTable)
+          .where(and(
+            eq(PedidoDeliveryTable.restauranteId, restauranteId),
+            gte(PedidoDeliveryTable.createdAt, ninetyDaysAgo)
+          ))
+          .groupBy(sql`DATE(${PedidoDeliveryTable.createdAt})`),
+        db.select({ fecha: sql<string>`DATE(${PedidoTakeawayTable.createdAt})` })
+          .from(PedidoTakeawayTable)
+          .where(and(
+            eq(PedidoTakeawayTable.restauranteId, restauranteId),
+            gte(PedidoTakeawayTable.createdAt, ninetyDaysAgo)
+          ))
+          .groupBy(sql`DATE(${PedidoTakeawayTable.createdAt})`)
+      ])
+
+      const allDatesSet = new Set<string>()
+        ;[...mesaDates, ...deliveryDates, ...takeawayDates].forEach(d => {
+          if (d.fecha) allDatesSet.add(d.fecha.toString().split('T')[0])
+        })
+      const fechasDisponibles = Array.from(allDatesSet).sort().reverse()
+
+      // 5. Calculate totals
+      const totalMesa = mesaPedidosConItems
+        .filter(p => p.estado !== 'archived' && p.totalItems > 0)
+        .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
+      const totalDelivery = deliveryPedidosConItems
+        .filter(p => p.estado !== 'archived' && p.estado !== 'cancelled')
+        .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
+      const totalTakeaway = takeawayPedidosConItems
+        .filter(p => p.estado !== 'archived' && p.estado !== 'cancelled')
+        .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
+
+      // 6. Product summary: aggregate quantity sold per product
+      const productSummary = new Map<string, { nombre: string; cantidad: number; totalVendido: number }>()
+
+      const addToSummary = (items: any[]) => {
+        items.forEach(item => {
+          const key = item.nombreProducto || `Producto #${item.productoId}`
+          const existing = productSummary.get(key) || { nombre: key, cantidad: 0, totalVendido: 0 }
+          existing.cantidad += item.cantidad || 1
+          existing.totalVendido += parseFloat(item.precioUnitario || '0') * (item.cantidad || 1)
+          productSummary.set(key, existing)
+        })
+      }
+
+      mesaPedidosConItems.filter(p => p.estado !== 'archived' && p.totalItems > 0).forEach(p => addToSummary(p.items))
+      deliveryPedidosConItems.filter(p => p.estado !== 'archived' && p.estado !== 'cancelled').forEach(p => addToSummary(p.items))
+      takeawayPedidosConItems.filter(p => p.estado !== 'archived' && p.estado !== 'cancelled').forEach(p => addToSummary(p.items))
+
+      const productosVendidos = Array.from(productSummary.values()).sort((a, b) => b.cantidad - a.cantidad)
+
+      return c.json({
+        success: true,
+        data: {
+          fecha: fechaStr || `${startOfDay.getFullYear()}-${String(startOfDay.getMonth() + 1).padStart(2, '0')}-${String(startOfDay.getDate()).padStart(2, '0')}`,
+          pedidosMesa: mesaPedidosConItems,
+          pedidosDelivery: deliveryPedidosConItems,
+          pedidosTakeaway: takeawayPedidosConItems,
+          totales: {
+            mesa: totalMesa.toFixed(2),
+            delivery: totalDelivery.toFixed(2),
+            takeaway: totalTakeaway.toFixed(2),
+            general: (totalMesa + totalDelivery + totalTakeaway).toFixed(2),
+          },
+          cantidades: {
+            mesa: mesaPedidosConItems.filter(p => p.totalItems > 0).length,
+            delivery: deliveryPedidosConItems.length,
+            takeaway: takeawayPedidosConItems.length,
+            total: mesaPedidosConItems.filter(p => p.totalItems > 0).length + deliveryPedidosConItems.length + takeawayPedidosConItems.length,
+          },
+          productosVendidos,
+          fechasDisponibles,
+        }
+      }, 200)
+    } catch (error) {
+      console.error('Error en cierre de turno:', error)
+      return c.json({
+        message: 'Error al obtener cierre de turno',
+        success: false,
+        error: (error as Error).message
+      }, 500)
+    }
+  })
+
   // Obtener un pedido específico con todos sus detalles
   .get('/:id', async (c) => {
     const db = drizzle(pool)
@@ -746,275 +1016,6 @@ const pedidoRoute = new Hono()
       console.error('Error al eliminar pedido:', error)
       return c.json({
         message: 'Error al eliminar el pedido',
-        success: false,
-        error: (error as Error).message
-      }, 500)
-    }
-  })
-
-  // ==================== CIERRE DE TURNO ====================
-
-  // Obtener resumen de ventas del día (cierre de turno)
-  .get('/cierre-turno', async (c) => {
-    const db = drizzle(pool)
-    const rawId = (c as any).user?.id
-    const restauranteId = Number(rawId)
-    const fechaStr = c.req.query('fecha') // YYYY-MM-DD format
-
-    console.log(`📊 Cierre de turno - rawId: ${rawId}, restauranteId: ${restauranteId}, type: ${typeof rawId}, fecha: ${fechaStr || 'hoy'}`)
-
-    if (!rawId || isNaN(restauranteId)) {
-      console.error(`❌ Cierre de turno - restauranteId inválido: rawId=${rawId}, parsed=${restauranteId}`)
-      return c.json({ message: 'restauranteId inválido', success: false }, 400)
-    }
-
-    // Build date range
-    let startOfDay: Date
-    let endOfDay: Date
-
-    if (fechaStr) {
-      // Validate YYYY-MM-DD format
-      const dateMatch = fechaStr.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-      if (!dateMatch) {
-        return c.json({ message: 'Formato de fecha inválido. Use YYYY-MM-DD', success: false }, 400)
-      }
-      const [, yearStr, monthStr, dayStr] = dateMatch
-      startOfDay = new Date(Number(yearStr), Number(monthStr) - 1, Number(dayStr), 0, 0, 0, 0)
-      endOfDay = new Date(Number(yearStr), Number(monthStr) - 1, Number(dayStr), 23, 59, 59, 999)
-    } else {
-      startOfDay = new Date()
-      startOfDay.setHours(0, 0, 0, 0)
-      endOfDay = new Date()
-      endOfDay.setHours(23, 59, 59, 999)
-    }
-
-    // Validate dates are valid
-    if (isNaN(startOfDay.getTime()) || isNaN(endOfDay.getTime())) {
-      return c.json({ message: 'Fecha inválida', success: false }, 400)
-    }
-
-    console.log(`📊 Date range: ${startOfDay.toISOString()} - ${endOfDay.toISOString()}`)
-
-    try {
-      // 1. Get all mesa pedidos for the date
-      const mesaPedidos = await db
-        .select({
-          id: PedidoTable.id,
-          mesaId: PedidoTable.mesaId,
-          nombrePedido: PedidoTable.nombrePedido,
-          estado: PedidoTable.estado,
-          total: PedidoTable.total,
-          createdAt: PedidoTable.createdAt,
-          closedAt: PedidoTable.closedAt,
-          mesaNombre: MesaTable.nombre,
-        })
-        .from(PedidoTable)
-        .leftJoin(MesaTable, eq(PedidoTable.mesaId, MesaTable.id))
-        .where(and(
-          eq(PedidoTable.restauranteId, restauranteId),
-          gte(PedidoTable.createdAt, startOfDay),
-          lt(PedidoTable.createdAt, endOfDay)
-        ))
-        .orderBy(desc(PedidoTable.createdAt))
-
-      // Get items for mesa pedidos
-      const mesaPedidosConItems = await Promise.all(mesaPedidos.map(async (pedido) => {
-        const items = await db
-          .select({
-            id: ItemPedidoTable.id,
-            productoId: ItemPedidoTable.productoId,
-            clienteNombre: ItemPedidoTable.clienteNombre,
-            cantidad: ItemPedidoTable.cantidad,
-            precioUnitario: ItemPedidoTable.precioUnitario,
-            nombreProducto: ProductoTable.nombre,
-            estado: ItemPedidoTable.estado,
-          })
-          .from(ItemPedidoTable)
-          .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
-          .where(eq(ItemPedidoTable.pedidoId, pedido.id))
-
-        return {
-          ...pedido,
-          tipo: 'mesa' as const,
-          items,
-          totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0)
-        }
-      }))
-
-      // 2. Get all delivery pedidos for the date
-      const deliveryPedidos = await db
-        .select({
-          id: PedidoDeliveryTable.id,
-          direccion: PedidoDeliveryTable.direccion,
-          nombreCliente: PedidoDeliveryTable.nombreCliente,
-          telefono: PedidoDeliveryTable.telefono,
-          estado: PedidoDeliveryTable.estado,
-          total: PedidoDeliveryTable.total,
-          notas: PedidoDeliveryTable.notas,
-          createdAt: PedidoDeliveryTable.createdAt,
-          deliveredAt: PedidoDeliveryTable.deliveredAt,
-        })
-        .from(PedidoDeliveryTable)
-        .where(and(
-          eq(PedidoDeliveryTable.restauranteId, restauranteId),
-          gte(PedidoDeliveryTable.createdAt, startOfDay),
-          lt(PedidoDeliveryTable.createdAt, endOfDay)
-        ))
-        .orderBy(desc(PedidoDeliveryTable.createdAt))
-
-      const deliveryPedidosConItems = await Promise.all(deliveryPedidos.map(async (pedido) => {
-        const items = await db
-          .select({
-            id: ItemPedidoDeliveryTable.id,
-            productoId: ItemPedidoDeliveryTable.productoId,
-            cantidad: ItemPedidoDeliveryTable.cantidad,
-            precioUnitario: ItemPedidoDeliveryTable.precioUnitario,
-            nombreProducto: ProductoTable.nombre,
-          })
-          .from(ItemPedidoDeliveryTable)
-          .leftJoin(ProductoTable, eq(ItemPedidoDeliveryTable.productoId, ProductoTable.id))
-          .where(eq(ItemPedidoDeliveryTable.pedidoDeliveryId, pedido.id))
-
-        return {
-          ...pedido,
-          tipo: 'delivery' as const,
-          items,
-          totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0)
-        }
-      }))
-
-      // 3. Get all takeaway pedidos for the date
-      const takeawayPedidos = await db
-        .select({
-          id: PedidoTakeawayTable.id,
-          nombreCliente: PedidoTakeawayTable.nombreCliente,
-          telefono: PedidoTakeawayTable.telefono,
-          estado: PedidoTakeawayTable.estado,
-          total: PedidoTakeawayTable.total,
-          notas: PedidoTakeawayTable.notas,
-          createdAt: PedidoTakeawayTable.createdAt,
-          deliveredAt: PedidoTakeawayTable.deliveredAt,
-        })
-        .from(PedidoTakeawayTable)
-        .where(and(
-          eq(PedidoTakeawayTable.restauranteId, restauranteId),
-          gte(PedidoTakeawayTable.createdAt, startOfDay),
-          lt(PedidoTakeawayTable.createdAt, endOfDay)
-        ))
-        .orderBy(desc(PedidoTakeawayTable.createdAt))
-
-      const takeawayPedidosConItems = await Promise.all(takeawayPedidos.map(async (pedido) => {
-        const items = await db
-          .select({
-            id: ItemPedidoTakeawayTable.id,
-            productoId: ItemPedidoTakeawayTable.productoId,
-            cantidad: ItemPedidoTakeawayTable.cantidad,
-            precioUnitario: ItemPedidoTakeawayTable.precioUnitario,
-            nombreProducto: ProductoTable.nombre,
-          })
-          .from(ItemPedidoTakeawayTable)
-          .leftJoin(ProductoTable, eq(ItemPedidoTakeawayTable.productoId, ProductoTable.id))
-          .where(eq(ItemPedidoTakeawayTable.pedidoTakeawayId, pedido.id))
-
-        return {
-          ...pedido,
-          tipo: 'takeaway' as const,
-          items,
-          totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0)
-        }
-      }))
-
-      // 4. Get available dates (distinct dates that have orders) - last 90 days
-      const ninetyDaysAgo = new Date()
-      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90)
-
-      const [mesaDates, deliveryDates, takeawayDates] = await Promise.all([
-        db.select({ fecha: sql<string>`DATE(${PedidoTable.createdAt})` })
-          .from(PedidoTable)
-          .where(and(
-            eq(PedidoTable.restauranteId, restauranteId),
-            gte(PedidoTable.createdAt, ninetyDaysAgo)
-          ))
-          .groupBy(sql`DATE(${PedidoTable.createdAt})`),
-        db.select({ fecha: sql<string>`DATE(${PedidoDeliveryTable.createdAt})` })
-          .from(PedidoDeliveryTable)
-          .where(and(
-            eq(PedidoDeliveryTable.restauranteId, restauranteId),
-            gte(PedidoDeliveryTable.createdAt, ninetyDaysAgo)
-          ))
-          .groupBy(sql`DATE(${PedidoDeliveryTable.createdAt})`),
-        db.select({ fecha: sql<string>`DATE(${PedidoTakeawayTable.createdAt})` })
-          .from(PedidoTakeawayTable)
-          .where(and(
-            eq(PedidoTakeawayTable.restauranteId, restauranteId),
-            gte(PedidoTakeawayTable.createdAt, ninetyDaysAgo)
-          ))
-          .groupBy(sql`DATE(${PedidoTakeawayTable.createdAt})`)
-      ])
-
-      const allDatesSet = new Set<string>()
-        ;[...mesaDates, ...deliveryDates, ...takeawayDates].forEach(d => {
-          if (d.fecha) allDatesSet.add(d.fecha.toString().split('T')[0])
-        })
-      const fechasDisponibles = Array.from(allDatesSet).sort().reverse()
-
-      // 5. Calculate totals
-      const totalMesa = mesaPedidosConItems
-        .filter(p => p.estado !== 'archived' && p.totalItems > 0)
-        .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
-      const totalDelivery = deliveryPedidosConItems
-        .filter(p => p.estado !== 'archived' && p.estado !== 'cancelled')
-        .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
-      const totalTakeaway = takeawayPedidosConItems
-        .filter(p => p.estado !== 'archived' && p.estado !== 'cancelled')
-        .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
-
-      // 6. Product summary: aggregate quantity sold per product
-      const productSummary = new Map<string, { nombre: string; cantidad: number; totalVendido: number }>()
-
-      const addToSummary = (items: any[]) => {
-        items.forEach(item => {
-          const key = item.nombreProducto || `Producto #${item.productoId}`
-          const existing = productSummary.get(key) || { nombre: key, cantidad: 0, totalVendido: 0 }
-          existing.cantidad += item.cantidad || 1
-          existing.totalVendido += parseFloat(item.precioUnitario || '0') * (item.cantidad || 1)
-          productSummary.set(key, existing)
-        })
-      }
-
-      mesaPedidosConItems.filter(p => p.estado !== 'archived' && p.totalItems > 0).forEach(p => addToSummary(p.items))
-      deliveryPedidosConItems.filter(p => p.estado !== 'archived' && p.estado !== 'cancelled').forEach(p => addToSummary(p.items))
-      takeawayPedidosConItems.filter(p => p.estado !== 'archived' && p.estado !== 'cancelled').forEach(p => addToSummary(p.items))
-
-      const productosVendidos = Array.from(productSummary.values()).sort((a, b) => b.cantidad - a.cantidad)
-
-      return c.json({
-        success: true,
-        data: {
-          fecha: fechaStr || `${startOfDay.getFullYear()}-${String(startOfDay.getMonth() + 1).padStart(2, '0')}-${String(startOfDay.getDate()).padStart(2, '0')}`,
-          pedidosMesa: mesaPedidosConItems,
-          pedidosDelivery: deliveryPedidosConItems,
-          pedidosTakeaway: takeawayPedidosConItems,
-          totales: {
-            mesa: totalMesa.toFixed(2),
-            delivery: totalDelivery.toFixed(2),
-            takeaway: totalTakeaway.toFixed(2),
-            general: (totalMesa + totalDelivery + totalTakeaway).toFixed(2),
-          },
-          cantidades: {
-            mesa: mesaPedidosConItems.filter(p => p.totalItems > 0).length,
-            delivery: deliveryPedidosConItems.length,
-            takeaway: takeawayPedidosConItems.length,
-            total: mesaPedidosConItems.filter(p => p.totalItems > 0).length + deliveryPedidosConItems.length + takeawayPedidosConItems.length,
-          },
-          productosVendidos,
-          fechasDisponibles,
-        }
-      }, 200)
-    } catch (error) {
-      console.error('Error en cierre de turno:', error)
-      return c.json({
-        message: 'Error al obtener cierre de turno',
         success: false,
         error: (error as Error).message
       }, 500)
