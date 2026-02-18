@@ -84,6 +84,7 @@ export const pedido = mysqlTable("pedido", {
     nombrePedido: varchar("nombre_pedido", { length: 255 }),
     estado: mysqlEnum('estado', ['pending', 'preparing', 'delivered', 'served', 'closed', 'archived']).default('pending'),
     total: decimal("total", { precision: 10, scale: 2 }).default('0.00'),
+    pagado: boolean("pagado").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     closedAt: timestamp("closed_at"),
 });
@@ -146,6 +147,7 @@ export const pedidoDelivery = mysqlTable("pedido_delivery", {
     telefono: varchar("telefono", { length: 50 }),
     estado: mysqlEnum('estado', ['pending', 'preparing', 'ready', 'delivered', 'cancelled', 'archived']).default('pending'),
     total: decimal("total", { precision: 10, scale: 2 }).default('0.00'),
+    pagado: boolean("pagado").default(false).notNull(),
     notas: varchar("notas", { length: 500 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     deliveredAt: timestamp("delivered_at"),
@@ -169,6 +171,7 @@ export const pedidoTakeaway = mysqlTable("pedido_takeaway", {
     telefono: varchar("telefono", { length: 50 }),
     estado: mysqlEnum('estado', ['pending', 'preparing', 'ready', 'delivered', 'cancelled', 'archived']).default('pending'),
     total: decimal("total", { precision: 10, scale: 2 }).default('0.00'),
+    pagado: boolean("pagado").default(false).notNull(),
     notas: varchar("notas", { length: 500 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     deliveredAt: timestamp("delivered_at"),

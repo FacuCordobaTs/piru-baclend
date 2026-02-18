@@ -54,6 +54,7 @@ const takeawayRoute = new Hono()
                 notas: PedidoTakeawayTable.notas,
                 createdAt: PedidoTakeawayTable.createdAt,
                 deliveredAt: PedidoTakeawayTable.deliveredAt,
+                pagado: PedidoTakeawayTable.pagado,
             })
             .from(PedidoTakeawayTable)
             .where(estado
@@ -270,6 +271,41 @@ const takeawayRoute = new Hono()
         return c.json({
             message: 'Estado actualizado correctamente',
             success: true
+        }, 200)
+    })
+
+    // Marcar/desmarcar pedido como pagado
+    .put('/:id/pagado', async (c) => {
+        const db = drizzle(pool)
+        const restauranteId = (c as any).user.id
+        const pedidoId = Number(c.req.param('id'))
+
+        // Verificar que el pedido pertenece al restaurante
+        const pedido = await db
+            .select()
+            .from(PedidoTakeawayTable)
+            .where(and(
+                eq(PedidoTakeawayTable.id, pedidoId),
+                eq(PedidoTakeawayTable.restauranteId, restauranteId)
+            ))
+            .limit(1)
+
+        if (!pedido || pedido.length === 0) {
+            return c.json({ message: 'Pedido no encontrado', success: false }, 404)
+        }
+
+        // Toggle pagado
+        const newPagado = !pedido[0].pagado
+
+        await db
+            .update(PedidoTakeawayTable)
+            .set({ pagado: newPagado })
+            .where(eq(PedidoTakeawayTable.id, pedidoId))
+
+        return c.json({
+            message: newPagado ? 'Pedido marcado como pagado' : 'Pedido marcado como no pagado',
+            success: true,
+            data: { pagado: newPagado }
         }, 200)
     })
 

@@ -51,6 +51,7 @@ const pedidoRoute = new Hono()
         total: PedidoTable.total,
         createdAt: PedidoTable.createdAt,
         closedAt: PedidoTable.closedAt,
+        pagado: PedidoTable.pagado,
         mesaNombre: MesaTable.nombre,
       })
       .from(PedidoTable)
@@ -183,6 +184,7 @@ const pedidoRoute = new Hono()
           total: PedidoTable.total,
           createdAt: PedidoTable.createdAt,
           closedAt: PedidoTable.closedAt,
+          pagado: PedidoTable.pagado,
           mesaNombre: MesaTable.nombre,
         })
         .from(PedidoTable)
@@ -230,6 +232,7 @@ const pedidoRoute = new Hono()
           notas: PedidoDeliveryTable.notas,
           createdAt: PedidoDeliveryTable.createdAt,
           deliveredAt: PedidoDeliveryTable.deliveredAt,
+          pagado: PedidoDeliveryTable.pagado,
         })
         .from(PedidoDeliveryTable)
         .where(and(
@@ -271,6 +274,7 @@ const pedidoRoute = new Hono()
           notas: PedidoTakeawayTable.notas,
           createdAt: PedidoTakeawayTable.createdAt,
           deliveredAt: PedidoTakeawayTable.deliveredAt,
+          pagado: PedidoTakeawayTable.pagado,
         })
         .from(PedidoTakeawayTable)
         .where(and(
@@ -396,6 +400,48 @@ const pedidoRoute = new Hono()
         error: (error as Error).message
       }, 500)
     }
+  })
+
+  // ==================== MARCAR PEDIDO COMO PAGADO ====================
+  // IMPORTANTE: Esta ruta DEBE estar ANTES de /:id para evitar conflictos
+
+  .put('/marcar-pagado/:id', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const pedidoId = Number(c.req.param('id'))
+
+    // Verificar que el pedido pertenece al restaurante
+    const pedido = await db
+      .select()
+      .from(PedidoTable)
+      .where(and(
+        eq(PedidoTable.id, pedidoId),
+        eq(PedidoTable.restauranteId, restauranteId)
+      ))
+      .limit(1)
+
+    if (!pedido || pedido.length === 0) {
+      return c.json({ message: 'Pedido no encontrado', success: false }, 404)
+    }
+
+    // Toggle pagado
+    const newPagado = !pedido[0].pagado
+
+    await db
+      .update(PedidoTable)
+      .set({ pagado: newPagado })
+      .where(eq(PedidoTable.id, pedidoId))
+
+    // Notificar a admins conectados para actualizar UI en tiempo real
+    if (pedido[0].mesaId) {
+      wsManager.broadcastEstadoToAdmins(pedido[0].mesaId)
+    }
+
+    return c.json({
+      message: newPagado ? 'Pedido marcado como pagado' : 'Pedido marcado como no pagado',
+      success: true,
+      data: { pagado: newPagado }
+    }, 200)
   })
 
   // Obtener un pedido específico con todos sus detalles

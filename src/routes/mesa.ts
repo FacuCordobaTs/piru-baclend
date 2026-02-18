@@ -195,6 +195,11 @@ const mesaRoute = new Hono()
       }
 
       if (todosPagaron) {
+        // Marcar pedido anterior como pagado
+        await db.update(PedidoTable)
+          .set({ pagado: true })
+          .where(eq(PedidoTable.id, pedidoActual.id))
+
         // Todos pagaron, crear nuevo pedido
         const nuevoPedido = await db.insert(PedidoTable).values({
           mesaId: mesa[0].id,
