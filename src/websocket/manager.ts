@@ -162,11 +162,13 @@ class WebSocketManager {
             imagenUrl: ProductoTable.imagenUrl,
             ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
             postConfirmacion: ItemPedidoTable.postConfirmacion,
-            estado: ItemPedidoTable.estado
+            estado: ItemPedidoTable.estado,
+            createdAt: ItemPedidoTable.createdAt,
           })
           .from(ItemPedidoTable)
           .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
-          .where(eq(ItemPedidoTable.pedidoId, pedido.id));
+          .where(eq(ItemPedidoTable.pedidoId, pedido.id))
+          .orderBy(desc(ItemPedidoTable.createdAt));
 
         // Helper para parsear JSON si viene como string
         const parseJsonField = (value: any): number[] | null => {
@@ -461,11 +463,13 @@ class WebSocketManager {
         imagenUrl: ProductoTable.imagenUrl,
         ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
         postConfirmacion: ItemPedidoTable.postConfirmacion,
-        estado: ItemPedidoTable.estado
+        estado: ItemPedidoTable.estado,
+        createdAt: ItemPedidoTable.createdAt,
       })
       .from(ItemPedidoTable)
       .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
-      .where(eq(ItemPedidoTable.pedidoId, pedidoId));
+      .where(eq(ItemPedidoTable.pedidoId, pedidoId))
+      .orderBy(desc(ItemPedidoTable.createdAt));
 
     // Obtener nombres de ingredientes excluidos para cada item
     const itemsConIngredientes = await Promise.all(
@@ -562,7 +566,8 @@ class WebSocketManager {
         imagenUrl: ProductoTable.imagenUrl,
         ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
         postConfirmacion: ItemPedidoTable.postConfirmacion,
-        estado: ItemPedidoTable.estado
+        estado: ItemPedidoTable.estado,
+        createdAt: ItemPedidoTable.createdAt,
       })
       .from(ItemPedidoTable)
       .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
