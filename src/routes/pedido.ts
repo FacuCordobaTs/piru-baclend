@@ -77,11 +77,13 @@ const pedidoRoute = new Hono()
           imagenUrl: ProductoTable.imagenUrl,
           ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
           postConfirmacion: ItemPedidoTable.postConfirmacion,
-          estado: ItemPedidoTable.estado
+          estado: ItemPedidoTable.estado,
+          createdAt: ItemPedidoTable.createdAt,
         })
         .from(ItemPedidoTable)
         .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
         .where(eq(ItemPedidoTable.pedidoId, pedido.id))
+        .orderBy(desc(ItemPedidoTable.createdAt))
 
       // Obtener nombres de ingredientes excluidos para cada item
       const items = await Promise.all(
@@ -105,15 +107,24 @@ const pedidoRoute = new Hono()
             ingredientesExcluidos: item.ingredientesExcluidos || [],
             ingredientesExcluidosNombres,
             postConfirmacion: item.postConfirmacion || false,
-            estado: item.estado || 'pending'
+            estado: item.estado || 'pending',
+            createdAt: item.createdAt
           }
         })
       )
 
+      // Para pedidos de mesa, calcular la fecha del último item agregado
+      // Si hay items, usar la fecha del más reciente; si no, usar la fecha de creación del pedido
+      const lastItemDate = items.length > 0 && items[0].createdAt
+        ? new Date(items[0].createdAt)
+        : new Date(pedido.createdAt)
+
       return {
         ...pedido,
         items,
-        totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0)
+        totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0),
+        // Para pedidos de mesa, usar la fecha del último item como createdAt
+        createdAt: pedido.mesaId ? lastItemDate.toISOString() : pedido.createdAt
       }
     }))
 
@@ -175,7 +186,8 @@ const pedidoRoute = new Hono()
 
     try {
       // 1. Get all mesa pedidos for the date
-      const mesaPedidos = await db
+      // For mesa pedidos, we filter by the date of the last item added, not the pedido creation date
+      const allMesaPedidos = await db
         .select({
           id: PedidoTable.id,
           mesaId: PedidoTable.mesaId,
@@ -189,15 +201,10 @@ const pedidoRoute = new Hono()
         })
         .from(PedidoTable)
         .leftJoin(MesaTable, eq(PedidoTable.mesaId, MesaTable.id))
-        .where(and(
-          eq(PedidoTable.restauranteId, restauranteId),
-          gte(PedidoTable.createdAt, startOfDay),
-          lt(PedidoTable.createdAt, endOfDay)
-        ))
-        .orderBy(desc(PedidoTable.createdAt))
+        .where(eq(PedidoTable.restauranteId, restauranteId))
 
-      // Get items for mesa pedidos
-      const mesaPedidosConItems = await Promise.all(mesaPedidos.map(async (pedido) => {
+      // Get items for all mesa pedidos and filter by last item date
+      const mesaPedidosConItems = await Promise.all(allMesaPedidos.map(async (pedido) => {
         const items = await db
           .select({
             id: ItemPedidoTable.id,
@@ -207,17 +214,38 @@ const pedidoRoute = new Hono()
             precioUnitario: ItemPedidoTable.precioUnitario,
             nombreProducto: ProductoTable.nombre,
             estado: ItemPedidoTable.estado,
+            createdAt: ItemPedidoTable.createdAt,
           })
           .from(ItemPedidoTable)
           .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
           .where(eq(ItemPedidoTable.pedidoId, pedido.id))
+          .orderBy(desc(ItemPedidoTable.createdAt))
+
+        // Get the date of the last item added (or use pedido createdAt if no items)
+        const lastItemDate = items.length > 0 && items[0].createdAt 
+          ? new Date(items[0].createdAt)
+          : new Date(pedido.createdAt)
 
         return {
           ...pedido,
           tipo: 'mesa' as const,
           items,
-          totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0)
+          totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0),
+          lastItemDate, // Store the date of the last item for filtering
         }
+      }))
+
+      // Filter pedidos by last item date
+      const mesaPedidosFiltered = mesaPedidosConItems.filter(pedido => {
+        const lastItemDate = pedido.lastItemDate
+        return lastItemDate >= startOfDay && lastItemDate < endOfDay
+      })
+
+      // Remove the temporary lastItemDate field and update createdAt to use last item date
+      const mesaPedidosFinal = mesaPedidosFiltered.map(({ lastItemDate, ...pedido }) => ({
+        ...pedido,
+        createdAt: lastItemDate.toISOString(), // Use last item date as createdAt for mesa pedidos
+        items: pedido.items // Keep createdAt in items for frontend use
       }))
 
       // 2. Get all delivery pedidos for the date
@@ -306,17 +334,37 @@ const pedidoRoute = new Hono()
       }))
 
       // 4. Get available dates (distinct dates that have orders) - last 90 days
+      // For mesa pedidos, use the date of the last item added, not the pedido creation date
       const ninetyDaysAgo = new Date()
       ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90)
 
-      const [mesaDates, deliveryDates, takeawayDates] = await Promise.all([
-        db.select({ fecha: sql<string>`DATE(${PedidoTable.createdAt})` })
-          .from(PedidoTable)
-          .where(and(
-            eq(PedidoTable.restauranteId, restauranteId),
-            gte(PedidoTable.createdAt, ninetyDaysAgo)
-          ))
-          .groupBy(sql`DATE(${PedidoTable.createdAt})`),
+      // For mesa pedidos, get dates from the last item added to each pedido
+      const mesaPedidosForDates = await db
+        .select({
+          pedidoId: PedidoTable.id,
+        })
+        .from(PedidoTable)
+        .where(and(
+          eq(PedidoTable.restauranteId, restauranteId),
+          gte(PedidoTable.createdAt, ninetyDaysAgo)
+        ))
+
+      const mesaItemDates = await Promise.all(mesaPedidosForDates.map(async (p) => {
+        const lastItem = await db
+          .select({ createdAt: ItemPedidoTable.createdAt })
+          .from(ItemPedidoTable)
+          .where(eq(ItemPedidoTable.pedidoId, p.pedidoId))
+          .orderBy(desc(ItemPedidoTable.createdAt))
+          .limit(1)
+        
+        return lastItem[0]?.createdAt || null
+      }))
+
+      const mesaDates = mesaItemDates
+        .filter(date => date !== null)
+        .map(date => ({ fecha: sql<string>`DATE(${date})` }))
+
+      const [deliveryDates, takeawayDates] = await Promise.all([
         db.select({ fecha: sql<string>`DATE(${PedidoDeliveryTable.createdAt})` })
           .from(PedidoDeliveryTable)
           .where(and(
@@ -340,7 +388,7 @@ const pedidoRoute = new Hono()
       const fechasDisponibles = Array.from(allDatesSet).sort().reverse()
 
       // 5. Calculate totals
-      const totalMesa = mesaPedidosConItems
+      const totalMesa = mesaPedidosFinal
         .filter(p => p.estado !== 'archived' && p.totalItems > 0)
         .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
       const totalDelivery = deliveryPedidosConItems
@@ -363,7 +411,7 @@ const pedidoRoute = new Hono()
         })
       }
 
-      mesaPedidosConItems.filter(p => p.estado !== 'archived' && p.totalItems > 0).forEach(p => addToSummary(p.items))
+      mesaPedidosFinal.filter(p => p.estado !== 'archived' && p.totalItems > 0).forEach(p => addToSummary(p.items))
       deliveryPedidosConItems.filter(p => p.estado !== 'archived' && p.estado !== 'cancelled').forEach(p => addToSummary(p.items))
       takeawayPedidosConItems.filter(p => p.estado !== 'archived' && p.estado !== 'cancelled').forEach(p => addToSummary(p.items))
 
@@ -373,7 +421,7 @@ const pedidoRoute = new Hono()
         success: true,
         data: {
           fecha: fechaStr || `${startOfDay.getFullYear()}-${String(startOfDay.getMonth() + 1).padStart(2, '0')}-${String(startOfDay.getDate()).padStart(2, '0')}`,
-          pedidosMesa: mesaPedidosConItems,
+          pedidosMesa: mesaPedidosFinal,
           pedidosDelivery: deliveryPedidosConItems,
           pedidosTakeaway: takeawayPedidosConItems,
           totales: {
@@ -383,10 +431,10 @@ const pedidoRoute = new Hono()
             general: (totalMesa + totalDelivery + totalTakeaway).toFixed(2),
           },
           cantidades: {
-            mesa: mesaPedidosConItems.filter(p => p.totalItems > 0).length,
+            mesa: mesaPedidosFinal.filter(p => p.totalItems > 0).length,
             delivery: deliveryPedidosConItems.length,
             takeaway: takeawayPedidosConItems.length,
-            total: mesaPedidosConItems.filter(p => p.totalItems > 0).length + deliveryPedidosConItems.length + takeawayPedidosConItems.length,
+            total: mesaPedidosFinal.filter(p => p.totalItems > 0).length + deliveryPedidosConItems.length + takeawayPedidosConItems.length,
           },
           productosVendidos,
           fechasDisponibles,
