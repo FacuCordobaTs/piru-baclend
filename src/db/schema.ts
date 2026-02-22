@@ -85,6 +85,7 @@ export const pedido = mysqlTable("pedido", {
     estado: mysqlEnum('estado', ['pending', 'preparing', 'delivered', 'served', 'closed', 'archived']).default('pending'),
     total: decimal("total", { precision: 10, scale: 2 }).default('0.00'),
     pagado: boolean("pagado").default(false).notNull(),
+    metodoPago: varchar('metodo_pago', { length: 50 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     closedAt: timestamp("closed_at"),
 });
@@ -105,7 +106,7 @@ export const itemPedido = mysqlTable('item_pedido', {
 export const pago = mysqlTable('pago', {
     id: int('id').primaryKey().autoincrement(),
     pedidoId: int('pedido_id').notNull(),
-    metodo: mysqlEnum('metodo', ['efectivo', 'mercadopago']).notNull(),
+    metodo: mysqlEnum('metodo', ['efectivo', 'mercadopago', 'transferencia']).notNull(),
     estado: mysqlEnum('estado', ['pending', 'paid', 'failed']).default('pending'),
     monto: decimal('monto', { precision: 10, scale: 2 }).notNull(),
     mpPaymentId: varchar('mp_payment_id', { length: 255 }),
@@ -120,7 +121,7 @@ export const pagoSubtotal = mysqlTable('pago_subtotal', {
     clienteNombre: varchar('cliente_nombre', { length: 100 }).notNull(),
     monto: decimal('monto', { precision: 10, scale: 2 }).notNull(),
     estado: mysqlEnum('estado', ['pending', 'pending_cash', 'paid', 'failed']).default('pending'),
-    metodo: mysqlEnum('metodo', ['efectivo', 'mercadopago']).notNull(),
+    metodo: mysqlEnum('metodo', ['efectivo', 'mercadopago', 'transferencia']).notNull(),
     mpPaymentId: varchar('mp_payment_id', { length: 255 }), // Para identificar el pago en webhook
     mpPreferenceId: varchar('mp_preference_id', { length: 255 }), // ID de la preferencia creada
     createdAt: timestamp('created_at').defaultNow(),
@@ -149,6 +150,7 @@ export const pedidoDelivery = mysqlTable("pedido_delivery", {
     estado: mysqlEnum('estado', ['pending', 'preparing', 'ready', 'delivered', 'cancelled', 'archived']).default('pending'),
     total: decimal("total", { precision: 10, scale: 2 }).default('0.00'),
     pagado: boolean("pagado").default(false).notNull(),
+    metodoPago: varchar('metodo_pago', { length: 50 }),
     notas: varchar("notas", { length: 500 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     deliveredAt: timestamp("delivered_at"),
@@ -173,6 +175,7 @@ export const pedidoTakeaway = mysqlTable("pedido_takeaway", {
     estado: mysqlEnum('estado', ['pending', 'preparing', 'ready', 'delivered', 'cancelled', 'archived']).default('pending'),
     total: decimal("total", { precision: 10, scale: 2 }).default('0.00'),
     pagado: boolean("pagado").default(false).notNull(),
+    metodoPago: varchar('metodo_pago', { length: 50 }),
     notas: varchar("notas", { length: 500 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     deliveredAt: timestamp("delivered_at"),

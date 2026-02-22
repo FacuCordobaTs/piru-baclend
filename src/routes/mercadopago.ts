@@ -1012,7 +1012,7 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
 
   try {
     const body = await c.req.json()
-    const { pedidoId, clientesAPagar, mozoItemIds, qrToken } = body
+    const { pedidoId, clientesAPagar, mozoItemIds, qrToken, metodoPago = 'efectivo' } = body
     // mozoItemIds: number[] - array of item_pedido IDs for individual Mozo items to pay
 
     if (!pedidoId) {
@@ -1125,7 +1125,7 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
           clienteNombre: cliente,
           monto: subtotal.toFixed(2),
           estado: 'pending_cash',
-          metodo: 'efectivo'
+          metodo: metodoPago
         })
 
         registeredKeys.push(cliente)
@@ -1160,11 +1160,11 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
           clienteNombre: mozoKey,
           monto: subtotal.toFixed(2),
           estado: 'pending_cash',
-          metodo: 'efectivo'
+          metodo: metodoPago
         })
 
         registeredKeys.push(mozoKey)
-        console.log(`⏳ Pago en efectivo pendiente de confirmación: mozoItem=${itemId}, monto=${subtotal.toFixed(2)}`)
+        console.log(`⏳ Pago pendiente de confirmación: mozoItem=${itemId}, monto=${subtotal.toFixed(2)}, metodo=${metodoPago}`)
       }
     }
 
@@ -1202,7 +1202,7 @@ mercadopagoRoute.post('/confirmar-efectivo', authMiddleware, async (c) => {
 
   try {
     const body = await c.req.json()
-    const { pedidoId, clienteNombre } = body
+    const { pedidoId, clienteNombre, metodoPago } = body
 
     if (!pedidoId) {
       return c.json({ success: false, error: 'pedidoId es requerido' }, 400)
@@ -1227,7 +1227,8 @@ mercadopagoRoute.post('/confirmar-efectivo', authMiddleware, async (c) => {
 
     const mesaId = pedido[0].mesaId!
 
-    // Buscar el registro de pago en estado pending_cash
+    // Buscar el registro de pago en estado pending_cash o similar
+    // Note: We also allow confirming something that might not be pending if they hit it directly, but let's stick to the current logic
     const pagoSubtotal = await db.select()
       .from(PagoSubtotalTable)
       .where(and(
@@ -1249,18 +1250,29 @@ mercadopagoRoute.post('/confirmar-efectivo', authMiddleware, async (c) => {
         .limit(1)
 
       if (yaPagado.length > 0) {
+        // Just update method if requested
+        if (metodoPago && yaPagado[0].metodo !== metodoPago) {
+          await db.update(PagoSubtotalTable)
+            .set({ metodo: metodoPago })
+            .where(eq(PagoSubtotalTable.id, yaPagado[0].id))
+        }
         return c.json({ success: false, error: 'Este cliente ya tiene su pago confirmado' }, 400)
       }
 
       return c.json({ success: false, error: 'No hay pago en efectivo pendiente para este cliente' }, 404)
     }
 
-    // Actualizar estado a 'paid'
+    // Actualizar estado a 'paid' y método si se especificó
+    const updateData: any = { estado: 'paid' }
+    if (metodoPago) {
+      updateData.metodo = metodoPago
+    }
+
     await db.update(PagoSubtotalTable)
-      .set({ estado: 'paid' })
+      .set(updateData)
       .where(eq(PagoSubtotalTable.id, pagoSubtotal[0].id))
 
-    console.log(`✅ Pago en efectivo CONFIRMADO por admin: cliente=${clienteNombre}, monto=${pagoSubtotal[0].monto}`)
+    console.log(`✅ Pago CONFIRMADO por admin: cliente=${clienteNombre}, monto=${pagoSubtotal[0].monto}, metodo=${metodoPago || pagoSubtotal[0].metodo}`)
 
     // Obtener todos los subtotales actualizados (incluyendo clientes sin registro de pago)
     const todosSubtotales = await getSubtotalesCompletos(pedidoId)

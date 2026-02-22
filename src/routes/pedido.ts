@@ -222,7 +222,7 @@ const pedidoRoute = new Hono()
           .orderBy(desc(ItemPedidoTable.createdAt))
 
         // Get the date of the last item added (or use pedido createdAt if no items)
-        const lastItemDate = items.length > 0 && items[0].createdAt 
+        const lastItemDate = items.length > 0 && items[0].createdAt
           ? new Date(items[0].createdAt)
           : new Date(pedido.createdAt)
 
@@ -356,7 +356,7 @@ const pedidoRoute = new Hono()
           .where(eq(ItemPedidoTable.pedidoId, p.pedidoId))
           .orderBy(desc(ItemPedidoTable.createdAt))
           .limit(1)
-        
+
         return lastItem[0]?.createdAt || null
       }))
 
@@ -473,11 +473,17 @@ const pedidoRoute = new Hono()
     }
 
     // Toggle pagado
+    const body = await c.req.json().catch(() => ({}))
+    const metodoPagoStr = body.metodoPago || null
+
     const newPagado = !pedido[0].pagado
 
     await db
       .update(PedidoTable)
-      .set({ pagado: newPagado })
+      .set({
+        pagado: newPagado,
+        metodoPago: newPagado ? metodoPagoStr : null
+      })
       .where(eq(PedidoTable.id, pedidoId))
 
     // Notificar a admins conectados para actualizar UI en tiempo real

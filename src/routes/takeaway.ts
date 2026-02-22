@@ -295,11 +295,17 @@ const takeawayRoute = new Hono()
         }
 
         // Toggle pagado
+        const body = await c.req.json().catch(() => ({}))
+        const metodoPagoStr = body.metodoPago || null
+
         const newPagado = !pedido[0].pagado
 
         await db
             .update(PedidoTakeawayTable)
-            .set({ pagado: newPagado })
+            .set({
+                pagado: newPagado,
+                metodoPago: newPagado ? metodoPagoStr : null
+            })
             .where(eq(PedidoTakeawayTable.id, pedidoId))
 
         return c.json({

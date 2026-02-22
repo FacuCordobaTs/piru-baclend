@@ -299,11 +299,17 @@ const deliveryRoute = new Hono()
         }
 
         // Toggle pagado
+        const body = await c.req.json().catch(() => ({}))
+        const metodoPagoStr = body.metodoPago || null
+
         const newPagado = !pedido[0].pagado
 
         await db
             .update(PedidoDeliveryTable)
-            .set({ pagado: newPagado })
+            .set({
+                pagado: newPagado,
+                metodoPago: newPagado ? metodoPagoStr : null
+            })
             .where(eq(PedidoDeliveryTable.id, pedidoId))
 
         return c.json({
