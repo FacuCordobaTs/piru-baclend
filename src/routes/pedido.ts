@@ -1,7 +1,7 @@
 // pedido.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable, pago as PagoTable, ingrediente as IngredienteTable, pedidoDelivery as PedidoDeliveryTable, itemPedidoDelivery as ItemPedidoDeliveryTable, pedidoTakeaway as PedidoTakeawayTable, itemPedidoTakeaway as ItemPedidoTakeawayTable } from '../db/schema'
+import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable, pago as PagoTable, pagoSubtotal as PagoSubtotalTable, ingrediente as IngredienteTable, pedidoDelivery as PedidoDeliveryTable, itemPedidoDelivery as ItemPedidoDeliveryTable, pedidoTakeaway as PedidoTakeawayTable, itemPedidoTakeaway as ItemPedidoTakeawayTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { eq, desc, and, inArray, gte, lt, sql } from 'drizzle-orm'
@@ -197,6 +197,7 @@ const pedidoRoute = new Hono()
           createdAt: PedidoTable.createdAt,
           closedAt: PedidoTable.closedAt,
           pagado: PedidoTable.pagado,
+          metodoPago: PedidoTable.metodoPago,
           mesaNombre: MesaTable.nombre,
         })
         .from(PedidoTable)
@@ -241,11 +242,22 @@ const pedidoRoute = new Hono()
         return lastItemDate >= startOfDay && lastItemDate < endOfDay
       })
 
+      // Get pagos for all filtered mesa pedidos
+      const mesaPedidoIds = mesaPedidosFiltered.map(p => p.id)
+      let pagosMesa: any[] = []
+      let pagosSubtotalMesa: any[] = []
+      if (mesaPedidoIds.length > 0) {
+        pagosMesa = await db.select().from(PagoTable).where(inArray(PagoTable.pedidoId, mesaPedidoIds))
+        pagosSubtotalMesa = await db.select().from(PagoSubtotalTable).where(inArray(PagoSubtotalTable.pedidoId, mesaPedidoIds))
+      }
+
       // Remove the temporary lastItemDate field and update createdAt to use last item date
       const mesaPedidosFinal = mesaPedidosFiltered.map(({ lastItemDate, ...pedido }) => ({
         ...pedido,
         createdAt: lastItemDate.toISOString(), // Use last item date as createdAt for mesa pedidos
-        items: pedido.items // Keep createdAt in items for frontend use
+        items: pedido.items, // Keep createdAt in items for frontend use
+        pagos: pagosMesa.filter(p => p.pedidoId === pedido.id),
+        pagosSubtotal: pagosSubtotalMesa.filter(p => p.pedidoId === pedido.id)
       }))
 
       // 2. Get all delivery pedidos for the date
@@ -261,6 +273,7 @@ const pedidoRoute = new Hono()
           createdAt: PedidoDeliveryTable.createdAt,
           deliveredAt: PedidoDeliveryTable.deliveredAt,
           pagado: PedidoDeliveryTable.pagado,
+          metodoPago: PedidoDeliveryTable.metodoPago,
         })
         .from(PedidoDeliveryTable)
         .where(and(
@@ -303,6 +316,7 @@ const pedidoRoute = new Hono()
           createdAt: PedidoTakeawayTable.createdAt,
           deliveredAt: PedidoTakeawayTable.deliveredAt,
           pagado: PedidoTakeawayTable.pagado,
+          metodoPago: PedidoTakeawayTable.metodoPago,
         })
         .from(PedidoTakeawayTable)
         .where(and(
