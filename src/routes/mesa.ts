@@ -47,6 +47,7 @@ const mesaRoute = new Hono()
       mpConnected: RestauranteTable.mpConnected,
       esCarrito: RestauranteTable.esCarrito,
       splitPayment: RestauranteTable.splitPayment,
+      soloCartaDigital: RestauranteTable.soloCartaDigital,
     }).from(RestauranteTable).where(eq(RestauranteTable.id, mesa[0].restauranteId!)).limit(1)
 
     let ultimoPedido = await db.select().
@@ -97,110 +98,51 @@ const mesaRoute = new Hono()
 
     let pedidoActual = ultimoPedido[0];
 
-    if (!pedidoActual) {
-      // No hay pedidos, crear uno nuevo
-      const nuevoPedido = await db.insert(PedidoTable).values({
-        mesaId: mesa[0].id,
-        restauranteId: mesa[0].restauranteId,
-        estado: 'pending',
-        total: '0.00'
-      })
+    if (restaurante[0].soloCartaDigital) {
+      if (pedidoActual) {
+        // En modo soloCartaDigital, verificamos si pasaron 20 minutos
+        const timeSinceCreation = new Date().getTime() - new Date(pedidoActual.createdAt).getTime();
+        const twentyMinutesMs = 20 * 60 * 1000;
 
-      // Obtener el pedido recién creado
-      ultimoPedido = await db.select().from(PedidoTable).
-        where(eq(PedidoTable.id, Number(nuevoPedido[0].insertId))).
-        orderBy(desc(PedidoTable.createdAt))
-        .limit(1)
+        if (timeSinceCreation > twentyMinutesMs) {
+          // Ya pasaron 20 mins, crear nuevo pedido
+          const nuevoPedido = await db.insert(PedidoTable).values({
+            mesaId: mesa[0].id,
+            restauranteId: mesa[0].restauranteId,
+            estado: 'pending',
+            total: '0.00'
+          })
 
-      pedidoActual = ultimoPedido[0];
-    } else if (pedidoActual.estado === 'archived') {
-      // El último pedido está archivado, siempre crear uno nuevo
-      const nuevoPedido = await db.insert(PedidoTable).values({
-        mesaId: mesa[0].id,
-        restauranteId: mesa[0].restauranteId,
-        estado: 'pending',
-        total: '0.00'
-      })
+          ultimoPedido = await db.select().from(PedidoTable).
+            where(eq(PedidoTable.id, Number(nuevoPedido[0].insertId))).
+            orderBy(desc(PedidoTable.createdAt))
+            .limit(1)
 
-      // Obtener el pedido recién creado
-      ultimoPedido = await db.select().from(PedidoTable).
-        where(eq(PedidoTable.id, Number(nuevoPedido[0].insertId))).
-        orderBy(desc(PedidoTable.createdAt))
-        .limit(1)
-
-      pedidoActual = ultimoPedido[0];
-    } else if (pedidoActual.estado === 'closed') {
-      // El último pedido está cerrado, verificar si todos pagaron
-      const items = await db
-        .select({
-          id: ItemPedidoTable.id,
-          clienteNombre: ItemPedidoTable.clienteNombre,
-          cantidad: ItemPedidoTable.cantidad,
-          precioUnitario: ItemPedidoTable.precioUnitario,
-        })
-        .from(ItemPedidoTable)
-        .where(eq(ItemPedidoTable.pedidoId, pedidoActual.id));
-
-      let todosPagaron = false;
-
-      if (items.length === 0) {
-        // Si no hay items, no hay nada que pagar
-        todosPagaron = true;
-      } else {
-        // Separar clientes regulares de items de Mozo
-        // Los items de Mozo se trackean individualmente con clave "Mozo:item:{id}"
-        const subtotalesPorCliente: Record<string, number> = {};
-        const mozoItems: { id: number; monto: number }[] = [];
-
-        for (const item of items) {
-          if (item.clienteNombre === 'Mozo') {
-            // Trackear items de Mozo individualmente
-            mozoItems.push({
-              id: item.id,
-              monto: parseFloat(item.precioUnitario) * (item.cantidad || 1)
-            });
-          } else {
-            // Cliente regular - agrupar por nombre
-            if (!subtotalesPorCliente[item.clienteNombre]) {
-              subtotalesPorCliente[item.clienteNombre] = 0;
-            }
-            subtotalesPorCliente[item.clienteNombre] += parseFloat(item.precioUnitario) * (item.cantidad || 1);
-          }
-        }
-
-        // Construir lista de todas las claves a verificar (clientes + Mozo:item:{id})
-        const allKeysToCheck: string[] = Object.keys(subtotalesPorCliente);
-        for (const mozoItem of mozoItems) {
-          allKeysToCheck.push(`Mozo:item:${mozoItem.id}`);
-        }
-
-        // Si no hay claves a verificar (no debería pasar si hay items), asumir pagado
-        if (allKeysToCheck.length === 0) {
-          todosPagaron = true;
+          pedidoActual = ultimoPedido[0];
         } else {
-          // Obtener todos los pagos de subtotales pagados
-          const pagosSubtotales = await db
-            .select()
-            .from(PagoSubtotalTable)
-            .where(and(
-              eq(PagoSubtotalTable.pedidoId, pedidoActual.id),
-              eq(PagoSubtotalTable.estado, 'paid'),
-              inArray(PagoSubtotalTable.clienteNombre, allKeysToCheck)
-            ));
-
-          // Verificar que cada clave tenga un pago
-          const paidKeys = new Set(pagosSubtotales.map(p => p.clienteNombre));
-          todosPagaron = allKeysToCheck.every(key => paidKeys.has(key));
+          // Aún no pasaron 20 mins, seguimos usando el mismo (sin importar su estado)
+          pedidoActual = ultimoPedido[0];
         }
+      } else {
+        // No hay pedido anterior, creamos uno nuevo
+        const nuevoPedido = await db.insert(PedidoTable).values({
+          mesaId: mesa[0].id,
+          restauranteId: mesa[0].restauranteId,
+          estado: 'pending',
+          total: '0.00'
+        })
+
+        ultimoPedido = await db.select().from(PedidoTable).
+          where(eq(PedidoTable.id, Number(nuevoPedido[0].insertId))).
+          orderBy(desc(PedidoTable.createdAt))
+          .limit(1)
+
+        pedidoActual = ultimoPedido[0];
       }
-
-      if (todosPagaron) {
-        // Marcar pedido anterior como pagado
-        await db.update(PedidoTable)
-          .set({ pagado: true })
-          .where(eq(PedidoTable.id, pedidoActual.id))
-
-        // Todos pagaron, crear nuevo pedido
+    } else {
+      // LOGICA NORMAL
+      if (!pedidoActual) {
+        // No hay pedidos, crear uno nuevo
         const nuevoPedido = await db.insert(PedidoTable).values({
           mesaId: mesa[0].id,
           restauranteId: mesa[0].restauranteId,
@@ -215,8 +157,111 @@ const mesaRoute = new Hono()
           .limit(1)
 
         pedidoActual = ultimoPedido[0];
+      } else if (pedidoActual.estado === 'archived') {
+        // El último pedido está archivado, siempre crear uno nuevo
+        const nuevoPedido = await db.insert(PedidoTable).values({
+          mesaId: mesa[0].id,
+          restauranteId: mesa[0].restauranteId,
+          estado: 'pending',
+          total: '0.00'
+        })
+
+        // Obtener el pedido recién creado
+        ultimoPedido = await db.select().from(PedidoTable).
+          where(eq(PedidoTable.id, Number(nuevoPedido[0].insertId))).
+          orderBy(desc(PedidoTable.createdAt))
+          .limit(1)
+
+        pedidoActual = ultimoPedido[0];
+      } else if (pedidoActual.estado === 'closed') {
+        // El último pedido está cerrado, verificar si todos pagaron
+        const items = await db
+          .select({
+            id: ItemPedidoTable.id,
+            clienteNombre: ItemPedidoTable.clienteNombre,
+            cantidad: ItemPedidoTable.cantidad,
+            precioUnitario: ItemPedidoTable.precioUnitario,
+          })
+          .from(ItemPedidoTable)
+          .where(eq(ItemPedidoTable.pedidoId, pedidoActual.id));
+
+        let todosPagaron = false;
+
+        if (items.length === 0) {
+          // Si no hay items, no hay nada que pagar
+          todosPagaron = true;
+        } else {
+          // Separar clientes regulares de items de Mozo
+          // Los items de Mozo se trackean individualmente con clave "Mozo:item:{id}"
+          const subtotalesPorCliente: Record<string, number> = {};
+          const mozoItems: { id: number; monto: number }[] = [];
+
+          for (const item of items) {
+            if (item.clienteNombre === 'Mozo') {
+              // Trackear items de Mozo individualmente
+              mozoItems.push({
+                id: item.id,
+                monto: parseFloat(item.precioUnitario) * (item.cantidad || 1)
+              });
+            } else {
+              // Cliente regular - agrupar por nombre
+              if (!subtotalesPorCliente[item.clienteNombre]) {
+                subtotalesPorCliente[item.clienteNombre] = 0;
+              }
+              subtotalesPorCliente[item.clienteNombre] += parseFloat(item.precioUnitario) * (item.cantidad || 1);
+            }
+          }
+
+          // Construir lista de todas las claves a verificar (clientes + Mozo:item:{id})
+          const allKeysToCheck: string[] = Object.keys(subtotalesPorCliente);
+          for (const mozoItem of mozoItems) {
+            allKeysToCheck.push(`Mozo:item:${mozoItem.id}`);
+          }
+
+          // Si no hay claves a verificar (no debería pasar si hay items), asumir pagado
+          if (allKeysToCheck.length === 0) {
+            todosPagaron = true;
+          } else {
+            // Obtener todos los pagos de subtotales pagados
+            const pagosSubtotales = await db
+              .select()
+              .from(PagoSubtotalTable)
+              .where(and(
+                eq(PagoSubtotalTable.pedidoId, pedidoActual.id),
+                eq(PagoSubtotalTable.estado, 'paid'),
+                inArray(PagoSubtotalTable.clienteNombre, allKeysToCheck)
+              ));
+
+            // Verificar que cada clave tenga un pago
+            const paidKeys = new Set(pagosSubtotales.map(p => p.clienteNombre));
+            todosPagaron = allKeysToCheck.every(key => paidKeys.has(key));
+          }
+        }
+
+        if (todosPagaron) {
+          // Marcar pedido anterior como pagado
+          await db.update(PedidoTable)
+            .set({ pagado: true })
+            .where(eq(PedidoTable.id, pedidoActual.id))
+
+          // Todos pagaron, crear nuevo pedido
+          const nuevoPedido = await db.insert(PedidoTable).values({
+            mesaId: mesa[0].id,
+            restauranteId: mesa[0].restauranteId,
+            estado: 'pending',
+            total: '0.00'
+          })
+
+          // Obtener el pedido recién creado
+          ultimoPedido = await db.select().from(PedidoTable).
+            where(eq(PedidoTable.id, Number(nuevoPedido[0].insertId))).
+            orderBy(desc(PedidoTable.createdAt))
+            .limit(1)
+
+          pedidoActual = ultimoPedido[0];
+        }
+        // Si no todos pagaron, usar el pedido cerrado actual
       }
-      // Si no todos pagaron, usar el pedido cerrado actual
     }
 
     return c.json({

@@ -23,6 +23,7 @@ export const restaurante = mysqlTable("restaurante", {
     mpConnected: boolean("mp_connected").default(false),
     splitPayment: boolean("split_payment").default(true).notNull(),
     itemTracking: boolean("item_tracking").default(true).notNull(),
+    soloCartaDigital: boolean("solo_carta_digital").default(false).notNull(),
 });
 
 export const categoria = mysqlTable("categoria", {
