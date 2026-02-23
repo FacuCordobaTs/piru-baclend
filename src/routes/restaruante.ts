@@ -365,4 +365,40 @@ restauranteRoute.put('/toggle-item-tracking', async (c) => {
   }
 })
 
+// Toggle solo carta digital (sin confirmación, se borra tras 20 min)
+restauranteRoute.put('/toggle-solo-carta-digital', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    // Obtener el estado actual
+    const [restaurante] = await db.select({ soloCartaDigital: RestauranteTable.soloCartaDigital })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!restaurante) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    // Toggle
+    const nuevoEstado = !restaurante.soloCartaDigital
+
+    await db.update(RestauranteTable)
+      .set({ soloCartaDigital: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    console.log(`📱 Solo Carta Digital ${nuevoEstado ? 'activado' : 'desactivado'} para restaurante ${restauranteId}`)
+
+    return c.json({
+      message: nuevoEstado ? 'Modo Sólo Carta Digital activado' : 'Modo Sólo Carta Digital desactivado',
+      success: true,
+      soloCartaDigital: nuevoEstado
+    }, 200)
+
+  } catch (error) {
+    console.error('Error updating solo carta digital mode:', error)
+    return c.json({ message: 'Error al cambiar modo Sólo Carta Digital', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 export { restauranteRoute }
