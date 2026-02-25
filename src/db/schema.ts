@@ -10,6 +10,7 @@ export const restaurante = mysqlTable("restaurante", {
     direccion: varchar("direccion", { length: 255 }),
     telefono: varchar("telefono", { length: 255 }),
     imagenUrl: varchar("imagen_url", { length: 255 }),
+    username: varchar("username", { length: 255 }).unique(),
     esCarrito: boolean("es_carrito").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     // Campos legacy (se pueden eliminar después de migrar)

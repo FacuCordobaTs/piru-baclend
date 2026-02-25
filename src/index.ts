@@ -13,6 +13,7 @@ import { mercadopagoRoute } from './routes/mercadopago';
 import { notificacionRoute } from './routes/notificacion';
 import { deliveryRoute } from './routes/delivery';
 import { takeawayRoute } from './routes/takeaway';
+import { publicRoute } from './routes/public';
 import { wsManager } from './websocket/manager';
 import type { WebSocketMessage } from './types/websocket';
 import { drizzle } from 'drizzle-orm/mysql2';
@@ -134,6 +135,7 @@ app.basePath('/api')
   .route('/notificacion', notificacionRoute)
   .route('/delivery', deliveryRoute)
   .route('/takeaway', takeawayRoute)
+  .route('/public', publicRoute)
 
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
 // because :qrToken would match "admin" as a token
