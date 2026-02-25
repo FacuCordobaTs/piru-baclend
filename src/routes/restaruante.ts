@@ -216,7 +216,7 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
         }
 
         // Verifica que no exista otro restaurante con este username
-        const existente = await db.select().from(RestauranteTable).where(and(eq(RestauranteTable.username, username), require('drizzle-orm').notEq(RestauranteTable.id, restauranteId))).limit(1)
+        const existente = await db.select().from(RestauranteTable).where(and(eq(RestauranteTable.username, username), require('drizzle-orm').ne(RestauranteTable.id, restauranteId))).limit(1)
         if (existente && existente.length > 0) {
           return c.json({ message: 'El alias ya está en uso', success: false }, 400)
         }
