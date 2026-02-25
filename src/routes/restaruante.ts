@@ -97,6 +97,7 @@ const updateProfileSchema = z.object({
   direccion: z.string().min(1).optional(),
   telefono: z.string().min(1).optional(),
   image: z.string().min(10).optional(), // Base64 de la imagen
+  username: z.string().min(3).optional(),
 })
 
 restauranteRoute.get('/profile', async (c) => {
@@ -186,7 +187,7 @@ restauranteRoute.post('/complete-profile', zValidator('json', completeProfileSch
 restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre, direccion, telefono, image } = c.req.valid('json')
+  const { nombre, direccion, telefono, image, username } = c.req.valid('json')
 
   try {
     // Obtener datos actuales del restaurante
@@ -205,6 +206,24 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
     if (nombre !== undefined) updateData.nombre = nombre
     if (direccion !== undefined) updateData.direccion = direccion
     if (telefono !== undefined) updateData.telefono = telefono
+    if (username !== undefined) {
+      if (!username || username.trim() === '') {
+        updateData.username = null
+      } else {
+        const usernameRegex = /^[a-zA-Z0-9_-]+$/
+        if (!usernameRegex.test(username)) {
+          return c.json({ message: 'El alias solo puede contener letras, números, guiones y guiones bajos', success: false }, 400)
+        }
+
+        // Verifica que no exista otro restaurante con este username
+        const existente = await db.select().from(RestauranteTable).where(and(eq(RestauranteTable.username, username), require('drizzle-orm').notEq(RestauranteTable.id, restauranteId))).limit(1)
+        if (existente && existente.length > 0) {
+          return c.json({ message: 'El alias ya está en uso', success: false }, 400)
+        }
+
+        updateData.username = username
+      }
+    }
 
     // Procesar imagen si se proporciona
     if (image && image.startsWith('data:image')) {
