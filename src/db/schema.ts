@@ -142,11 +142,21 @@ export const notificacion = mysqlTable('notificacion', {
     leida: boolean('leida').default(false).notNull(),
 });
 
+export const cliente = mysqlTable('cliente', {
+    id: int('id').primaryKey().autoincrement(),
+    restauranteId: int('restaurante_id').references(() => restaurante.id).notNull(),
+    nombre: varchar("nombre", { length: 255 }).notNull(),
+    telefono: varchar("telefono", { length: 50 }).notNull(),
+    direccion: varchar("direccion", { length: 255 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Pedido de delivery (sin mesa, con dirección)
 export const pedidoDelivery = mysqlTable("pedido_delivery", {
     id: int("id").primaryKey().autoincrement(),
     restauranteId: int("restaurante_id").references(() => restaurante.id),
-    direccion: varchar("direccion", { length: 500 }).notNull(),
+    clienteId: int("cliente_id").references(() => cliente.id),
+    direccion: varchar("direccion", { length: 255 }).notNull(),
     nombreCliente: varchar("nombre_cliente", { length: 255 }),
     telefono: varchar("telefono", { length: 50 }),
     estado: mysqlEnum('estado', ['pending', 'preparing', 'ready', 'delivered', 'cancelled', 'archived']).default('pending'),
@@ -172,6 +182,7 @@ export const itemPedidoDelivery = mysqlTable('item_pedido_delivery', {
 export const pedidoTakeaway = mysqlTable("pedido_takeaway", {
     id: int("id").primaryKey().autoincrement(),
     restauranteId: int("restaurante_id").references(() => restaurante.id),
+    clienteId: int("cliente_id").references(() => cliente.id),
     nombreCliente: varchar("nombre_cliente", { length: 255 }),
     telefono: varchar("telefono", { length: 50 }),
     estado: mysqlEnum('estado', ['pending', 'preparing', 'ready', 'delivered', 'cancelled', 'archived']).default('pending'),

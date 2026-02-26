@@ -87,7 +87,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
 
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { pedidoDelivery as PedidoDeliveryTable, itemPedidoDelivery as ItemPedidoDeliveryTable, pedidoTakeaway as PedidoTakeawayTable, itemPedidoTakeaway as ItemPedidoTakeawayTable } from '../db/schema'
+import { pedidoDelivery as PedidoDeliveryTable, itemPedidoDelivery as ItemPedidoDeliveryTable, pedidoTakeaway as PedidoTakeawayTable, itemPedidoTakeaway as ItemPedidoTakeawayTable, cliente as ClienteTable } from '../db/schema'
 
 const createDeliverySchema = z.object({
     restauranteId: z.number().int().positive(),
@@ -128,8 +128,33 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             total += parseFloat(producto.precio) * item.cantidad
         }
 
+        let clienteId: number | null = null;
+        if (telefono && nombreCliente) {
+            // Verificar si el cliente existe
+            const clienteExistente = await db.select().from(ClienteTable).where(
+                and(
+                    eq(ClienteTable.telefono, telefono),
+                    eq(ClienteTable.restauranteId, restauranteId)
+                )
+            ).limit(1);
+
+            if (clienteExistente.length > 0) {
+                clienteId = clienteExistente[0].id;
+                // Actualizar dirección si es diferente (opcional)
+            } else {
+                const nuevoCliente = await db.insert(ClienteTable).values({
+                    restauranteId,
+                    nombre: nombreCliente,
+                    telefono,
+                    direccion,
+                });
+                clienteId = Number(nuevoCliente[0].insertId);
+            }
+        }
+
         const nuevoPedido = await db.insert(PedidoDeliveryTable).values({
             restauranteId,
+            clienteId: clienteId || null,
             direccion,
             nombreCliente: nombreCliente || null,
             telefono: telefono || null,
@@ -213,8 +238,31 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             total += parseFloat(producto.precio) * item.cantidad
         }
 
+        let clienteId: number | null = null;
+        if (telefono && nombreCliente) {
+            // Verificar si el cliente existe
+            const clienteExistente = await db.select().from(ClienteTable).where(
+                and(
+                    eq(ClienteTable.telefono, telefono),
+                    eq(ClienteTable.restauranteId, restauranteId)
+                )
+            ).limit(1);
+
+            if (clienteExistente.length > 0) {
+                clienteId = clienteExistente[0].id;
+            } else {
+                const nuevoCliente = await db.insert(ClienteTable).values({
+                    restauranteId,
+                    nombre: nombreCliente,
+                    telefono,
+                });
+                clienteId = Number(nuevoCliente[0].insertId);
+            }
+        }
+
         const nuevoPedido = await db.insert(PedidoTakeawayTable).values({
             restauranteId,
+            clienteId: clienteId || null,
             nombreCliente: nombreCliente || null,
             telefono: telefono || null,
             notas: notas || null,
