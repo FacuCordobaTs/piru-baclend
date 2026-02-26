@@ -21,7 +21,6 @@ clientesRoute.get('/list', async (c) => {
             total: PedidoDeliveryTable.total,
             createdAt: PedidoDeliveryTable.createdAt,
             id: PedidoDeliveryTable.id,
-            tipo: 'delivery'
         }).from(PedidoDeliveryTable)
             .where(eq(PedidoDeliveryTable.restauranteId, restauranteId))
 
@@ -30,7 +29,6 @@ clientesRoute.get('/list', async (c) => {
             total: PedidoTakeawayTable.total,
             createdAt: PedidoTakeawayTable.createdAt,
             id: PedidoTakeawayTable.id,
-            tipo: 'takeaway'
         }).from(PedidoTakeawayTable)
             .where(eq(PedidoTakeawayTable.restauranteId, restauranteId))
 
