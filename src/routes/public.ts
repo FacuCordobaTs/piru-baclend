@@ -3,6 +3,7 @@ import { pool } from '../db'
 import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { eq, and } from 'drizzle-orm'
+import { wsManager } from '../websocket/manager'
 
 const publicRoute = new Hono()
 
@@ -150,6 +151,19 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             })
         }
 
+        wsManager.notifyAdmins(restauranteId, {
+            id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            tipo: 'NUEVO_PEDIDO',
+            mesaId: 0,
+            mesaNombre: 'Delivery',
+            mensaje: `Nuevo pedido de Delivery`,
+            detalles: `${nombreCliente || 'Cliente'} - $${total.toFixed(2)}`,
+            timestamp: new Date().toISOString(),
+            leida: false,
+            pedidoId: pedidoId
+        })
+        wsManager.broadcastAdminUpdate(restauranteId, 'delivery')
+
         return c.json({
             message: 'Pedido de delivery creado correctamente',
             success: true,
@@ -220,6 +234,19 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 ingredientesExcluidos: item.ingredientesExcluidos || null
             })
         }
+
+        wsManager.notifyAdmins(restauranteId, {
+            id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            tipo: 'NUEVO_PEDIDO',
+            mesaId: 0,
+            mesaNombre: 'Take Away',
+            mensaje: `Nuevo pedido de Take Away`,
+            detalles: `${nombreCliente || 'Cliente'} - $${total.toFixed(2)}`,
+            timestamp: new Date().toISOString(),
+            leida: false,
+            pedidoId: pedidoId
+        })
+        wsManager.broadcastAdminUpdate(restauranteId, 'takeaway')
 
         return c.json({
             message: 'Pedido de takeaway creado correctamente',
