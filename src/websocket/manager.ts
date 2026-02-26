@@ -93,7 +93,8 @@ class WebSocketManager {
         } catch (error) {
           console.error('Error enviando notificación a admin:', error);
         }
-      });
+      }
+    });
   }
 
   // Notificar actualización genérica (para delivery/takeaway)
