@@ -1,9 +1,16 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { cliente as ClienteTable, pedidoDelivery as PedidoDeliveryTable, pedidoTakeaway as PedidoTakeawayTable } from '../db/schema'
+import {
+    cliente as ClienteTable,
+    pedidoDelivery as PedidoDeliveryTable,
+    pedidoTakeaway as PedidoTakeawayTable,
+    itemPedidoDelivery as ItemDeliveryTable,
+    itemPedidoTakeaway as ItemTakeawayTable,
+    producto as ProductoTable
+} from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
-import { eq, desc } from 'drizzle-orm'
+import { eq, desc, inArray } from 'drizzle-orm'
 
 const clientesRoute = new Hono()
 
@@ -32,7 +39,83 @@ clientesRoute.get('/list', async (c) => {
         }).from(PedidoTakeawayTable)
             .where(eq(PedidoTakeawayTable.restauranteId, restauranteId))
 
-        const allPedidos = [...pedidosDelivery.map(p => ({ ...p, tipo: 'delivery' })), ...pedidosTakeaway.map(p => ({ ...p, tipo: 'takeaway' }))]
+        // Fetch items for delivery orders
+        const deliveryIds = pedidosDelivery.map(p => p.id)
+        let itemsDelivery: { pedidoDeliveryId: number, productoId: number, cantidad: number | null, precioUnitario: string }[] = []
+        if (deliveryIds.length > 0) {
+            itemsDelivery = await db.select({
+                pedidoDeliveryId: ItemDeliveryTable.pedidoDeliveryId,
+                productoId: ItemDeliveryTable.productoId,
+                cantidad: ItemDeliveryTable.cantidad,
+                precioUnitario: ItemDeliveryTable.precioUnitario,
+            }).from(ItemDeliveryTable)
+                .where(inArray(ItemDeliveryTable.pedidoDeliveryId, deliveryIds))
+        }
+
+        // Fetch items for takeaway orders
+        const takeawayIds = pedidosTakeaway.map(p => p.id)
+        let itemsTakeaway: { pedidoTakeawayId: number, productoId: number, cantidad: number | null, precioUnitario: string }[] = []
+        if (takeawayIds.length > 0) {
+            itemsTakeaway = await db.select({
+                pedidoTakeawayId: ItemTakeawayTable.pedidoTakeawayId,
+                productoId: ItemTakeawayTable.productoId,
+                cantidad: ItemTakeawayTable.cantidad,
+                precioUnitario: ItemTakeawayTable.precioUnitario,
+            }).from(ItemTakeawayTable)
+                .where(inArray(ItemTakeawayTable.pedidoTakeawayId, takeawayIds))
+        }
+
+        // Fetch product names
+        const allProductoIds = [
+            ...new Set([
+                ...itemsDelivery.map(i => i.productoId),
+                ...itemsTakeaway.map(i => i.productoId)
+            ])
+        ]
+        let productosMap: Record<number, string> = {}
+        if (allProductoIds.length > 0) {
+            const productos = await db.select({
+                id: ProductoTable.id,
+                nombre: ProductoTable.nombre,
+            }).from(ProductoTable)
+                .where(inArray(ProductoTable.id, allProductoIds))
+            productosMap = Object.fromEntries(productos.map(p => [p.id, p.nombre]))
+        }
+
+        // Build items map per delivery order
+        const deliveryItemsMap: Record<number, { nombreProducto: string, cantidad: number, precioUnitario: string }[]> = {}
+        for (const item of itemsDelivery) {
+            if (!deliveryItemsMap[item.pedidoDeliveryId]) deliveryItemsMap[item.pedidoDeliveryId] = []
+            deliveryItemsMap[item.pedidoDeliveryId].push({
+                nombreProducto: productosMap[item.productoId] || 'Producto eliminado',
+                cantidad: item.cantidad ?? 1,
+                precioUnitario: item.precioUnitario,
+            })
+        }
+
+        // Build items map per takeaway order
+        const takeawayItemsMap: Record<number, { nombreProducto: string, cantidad: number, precioUnitario: string }[]> = {}
+        for (const item of itemsTakeaway) {
+            if (!takeawayItemsMap[item.pedidoTakeawayId]) takeawayItemsMap[item.pedidoTakeawayId] = []
+            takeawayItemsMap[item.pedidoTakeawayId].push({
+                nombreProducto: productosMap[item.productoId] || 'Producto eliminado',
+                cantidad: item.cantidad ?? 1,
+                precioUnitario: item.precioUnitario,
+            })
+        }
+
+        const allPedidos = [
+            ...pedidosDelivery.map(p => ({
+                ...p,
+                tipo: 'delivery' as const,
+                items: deliveryItemsMap[p.id] || []
+            })),
+            ...pedidosTakeaway.map(p => ({
+                ...p,
+                tipo: 'takeaway' as const,
+                items: takeawayItemsMap[p.id] || []
+            }))
+        ]
 
         const clientesConMetricas = clientes.map(cliente => {
             const clientPedidos = allPedidos.filter(p => p.clienteId === cliente.id)
