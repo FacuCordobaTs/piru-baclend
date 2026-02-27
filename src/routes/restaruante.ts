@@ -98,6 +98,7 @@ const updateProfileSchema = z.object({
   telefono: z.string().min(1).optional(),
   image: z.string().min(10).optional(), // Base64 de la imagen
   username: z.string().min(3).optional(),
+  deliveryFee: z.string().optional(),
 })
 
 restauranteRoute.get('/profile', async (c) => {
@@ -187,7 +188,7 @@ restauranteRoute.post('/complete-profile', zValidator('json', completeProfileSch
 restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre, direccion, telefono, image, username } = c.req.valid('json')
+  const { nombre, direccion, telefono, image, username, deliveryFee } = c.req.valid('json')
 
   try {
     // Obtener datos actuales del restaurante
@@ -206,6 +207,7 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
     if (nombre !== undefined) updateData.nombre = nombre
     if (direccion !== undefined) updateData.direccion = direccion
     if (telefono !== undefined) updateData.telefono = telefono
+    if (deliveryFee !== undefined) updateData.deliveryFee = deliveryFee
     if (username !== undefined) {
       if (!username || username.trim() === '') {
         updateData.username = null

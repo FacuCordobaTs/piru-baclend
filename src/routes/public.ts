@@ -18,6 +18,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             imagenUrl: RestauranteTable.imagenUrl,
             direccion: RestauranteTable.direccion,
             telefono: RestauranteTable.telefono,
+            deliveryFee: RestauranteTable.deliveryFee,
         })
             .from(RestauranteTable)
             .where(eq(RestauranteTable.username, username))
@@ -126,6 +127,11 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         for (const item of items) {
             const producto = productosMap.get(item.productoId)!
             total += parseFloat(producto.precio) * item.cantidad
+        }
+
+        const resRestaurante = await db.select({ deliveryFee: RestauranteTable.deliveryFee }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+        if (resRestaurante.length > 0 && resRestaurante[0].deliveryFee) {
+            total += parseFloat(resRestaurante[0].deliveryFee)
         }
 
         let clienteId: number | null = null;

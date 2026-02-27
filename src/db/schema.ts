@@ -23,8 +23,9 @@ export const restaurante = mysqlTable("restaurante", {
     mpUserId: varchar("mp_user_id", { length: 50 }),
     mpConnected: boolean("mp_connected").default(false),
     splitPayment: boolean("split_payment").default(true).notNull(),
-    itemTracking: boolean("item_tracking").default(true).notNull(),
+    itemTracking: boolean("item_tracking").default(false).notNull(),
     soloCartaDigital: boolean("solo_carta_digital").default(false).notNull(),
+    deliveryFee: decimal("delivery_fee", { precision: 10, scale: 2 }).default('0.00').notNull(),
 });
 
 export const categoria = mysqlTable("categoria", {
