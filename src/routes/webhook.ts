@@ -1,5 +1,4 @@
 import { Hono } from 'hono'
-import { ContentfulStatusCode } from 'hono/utils/http-status';
 
 const webhookRoute = new Hono()
 
@@ -40,71 +39,70 @@ webhookRoute.post('/cucuru/collection_received', async (c: any) => {
     }
   });
 
-  
-  const apiKey = process.env.CUCURU_API_KEY;
-  const collectorId = process.env.CUCURU_COLLECTOR_ID;
-  webhookRoute.get('/cucuru/create_account', async (c) => {
-    try {
-      const productId = collectorId; // El alias que conocemos
-  
-      // PASO 1: DESCUBRIR EL ID REAL (Investigación)
-      // Llamamos al endpoint que descubriste en el navegador
-      const configUrl = `https://api.cucuru.com/app/v1/Collection/config?product_Id=${productId}`;
-      
-      const configResponse = await fetch(configUrl, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
-          // A veces estos endpoints públicos no piden API Key, pero por si acaso:
-          // 'X-Cucuru-Api-Key': apiKey 
-        }
-      });
-  
-      const configData = await configResponse.json();
-      
-      // Si esto funciona, imprimimos qué nos devolvió para encontrar el ID oculto
-      console.log("🕵️‍♂️ DATOS DE CONFIGURACIÓN RECUPERADOS:", configData);
-  
-      // Intentamos adivinar cuál es el campo correcto del ID
-      // (Ajustaremos esto según lo que salga en el console log)
-      const realCollectorId = configData.id || configData.collector_id || configData.collectorId;
-  
-      if (!realCollectorId) {
-          return c.json({ 
-              message: "No encontramos el ID numérico en la config", 
-              debug: configData 
-          }, 400);
-      }
-  
-      // PASO 2: USAR EL ID REAL PARA CREAR LA CUENTA
-      const createUrl = 'https://api.cucuru.com/app/v1/Collection/accounts/account';
-      const body = {
-        customer_id: 'CLIENTE_TEST_FINAL',
-        read_only: 'true',
-      };
-  
-      const response = await fetch(createUrl, {
-        method: 'PUT',
-        headers: new Headers({
-          'Content-Type': 'application/json',
-          'X-Cucuru-Api-Key': apiKey ?? '',
-          // AQUÍ USAMOS EL ID NUMÉRICO QUE DESCUBRIMOS
-          'X-Cucuru-Collector-id': realCollectorId.toString(),
-        }),
-        body: JSON.stringify(body),
-      });
+// GET de prueba para crear una cuenta de cobro en Cucuru desde el backend
+// Accede desde el navegador a esta ruta para disparar la request y ver la respuesta.
+webhookRoute.get('/cucuru/create_account', async (c) => {
+  try {
+    const apiKey = process.env.CUCURU_API_KEY;
+    const collectorId = process.env.CUCURU_COLLECTOR_ID;
 
-      const result = await response.json();
-
-      return c.json({
-        paso_1_config: configData,
-        id_usado: realCollectorId,
-        resultado_final: result
-      }, response.status as ContentfulStatusCode);
-  
-    } catch (error) {
-      return c.json({ error: (error as Error).message }, 500);
+    if (!apiKey || !collectorId) {
+      return c.json(
+        {
+          ok: false,
+          message:
+            'Faltan variables de entorno CUCURU_API_KEY o CUCURU_COLLECTOR_ID. Configúralas en el backend.',
+        },
+        500
+      );
     }
-  });
+
+    const url = 'https://api.cucuru.com/app/v1/Collection/accounts/account';
+
+    // Puedes cambiar estos valores para probar distintos customer_id / read_only
+    const body = {
+      customer_id: 'CLIENTE_TEST_BACKEND',
+      read_only: 'true', // "true" o "false", o elimina este campo si quieres usar el default
+    };
+
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Cucuru-Api-Key': apiKey,
+        'X-Cucuru-Collection-Id': collectorId,
+      },
+      body: JSON.stringify(body),
+    });
+
+    let data: any;
+    const text = await response.text();
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+
+    // Devolvemos al navegador el status HTTP de Cucuru y el cuerpo que respondió
+    return c.json(
+      {
+        ok: response.ok,
+        status: response.status,
+        data,
+      },
+      response.status as any
+    );
+  } catch (error) {
+    console.error('❌ Error creando cuenta en Cucuru:', error);
+    return c.json(
+      {
+        ok: false,
+        message: 'Error interno llamando a la API de Cucuru',
+      },
+      500
+    );
+  }
+});
+
 
 export { webhookRoute }
