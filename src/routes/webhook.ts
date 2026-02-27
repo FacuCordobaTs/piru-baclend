@@ -2,6 +2,10 @@ import { Hono } from 'hono'
 
 const webhookRoute = new Hono()
 
+.get('/', async (c) => { 
+    return c.json({ message: 'Webhook get received' }, 200)
+})
+
 .post('/', async (c) => {
     return c.json({ message: 'Webhook received' }, 200)
 })
