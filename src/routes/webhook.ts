@@ -1,108 +1,110 @@
 import { Hono } from 'hono'
+import { pool } from '../db'
+import { drizzle } from 'drizzle-orm/mysql2'
+import { eq, and, ne } from 'drizzle-orm'
+import {
+  pedido as PedidoTable,
+  pago as PagoTable,
+  notificacion as NotificacionTable
+} from '../db/schema'
 
 const webhookRoute = new Hono()
 
-.get('/', async (c) => { 
-    return c.json({ message: 'Webhook get received' }, 200)
+webhookRoute.get('/', async (c) => {
+  return c.json({ message: 'Webhook get received' }, 200)
 })
 
-.post('/', async (c) => {
-    return c.json({ message: 'Webhook received' }, 200)
+webhookRoute.post('/', async (c) => {
+  return c.json({ message: 'Webhook received' }, 200)
 })
 
 webhookRoute.post('/cucuru/collection_received', async (c: any) => {
-    try {
-      const body = await c.req.json();
-  
-      // LOGS: Fundamental para ver qué nos manda Cucuru la primera vez
-      console.log('🔔 Webhook recibido de Cucuru:', JSON.stringify(body, null, 2));
-  
-      const amount = body.amount; // [cite: 187]
-  
-      // CASO DE PRUEBA (El "Handshake" inicial)
-      // Cuando configuramos el webhook, mandan importe 0 [cite: 245]
-      if (amount === 0) {
-        console.log('✅ Validación de Webhook exitosa (Importe 0)');
-        return c.json({ status: 'ok' }, 200); // [cite: 246]
-      }
-  
-      // AQUÍ IRÁ LA LÓGICA DE NEGOCIO (Split payment, liberar pedido, etc.)
-      // ... procesarPago(body) ...
-  
-      return c.json({ status: 'received' }, 200); // Responder siempre 200 rápido [cite: 200]
-  
-    } catch (error) {
-      console.error('❌ Error procesando webhook:', error);
-      // Aunque falle tu lógica interna, a veces conviene responder 200 para que no reintenten,
-      // pero en desarrollo responde 500 para enterarte.
-      return c.json({ error: 'Internal Error' }, 500);
-    }
-  });
-
-// GET de prueba para crear una cuenta de cobro en Cucuru desde el backend
-// Accede desde el navegador a esta ruta para disparar la request y ver la respuesta.
-webhookRoute.get('/cucuru/create_account', async (c) => {
   try {
-    const apiKey = process.env.CUCURU_API_KEY;
-    const collectorId = process.env.CUCURU_COLLECTOR_ID;
+    const body = await c.req.json();
 
-    if (!apiKey || !collectorId) {
-      return c.json(
-        {
-          ok: false,
-          message:
-            'Faltan variables de entorno CUCURU_API_KEY o CUCURU_COLLECTOR_ID. Configúralas en el backend.',
-        },
-        500
-      );
+    // LOGS: Fundamental para ver qué nos manda Cucuru la primera vez
+    console.log('🔔 Webhook recibido de Cucuru:', JSON.stringify(body, null, 2));
+
+    const amount = body.amount;
+    const customerIdStr = body.customer_id;
+    const collectionId = body.collection_id;
+
+    // CASO DE PRUEBA (El "Handshake" inicial)
+    if (amount === 0) {
+      console.log('✅ Validación de Webhook exitosa (Importe 0)');
+      return c.json({ status: 'ok' }, 200);
     }
 
-    const url = 'https://api.cucuru.com/app/v1/Collection/accounts/account';
-
-    // Puedes cambiar estos valores para probar distintos customer_id / read_only
-    const body = {
-      customer_id: 'CLIENTE_TEST_BACKEND',
-      read_only: 'true', // "true" o "false", o elimina este campo si quieres usar el default
-    };
-
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Cucuru-Api-Key': apiKey,
-        'X-Cucuru-Collection-Id': collectorId,
-      },
-      body: JSON.stringify(body),
-    });
-
-    let data: any;
-    const text = await response.text();
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text;
+    if (!customerIdStr || amount === undefined) {
+      console.warn('⚠️ Webhook inválido: Falta customer_id o amount');
+      return c.json({ error: 'Missing data' }, 400);
     }
 
-    // Devolvemos al navegador el status HTTP de Cucuru y el cuerpo que respondió
-    return c.json(
-      {
-        ok: response.ok,
-        status: response.status,
-        data,
-      },
-      response.status as any
-    );
+    const restauranteId = Number(customerIdStr);
+    const db = drizzle(pool);
+
+    // Buscar en la tabla pedido un registro que coincida
+    const pedidos = await db.select()
+      .from(PedidoTable)
+      .where(
+        and(
+          eq(PedidoTable.restauranteId, restauranteId),
+          eq(PedidoTable.total, String(amount)),
+          eq(PedidoTable.pagado, false),
+          ne(PedidoTable.estado, 'closed'),
+          ne(PedidoTable.estado, 'archived')
+        )
+      )
+      .limit(1);
+
+    if (pedidos.length === 0) {
+      console.log('⚠️ Pago Huérfano / Posible Propina (No Match)');
+      return c.json({ status: 'received' }, 200);
+    }
+
+    const pedido = pedidos[0];
+
+    // Match: Update pedido
+    await db.update(PedidoTable)
+      .set({
+        pagado: true,
+        estado: 'closed',
+        metodoPago: 'transferencia',
+        closedAt: new Date()
+      })
+      .where(eq(PedidoTable.id, pedido.id));
+
+    // Insert en tabla pago: registrar la transacción
+    await db.insert(PagoTable)
+      .values({
+        pedidoId: pedido.id,
+        metodo: 'transferencia',
+        estado: 'paid',
+        monto: String(amount),
+        mpPaymentId: collectionId
+      });
+
+    // Insert en tabla notificacion: Tipo PAGO_RECIBIDO
+    const notifId = `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+    await db.insert(NotificacionTable)
+      .values({
+        id: notifId,
+        restauranteId: restauranteId,
+        tipo: 'PAGO_RECIBIDO',
+        mesaId: pedido.mesaId,
+        pedidoId: pedido.id,
+        mensaje: `Pago de $${amount} recibido vía Cucuru`,
+        detalles: `CVU origen: ${body.collection_account || 'Desconocido'} - Transacción: ${collectionId}`
+      });
+
+    return c.json({ status: 'received' }, 200);
+
   } catch (error) {
-    console.error('❌ Error creando cuenta en Cucuru:', error);
-    return c.json(
-      {
-        ok: false,
-        message: 'Error interno llamando a la API de Cucuru',
-      },
-      500
-    );
+    console.error('❌ Error procesando webhook:', error);
+    // Siempre responder 200 rápido para evitar encolados de Cucuru, excepto error interno real
+    return c.json({ error: 'Internal Error' }, 500);
   }
 });
 
-
-export { webhookRoute }
+export default webhookRoute;

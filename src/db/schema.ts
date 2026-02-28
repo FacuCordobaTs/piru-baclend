@@ -26,6 +26,10 @@ export const restaurante = mysqlTable("restaurante", {
     itemTracking: boolean("item_tracking").default(false).notNull(),
     soloCartaDigital: boolean("solo_carta_digital").default(false).notNull(),
     deliveryFee: decimal("delivery_fee", { precision: 10, scale: 2 }).default('0.00').notNull(),
+    cucuruCustomerId: varchar("cucuru_customer_id", { length: 255 }),
+    cucuruAccountNumber: varchar("cucuru_account_number", { length: 255 }),
+    cucuruAlias: varchar("cucuru_alias", { length: 255 }),
+    cucuruEnabled: boolean("cucuru_enabled").default(false).notNull(),
 });
 
 export const categoria = mysqlTable("categoria", {
