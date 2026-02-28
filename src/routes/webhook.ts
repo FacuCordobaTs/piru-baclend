@@ -107,4 +107,4 @@ webhookRoute.post('/cucuru/collection_received', async (c: any) => {
   }
 });
 
-export default webhookRoute;
+export { webhookRoute }

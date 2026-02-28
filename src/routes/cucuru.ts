@@ -1,3 +1,35 @@
+import { zValidator } from '@hono/zod-validator'
+import { Hono } from 'hono'
+import { z } from 'zod'
+import { pool } from '../db'
+import { drizzle } from 'drizzle-orm/mysql2'
+import { restaurante as RestauranteTable } from '../db/schema'
+import { eq } from 'drizzle-orm'
+
+
+const createCucuruSchema = z.object({
+    slug: z.string().min(1).max(255)
+})
+
+const cucuruRoute = new Hono()
+
+cucuruRoute.post('/create', zValidator('json', createCucuruSchema), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const { slug } = c.req.valid('json')
+    const restaurant = await createRestaurantWallet(restauranteId, slug)
+
+    await db.update(RestauranteTable)
+        .set({
+            cucuruCustomerId: restaurant.cucuruCustomerId,
+            cucuruAccountNumber: restaurant.cucuruAccountNumber,
+            cucuruAlias: restaurant.cucuruAlias,
+            cucuruEnabled: restaurant.cucuruEnabled
+        })
+        .where(eq(RestauranteTable.id, restauranteId))  
+    return c.json({ message: 'Cucuru creado correctamente', success: true, data: restaurant }, 200)
+})
+
 export async function createRestaurantWallet(restaurantId: number, slug: string) {
     const API_KEY = process.env.CUCURU_API_KEY || '';
     const COLLECTOR_ID = process.env.CUCURU_COLLECTOR_ID || '';
@@ -68,3 +100,5 @@ export async function createRestaurantWallet(restaurantId: number, slug: string)
         warning: aliasWarning
     };
 }
+
+export { cucuruRoute }
