@@ -112,7 +112,9 @@ export const itemPedido = mysqlTable('item_pedido', {
 
 export const pago = mysqlTable('pago', {
     id: int('id').primaryKey().autoincrement(),
-    pedidoId: int('pedido_id').notNull(),
+    pedidoId: int('pedido_id'), // Ya no es .notNull()
+    pedidoDeliveryId: int('pedido_delivery_id'), // Nuevo
+    pedidoTakeawayId: int('pedido_takeaway_id'), // Nuevo
     metodo: mysqlEnum('metodo', ['efectivo', 'mercadopago', 'transferencia']).notNull(),
     estado: mysqlEnum('estado', ['pending', 'paid', 'failed']).default('pending'),
     monto: decimal('monto', { precision: 10, scale: 2 }).notNull(),

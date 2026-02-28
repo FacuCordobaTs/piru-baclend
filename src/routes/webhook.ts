@@ -67,7 +67,7 @@ webhookRoute.post('/cucuru/collection_received', async (c: any) => {
       }).where(eq(PedidoDeliveryTable.id, pedido.id));
 
       await db.insert(PagoTable).values({
-        pedidoId: pedido.id,
+        pedidoDeliveryId: pedido.id,
         metodo: 'transferencia',
         estado: 'paid',
         monto: String(amount),
@@ -115,7 +115,7 @@ webhookRoute.post('/cucuru/collection_received', async (c: any) => {
       }).where(eq(PedidoTakeawayTable.id, pedido.id));
 
       await db.insert(PagoTable).values({
-        pedidoId: pedido.id,
+        pedidoTakeawayId: pedido.id,
         metodo: 'transferencia',
         estado: 'paid',
         monto: String(amount),
