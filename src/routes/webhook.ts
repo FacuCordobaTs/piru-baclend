@@ -4,9 +4,12 @@ import { drizzle } from 'drizzle-orm/mysql2'
 import { eq, and, ne } from 'drizzle-orm'
 import {
   pedido as PedidoTable,
+  pedidoDelivery as PedidoDeliveryTable,
+  pedidoTakeaway as PedidoTakeawayTable,
   pago as PagoTable,
   notificacion as NotificacionTable
 } from '../db/schema'
+import { wsManager } from '../websocket/manager'
 
 const webhookRoute = new Hono()
 
@@ -22,14 +25,12 @@ webhookRoute.post('/cucuru/collection_received', async (c: any) => {
   try {
     const body = await c.req.json();
 
-    // LOGS: Fundamental para ver qué nos manda Cucuru la primera vez
     console.log('🔔 Webhook recibido de Cucuru:', JSON.stringify(body, null, 2));
 
     const amount = body.amount;
     const customerIdStr = body.customer_id;
     const collectionId = body.collection_id;
 
-    // CASO DE PRUEBA (El "Handshake" inicial)
     if (amount === 0) {
       console.log('✅ Validación de Webhook exitosa (Importe 0)');
       return c.json({ status: 'ok' }, 200);
@@ -43,7 +44,103 @@ webhookRoute.post('/cucuru/collection_received', async (c: any) => {
     const restauranteId = Number(customerIdStr);
     const db = drizzle(pool);
 
-    // Buscar en la tabla pedido un registro que coincida
+    // 1. Buscar en Delivery
+    const pedidosDelivery = await db.select()
+      .from(PedidoDeliveryTable)
+      .where(
+        and(
+          eq(PedidoDeliveryTable.restauranteId, restauranteId),
+          eq(PedidoDeliveryTable.total, String(amount)),
+          eq(PedidoDeliveryTable.pagado, false),
+          ne(PedidoDeliveryTable.estado, 'delivered'),
+          ne(PedidoDeliveryTable.estado, 'archived'),
+          ne(PedidoDeliveryTable.estado, 'cancelled')
+        )
+      )
+      .limit(1);
+
+    if (pedidosDelivery.length > 0) {
+      const pedido = pedidosDelivery[0];
+      await db.update(PedidoDeliveryTable).set({
+        pagado: true,
+        metodoPago: 'transferencia'
+      }).where(eq(PedidoDeliveryTable.id, pedido.id));
+
+      await db.insert(PagoTable).values({
+        pedidoId: pedido.id,
+        metodo: 'transferencia',
+        estado: 'paid',
+        monto: String(amount),
+        mpPaymentId: collectionId
+      });
+
+      const notifId = `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      await db.insert(NotificacionTable).values({
+        id: notifId,
+        restauranteId: restauranteId,
+        tipo: 'PAGO_RECIBIDO',
+        mesaId: null as any,
+        mesaNombre: 'Delivery',
+        pedidoId: pedido.id,
+        mensaje: `Cobro CUCURU de $${amount} (Delivery)`,
+        detalles: `Transacción: ${collectionId}`
+      });
+
+      console.log(`🚀 [Cucuru] Pago acreditado para Delivery #${pedido.id}`);
+      wsManager.broadcastAdminUpdate(restauranteId, 'delivery');
+      wsManager.notifyPublicClientPayment('delivery', pedido.id);
+      return c.json({ status: 'received' }, 200);
+    }
+
+    // 2. Buscar en Takeaway
+    const pedidosTakeaway = await db.select()
+      .from(PedidoTakeawayTable)
+      .where(
+        and(
+          eq(PedidoTakeawayTable.restauranteId, restauranteId),
+          eq(PedidoTakeawayTable.total, String(amount)),
+          eq(PedidoTakeawayTable.pagado, false),
+          ne(PedidoTakeawayTable.estado, 'delivered'),
+          ne(PedidoTakeawayTable.estado, 'archived'),
+          ne(PedidoTakeawayTable.estado, 'cancelled')
+        )
+      )
+      .limit(1);
+
+    if (pedidosTakeaway.length > 0) {
+      const pedido = pedidosTakeaway[0];
+      await db.update(PedidoTakeawayTable).set({
+        pagado: true,
+        metodoPago: 'transferencia'
+      }).where(eq(PedidoTakeawayTable.id, pedido.id));
+
+      await db.insert(PagoTable).values({
+        pedidoId: pedido.id,
+        metodo: 'transferencia',
+        estado: 'paid',
+        monto: String(amount),
+        mpPaymentId: collectionId
+      });
+
+      const notifId = `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      await db.insert(NotificacionTable).values({
+        id: notifId,
+        restauranteId: restauranteId,
+        tipo: 'PAGO_RECIBIDO',
+        mesaId: null as any,
+        mesaNombre: 'Take Away',
+        pedidoId: pedido.id,
+        mensaje: `Cobro CUCURU de $${amount} (Take Away)`,
+        detalles: `Transacción: ${collectionId}`
+      });
+
+      console.log(`🏃‍♂️ [Cucuru] Pago acreditado para TakeAway #${pedido.id}`);
+      wsManager.broadcastAdminUpdate(restauranteId, 'takeaway');
+      wsManager.notifyPublicClientPayment('takeaway', pedido.id);
+      return c.json({ status: 'received' }, 200);
+    }
+
+    // 3. Buscar en tabla pedido normal (Restaurante/Mesas)
     const pedidos = await db.select()
       .from(PedidoTable)
       .where(
@@ -58,13 +155,11 @@ webhookRoute.post('/cucuru/collection_received', async (c: any) => {
       .limit(1);
 
     if (pedidos.length === 0) {
-      console.log('⚠️ Pago Huérfano / Posible Propina (No Match)');
+      console.log('⚠️ Pago Huérfano / Posible Propina (No Match) - Buscado en Delivery, Takeaway y Mesas');
       return c.json({ status: 'received' }, 200);
     }
 
     const pedido = pedidos[0];
-
-    // Match: Update pedido
     await db.update(PedidoTable)
       .set({
         pagado: true,
@@ -74,7 +169,6 @@ webhookRoute.post('/cucuru/collection_received', async (c: any) => {
       })
       .where(eq(PedidoTable.id, pedido.id));
 
-    // Insert en tabla pago: registrar la transacción
     await db.insert(PagoTable)
       .values({
         pedidoId: pedido.id,
@@ -84,9 +178,7 @@ webhookRoute.post('/cucuru/collection_received', async (c: any) => {
         mpPaymentId: collectionId
       });
 
-    // Insert en tabla notificacion: Tipo PAGO_RECIBIDO
     const notifId = `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-
     await db.insert(NotificacionTable)
       .values({
         id: notifId,
@@ -95,14 +187,15 @@ webhookRoute.post('/cucuru/collection_received', async (c: any) => {
         mesaId: pedido.mesaId,
         pedidoId: pedido.id,
         mensaje: `Pago de $${amount} recibido vía Cucuru`,
-        detalles: `CVU origen: ${body.collection_account || 'Desconocido'} - Transacción: ${collectionId}`
+        detalles: `Transacción: ${collectionId}`
       });
 
+    console.log(`🍽️ [Cucuru] Pago acreditado para Mesa #${pedido.mesaId}`);
+    if (pedido.mesaId) wsManager.broadcastEstadoToAdmins(pedido.mesaId);
     return c.json({ status: 'received' }, 200);
 
   } catch (error) {
     console.error('❌ Error procesando webhook:', error);
-    // Siempre responder 200 rápido para evitar encolados de Cucuru, excepto error interno real
     return c.json({ error: 'Internal Error' }, 500);
   }
 });

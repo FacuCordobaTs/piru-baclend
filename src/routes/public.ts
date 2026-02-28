@@ -19,6 +19,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
             direccion: RestauranteTable.direccion,
             telefono: RestauranteTable.telefono,
             deliveryFee: RestauranteTable.deliveryFee,
+            cucuruAlias: RestauranteTable.cucuruAlias,
+            cucuruEnabled: RestauranteTable.cucuruEnabled,
         })
             .from(RestauranteTable)
             .where(eq(RestauranteTable.username, username))

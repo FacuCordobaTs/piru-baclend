@@ -20,6 +20,7 @@ class WebSocketManager {
   private sessions: Map<number, MesaSession> = new Map();
   private adminSessions: Map<number, AdminSession> = new Map(); // restauranteId -> AdminSession
   private mesaToRestaurante: Map<number, number> = new Map(); // mesaId -> restauranteId
+  public publicClients: Map<string, Set<any>> = new Map(); // key -> Set of ws (key = {tipo}-{pedidoId})
   private db = drizzle(pool);
 
   // ==================== ADMIN METHODS ====================
@@ -1253,6 +1254,20 @@ class WebSocketManager {
     } catch (error) {
       console.error('Error verificando si todos pagaron:', error);
       return false; // En caso de error, asumir que no todos pagaron
+    }
+  }
+
+  // Notificar a cliente público (Delivery/Takeaway) de que su pago se acreditó
+  notifyPublicClientPayment(tipo: string, pedidoId: number) {
+    const key = `${tipo}-${pedidoId}`;
+    const clients = this.publicClients.get(key);
+    if (clients) {
+      clients.forEach(ws => {
+        if (ws.readyState === 1) { // OPEN
+          ws.send(JSON.stringify({ type: 'PAGO_ACREDITADO' }));
+        }
+      });
+      console.log(`🔌 Notificando PAGO_ACREDITADO a ${clients.size} cliente(s) para ${key}`);
     }
   }
 }

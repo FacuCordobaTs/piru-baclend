@@ -250,7 +250,36 @@ app.get(
   })
 )
 
-// WebSocket endpoint for mesa clients (must come AFTER /ws/admin)
+// WebSocket endpoint for public clients (e.g. tracking Delivery/Takeaway payment success)
+app.get(
+  '/ws/public/:tipo/:pedidoId',
+  upgradeWebSocket(async (c: any) => {
+    const tipo = c.req.param('tipo'); // delivery | takeaway
+    const pedidoId = parseInt(c.req.param('pedidoId'), 10);
+    const key = `${tipo}-${pedidoId}`;
+
+    return {
+      async onOpen(event: any, ws: any) {
+        if (!wsManager.publicClients.has(key)) {
+          wsManager.publicClients.set(key, new Set());
+        }
+        wsManager.publicClients.get(key)!.add(ws);
+        console.log(`🔌 Cliente público conectado: ${key}`);
+      },
+      async onClose(event: any, ws: any) {
+        if (wsManager.publicClients.has(key)) {
+          wsManager.publicClients.get(key)!.delete(ws);
+          if (wsManager.publicClients.get(key)!.size === 0) {
+            wsManager.publicClients.delete(key);
+          }
+        }
+        console.log(`🔌 Cliente público desconectado: ${key}`);
+      }
+    };
+  })
+)
+
+// WebSocket endpoint for mesa clients (must come AFTER /ws/admin and others)
 app.get(
   '/ws/:qrToken',
   upgradeWebSocket(async (c: any) => {
