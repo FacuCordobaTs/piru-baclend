@@ -5,13 +5,15 @@ import { pool } from '../db'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { restaurante as RestauranteTable } from '../db/schema'
 import { eq } from 'drizzle-orm'
-
+import { authMiddleware } from '../middleware/auth'
 
 const createCucuruSchema = z.object({
     slug: z.string().min(1).max(255)
 })
 
 const cucuruRoute = new Hono()
+
+cucuruRoute.use('*', authMiddleware)
 
 cucuruRoute.post('/create', zValidator('json', createCucuruSchema), async (c) => {
     const db = drizzle(pool)
@@ -26,7 +28,7 @@ cucuruRoute.post('/create', zValidator('json', createCucuruSchema), async (c) =>
             cucuruAlias: restaurant.cucuruAlias,
             cucuruEnabled: restaurant.cucuruEnabled
         })
-        .where(eq(RestauranteTable.id, restauranteId))  
+        .where(eq(RestauranteTable.id, restauranteId))
     return c.json({ message: 'Cucuru creado correctamente', success: true, data: restaurant }, 200)
 })
 
