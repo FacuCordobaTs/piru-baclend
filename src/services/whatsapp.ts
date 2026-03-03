@@ -16,10 +16,21 @@ export interface OrderNotification {
 }
 
 // Helper: Convierte el array de items en un string multilinea formateado
-const formatOrderItems = (items: OrderItem[]): string => {
-    return items
-        .map(item => `• ${item.quantity}x ${item.name}`)
-        .join('\n');
+const formatOrderSummary = (items: OrderItem[]): string => {
+    // Calculamos la cantidad total de cosas que pidió
+    const totalArticulos = items.reduce((suma, item) => suma + item.quantity, 0);
+
+    // Armamos un string separado por comas (sin saltos de línea)
+    // Ej: "2x Hamburguesa Doble, 1x Papas"
+    const resumen = items.map(item => `${item.quantity}x ${item.name}`).join(', ');
+
+    // Meta limita los caracteres de las variables. Si el pedido es gigante,
+    // aplicamos tu brillante idea del texto genérico para que vayan al panel.
+    if (resumen.length > 50) {
+        return `${totalArticulos} producto${totalArticulos > 1 ? 's' : ''} (Ver en el panel)`;
+    }
+
+    return resumen;
 };
 
 export const sendOrderWhatsApp = async (c: any, data: OrderNotification) => {
@@ -29,7 +40,7 @@ export const sendOrderWhatsApp = async (c: any, data: OrderNotification) => {
     const url = `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_ID}/messages`;
 
     // Preparamos el string de la lista
-    const itemsListString = formatOrderItems(data.items);
+    const itemsListString = formatOrderSummary(data.items);
 
     const body = {
         messaging_product: "whatsapp",
