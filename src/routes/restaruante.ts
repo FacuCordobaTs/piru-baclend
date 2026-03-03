@@ -101,6 +101,7 @@ const updateProfileSchema = z.object({
   deliveryFee: z.string().optional(),
   whatsappEnabled: z.boolean().optional(),
   whatsappNumber: z.string().optional(),
+  transferenciaAlias: z.string().optional(),
 })
 
 restauranteRoute.get('/profile', async (c) => {
@@ -190,7 +191,7 @@ restauranteRoute.post('/complete-profile', zValidator('json', completeProfileSch
 restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre, direccion, telefono, image, username, deliveryFee, whatsappEnabled, whatsappNumber } = c.req.valid('json')
+  const { nombre, direccion, telefono, image, username, deliveryFee, whatsappEnabled, whatsappNumber, transferenciaAlias } = c.req.valid('json')
 
   try {
     // Obtener datos actuales del restaurante
@@ -212,6 +213,7 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
     if (deliveryFee !== undefined) updateData.deliveryFee = deliveryFee
     if (whatsappEnabled !== undefined) updateData.whatsappEnabled = whatsappEnabled
     if (whatsappNumber !== undefined) updateData.whatsappNumber = whatsappNumber
+    if (transferenciaAlias !== undefined) updateData.transferenciaAlias = transferenciaAlias
     if (username !== undefined) {
       if (!username || username.trim() === '') {
         updateData.username = null

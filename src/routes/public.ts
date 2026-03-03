@@ -22,6 +22,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
             deliveryFee: RestauranteTable.deliveryFee,
             cucuruAlias: RestauranteTable.cucuruAlias,
             cucuruEnabled: RestauranteTable.cucuruEnabled,
+            mpConnected: RestauranteTable.mpConnected,
+            transferenciaAlias: RestauranteTable.transferenciaAlias,
         })
             .from(RestauranteTable)
             .where(eq(RestauranteTable.username, username))
@@ -377,6 +379,60 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
     } catch (error) {
         console.error('Error creating public takeaway:', error)
         return c.json({ message: 'Error creating takeaway', error: (error as Error).message }, 500)
+    }
+})
+
+const setMetodoPagoSchema = z.object({
+    metodoPago: z.string().min(1)
+})
+
+publicRoute.put('/delivery/:id/metodo-pago', zValidator('json', setMetodoPagoSchema), async (c) => {
+    const db = drizzle(pool)
+    const id = parseInt(c.req.param('id'))
+    const { metodoPago } = c.req.valid('json')
+
+    try {
+        const result = await db.update(PedidoDeliveryTable)
+            .set({ metodoPago })
+            .where(eq(PedidoDeliveryTable.id, id))
+
+        if (result[0].affectedRows === 0) {
+            return c.json({ message: 'Pedido no encontrado', success: false }, 404)
+        }
+
+        const pedido = await db.select({ restauranteId: PedidoDeliveryTable.restauranteId }).from(PedidoDeliveryTable).where(eq(PedidoDeliveryTable.id, id)).limit(1)
+        if (pedido.length > 0 && pedido[0].restauranteId) {
+            wsManager.broadcastAdminUpdate(pedido[0].restauranteId, 'delivery')
+        }
+
+        return c.json({ message: 'Método de pago actualizado', success: true }, 200)
+    } catch (error) {
+        return c.json({ message: 'Error', error: (error as Error).message }, 500)
+    }
+})
+
+publicRoute.put('/takeaway/:id/metodo-pago', zValidator('json', setMetodoPagoSchema), async (c) => {
+    const db = drizzle(pool)
+    const id = parseInt(c.req.param('id'))
+    const { metodoPago } = c.req.valid('json')
+
+    try {
+        const result = await db.update(PedidoTakeawayTable)
+            .set({ metodoPago })
+            .where(eq(PedidoTakeawayTable.id, id))
+
+        if (result[0].affectedRows === 0) {
+            return c.json({ message: 'Pedido no encontrado', success: false }, 404)
+        }
+
+        const pedido = await db.select({ restauranteId: PedidoTakeawayTable.restauranteId }).from(PedidoTakeawayTable).where(eq(PedidoTakeawayTable.id, id)).limit(1)
+        if (pedido.length > 0 && pedido[0].restauranteId) {
+            wsManager.broadcastAdminUpdate(pedido[0].restauranteId, 'takeaway')
+        }
+
+        return c.json({ message: 'Método de pago actualizado', success: true }, 200)
+    } catch (error) {
+        return c.json({ message: 'Error', error: (error as Error).message }, 500)
     }
 })
 
