@@ -5,11 +5,9 @@ import {
     pedidoTakeaway as PedidoTakeawayTable,
     itemPedidoTakeaway as ItemPedidoTakeawayTable,
     producto as ProductoTable,
-    ingrediente as IngredienteTable,
-    restaurante as RestauranteTable
+    ingrediente as IngredienteTable
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
-import { sendOrderWhatsApp } from '../services/whatsapp'
 import { authMiddleware } from '../middleware/auth'
 import { eq, desc, and, inArray } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
@@ -223,38 +221,6 @@ const takeawayRoute = new Hono()
                 precioUnitario: producto.precio,
                 ingredientesExcluidos: item.ingredientesExcluidos || null
             })
-        }
-
-        // Notificación por WhatsApp
-        try {
-            const restaurante = await db.select({
-                whatsappEnabled: RestauranteTable.whatsappEnabled,
-                whatsappNumber: RestauranteTable.whatsappNumber,
-            }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1);
-
-            if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
-                const orderItemsForWa = items.map(item => {
-                    const producto = productosMap.get(item.productoId)!;
-                    return {
-                        name: producto.nombre,
-                        quantity: item.cantidad
-                    };
-                });
-
-                console.log("⏳ Iniciando envío de WhatsApp a:", restaurante[0].whatsappNumber);
-                sendOrderWhatsApp(c, {
-                    phone: restaurante[0].whatsappNumber,
-                    customerName: nombreCliente || 'Cliente no especificado',
-                    address: 'Retira en local (Take Away)',
-                    total: total.toFixed(2),
-                    items: orderItemsForWa,
-                    orderId: pedidoId.toString()
-                }).catch(err => {
-                    console.error("❌ Error en envío de WhatsApp en background:", err);
-                });
-            }
-        } catch (error) {
-            console.error("❌ Error obteniendo datos del restaurante para WhatsApp:", error);
         }
 
         return c.json({
