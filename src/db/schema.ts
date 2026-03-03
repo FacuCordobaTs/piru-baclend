@@ -30,6 +30,8 @@ export const restaurante = mysqlTable("restaurante", {
     cucuruAccountNumber: varchar("cucuru_account_number", { length: 255 }),
     cucuruAlias: varchar("cucuru_alias", { length: 255 }),
     cucuruEnabled: boolean("cucuru_enabled").default(false).notNull(),
+    whatsappEnabled: boolean("whatsapp_enabled").default(false).notNull(),
+    whatsappNumber: varchar("whatsapp_number", { length: 50 }),
 });
 
 export const categoria = mysqlTable("categoria", {
