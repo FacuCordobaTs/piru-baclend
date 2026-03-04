@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { producto as ProductoTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, itemPedido as ItemPedidoTable, etiqueta as EtiquetaTable } from '../db/schema'
+import { producto as ProductoTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, itemPedido as ItemPedidoTable, etiqueta as EtiquetaTable, productoPuntos as ProductoPuntosTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
@@ -169,6 +169,8 @@ const createProductSchema = z.object({
   categoriaId: z.number().optional(),
   ingredienteIds: z.array(z.number().int().positive()).optional(),
   etiquetas: z.array(z.string().min(1).max(100)).optional(),
+  puntosGanados: z.number().int().min(0).optional().default(0),
+  puntosNecesarios: z.number().int().min(0).optional().default(0),
 });
 
 const updateProductSchema = z.object({
@@ -181,6 +183,8 @@ const updateProductSchema = z.object({
   ingredienteIds: z.array(z.number().int().positive()).optional(),
   activo: z.boolean().optional(),
   etiquetas: z.array(z.string().min(1).max(100)).optional(),
+  puntosGanados: z.number().int().min(0).optional(),
+  puntosNecesarios: z.number().int().min(0).optional(),
 });
 
 const productoRoute = new Hono()
@@ -206,10 +210,13 @@ const productoRoute = new Hono()
         categoria: {
           id: CategoriaTable.id,
           nombre: CategoriaTable.nombre,
-        }
+        },
+        puntosGanados: ProductoPuntosTable.puntosGanados,
+        puntosNecesarios: ProductoPuntosTable.puntosNecesarios
       })
       .from(ProductoTable)
       .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
+      .leftJoin(ProductoPuntosTable, eq(ProductoTable.id, ProductoPuntosTable.productoId))
       .where(eq(ProductoTable.restauranteId, restauranteId))
 
     // Obtener ingredientes y etiquetas para cada producto
@@ -252,7 +259,7 @@ const productoRoute = new Hono()
   .post('/create', zValidator('json', createProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, etiquetas } = c.req.valid('json')
+    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, etiquetas, puntosGanados, puntosNecesarios } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId) {
@@ -374,13 +381,22 @@ const productoRoute = new Hono()
 
     await db.insert(EtiquetaTable).values(etiquetasAInsertar)
 
+    if (puntosGanados || puntosNecesarios) {
+      await db.insert(ProductoPuntosTable).values({
+        restauranteId,
+        productoId,
+        puntosGanados: puntosGanados || 0,
+        puntosNecesarios: puntosNecesarios || 0
+      })
+    }
+
     return c.json({ message: 'Producto creado correctamente', success: true, data: product, etiquetaAutoGenerada: etiquetaAuto }, 200)
   })
 
   .put('/update', zValidator('json', updateProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, activo, etiquetas } = c.req.valid('json')
+    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, activo, etiquetas, puntosGanados, puntosNecesarios } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId !== undefined) {
@@ -505,6 +521,23 @@ const productoRoute = new Hono()
             nombre,
           }))
         )
+      }
+    }
+
+    if (puntosGanados !== undefined || puntosNecesarios !== undefined) {
+      const existente = await db.select().from(ProductoPuntosTable).where(eq(ProductoPuntosTable.productoId, id)).limit(1);
+      if (existente.length > 0) {
+        const updatePuntos: any = {};
+        if (puntosGanados !== undefined) updatePuntos.puntosGanados = puntosGanados;
+        if (puntosNecesarios !== undefined) updatePuntos.puntosNecesarios = puntosNecesarios;
+        await db.update(ProductoPuntosTable).set(updatePuntos).where(eq(ProductoPuntosTable.productoId, id));
+      } else {
+        await db.insert(ProductoPuntosTable).values({
+          restauranteId,
+          productoId: id,
+          puntosGanados: puntosGanados || 0,
+          puntosNecesarios: puntosNecesarios || 0
+        })
       }
     }
 

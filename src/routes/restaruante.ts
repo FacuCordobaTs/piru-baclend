@@ -428,4 +428,40 @@ restauranteRoute.put('/toggle-solo-carta-digital', async (c) => {
   }
 })
 
+// Toggle sistema de puntos
+restauranteRoute.put('/toggle-sistema-puntos', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    // Obtener el estado actual
+    const [restaurante] = await db.select({ sistemaPuntos: RestauranteTable.sistemaPuntos })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!restaurante) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    // Toggle
+    const nuevoEstado = !restaurante.sistemaPuntos
+
+    await db.update(RestauranteTable)
+      .set({ sistemaPuntos: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    console.log(`⭐ Sistema de puntos ${nuevoEstado ? 'activado' : 'desactivado'} para restaurante ${restauranteId}`)
+
+    return c.json({
+      message: nuevoEstado ? 'Sistema de puntos activado' : 'Sistema de puntos desactivado',
+      success: true,
+      sistemaPuntos: nuevoEstado
+    }, 200)
+
+  } catch (error) {
+    console.error('Error updating points system mode:', error)
+    return c.json({ message: 'Error al cambiar sistema de puntos', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 export { restauranteRoute }

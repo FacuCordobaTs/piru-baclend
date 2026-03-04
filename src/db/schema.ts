@@ -33,6 +33,7 @@ export const restaurante = mysqlTable("restaurante", {
     whatsappEnabled: boolean("whatsapp_enabled").default(false).notNull(),
     whatsappNumber: varchar("whatsapp_number", { length: 50 }),
     transferenciaAlias: varchar("transferencia_alias", { length: 255 }),
+    sistemaPuntos: boolean("sistema_puntos").default(false).notNull(),
 });
 
 export const categoria = mysqlTable("categoria", {
@@ -158,6 +159,7 @@ export const cliente = mysqlTable('cliente', {
     nombre: varchar("nombre", { length: 255 }).notNull(),
     telefono: varchar("telefono", { length: 50 }).notNull(),
     direccion: varchar("direccion", { length: 255 }),
+    puntos: int("puntos").default(0).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -174,6 +176,8 @@ export const pedidoDelivery = mysqlTable("pedido_delivery", {
     pagado: boolean("pagado").default(false).notNull(),
     metodoPago: varchar('metodo_pago', { length: 50 }),
     notas: varchar("notas", { length: 500 }),
+    puntosGanados: int("puntos_ganados").default(0),
+    puntosUsados: int("puntos_usados").default(0),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     deliveredAt: timestamp("delivered_at"),
 });
@@ -186,6 +190,7 @@ export const itemPedidoDelivery = mysqlTable('item_pedido_delivery', {
     cantidad: int('cantidad').default(1),
     precioUnitario: decimal('precio_unitario', { precision: 10, scale: 2 }).notNull(),
     ingredientesExcluidos: json('ingredientes_excluidos'),
+    esCanjePuntos: boolean('es_canje_puntos').default(false),
 });
 
 // Pedido Take Away (sin mesa, sin dirección)
@@ -200,6 +205,8 @@ export const pedidoTakeaway = mysqlTable("pedido_takeaway", {
     pagado: boolean("pagado").default(false).notNull(),
     metodoPago: varchar('metodo_pago', { length: 50 }),
     notas: varchar("notas", { length: 500 }),
+    puntosGanados: int("puntos_ganados").default(0),
+    puntosUsados: int("puntos_usados").default(0),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     deliveredAt: timestamp("delivered_at"),
 });
@@ -212,4 +219,13 @@ export const itemPedidoTakeaway = mysqlTable('item_pedido_takeaway', {
     cantidad: int('cantidad').default(1),
     precioUnitario: decimal('precio_unitario', { precision: 10, scale: 2 }).notNull(),
     ingredientesExcluidos: json('ingredientes_excluidos'),
+    esCanjePuntos: boolean('es_canje_puntos').default(false),
+});
+
+export const productoPuntos = mysqlTable("producto_puntos", {
+    id: int("id").primaryKey().autoincrement(),
+    restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+    productoId: int("producto_id").references(() => producto.id).notNull(),
+    puntosNecesarios: int("puntos_necesarios").notNull(),
+    puntosGanados: int("puntos_ganados").default(0).notNull(),
 });

@@ -5,6 +5,7 @@ import { drizzle } from 'drizzle-orm/mysql2'
 import { eq, and } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp } from '../services/whatsapp'
+import { productoPuntos as ProductoPuntosTable } from '../db/schema'
 
 const publicRoute = new Hono()
 
@@ -24,6 +25,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             cucuruEnabled: RestauranteTable.cucuruEnabled,
             mpConnected: RestauranteTable.mpConnected,
             transferenciaAlias: RestauranteTable.transferenciaAlias,
+            sistemaPuntos: RestauranteTable.sistemaPuntos,
         })
             .from(RestauranteTable)
             .where(eq(RestauranteTable.username, username))
@@ -50,10 +52,13 @@ publicRoute.get('/restaurante/:username', async (c) => {
                 categoria: {
                     id: CategoriaTable.id,
                     nombre: CategoriaTable.nombre,
-                }
+                },
+                puntosNecesarios: ProductoPuntosTable.puntosNecesarios,
+                puntosGanados: ProductoPuntosTable.puntosGanados,
             })
             .from(ProductoTable)
             .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
+            .leftJoin(ProductoPuntosTable, eq(ProductoTable.id, ProductoPuntosTable.productoId))
             .where(and(eq(ProductoTable.restauranteId, restauranteId), eq(ProductoTable.activo, true)))
 
         // Obtener ingredientes para cada producto
@@ -104,7 +109,8 @@ const createDeliverySchema = z.object({
     items: z.array(z.object({
         productoId: z.number().int().positive(),
         cantidad: z.number().int().positive().default(1),
-        ingredientesExcluidos: z.array(z.number().int().positive()).optional()
+        ingredientesExcluidos: z.array(z.number().int().positive()).optional(),
+        esCanjePuntos: z.boolean().optional().default(false)
     })).min(1)
 })
 
@@ -115,8 +121,12 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
     try {
         const productosIds = items.map(i => i.productoId)
         const productos = await db
-            .select()
+            .select({
+                producto: ProductoTable,
+                puntos: ProductoPuntosTable
+            })
             .from(ProductoTable)
+            .leftJoin(ProductoPuntosTable, eq(ProductoTable.id, ProductoPuntosTable.productoId))
             .where(and(
                 require('drizzle-orm').inArray(ProductoTable.id, productosIds),
                 eq(ProductoTable.restauranteId, restauranteId)
@@ -126,22 +136,40 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             return c.json({ message: 'Algunos productos no fueron encontrados', success: false }, 400)
         }
 
-        const productosMap = new Map(productos.map(p => [p.id, p]))
+        const productosMap = new Map(productos.map(p => [p.producto.id, p]))
 
         let total = 0
+        let puntosGanados = 0;
+        let puntosUsados = 0;
+
         for (const item of items) {
-            const producto = productosMap.get(item.productoId)!
-            total += parseFloat(producto.precio) * item.cantidad
+            const row = productosMap.get(item.productoId)!
+            if (item.esCanjePuntos) {
+                if (!row.puntos || row.puntos.puntosNecesarios <= 0) {
+                    return c.json({ message: 'El producto no es canjeable por puntos', success: false }, 400)
+                }
+                puntosUsados += row.puntos.puntosNecesarios * item.cantidad
+            } else {
+                total += parseFloat(row.producto.precio) * item.cantidad
+                if (row.puntos) {
+                    puntosGanados += row.puntos.puntosGanados * item.cantidad
+                }
+            }
         }
 
-        const resRestaurante = await db.select({ deliveryFee: RestauranteTable.deliveryFee }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+        const resRestaurante = await db.select({ deliveryFee: RestauranteTable.deliveryFee, sistemaPuntos: RestauranteTable.sistemaPuntos }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
         if (resRestaurante.length > 0 && resRestaurante[0].deliveryFee) {
             total += parseFloat(resRestaurante[0].deliveryFee)
+        }
+        const sistemaPuntosActivo = resRestaurante.length > 0 && resRestaurante[0].sistemaPuntos;
+
+        if (!sistemaPuntosActivo) {
+            puntosGanados = 0;
+            if (puntosUsados > 0) return c.json({ message: 'El sistema de puntos está inactivo', success: false }, 400);
         }
 
         let clienteId: number | null = null;
         if (telefono && nombreCliente) {
-            // Verificar si el cliente existe
             const clienteExistente = await db.select().from(ClienteTable).where(
                 and(
                     eq(ClienteTable.telefono, telefono),
@@ -151,16 +179,26 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
             if (clienteExistente.length > 0) {
                 clienteId = clienteExistente[0].id;
-                // Actualizar dirección si es diferente (opcional)
+                if (puntosUsados > clienteExistente[0].puntos) {
+                    return c.json({ message: 'Puntos insuficientes para realizar el canje', success: false }, 400);
+                }
+                const nuevosPuntos = clienteExistente[0].puntos - puntosUsados + puntosGanados;
+                await db.update(ClienteTable).set({ puntos: nuevosPuntos }).where(eq(ClienteTable.id, clienteId));
             } else {
+                if (puntosUsados > 0) {
+                    return c.json({ message: 'Cliente no encontrado, no se pueden usar puntos', success: false }, 400);
+                }
                 const nuevoCliente = await db.insert(ClienteTable).values({
                     restauranteId,
                     nombre: nombreCliente,
                     telefono,
                     direccion,
+                    puntos: puntosGanados,
                 });
                 clienteId = Number(nuevoCliente[0].insertId);
             }
+        } else if (puntosUsados > 0) {
+            return c.json({ message: 'Debes ingresar datos de cliente para canjear puntos', success: false }, 400);
         }
 
         const nuevoPedido = await db.insert(PedidoDeliveryTable).values({
@@ -171,19 +209,22 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             telefono: telefono || null,
             notas: notas || null,
             estado: 'pending',
-            total: total.toFixed(2)
+            total: total.toFixed(2),
+            puntosGanados,
+            puntosUsados
         })
 
         const pedidoId = Number(nuevoPedido[0].insertId)
 
         for (const item of items) {
-            const producto = productosMap.get(item.productoId)!
+            const row = productosMap.get(item.productoId)!
             await db.insert(ItemPedidoDeliveryTable).values({
                 pedidoDeliveryId: pedidoId,
                 productoId: item.productoId,
                 cantidad: item.cantidad,
-                precioUnitario: producto.precio,
-                ingredientesExcluidos: item.ingredientesExcluidos || null
+                precioUnitario: item.esCanjePuntos ? '0.00' : row.producto.precio,
+                ingredientesExcluidos: item.ingredientesExcluidos || null,
+                esCanjePuntos: item.esCanjePuntos || false
             })
         }
 
@@ -196,9 +237,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
             if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
                 const orderItemsForWa = items.map(item => {
-                    const producto = productosMap.get(item.productoId)!;
+                    const row = productosMap.get(item.productoId)!;
                     return {
-                        name: producto.nombre,
+                        name: item.esCanjePuntos ? `${row.producto.nombre} (Canje Puntos)` : row.producto.nombre,
                         quantity: item.cantidad
                     };
                 });
@@ -251,7 +292,8 @@ const createTakeawaySchema = z.object({
     items: z.array(z.object({
         productoId: z.number().int().positive(),
         cantidad: z.number().int().positive().default(1),
-        ingredientesExcluidos: z.array(z.number().int().positive()).optional()
+        ingredientesExcluidos: z.array(z.number().int().positive()).optional(),
+        esCanjePuntos: z.boolean().optional().default(false)
     })).min(1)
 })
 
@@ -262,8 +304,12 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
     try {
         const productosIds = items.map(i => i.productoId)
         const productos = await db
-            .select()
+            .select({
+                producto: ProductoTable,
+                puntos: ProductoPuntosTable
+            })
             .from(ProductoTable)
+            .leftJoin(ProductoPuntosTable, eq(ProductoTable.id, ProductoPuntosTable.productoId))
             .where(and(
                 require('drizzle-orm').inArray(ProductoTable.id, productosIds),
                 eq(ProductoTable.restauranteId, restauranteId)
@@ -273,17 +319,37 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             return c.json({ message: 'Algunos productos no fueron encontrados', success: false }, 400)
         }
 
-        const productosMap = new Map(productos.map(p => [p.id, p]))
+        const productosMap = new Map(productos.map(p => [p.producto.id, p]))
 
         let total = 0
+        let puntosGanados = 0;
+        let puntosUsados = 0;
+
         for (const item of items) {
-            const producto = productosMap.get(item.productoId)!
-            total += parseFloat(producto.precio) * item.cantidad
+            const row = productosMap.get(item.productoId)!
+            if (item.esCanjePuntos) {
+                if (!row.puntos || row.puntos.puntosNecesarios <= 0) {
+                    return c.json({ message: 'El producto no es canjeable por puntos', success: false }, 400)
+                }
+                puntosUsados += row.puntos.puntosNecesarios * item.cantidad
+            } else {
+                total += parseFloat(row.producto.precio) * item.cantidad
+                if (row.puntos) {
+                    puntosGanados += row.puntos.puntosGanados * item.cantidad
+                }
+            }
+        }
+
+        const resRestaurante = await db.select({ sistemaPuntos: RestauranteTable.sistemaPuntos }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+        const sistemaPuntosActivo = resRestaurante.length > 0 && resRestaurante[0].sistemaPuntos;
+
+        if (!sistemaPuntosActivo) {
+            puntosGanados = 0;
+            if (puntosUsados > 0) return c.json({ message: 'El sistema de puntos está inactivo', success: false }, 400);
         }
 
         let clienteId: number | null = null;
         if (telefono && nombreCliente) {
-            // Verificar si el cliente existe
             const clienteExistente = await db.select().from(ClienteTable).where(
                 and(
                     eq(ClienteTable.telefono, telefono),
@@ -293,14 +359,25 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
 
             if (clienteExistente.length > 0) {
                 clienteId = clienteExistente[0].id;
+                if (puntosUsados > clienteExistente[0].puntos) {
+                    return c.json({ message: 'Puntos insuficientes para realizar el canje', success: false }, 400);
+                }
+                const nuevosPuntos = clienteExistente[0].puntos - puntosUsados + puntosGanados;
+                await db.update(ClienteTable).set({ puntos: nuevosPuntos }).where(eq(ClienteTable.id, clienteId));
             } else {
+                if (puntosUsados > 0) {
+                    return c.json({ message: 'Cliente no encontrado, no se pueden usar puntos', success: false }, 400);
+                }
                 const nuevoCliente = await db.insert(ClienteTable).values({
                     restauranteId,
                     nombre: nombreCliente,
                     telefono,
+                    puntos: puntosGanados,
                 });
                 clienteId = Number(nuevoCliente[0].insertId);
             }
+        } else if (puntosUsados > 0) {
+            return c.json({ message: 'Debes ingresar datos de cliente para canjear puntos', success: false }, 400);
         }
 
         const nuevoPedido = await db.insert(PedidoTakeawayTable).values({
@@ -310,19 +387,22 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             telefono: telefono || null,
             notas: notas || null,
             estado: 'pending',
-            total: total.toFixed(2)
+            total: total.toFixed(2),
+            puntosGanados,
+            puntosUsados
         })
 
         const pedidoId = Number(nuevoPedido[0].insertId)
 
         for (const item of items) {
-            const producto = productosMap.get(item.productoId)!
+            const row = productosMap.get(item.productoId)!
             await db.insert(ItemPedidoTakeawayTable).values({
                 pedidoTakeawayId: pedidoId,
                 productoId: item.productoId,
                 cantidad: item.cantidad,
-                precioUnitario: producto.precio,
-                ingredientesExcluidos: item.ingredientesExcluidos || null
+                precioUnitario: item.esCanjePuntos ? '0.00' : row.producto.precio,
+                ingredientesExcluidos: item.ingredientesExcluidos || null,
+                esCanjePuntos: item.esCanjePuntos || false
             })
         }
 
@@ -335,9 +415,9 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
 
             if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
                 const orderItemsForWa = items.map(item => {
-                    const producto = productosMap.get(item.productoId)!;
+                    const row = productosMap.get(item.productoId)!;
                     return {
-                        name: producto.nombre,
+                        name: item.esCanjePuntos ? `${row.producto.nombre} (Canje Puntos)` : row.producto.nombre,
                         quantity: item.cantidad
                     };
                 });
@@ -432,6 +512,34 @@ publicRoute.put('/takeaway/:id/metodo-pago', zValidator('json', setMetodoPagoSch
 
         return c.json({ message: 'Método de pago actualizado', success: true }, 200)
     } catch (error) {
+        return c.json({ message: 'Error', error: (error as Error).message }, 500)
+    }
+})
+
+publicRoute.get('/restaurante/:id/cliente/:telefono', async (c) => {
+    const db = drizzle(pool)
+    const id = parseInt(c.req.param('id'))
+    const telefono = c.req.param('telefono')
+
+    try {
+        const cliente = await db.select({
+            id: ClienteTable.id,
+            nombre: ClienteTable.nombre,
+            puntos: ClienteTable.puntos
+        }).from(ClienteTable).where(
+            and(
+                eq(ClienteTable.restauranteId, id),
+                eq(ClienteTable.telefono, telefono)
+            )
+        ).limit(1)
+
+        if (cliente.length === 0) {
+            return c.json({ message: 'Cliente no encontrado', success: false }, 404)
+        }
+
+        return c.json({ message: 'Cliente encontrado', success: true, data: cliente[0] }, 200)
+    } catch (error) {
+        console.error('Error getting client:', error)
         return c.json({ message: 'Error', error: (error as Error).message }, 500)
     }
 })
