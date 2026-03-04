@@ -440,18 +440,18 @@ const productoRoute = new Hono()
     }
 
     const updateData: { [key: string]: any } = {};
-    if (nombre) updateData.nombre = nombre;
-    if (descripcion) updateData.descripcion = descripcion;
-    if (precio) updateData.precio = precio;
+    if (nombre !== undefined) updateData.nombre = nombre;
+    if (descripcion !== undefined) updateData.descripcion = descripcion;
+    if (precio !== undefined) updateData.precio = precio;
     if (newImageUrl) updateData.imagenUrl = newImageUrl;
     if (categoriaId !== undefined) updateData.categoriaId = categoriaId;
     if (activo !== undefined) updateData.activo = activo;
-    if (Object.keys(updateData).length === 0) {
-      return c.json({ message: 'No se proporcionaron datos para actualizar', success: false }, 400)
+
+    if (Object.keys(updateData).length > 0) {
+      await db.update(ProductoTable)
+        .set(updateData)
+        .where(and(eq(ProductoTable.id, id), eq(ProductoTable.restauranteId, restauranteId)))
     }
-    await db.update(ProductoTable)
-      .set(updateData)
-      .where(and(eq(ProductoTable.id, id), eq(ProductoTable.restauranteId, restauranteId)))
 
     // Actualizar ingredientes si se proporcionaron
     if (ingredienteIds !== undefined) {
