@@ -1,3 +1,5 @@
+import { sql } from 'drizzle-orm';
+
 export async function configurarWebhookCliente(apiKey: string, collectorId: string) {
     try {
         const url = "https://api.cucuru.com/app/v1/Collection/webhooks/endpoint";
@@ -49,21 +51,21 @@ export async function asignarAliasAPedido({
     return await db.transaction(async (tx: any) => {
         // 1. Buscar una cuenta disponible
         // skipLocked es crucial para evitar cuellos de botella y errores en concurrencia
-        const availableAccounts = await tx.query(
-            `SELECT * FROM account_pool 
-             WHERE restaurante_id = ? AND estado = 'disponible' 
-             LIMIT 1 FOR UPDATE SKIP LOCKED`,
-            [restauranteId]
+        const availableAccountsResult = await tx.execute(
+            sql`SELECT * FROM account_pool 
+                WHERE restaurante_id = ${restauranteId} AND estado = 'disponible' 
+                LIMIT 1 FOR UPDATE SKIP LOCKED`
         );
 
-        if (availableAccounts[0] && availableAccounts[0].length > 0) {
-            const cuenta = availableAccounts[0][0];
+        const availableAccounts = availableAccountsResult[0] as any[];
 
-            await tx.query(
-                `UPDATE account_pool 
-                 SET estado = 'asignado', pedido_id_asignado = ?, updated_at = NOW() 
-                 WHERE id = ?`,
-                [pedidoId, cuenta.id]
+        if (availableAccounts && availableAccounts.length > 0) {
+            const cuenta = availableAccounts[0];
+
+            await tx.execute(
+                sql`UPDATE account_pool 
+                    SET estado = 'asignado', pedido_id_asignado = ${pedidoId}, updated_at = NOW() 
+                    WHERE id = ${cuenta.id}`
             );
 
             return {
@@ -73,11 +75,11 @@ export async function asignarAliasAPedido({
         }
 
         // 2. Si no hay disponibles, contar cuántas existen en total
-        const countQuery = await tx.query(
-            `SELECT COUNT(*) as count FROM account_pool WHERE restaurante_id = ?`,
-            [restauranteId]
+        const countQueryResult = await tx.execute(
+            sql`SELECT COUNT(*) as count FROM account_pool WHERE restaurante_id = ${restauranteId}`
         );
-        const totalAccounts = countQuery[0][0].count;
+        const countQueryRows = countQueryResult[0] as any[];
+        const totalAccounts = countQueryRows[0].count;
 
         if (totalAccounts >= 10000) {
             throw new Error("Límite máximo de 10.000 alias alcanzado para este restaurante.");
@@ -138,10 +140,9 @@ export async function asignarAliasAPedido({
         }
 
         // 5. Insertar y Asignar la cuenta en la Base de Datos
-        await tx.query(
-            `INSERT INTO account_pool (restaurante_id, account_number, alias, estado, pedido_id_asignado) 
-             VALUES (?, ?, ?, 'asignado', ?)`,
-            [restauranteId, accountNumber, aliasSecuencial, pedidoId]
+        await tx.execute(
+            sql`INSERT INTO account_pool (restaurante_id, account_number, alias, estado, pedido_id_asignado) 
+                VALUES (${restauranteId}, ${accountNumber}, ${aliasSecuencial}, 'asignado', ${pedidoId})`
         );
 
         return {
