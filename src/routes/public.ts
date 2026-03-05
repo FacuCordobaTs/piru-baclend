@@ -106,6 +106,7 @@ const createDeliverySchema = z.object({
     nombreCliente: z.string().optional(),
     telefono: z.string().optional(),
     notas: z.string().optional(),
+    metodoPago: z.string().optional(),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
         cantidad: z.number().int().positive().default(1),
@@ -116,7 +117,7 @@ const createDeliverySchema = z.object({
 
 publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, direccion, nombreCliente, telefono, notas, items } = c.req.valid('json')
+    const { restauranteId, direccion, nombreCliente, telefono, notas, metodoPago, items } = c.req.valid('json')
 
     try {
         const productosIds = items.map(i => i.productoId)
@@ -208,6 +209,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             nombreCliente: nombreCliente || null,
             telefono: telefono || null,
             notas: notas || null,
+            metodoPago: metodoPago || null,
             estado: 'pending',
             total: total.toFixed(2),
             puntosGanados,
@@ -244,12 +246,19 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                     };
                 });
 
+                if (resRestaurante.length > 0 && resRestaurante[0].deliveryFee) {
+                    orderItemsForWa.push({
+                        name: 'Delivery',
+                        quantity: 1
+                    });
+                }
+
                 console.log("⏳ Iniciando envío de WhatsApp a:", restaurante[0].whatsappNumber);
                 sendOrderWhatsApp(c, {
                     phone: restaurante[0].whatsappNumber,
                     customerName: nombreCliente || 'Cliente no especificado',
                     address: direccion || 'Sin dirección',
-                    total: total.toFixed(2),
+                    total: metodoPago ? `${total.toFixed(2)} (${metodoPago})` : total.toFixed(2),
                     items: orderItemsForWa,
                     orderId: pedidoId.toString()
                 }).catch(err => {
@@ -289,6 +298,7 @@ const createTakeawaySchema = z.object({
     nombreCliente: z.string().optional(),
     telefono: z.string().optional(),
     notas: z.string().optional(),
+    metodoPago: z.string().optional(),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
         cantidad: z.number().int().positive().default(1),
@@ -299,7 +309,7 @@ const createTakeawaySchema = z.object({
 
 publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, nombreCliente, telefono, notas, items } = c.req.valid('json')
+    const { restauranteId, nombreCliente, telefono, notas, metodoPago, items } = c.req.valid('json')
 
     try {
         const productosIds = items.map(i => i.productoId)
@@ -386,6 +396,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             nombreCliente: nombreCliente || null,
             telefono: telefono || null,
             notas: notas || null,
+            metodoPago: metodoPago || null,
             estado: 'pending',
             total: total.toFixed(2),
             puntosGanados,
@@ -427,7 +438,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                     phone: restaurante[0].whatsappNumber,
                     customerName: nombreCliente || 'Cliente no especificado',
                     address: 'Retira en local (Take Away)',
-                    total: total.toFixed(2),
+                    total: metodoPago ? `${total.toFixed(2)} (${metodoPago})` : total.toFixed(2),
                     items: orderItemsForWa,
                     orderId: pedidoId.toString()
                 }).catch(err => {
