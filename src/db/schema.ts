@@ -27,10 +27,9 @@ export const restaurante = mysqlTable("restaurante", {
     itemTracking: boolean("item_tracking").default(false).notNull(),
     soloCartaDigital: boolean("solo_carta_digital").default(false).notNull(),
     deliveryFee: decimal("delivery_fee", { precision: 10, scale: 2 }).default('0.00').notNull(),
-    cucuruCustomerId: varchar("cucuru_customer_id", { length: 255 }),
-    cucuruAccountNumber: varchar("cucuru_account_number", { length: 255 }),
-    cucuruAlias: varchar("cucuru_alias", { length: 255 }),
-    cucuruEnabled: boolean("cucuru_enabled").default(false).notNull(),
+    cucuruApiKey: varchar("cucuru_api_key", { length: 255 }),
+    cucuruCollectorId: varchar("cucuru_collector_id", { length: 255 }),
+    cucuruConfigurado: boolean("cucuru_configurado").default(false).notNull(),
     whatsappEnabled: boolean("whatsapp_enabled").default(false).notNull(),
     whatsappNumber: varchar("whatsapp_number", { length: 50 }),
     transferenciaAlias: varchar("transferencia_alias", { length: 255 }),
@@ -232,4 +231,14 @@ export const productoPuntos = mysqlTable("producto_puntos", {
     productoId: int("producto_id").references(() => producto.id).notNull(),
     puntosNecesarios: int("puntos_necesarios").notNull(),
     puntosGanados: int("puntos_ganados").default(0).notNull(),
+});
+
+export const accountPool = mysqlTable("account_pool", {
+    id: int("id").primaryKey().autoincrement(),
+    restauranteId: int("restaurante_id").references(() => restaurante.id),
+    accountNumber: varchar("account_number", { length: 255 }),
+    alias: varchar("alias", { length: 255 }),
+    estado: mysqlEnum("estado", ["disponible", "asignado"]).default("disponible"),
+    pedidoIdAsignado: int("pedido_id_asignado"),
+    updatedAt: timestamp("updated_at").defaultNow(),
 });

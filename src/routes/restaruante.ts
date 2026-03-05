@@ -8,6 +8,7 @@ import { z } from 'zod'
 import { eq, and } from 'drizzle-orm'
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3"
 import UUID = require("uuid-js")
+import { configurarWebhookCliente } from '../services/cucuru'
 
 // Configuración de R2
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID
@@ -485,6 +486,35 @@ restauranteRoute.put('/toggle-sistema-puntos', async (c) => {
   } catch (error) {
     console.error('Error updating points system mode:', error)
     return c.json({ message: 'Error al cambiar sistema de puntos', error: (error as Error).message, success: false }, 500)
+  }
+})
+
+// Configurar Cucuru (Webhook)
+const configCucuruSchema = z.object({
+  apiKey: z.string().min(1),
+  collectorId: z.string().min(1)
+})
+
+restauranteRoute.post('/configurar-cucuru', zValidator('json', configCucuruSchema), async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const { apiKey, collectorId } = c.req.valid('json')
+
+  try {
+    await configurarWebhookCliente(apiKey, collectorId)
+
+    await db.update(RestauranteTable)
+      .set({
+        cucuruApiKey: apiKey,
+        cucuruCollectorId: collectorId,
+        cucuruConfigurado: true
+      })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({ message: 'Cucuru configurado exitosamente', success: true }, 200)
+  } catch (error) {
+    console.error('Error configurando Cucuru:', error)
+    return c.json({ message: 'Error configurando Cucuru', error: (error as Error).message, success: false }, 500)
   }
 })
 
