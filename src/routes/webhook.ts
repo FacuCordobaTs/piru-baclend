@@ -21,17 +21,17 @@ webhookRoute.post('/', async (c) => {
   return c.json({ message: 'Webhook received' }, 200)
 })
 
-webhookRoute.post('/cucuru/collection_received', async (c: any) => {
+const cucuruWebhookHandler = async (c: any) => {
   try {
     let body;
     try {
       body = await c.req.json();
     } catch (err) {
-      console.log('✅ Validación de Webhook exitosa (Ping sin JSON)');
+      console.log(`✅ [${c.req.method} ${c.req.path}] Validación de Webhook exitosa (Ping sin JSON)`);
       return c.json({ status: 'ok' }, 200);
     }
 
-    console.log('🔔 Webhook recibido de Cucuru:', JSON.stringify(body, null, 2));
+    console.log(`🔔 [${c.req.method} ${c.req.path}] Webhook recibido de Cucuru:`, JSON.stringify(body, null, 2));
 
     const amount = body.amount;
     const customerIdStr = body.customer_id;
@@ -204,6 +204,16 @@ webhookRoute.post('/cucuru/collection_received', async (c: any) => {
     console.error('❌ Error procesando webhook:', error);
     return c.json({ error: 'Internal Error' }, 500);
   }
-});
+};
+
+// Rutas para abarcar todas las posibles URL's a las que puede estar pegando el PING de Cucuru:
+webhookRoute.post('/cucuru/collection_received', cucuruWebhookHandler);
+webhookRoute.get('/cucuru/collection_received', (c) => c.json({ status: 'ok' }, 200));
+
+webhookRoute.post('/cucuru/collection_received/collection_received', cucuruWebhookHandler);
+webhookRoute.get('/cucuru/collection_received/collection_received', (c) => c.json({ status: 'ok' }, 200));
+
+webhookRoute.post('/cucuru', cucuruWebhookHandler);
+webhookRoute.get('/cucuru', (c) => c.json({ status: 'ok' }, 200));
 
 export { webhookRoute }
