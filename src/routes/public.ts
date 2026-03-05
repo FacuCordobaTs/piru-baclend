@@ -26,6 +26,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
             mpConnected: RestauranteTable.mpConnected,
             transferenciaAlias: RestauranteTable.transferenciaAlias,
             sistemaPuntos: RestauranteTable.sistemaPuntos,
+            colorPrimario: RestauranteTable.colorPrimario,
+            colorSecundario: RestauranteTable.colorSecundario,
         })
             .from(RestauranteTable)
             .where(eq(RestauranteTable.username, username))
