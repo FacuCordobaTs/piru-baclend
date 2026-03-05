@@ -34,6 +34,8 @@ export const restaurante = mysqlTable("restaurante", {
     whatsappNumber: varchar("whatsapp_number", { length: 50 }),
     transferenciaAlias: varchar("transferencia_alias", { length: 255 }),
     sistemaPuntos: boolean("sistema_puntos").default(false).notNull(),
+    colorPrimario: varchar("color_primario", { length: 50 }),
+    colorSecundario: varchar("color_secundario", { length: 50 }),
 });
 
 export const categoria = mysqlTable("categoria", {
