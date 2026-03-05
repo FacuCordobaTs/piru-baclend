@@ -6,6 +6,7 @@ import { eq, and } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp } from '../services/whatsapp'
 import { productoPuntos as ProductoPuntosTable } from '../db/schema'
+import { asignarAliasAPedido } from '../services/cucuru'
 
 const publicRoute = new Hono()
 
@@ -167,7 +168,15 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             }
         }
 
-        const resRestaurante = await db.select({ deliveryFee: RestauranteTable.deliveryFee, sistemaPuntos: RestauranteTable.sistemaPuntos }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+        const resRestaurante = await db.select({
+            deliveryFee: RestauranteTable.deliveryFee,
+            sistemaPuntos: RestauranteTable.sistemaPuntos,
+            cucuruApiKey: RestauranteTable.cucuruApiKey,
+            cucuruCollectorId: RestauranteTable.cucuruCollectorId,
+            cucuruConfigurado: RestauranteTable.cucuruConfigurado,
+            username: RestauranteTable.username,
+            id: RestauranteTable.id
+        }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
         if (resRestaurante.length > 0 && resRestaurante[0].deliveryFee) {
             total += parseFloat(resRestaurante[0].deliveryFee)
         }
@@ -244,6 +253,20 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             })
         }
 
+        let cuentaCucuru = null;
+        if (metodoPago === 'transferencia' && resRestaurante[0]?.cucuruConfigurado) {
+            try {
+                cuentaCucuru = await asignarAliasAPedido({
+                    db,
+                    restaurante: resRestaurante[0],
+                    pedidoId,
+                    slug: resRestaurante[0].username!
+                });
+            } catch (error) {
+                console.error("❌ Error asignando CVU/Alias de Cucuru:", error);
+            }
+        }
+
         // Notificación por WhatsApp
         try {
             const restaurante = await db.select({
@@ -299,7 +322,16 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         return c.json({
             message: 'Pedido de delivery creado correctamente',
             success: true,
-            data: { id: pedidoId, direccion, nombreCliente, telefono, total: total.toFixed(2), estado: 'pending' }
+            data: {
+                id: pedidoId,
+                direccion,
+                nombreCliente,
+                telefono,
+                total: total.toFixed(2),
+                estado: 'pending',
+                cucuruAlias: cuentaCucuru?.alias,
+                cucuruAccountNumber: cuentaCucuru?.accountNumber
+            }
         }, 201)
     } catch (error) {
         console.error('Error creating public delivery:', error)
@@ -369,7 +401,14 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             }
         }
 
-        const resRestaurante = await db.select({ sistemaPuntos: RestauranteTable.sistemaPuntos }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+        const resRestaurante = await db.select({
+            sistemaPuntos: RestauranteTable.sistemaPuntos,
+            cucuruApiKey: RestauranteTable.cucuruApiKey,
+            cucuruCollectorId: RestauranteTable.cucuruCollectorId,
+            cucuruConfigurado: RestauranteTable.cucuruConfigurado,
+            username: RestauranteTable.username,
+            id: RestauranteTable.id
+        }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
         const sistemaPuntosActivo = resRestaurante.length > 0 && resRestaurante[0].sistemaPuntos;
 
         if (!sistemaPuntosActivo) {
@@ -441,6 +480,20 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             })
         }
 
+        let cuentaCucuru = null;
+        if (metodoPago === 'transferencia' && resRestaurante[0]?.cucuruConfigurado) {
+            try {
+                cuentaCucuru = await asignarAliasAPedido({
+                    db,
+                    restaurante: resRestaurante[0],
+                    pedidoId,
+                    slug: resRestaurante[0].username!
+                });
+            } catch (error) {
+                console.error("❌ Error asignando CVU/Alias de Cucuru:", error);
+            }
+        }
+
         // Notificación por WhatsApp
         try {
             const restaurante = await db.select({
@@ -489,7 +542,15 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         return c.json({
             message: 'Pedido de takeaway creado correctamente',
             success: true,
-            data: { id: pedidoId, nombreCliente, telefono, total: total.toFixed(2), estado: 'pending' }
+            data: {
+                id: pedidoId,
+                nombreCliente,
+                telefono,
+                total: total.toFixed(2),
+                estado: 'pending',
+                cucuruAlias: cuentaCucuru?.alias,
+                cucuruAccountNumber: cuentaCucuru?.accountNumber
+            }
         }, 201)
     } catch (error) {
         console.error('Error creating public takeaway:', error)

@@ -7,7 +7,8 @@ import {
   pedidoDelivery as PedidoDeliveryTable,
   pedidoTakeaway as PedidoTakeawayTable,
   pago as PagoTable,
-  notificacion as NotificacionTable
+  notificacion as NotificacionTable,
+  accountPool as AccountPoolTable
 } from '../db/schema'
 import { wsManager } from '../websocket/manager'
 
@@ -36,6 +37,7 @@ const cucuruWebhookHandler = async (c: any) => {
     const amount = body.amount;
     const customerIdStr = body.customer_id;
     const collectionId = body.collection_id;
+    const collectionAccount = body.collection_account;
 
     if (amount === 0) {
       console.log('✅ Validación de Webhook exitosa (Importe 0)');
@@ -50,18 +52,46 @@ const cucuruWebhookHandler = async (c: any) => {
     const restauranteId = Number(customerIdStr);
     const db = drizzle(pool);
 
+    let assignedPedidoId: number | null = null;
+    let poolRecordId: number | null = null;
+
+    if (collectionAccount) {
+      const poolRecords = await db.select()
+        .from(AccountPoolTable)
+        .where(eq(AccountPoolTable.accountNumber, collectionAccount))
+        .limit(1);
+
+      if (poolRecords.length > 0 && poolRecords[0].pedidoIdAsignado) {
+        assignedPedidoId = poolRecords[0].pedidoIdAsignado;
+        poolRecordId = poolRecords[0].id;
+        console.log(`🔍 Encontrado Alias Dinámico: CVU ${collectionAccount} apunta al Pedido #${assignedPedidoId}`);
+      }
+    }
+
+    // Helper para liberar el alias
+    const freePoolRecord = async () => {
+      if (poolRecordId) {
+        await db.update(AccountPoolTable)
+          .set({ estado: 'disponible', pedidoIdAsignado: null, updatedAt: new Date() })
+          .where(eq(AccountPoolTable.id, poolRecordId));
+        console.log(`♻️ Alias Reciclado: CVU ${collectionAccount} ha sido liberado para futuros pedidos.`);
+      }
+    };
+
     // 1. Buscar en Delivery
     const pedidosDelivery = await db.select()
       .from(PedidoDeliveryTable)
       .where(
-        and(
-          eq(PedidoDeliveryTable.restauranteId, restauranteId),
-          eq(PedidoDeliveryTable.total, String(amount)),
-          eq(PedidoDeliveryTable.pagado, false),
-          ne(PedidoDeliveryTable.estado, 'delivered'),
-          ne(PedidoDeliveryTable.estado, 'archived'),
-          ne(PedidoDeliveryTable.estado, 'cancelled')
-        )
+        assignedPedidoId
+          ? eq(PedidoDeliveryTable.id, assignedPedidoId)
+          : and(
+            eq(PedidoDeliveryTable.restauranteId, restauranteId),
+            eq(PedidoDeliveryTable.total, String(amount)),
+            eq(PedidoDeliveryTable.pagado, false),
+            ne(PedidoDeliveryTable.estado, 'delivered'),
+            ne(PedidoDeliveryTable.estado, 'archived'),
+            ne(PedidoDeliveryTable.estado, 'cancelled')
+          )
       )
       .limit(1);
 
@@ -92,6 +122,8 @@ const cucuruWebhookHandler = async (c: any) => {
         detalles: `Transacción: ${collectionId}`
       });
 
+      await freePoolRecord();
+
       console.log(`🚀 [Cucuru] Pago acreditado para Delivery #${pedido.id}`);
       wsManager.broadcastAdminUpdate(restauranteId, 'delivery');
       wsManager.notifyPublicClientPayment('delivery', pedido.id);
@@ -102,14 +134,16 @@ const cucuruWebhookHandler = async (c: any) => {
     const pedidosTakeaway = await db.select()
       .from(PedidoTakeawayTable)
       .where(
-        and(
-          eq(PedidoTakeawayTable.restauranteId, restauranteId),
-          eq(PedidoTakeawayTable.total, String(amount)),
-          eq(PedidoTakeawayTable.pagado, false),
-          ne(PedidoTakeawayTable.estado, 'delivered'),
-          ne(PedidoTakeawayTable.estado, 'archived'),
-          ne(PedidoTakeawayTable.estado, 'cancelled')
-        )
+        assignedPedidoId
+          ? eq(PedidoTakeawayTable.id, assignedPedidoId)
+          : and(
+            eq(PedidoTakeawayTable.restauranteId, restauranteId),
+            eq(PedidoTakeawayTable.total, String(amount)),
+            eq(PedidoTakeawayTable.pagado, false),
+            ne(PedidoTakeawayTable.estado, 'delivered'),
+            ne(PedidoTakeawayTable.estado, 'archived'),
+            ne(PedidoTakeawayTable.estado, 'cancelled')
+          )
       )
       .limit(1);
 
@@ -140,6 +174,8 @@ const cucuruWebhookHandler = async (c: any) => {
         detalles: `Transacción: ${collectionId}`
       });
 
+      await freePoolRecord();
+
       console.log(`🏃‍♂️ [Cucuru] Pago acreditado para TakeAway #${pedido.id}`);
       wsManager.broadcastAdminUpdate(restauranteId, 'takeaway');
       wsManager.notifyPublicClientPayment('takeaway', pedido.id);
@@ -150,18 +186,23 @@ const cucuruWebhookHandler = async (c: any) => {
     const pedidos = await db.select()
       .from(PedidoTable)
       .where(
-        and(
-          eq(PedidoTable.restauranteId, restauranteId),
-          eq(PedidoTable.total, String(amount)),
-          eq(PedidoTable.pagado, false),
-          ne(PedidoTable.estado, 'closed'),
-          ne(PedidoTable.estado, 'archived')
-        )
+        assignedPedidoId
+          ? eq(PedidoTable.id, assignedPedidoId)
+          : and(
+            eq(PedidoTable.restauranteId, restauranteId),
+            eq(PedidoTable.total, String(amount)),
+            eq(PedidoTable.pagado, false),
+            ne(PedidoTable.estado, 'closed'),
+            ne(PedidoTable.estado, 'archived')
+          )
       )
       .limit(1);
 
     if (pedidos.length === 0) {
       console.log('⚠️ Pago Huérfano / Posible Propina (No Match) - Buscado en Delivery, Takeaway y Mesas');
+      // Aun si no lo encontramos para acoplar a un pedido (tal vez alguien transfirió demás),
+      // reciclamos el CVU por seguridad para que no quede incrustado
+      await freePoolRecord();
       return c.json({ status: 'received' }, 200);
     }
 
@@ -195,6 +236,8 @@ const cucuruWebhookHandler = async (c: any) => {
         mensaje: `Pago de $${amount} recibido vía Cucuru`,
         detalles: `Transacción: ${collectionId}`
       });
+
+    await freePoolRecord();
 
     console.log(`🍽️ [Cucuru] Pago acreditado para Mesa #${pedido.mesaId}`);
     if (pedido.mesaId) wsManager.broadcastEstadoToAdmins(pedido.mesaId);
