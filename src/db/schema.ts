@@ -63,6 +63,7 @@ export const producto = mysqlTable("producto", {
     precio: decimal("precio", { precision: 10, scale: 2 }).notNull(),
     activo: boolean("activo").default(true),
     imagenUrl: varchar("imagen_url", { length: 255 }),
+    descuento: int("descuento").default(0),
     createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

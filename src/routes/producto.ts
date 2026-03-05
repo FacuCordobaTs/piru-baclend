@@ -171,6 +171,7 @@ const createProductSchema = z.object({
   etiquetas: z.array(z.string().min(1).max(100)).optional(),
   puntosGanados: z.number().int().min(0).optional().default(0),
   puntosNecesarios: z.number().int().min(0).optional().default(0),
+  descuento: z.number().int().min(0).max(100).optional().default(0),
 });
 
 const updateProductSchema = z.object({
@@ -185,6 +186,7 @@ const updateProductSchema = z.object({
   etiquetas: z.array(z.string().min(1).max(100)).optional(),
   puntosGanados: z.number().int().min(0).optional(),
   puntosNecesarios: z.number().int().min(0).optional(),
+  descuento: z.number().int().min(0).max(100).optional(),
 });
 
 const productoRoute = new Hono()
@@ -206,6 +208,7 @@ const productoRoute = new Hono()
         precio: ProductoTable.precio,
         activo: ProductoTable.activo,
         imagenUrl: ProductoTable.imagenUrl,
+        descuento: ProductoTable.descuento,
         createdAt: ProductoTable.createdAt,
         categoria: {
           id: CategoriaTable.id,
@@ -259,7 +262,7 @@ const productoRoute = new Hono()
   .post('/create', zValidator('json', createProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, etiquetas, puntosGanados, puntosNecesarios } = c.req.valid('json')
+    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, etiquetas, puntosGanados, puntosNecesarios, descuento } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId) {
@@ -305,6 +308,7 @@ const productoRoute = new Hono()
       imagenUrl: newImageUrl,
       restauranteId,
       categoriaId: categoriaId || null,
+      descuento: descuento || 0,
     })
 
     const productoId = Number(product[0].insertId)
@@ -396,7 +400,7 @@ const productoRoute = new Hono()
   .put('/update', zValidator('json', updateProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, activo, etiquetas, puntosGanados, puntosNecesarios } = c.req.valid('json')
+    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, activo, etiquetas, puntosGanados, puntosNecesarios, descuento } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId !== undefined) {
@@ -446,6 +450,7 @@ const productoRoute = new Hono()
     if (newImageUrl) updateData.imagenUrl = newImageUrl;
     if (categoriaId !== undefined) updateData.categoriaId = categoriaId;
     if (activo !== undefined) updateData.activo = activo;
+    if (descuento !== undefined) updateData.descuento = descuento;
 
     if (Object.keys(updateData).length > 0) {
       await db.update(ProductoTable)
@@ -584,6 +589,7 @@ const productoRoute = new Hono()
         precio: ProductoTable.precio,
         activo: ProductoTable.activo,
         imagenUrl: ProductoTable.imagenUrl,
+        descuento: ProductoTable.descuento,
         createdAt: ProductoTable.createdAt,
         categoria: {
           id: CategoriaTable.id,

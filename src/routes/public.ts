@@ -51,6 +51,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
                 precio: ProductoTable.precio,
                 activo: ProductoTable.activo,
                 imagenUrl: ProductoTable.imagenUrl,
+                descuento: ProductoTable.descuento,
                 createdAt: ProductoTable.createdAt,
                 categoria: {
                     id: CategoriaTable.id,
@@ -154,7 +155,12 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 }
                 puntosUsados += row.puntos.puntosNecesarios * item.cantidad
             } else {
-                total += parseFloat(row.producto.precio) * item.cantidad
+                let precioBase = parseFloat(row.producto.precio)
+                const descuento = row.producto.descuento || 0
+                if (descuento > 0) {
+                    precioBase = precioBase * (1 - descuento / 100)
+                }
+                total += precioBase * item.cantidad
                 if (row.puntos) {
                     puntosGanados += row.puntos.puntosGanados * item.cantidad
                 }
@@ -223,11 +229,16 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
         for (const item of items) {
             const row = productosMap.get(item.productoId)!
+            let precioUnitario = item.esCanjePuntos ? '0.00' : row.producto.precio
+            if (!item.esCanjePuntos && (row.producto.descuento || 0) > 0) {
+                const descuentoPct = row.producto.descuento || 0
+                precioUnitario = (parseFloat(row.producto.precio) * (1 - descuentoPct / 100)).toFixed(2)
+            }
             await db.insert(ItemPedidoDeliveryTable).values({
                 pedidoDeliveryId: pedidoId,
                 productoId: item.productoId,
                 cantidad: item.cantidad,
-                precioUnitario: item.esCanjePuntos ? '0.00' : row.producto.precio,
+                precioUnitario,
                 ingredientesExcluidos: item.ingredientesExcluidos || null,
                 esCanjePuntos: item.esCanjePuntos || false
             })
@@ -346,7 +357,12 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 }
                 puntosUsados += row.puntos.puntosNecesarios * item.cantidad
             } else {
-                total += parseFloat(row.producto.precio) * item.cantidad
+                let precioBase = parseFloat(row.producto.precio)
+                const descuento = row.producto.descuento || 0
+                if (descuento > 0) {
+                    precioBase = precioBase * (1 - descuento / 100)
+                }
+                total += precioBase * item.cantidad
                 if (row.puntos) {
                     puntosGanados += row.puntos.puntosGanados * item.cantidad
                 }
@@ -410,11 +426,16 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
 
         for (const item of items) {
             const row = productosMap.get(item.productoId)!
+            let precioUnitario = item.esCanjePuntos ? '0.00' : row.producto.precio
+            if (!item.esCanjePuntos && (row.producto.descuento || 0) > 0) {
+                const descuentoPct = row.producto.descuento || 0
+                precioUnitario = (parseFloat(row.producto.precio) * (1 - descuentoPct / 100)).toFixed(2)
+            }
             await db.insert(ItemPedidoTakeawayTable).values({
                 pedidoTakeawayId: pedidoId,
                 productoId: item.productoId,
                 cantidad: item.cantidad,
-                precioUnitario: item.esCanjePuntos ? '0.00' : row.producto.precio,
+                precioUnitario,
                 ingredientesExcluidos: item.ingredientesExcluidos || null,
                 esCanjePuntos: item.esCanjePuntos || false
             })
