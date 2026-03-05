@@ -96,7 +96,8 @@ const updateProfileSchema = z.object({
   nombre: z.string().min(3).optional(),
   direccion: z.string().min(1).optional(),
   telefono: z.string().min(1).optional(),
-  image: z.string().min(10).optional(), // Base64 de la imagen
+  image: z.string().min(10).optional(), // Base64 de la imagen dark
+  imageLight: z.string().min(10).optional(), // Base64 de la imagen light
   username: z.string().min(3).optional(),
   deliveryFee: z.string().optional(),
   whatsappEnabled: z.boolean().optional(),
@@ -193,7 +194,7 @@ restauranteRoute.post('/complete-profile', zValidator('json', completeProfileSch
 restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre, direccion, telefono, image, username, deliveryFee, whatsappEnabled, whatsappNumber, transferenciaAlias, colorPrimario, colorSecundario } = c.req.valid('json')
+  const { nombre, direccion, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, transferenciaAlias, colorPrimario, colorSecundario } = c.req.valid('json')
 
   try {
     // Obtener datos actuales del restaurante
@@ -255,6 +256,25 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
             }
             // Guardar nueva imagen
             updateData.imagenUrl = await saveImage(image)
+          }
+        }
+      }
+    }
+
+    // Procesar imagen light si se proporciona
+    if (imageLight && imageLight.startsWith('data:image')) {
+      const mimeMatchLight = imageLight.match(/^data:(image\/\w+);base64,/)
+      if (mimeMatchLight) {
+        const mimeTypeLight = mimeMatchLight[1]
+        if (ALLOWED_MIME_TYPES.includes(mimeTypeLight)) {
+          const base64DataLight = imageLight.replace(/^data:image\/\w+;base64,/, "")
+          const bufferLight = Buffer.from(base64DataLight, "base64")
+          if (bufferLight.byteLength <= MAX_FILE_SIZE) {
+            // Eliminar imagen anterior si existe
+            if (currentRestaurante[0].imagenLightUrl) {
+              await deleteImage(currentRestaurante[0].imagenLightUrl)
+            }
+            updateData.imagenLightUrl = await saveImage(imageLight)
           }
         }
       }

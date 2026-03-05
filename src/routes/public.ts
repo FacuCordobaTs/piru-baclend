@@ -18,6 +18,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             id: RestauranteTable.id,
             nombre: RestauranteTable.nombre,
             imagenUrl: RestauranteTable.imagenUrl,
+            imagenLightUrl: RestauranteTable.imagenLightUrl,
             direccion: RestauranteTable.direccion,
             telefono: RestauranteTable.telefono,
             deliveryFee: RestauranteTable.deliveryFee,
