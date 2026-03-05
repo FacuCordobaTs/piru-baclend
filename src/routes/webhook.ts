@@ -23,7 +23,13 @@ webhookRoute.post('/', async (c) => {
 
 webhookRoute.post('/cucuru/collection_received', async (c: any) => {
   try {
-    const body = await c.req.json();
+    let body;
+    try {
+      body = await c.req.json();
+    } catch (err) {
+      console.log('✅ Validación de Webhook exitosa (Ping sin JSON)');
+      return c.json({ status: 'ok' }, 200);
+    }
 
     console.log('🔔 Webhook recibido de Cucuru:', JSON.stringify(body, null, 2));
 
@@ -37,8 +43,8 @@ webhookRoute.post('/cucuru/collection_received', async (c: any) => {
     }
 
     if (!customerIdStr || amount === undefined) {
-      console.warn('⚠️ Webhook inválido: Falta customer_id o amount');
-      return c.json({ error: 'Missing data' }, 400);
+      console.warn('⚠️ Webhook inválido o ping de validación: Falta customer_id o amount. Respondiendo 200 OK.');
+      return c.json({ status: 'ignored' }, 200);
     }
 
     const restauranteId = Number(customerIdStr);

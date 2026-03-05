@@ -1,7 +1,7 @@
 export async function configurarWebhookCliente(apiKey: string, collectorId: string) {
     try {
         const url = "https://api.cucuru.com/app/v1/Collection/webhooks/endpoint";
-        const body = { url: "https://api.piru.app/api/webhooks/cucuru/collection_received" };
+        const body = { url: "https://api.piru.app/api/webhook/cucuru/collection_received" };
 
         const response = await fetch(url, {
             method: "POST",
