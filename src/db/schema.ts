@@ -78,7 +78,9 @@ export const productoIngrediente = mysqlTable("producto_ingrediente", {
     productoId: int("producto_id").references(() => producto.id).notNull(),
     ingredienteId: int("ingrediente_id").references(() => ingrediente.id).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+    uniqueIndex("uq_producto_ingrediente").on(table.productoId, table.ingredienteId)
+]);
 
 // Etiquetas de productos (únicas por restaurante, asociadas a un solo producto)
 export const etiqueta = mysqlTable("etiqueta", {
@@ -231,6 +233,7 @@ export const productoPuntos = mysqlTable("producto_puntos", {
     productoId: int("producto_id").references(() => producto.id).notNull(),
     puntosNecesarios: int("puntos_necesarios").notNull(),
     puntosGanados: int("puntos_ganados").default(0).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const accountPool = mysqlTable("account_pool", {
