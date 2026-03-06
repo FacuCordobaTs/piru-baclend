@@ -174,6 +174,8 @@ export const pedidoDelivery = mysqlTable("pedido_delivery", {
     restauranteId: int("restaurante_id").references(() => restaurante.id),
     clienteId: int("cliente_id").references(() => cliente.id),
     direccion: varchar("direccion", { length: 255 }).notNull(),
+    latitud: varchar("latitud", { length: 50 }),
+    longitud: varchar("longitud", { length: 50 }),
     nombreCliente: varchar("nombre_cliente", { length: 255 }),
     telefono: varchar("telefono", { length: 50 }),
     estado: mysqlEnum('estado', ['pending', 'preparing', 'ready', 'delivered', 'cancelled', 'archived']).default('pending'),

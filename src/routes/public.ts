@@ -5,8 +5,9 @@ import { drizzle } from 'drizzle-orm/mysql2'
 import { eq, and } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp } from '../services/whatsapp'
-import { productoPuntos as ProductoPuntosTable } from '../db/schema'
+import { productoPuntos as ProductoPuntosTable, zonaDelivery as ZonaDeliveryTable } from '../db/schema'
 import { asignarAliasAPedido } from '../services/cucuru'
+import { findZoneForPoint } from '../utils/geo'
 
 const publicRoute = new Hono()
 
@@ -107,6 +108,8 @@ import { pedidoDelivery as PedidoDeliveryTable, itemPedidoDelivery as ItemPedido
 const createDeliverySchema = z.object({
     restauranteId: z.number().int().positive(),
     direccion: z.string().min(5),
+    lat: z.number().optional(),
+    lng: z.number().optional(),
     nombreCliente: z.string().optional(),
     telefono: z.string().optional(),
     notas: z.string().optional(),
@@ -121,7 +124,7 @@ const createDeliverySchema = z.object({
 
 publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, direccion, nombreCliente, telefono, notas, metodoPago, items } = c.req.valid('json')
+    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, items } = c.req.valid('json')
 
     try {
         const productosIds = items.map(i => i.productoId)
@@ -176,9 +179,35 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             username: RestauranteTable.username,
             id: RestauranteTable.id
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
-        if (resRestaurante.length > 0 && resRestaurante[0].deliveryFee) {
-            total += parseFloat(resRestaurante[0].deliveryFee)
+
+        // --- Lógica de zonas de delivery ---
+        let deliveryFeeAplicado = 0
+        let zonaNombre: string | null = null
+
+        // 1. Buscar zonas configuradas para este restaurante
+        const zonasDelivery = await db.select().from(ZonaDeliveryTable)
+            .where(eq(ZonaDeliveryTable.restauranteId, restauranteId))
+
+        if (zonasDelivery.length > 0 && lat !== undefined && lng !== undefined) {
+            // Hay zonas configuradas → validar que el punto caiga en alguna
+            const zonaMatch = findZoneForPoint({ lat, lng }, zonasDelivery)
+
+            if (!zonaMatch) {
+                return c.json({
+                    message: 'Lo sentimos, tu ubicación está fuera de nuestra área de delivery.',
+                    success: false,
+                    code: 'FUERA_DE_ZONA'
+                }, 400)
+            }
+
+            deliveryFeeAplicado = parseFloat(zonaMatch.precio)
+            zonaNombre = zonaMatch.nombre
+        } else if (resRestaurante.length > 0 && resRestaurante[0].deliveryFee) {
+            // Fallback: usar deliveryFee global del restaurante
+            deliveryFeeAplicado = parseFloat(resRestaurante[0].deliveryFee)
         }
+
+        total += deliveryFeeAplicado
         const sistemaPuntosActivo = resRestaurante.length > 0 && resRestaurante[0].sistemaPuntos;
 
         if (!sistemaPuntosActivo) {
@@ -223,6 +252,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             restauranteId,
             clienteId: clienteId || null,
             direccion,
+            latitud: lat !== undefined ? lat.toString() : null,
+            longitud: lng !== undefined ? lng.toString() : null,
             nombreCliente: nombreCliente || null,
             telefono: telefono || null,
             notas: notas || null,
@@ -283,9 +314,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                     };
                 });
 
-                if (resRestaurante.length > 0 && resRestaurante[0].deliveryFee) {
+                if (deliveryFeeAplicado > 0) {
                     orderItemsForWa.push({
-                        name: 'Delivery',
+                        name: zonaNombre ? `Delivery (${zonaNombre})` : 'Delivery',
                         quantity: 1
                     });
                 }
@@ -330,7 +361,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 total: total.toFixed(2),
                 estado: 'pending',
                 cucuruAlias: cuentaCucuru?.alias,
-                cucuruAccountNumber: cuentaCucuru?.accountNumber
+                cucuruAccountNumber: cuentaCucuru?.accountNumber,
+                deliveryFee: deliveryFeeAplicado.toFixed(2),
+                zonaNombre
             }
         }, 201)
     } catch (error) {
