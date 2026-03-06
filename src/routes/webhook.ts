@@ -8,9 +8,14 @@ import {
   pedidoTakeaway as PedidoTakeawayTable,
   pago as PagoTable,
   notificacion as NotificacionTable,
-  accountPool as AccountPoolTable
+  accountPool as AccountPoolTable,
+  itemPedidoDelivery as ItemPedidoDeliveryTable,
+  itemPedidoTakeaway as ItemPedidoTakeawayTable,
+  producto as ProductoTable,
+  restaurante as RestauranteTable
 } from '../db/schema'
 import { wsManager } from '../websocket/manager'
+import { sendOrderWhatsApp } from '../services/whatsapp'
 
 const webhookRoute = new Hono()
 
@@ -97,6 +102,12 @@ const cucuruWebhookHandler = async (c: any) => {
 
     if (pedidosDelivery.length > 0) {
       const pedido = pedidosDelivery[0];
+
+      if (Number(amount) < Number(pedido.total)) {
+        console.warn(`⚠️ [Cucuru] Pago insuficiente para Delivery #${pedido.id}. Pagado: $${amount}, Esperado: $${pedido.total}`);
+        return c.json({ status: 'ignored_insufficient' }, 200);
+      }
+
       await db.update(PedidoDeliveryTable).set({
         pagado: true,
         metodoPago: 'transferencia'
@@ -127,6 +138,47 @@ const cucuruWebhookHandler = async (c: any) => {
       console.log(`🚀 [Cucuru] Pago acreditado para Delivery #${pedido.id}`);
       wsManager.broadcastAdminUpdate(restauranteId, 'delivery');
       wsManager.notifyPublicClientPayment('delivery', pedido.id);
+
+      // WhatsApp Notification
+      try {
+        const restaurante = await db.select({
+          whatsappEnabled: RestauranteTable.whatsappEnabled,
+          whatsappNumber: RestauranteTable.whatsappNumber,
+          deliveryFee: RestauranteTable.deliveryFee
+        }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1);
+
+        if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
+          const itemsRaw = await db.select({
+            cantidad: ItemPedidoDeliveryTable.cantidad,
+            nombreProducto: ProductoTable.nombre,
+            esCanjePuntos: ItemPedidoDeliveryTable.esCanjePuntos
+          })
+            .from(ItemPedidoDeliveryTable)
+            .leftJoin(ProductoTable, eq(ItemPedidoDeliveryTable.productoId, ProductoTable.id))
+            .where(eq(ItemPedidoDeliveryTable.pedidoDeliveryId, pedido.id));
+
+          const orderItemsForWa = itemsRaw.map(item => ({
+            name: item.esCanjePuntos ? `${item.nombreProducto} (Canje Puntos)` : item.nombreProducto!,
+            quantity: item.cantidad!
+          }));
+
+          if (restaurante[0].deliveryFee) {
+            orderItemsForWa.push({ name: 'Delivery', quantity: 1 });
+          }
+
+          sendOrderWhatsApp(c, {
+            phone: restaurante[0].whatsappNumber,
+            customerName: pedido.nombreCliente || 'Cliente no especificado',
+            address: pedido.direccion || 'Sin dirección',
+            total: `${pedido.total} (transferencia)`,
+            items: orderItemsForWa,
+            orderId: pedido.id.toString()
+          }).catch(console.error);
+        }
+      } catch (error) {
+        console.error("❌ Error enviando WhatsApp post-pago:", error);
+      }
+
       return c.json({ status: 'received' }, 200);
     }
 
@@ -149,6 +201,12 @@ const cucuruWebhookHandler = async (c: any) => {
 
     if (pedidosTakeaway.length > 0) {
       const pedido = pedidosTakeaway[0];
+
+      if (Number(amount) < Number(pedido.total)) {
+        console.warn(`⚠️ [Cucuru] Pago insuficiente para TakeAway #${pedido.id}. Pagado: $${amount}, Esperado: $${pedido.total}`);
+        return c.json({ status: 'ignored_insufficient' }, 200);
+      }
+
       await db.update(PedidoTakeawayTable).set({
         pagado: true,
         metodoPago: 'transferencia'
@@ -179,6 +237,42 @@ const cucuruWebhookHandler = async (c: any) => {
       console.log(`🏃‍♂️ [Cucuru] Pago acreditado para TakeAway #${pedido.id}`);
       wsManager.broadcastAdminUpdate(restauranteId, 'takeaway');
       wsManager.notifyPublicClientPayment('takeaway', pedido.id);
+
+      // WhatsApp Notification
+      try {
+        const restaurante = await db.select({
+          whatsappEnabled: RestauranteTable.whatsappEnabled,
+          whatsappNumber: RestauranteTable.whatsappNumber
+        }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1);
+
+        if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
+          const itemsRaw = await db.select({
+            cantidad: ItemPedidoTakeawayTable.cantidad,
+            nombreProducto: ProductoTable.nombre,
+            esCanjePuntos: ItemPedidoTakeawayTable.esCanjePuntos
+          })
+            .from(ItemPedidoTakeawayTable)
+            .leftJoin(ProductoTable, eq(ItemPedidoTakeawayTable.productoId, ProductoTable.id))
+            .where(eq(ItemPedidoTakeawayTable.pedidoTakeawayId, pedido.id));
+
+          const orderItemsForWa = itemsRaw.map(item => ({
+            name: item.esCanjePuntos ? `${item.nombreProducto} (Canje Puntos)` : item.nombreProducto!,
+            quantity: item.cantidad!
+          }));
+
+          sendOrderWhatsApp(c, {
+            phone: restaurante[0].whatsappNumber,
+            customerName: pedido.nombreCliente || 'Cliente no especificado',
+            address: 'Retira en local (Take Away)',
+            total: `${pedido.total} (transferencia)`,
+            items: orderItemsForWa,
+            orderId: pedido.id.toString()
+          }).catch(console.error);
+        }
+      } catch (error) {
+        console.error("❌ Error enviando WhatsApp post-pago:", error);
+      }
+
       return c.json({ status: 'received' }, 200);
     }
 
@@ -207,6 +301,12 @@ const cucuruWebhookHandler = async (c: any) => {
     }
 
     const pedido = pedidos[0];
+
+    if (Number(amount) < Number(pedido.total)) {
+      console.warn(`⚠️ [Cucuru] Pago insuficiente para Mesa #${pedido.id}. Pagado: $${amount}, Esperado: $${pedido.total}`);
+      return c.json({ status: 'ignored_insufficient' }, 200);
+    }
+
     await db.update(PedidoTable)
       .set({
         pagado: true,

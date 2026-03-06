@@ -267,13 +267,14 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         }
 
         // Notificación por WhatsApp
+        const waitToPay = metodoPago === 'transferencia' && resRestaurante[0]?.cucuruConfigurado;
         try {
             const restaurante = await db.select({
                 whatsappEnabled: RestauranteTable.whatsappEnabled,
                 whatsappNumber: RestauranteTable.whatsappNumber,
             }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1);
 
-            if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
+            if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber && !waitToPay) {
                 const orderItemsForWa = items.map(item => {
                     const row = productosMap.get(item.productoId)!;
                     return {
@@ -494,13 +495,14 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         }
 
         // Notificación por WhatsApp
+        const waitToPay = metodoPago === 'transferencia' && resRestaurante[0]?.cucuruConfigurado;
         try {
             const restaurante = await db.select({
                 whatsappEnabled: RestauranteTable.whatsappEnabled,
                 whatsappNumber: RestauranteTable.whatsappNumber,
             }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1);
 
-            if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
+            if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber && !waitToPay) {
                 const orderItemsForWa = items.map(item => {
                     const row = productosMap.get(item.productoId)!;
                     return {
