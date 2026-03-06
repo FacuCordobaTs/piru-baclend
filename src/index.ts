@@ -26,6 +26,7 @@ import type { ServerWebSocket } from "bun";
 import { verifyToken } from './libs/jwt';
 import { webhookRoute } from './routes/webhook';
 import { cucuruRoute } from './routes/cucuru';
+import { zonaDeliveryRoute } from './routes/zona-delivery';
 
 // Destructure upgradeWebSocket and websocket from the helper function's return
 const { upgradeWebSocket, websocket } = createBunWebSocket<ServerWebSocket>();
@@ -142,6 +143,7 @@ app.basePath('/api')
   .route('/clientes', clientesRoute)
   .route('/webhook', webhookRoute)
   .route('/cucuru', cucuruRoute)
+  .route('/zona-delivery', zonaDeliveryRoute)
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
 // because :qrToken would match "admin" as a token
 app.get(

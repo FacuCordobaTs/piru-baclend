@@ -245,3 +245,14 @@ export const accountPool = mysqlTable("account_pool", {
     pedidoIdAsignado: int("pedido_id_asignado"),
     updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+// Zonas de delivery con polígonos y precios dinámicos
+export const zonaDelivery = mysqlTable("zona_delivery", {
+    id: int("id").primaryKey().autoincrement(),
+    restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+    nombre: varchar("nombre", { length: 255 }).notNull(),
+    precio: decimal("precio", { precision: 10, scale: 2 }).notNull(),
+    poligono: json("poligono").notNull(), // Array de {lat: number, lng: number}
+    color: varchar("color", { length: 50 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+});
