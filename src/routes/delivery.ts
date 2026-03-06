@@ -57,6 +57,7 @@ const deliveryRoute = new Hono()
                 createdAt: PedidoDeliveryTable.createdAt,
                 deliveredAt: PedidoDeliveryTable.deliveredAt,
                 pagado: PedidoDeliveryTable.pagado,
+                metodoPago: PedidoDeliveryTable.metodoPago,
             })
             .from(PedidoDeliveryTable)
             .where(estado
