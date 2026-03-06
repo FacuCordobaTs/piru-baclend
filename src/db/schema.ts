@@ -36,6 +36,7 @@ export const restaurante = mysqlTable("restaurante", {
     sistemaPuntos: boolean("sistema_puntos").default(false).notNull(),
     colorPrimario: varchar("color_primario", { length: 50 }),
     colorSecundario: varchar("color_secundario", { length: 50 }),
+    disenoAlternativo: boolean("diseno_alternativo").default(false).notNull(),
 });
 
 export const categoria = mysqlTable("categoria", {

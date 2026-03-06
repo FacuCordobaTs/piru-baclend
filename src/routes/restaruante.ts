@@ -106,6 +106,7 @@ const updateProfileSchema = z.object({
   transferenciaAlias: z.string().optional(),
   colorPrimario: z.string().optional(),
   colorSecundario: z.string().optional(),
+  disenoAlternativo: z.boolean().optional(),
 })
 
 restauranteRoute.get('/profile', async (c) => {
@@ -195,7 +196,7 @@ restauranteRoute.post('/complete-profile', zValidator('json', completeProfileSch
 restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre, direccion, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, transferenciaAlias, colorPrimario, colorSecundario } = c.req.valid('json')
+  const { nombre, direccion, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, transferenciaAlias, colorPrimario, colorSecundario, disenoAlternativo } = c.req.valid('json')
 
   try {
     // Obtener datos actuales del restaurante
@@ -220,6 +221,7 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
     if (transferenciaAlias !== undefined) updateData.transferenciaAlias = transferenciaAlias
     if (colorPrimario !== undefined) updateData.colorPrimario = colorPrimario
     if (colorSecundario !== undefined) updateData.colorSecundario = colorSecundario
+    if (disenoAlternativo !== undefined) updateData.disenoAlternativo = disenoAlternativo
     if (username !== undefined) {
       if (!username || username.trim() === '') {
         updateData.username = null
@@ -486,6 +488,42 @@ restauranteRoute.put('/toggle-sistema-puntos', async (c) => {
   } catch (error) {
     console.error('Error updating points system mode:', error)
     return c.json({ message: 'Error al cambiar sistema de puntos', error: (error as Error).message, success: false }, 500)
+  }
+})
+
+// Toggle diseño alternativo
+restauranteRoute.put('/toggle-diseno-alternativo', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    // Obtener el estado actual
+    const [restaurante] = await db.select({ disenoAlternativo: RestauranteTable.disenoAlternativo })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!restaurante) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    // Toggle
+    const nuevoEstado = !restaurante.disenoAlternativo
+
+    await db.update(RestauranteTable)
+      .set({ disenoAlternativo: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    console.log(`🎨 Diseño alternativo ${nuevoEstado ? 'activado' : 'desactivado'} para restaurante ${restauranteId}`)
+
+    return c.json({
+      message: nuevoEstado ? 'Diseño alternativo activado' : 'Diseño alternativo desactivado',
+      success: true,
+      disenoAlternativo: nuevoEstado
+    }, 200)
+
+  } catch (error) {
+    console.error('Error updating design option:', error)
+    return c.json({ message: 'Error al cambiar opción de diseño', error: (error as Error).message, success: false }, 500)
   }
 })
 
