@@ -674,4 +674,60 @@ publicRoute.get('/restaurante/:id/cliente/:telefono', async (c) => {
     }
 })
 
+// Check delivery zone for a given lat/lng (public, no auth needed)
+publicRoute.get('/restaurante/:id/check-zona', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = parseInt(c.req.param('id'), 10)
+    const lat = parseFloat(c.req.query('lat') || '')
+    const lng = parseFloat(c.req.query('lng') || '')
+
+    if (isNaN(restauranteId) || isNaN(lat) || isNaN(lng)) {
+        return c.json({ success: false, message: 'Parámetros inválidos' }, 400)
+    }
+
+    try {
+        const zonasDelivery = await db.select().from(ZonaDeliveryTable)
+            .where(eq(ZonaDeliveryTable.restauranteId, restauranteId))
+
+        if (zonasDelivery.length === 0) {
+            // No zones configured — fallback to global deliveryFee
+            const resRestaurante = await db.select({
+                deliveryFee: RestauranteTable.deliveryFee
+            }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+
+            const fee = resRestaurante.length > 0 && resRestaurante[0].deliveryFee
+                ? resRestaurante[0].deliveryFee
+                : '0.00'
+
+            return c.json({
+                success: true,
+                tieneZonas: false,
+                deliveryFee: fee,
+                zonaNombre: null
+            }, 200)
+        }
+
+        // Zones exist — check if point is in any
+        const zonaMatch = findZoneForPoint({ lat, lng }, zonasDelivery)
+
+        if (!zonaMatch) {
+            return c.json({
+                success: false,
+                code: 'FUERA_DE_ZONA',
+                message: 'Tu ubicación está fuera de nuestra área de delivery.'
+            }, 200) // 200 so the frontend can handle it gracefully
+        }
+
+        return c.json({
+            success: true,
+            tieneZonas: true,
+            deliveryFee: zonaMatch.precio,
+            zonaNombre: zonaMatch.nombre
+        }, 200)
+    } catch (error) {
+        console.error('Error checking delivery zone:', error)
+        return c.json({ success: false, message: 'Error al verificar zona' }, 500)
+    }
+})
+
 export { publicRoute }
