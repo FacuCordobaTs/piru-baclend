@@ -122,15 +122,16 @@ const cucuruWebhookHandler = async (c: any) => {
       });
 
       const notifId = `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      await db.insert(NotificacionTable).values({
+      wsManager.notifyAdmins(restauranteId, {
         id: notifId,
-        restauranteId: restauranteId,
-        tipo: 'PAGO_RECIBIDO',
-        mesaId: null as any,
+        tipo: 'NUEVO_PEDIDO',
+        mesaId: 0,
         mesaNombre: 'Delivery',
-        pedidoId: pedido.id,
-        mensaje: `Cobro CUCURU de $${amount} (Delivery)`,
-        detalles: `Transacción: ${collectionId}`
+        mensaje: `Nuevo pedido de Delivery (Pagado)`,
+        detalles: `${pedido.nombreCliente || 'Cliente'} - $${pedido.total}`,
+        timestamp: new Date().toISOString(),
+        leida: false,
+        pedidoId: pedido.id
       });
 
       await freePoolRecord();
@@ -221,15 +222,16 @@ const cucuruWebhookHandler = async (c: any) => {
       });
 
       const notifId = `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      await db.insert(NotificacionTable).values({
+      wsManager.notifyAdmins(restauranteId, {
         id: notifId,
-        restauranteId: restauranteId,
-        tipo: 'PAGO_RECIBIDO',
-        mesaId: null as any,
+        tipo: 'NUEVO_PEDIDO',
+        mesaId: 0,
         mesaNombre: 'Take Away',
-        pedidoId: pedido.id,
-        mensaje: `Cobro CUCURU de $${amount} (Take Away)`,
-        detalles: `Transacción: ${collectionId}`
+        mensaje: `Nuevo pedido de Take Away (Pagado)`,
+        detalles: `${pedido.nombreCliente || 'Cliente'} - $${pedido.total}`,
+        timestamp: new Date().toISOString(),
+        leida: false,
+        pedidoId: pedido.id
       });
 
       await freePoolRecord();

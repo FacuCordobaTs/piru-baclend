@@ -376,8 +376,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 leida: false,
                 pedidoId: pedidoId
             })
+            wsManager.broadcastAdminUpdate(restauranteId, 'delivery')
         }
-        wsManager.broadcastAdminUpdate(restauranteId, 'delivery')
 
         return c.json({
             message: 'Pedido de delivery creado correctamente',
@@ -615,8 +615,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 leida: false,
                 pedidoId: pedidoId
             })
+            wsManager.broadcastAdminUpdate(restauranteId, 'takeaway')
         }
-        wsManager.broadcastAdminUpdate(restauranteId, 'takeaway')
 
         return c.json({
             message: 'Pedido de takeaway creado correctamente',

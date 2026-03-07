@@ -5,11 +5,12 @@ import {
     pedidoDelivery as PedidoDeliveryTable,
     itemPedidoDelivery as ItemPedidoDeliveryTable,
     producto as ProductoTable,
-    ingrediente as IngredienteTable
+    ingrediente as IngredienteTable,
+    restaurante as RestauranteTable
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
-import { eq, desc, and, inArray } from 'drizzle-orm'
+import { eq, desc, and, inArray, not } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 
@@ -43,7 +44,22 @@ const deliveryRoute = new Hono()
         const estado = c.req.query('estado')
         const offset = (page - 1) * limit
 
-        let whereCondition = eq(PedidoDeliveryTable.restauranteId, restauranteId)
+        const restaurante = await db.select({ cucuruConfigurado: RestauranteTable.cucuruConfigurado })
+            .from(RestauranteTable)
+            .where(eq(RestauranteTable.id, restauranteId))
+            .limit(1)
+
+        let whereCondition: any = eq(PedidoDeliveryTable.restauranteId, restauranteId)
+
+        if (restaurante.length > 0 && restaurante[0].cucuruConfigurado) {
+            whereCondition = and(
+                whereCondition,
+                not(and(
+                    eq(PedidoDeliveryTable.pagado, false),
+                    eq(PedidoDeliveryTable.metodoPago, 'transferencia')
+                ))
+            )
+        }
 
         const pedidos = await db
             .select({
