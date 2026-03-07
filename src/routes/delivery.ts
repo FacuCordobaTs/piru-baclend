@@ -95,6 +95,7 @@ const deliveryRoute = new Hono()
                     nombreProducto: ProductoTable.nombre,
                     imagenUrl: ProductoTable.imagenUrl,
                     ingredientesExcluidos: ItemPedidoDeliveryTable.ingredientesExcluidos,
+                    agregados: ItemPedidoDeliveryTable.agregados,
                 })
                 .from(ItemPedidoDeliveryTable)
                 .leftJoin(ProductoTable, eq(ItemPedidoDeliveryTable.productoId, ProductoTable.id))
@@ -117,10 +118,20 @@ const deliveryRoute = new Hono()
                         ingredientesExcluidosNombres = ingredientes.map(ing => ing.nombre)
                     }
 
+                    let agregadosParsed = []
+                    if (item.agregados) {
+                        if (typeof item.agregados === 'string') {
+                            try { agregadosParsed = JSON.parse(item.agregados) } catch (e) { }
+                        } else if (Array.isArray(item.agregados)) {
+                            agregadosParsed = item.agregados
+                        }
+                    }
+
                     return {
                         ...item,
                         ingredientesExcluidos: item.ingredientesExcluidos || [],
                         ingredientesExcluidosNombres,
+                        agregados: agregadosParsed,
                     }
                 })
             )

@@ -18,7 +18,12 @@ const addItemSchema = z.object({
   productoId: z.number().int().positive(),
   cantidad: z.number().int().positive().default(1),
   clienteNombre: z.string().default('Mozo'),
-  ingredientesExcluidos: z.array(z.number().int().positive()).optional()
+  ingredientesExcluidos: z.array(z.number().int().positive()).optional(),
+  agregados: z.array(z.object({
+    id: z.number().int().positive(),
+    nombre: z.string(),
+    precio: z.string()
+  })).optional()
 })
 
 const updateItemSchema = z.object({
@@ -76,6 +81,7 @@ const pedidoRoute = new Hono()
           nombreProducto: ProductoTable.nombre,
           imagenUrl: ProductoTable.imagenUrl,
           ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
+          agregados: ItemPedidoTable.agregados,
           postConfirmacion: ItemPedidoTable.postConfirmacion,
           estado: ItemPedidoTable.estado,
           createdAt: ItemPedidoTable.createdAt,
@@ -102,10 +108,20 @@ const pedidoRoute = new Hono()
             ingredientesExcluidosNombres = ingredientes.map(ing => ing.nombre)
           }
 
+          let agregadosParsed = []
+          if (item.agregados) {
+            if (typeof item.agregados === 'string') {
+              try { agregadosParsed = JSON.parse(item.agregados) } catch (e) { }
+            } else if (Array.isArray(item.agregados)) {
+              agregadosParsed = item.agregados
+            }
+          }
+
           return {
             ...item,
             ingredientesExcluidos: item.ingredientesExcluidos || [],
             ingredientesExcluidosNombres,
+            agregados: agregadosParsed,
             postConfirmacion: item.postConfirmacion || false,
             estado: item.estado || 'pending',
             createdAt: item.createdAt
@@ -541,6 +557,7 @@ const pedidoRoute = new Hono()
         imagenUrl: ProductoTable.imagenUrl,
         descripcion: ProductoTable.descripcion,
         ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
+        agregados: ItemPedidoTable.agregados,
         postConfirmacion: ItemPedidoTable.postConfirmacion,
         estado: ItemPedidoTable.estado
       })
@@ -585,6 +602,7 @@ const pedidoRoute = new Hono()
           ...item,
           ingredientesExcluidos: ingredientesExcluidosParsed || [],
           ingredientesExcluidosNombres,
+          agregados: parseJsonField(item.agregados) || [],
           postConfirmacion: item.postConfirmacion || false,
           estado: item.estado || 'pending'
         }
@@ -797,7 +815,7 @@ const pedidoRoute = new Hono()
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))
-    const { productoId, cantidad, clienteNombre, ingredientesExcluidos } = c.req.valid('json')
+    const { productoId, cantidad, clienteNombre, ingredientesExcluidos, agregados } = c.req.valid('json')
 
     // Verificar que el pedido pertenece al restaurante
     const pedido = await db
@@ -835,13 +853,29 @@ const pedidoRoute = new Hono()
       return c.json({ message: 'El producto no está disponible', success: false }, 400)
     }
 
+    // Calcular total de agregados si los hay
+    let totalAgregados = 0;
+    if (agregados && agregados.length > 0) {
+      for (const ag of agregados) {
+        totalAgregados += parseFloat(ag.precio);
+      }
+    }
+
+    const { precio, descuento } = producto[0]
+    let precioBaseNum = parseFloat(precio);
+    if (descuento != null && Number(descuento) > 0) {
+      precioBaseNum = Number(descuento);
+    }
+    const precioFinal = (precioBaseNum + totalAgregados).toFixed(2)
+
     // Usar wsManager para agregar el item (esto hace broadcast automáticamente)
     const nuevoItem = await wsManager.agregarItem(pedidoId, pedido[0].mesaId!, {
       productoId,
       cantidad,
       clienteNombre,
-      precioUnitario: producto[0].precio,
-      ingredientesExcluidos
+      precioUnitario: precioFinal,
+      ingredientesExcluidos,
+      agregados,
     })
 
     // Notificar a admins
