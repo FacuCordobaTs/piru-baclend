@@ -183,6 +183,7 @@ class WebSocketManager {
             nombreProducto: ProductoTable.nombre,
             imagenUrl: ProductoTable.imagenUrl,
             ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
+            agregados: ItemPedidoTable.agregados,
             postConfirmacion: ItemPedidoTable.postConfirmacion,
             estado: ItemPedidoTable.estado,
             createdAt: ItemPedidoTable.createdAt,
@@ -230,6 +231,7 @@ class WebSocketManager {
               ...item,
               ingredientesExcluidos: ingredientesExcluidosParsed || [],
               ingredientesExcluidosNombres,
+              agregados: parseJsonField(item.agregados) || [],
               postConfirmacion: item.postConfirmacion || false,
               estado: item.estado || 'pending'
             }
@@ -484,6 +486,7 @@ class WebSocketManager {
         nombreProducto: ProductoTable.nombre,
         imagenUrl: ProductoTable.imagenUrl,
         ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
+        agregados: ItemPedidoTable.agregados,
         postConfirmacion: ItemPedidoTable.postConfirmacion,
         estado: ItemPedidoTable.estado,
         createdAt: ItemPedidoTable.createdAt,
@@ -532,6 +535,7 @@ class WebSocketManager {
           ...item,
           ingredientesExcluidos: ingredientesExcluidosParsed || [],
           ingredientesExcluidosNombres,
+          agregados: parseJsonField(item.agregados) || [],
           postConfirmacion: item.postConfirmacion || false,
           estado: item.estado || 'pending'
         }
@@ -569,6 +573,7 @@ class WebSocketManager {
       cantidad: item.cantidad,
       precioUnitario: item.precioUnitario,
       ingredientesExcluidos: item.ingredientesExcluidos || null,
+      agregados: item.agregados || null,
       postConfirmacion: isPostConfirmacion,
       estado: isPostConfirmacion ? 'preparing' : 'pending'
     });
@@ -587,6 +592,7 @@ class WebSocketManager {
         nombreProducto: ProductoTable.nombre,
         imagenUrl: ProductoTable.imagenUrl,
         ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
+        agregados: ItemPedidoTable.agregados,
         postConfirmacion: ItemPedidoTable.postConfirmacion,
         estado: ItemPedidoTable.estado,
         createdAt: ItemPedidoTable.createdAt,
@@ -632,6 +638,7 @@ class WebSocketManager {
       ...itemCompleto[0],
       ingredientesExcluidos: ingredientesExcluidosParsed || [],
       ingredientesExcluidosNombres,
+      agregados: parseJsonField(itemCompleto[0].agregados) || [],
       postConfirmacion: itemCompleto[0].postConfirmacion || false,
       estado: itemCompleto[0].estado || 'pending'
     }

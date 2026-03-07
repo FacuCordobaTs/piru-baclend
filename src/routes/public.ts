@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable } from '../db/schema'
+import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { eq, and } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
@@ -67,22 +67,34 @@ publicRoute.get('/restaurante/:username', async (c) => {
             .leftJoin(ProductoPuntosTable, eq(ProductoTable.id, ProductoPuntosTable.productoId))
             .where(and(eq(ProductoTable.restauranteId, restauranteId), eq(ProductoTable.activo, true)))
 
-        // Obtener ingredientes para cada producto
+        // Obtener ingredientes y agregados para cada producto
         const productosConIngredientes = await Promise.all(
             productosRaw.map(async (p) => {
-                const ingredientes = await db
-                    .select({
-                        id: IngredienteTable.id,
-                        nombre: IngredienteTable.nombre,
-                    })
-                    .from(ProductoIngredienteTable)
-                    .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
-                    .where(eq(ProductoIngredienteTable.productoId, p.id))
+                const [ingredientes, agregados] = await Promise.all([
+                    db
+                        .select({
+                            id: IngredienteTable.id,
+                            nombre: IngredienteTable.nombre,
+                        })
+                        .from(ProductoIngredienteTable)
+                        .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
+                        .where(eq(ProductoIngredienteTable.productoId, p.id)),
+                    db
+                        .select({
+                            id: AgregadoTable.id,
+                            nombre: AgregadoTable.nombre,
+                            precio: AgregadoTable.precio,
+                        })
+                        .from(ProductoAgregadoTable)
+                        .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
+                        .where(eq(ProductoAgregadoTable.productoId, p.id))
+                ]);
 
                 return {
                     ...p,
                     categoria: p.categoria?.nombre || null,
                     ingredientes: ingredientes,
+                    agregados: agregados,
                 }
             })
         )
@@ -119,6 +131,11 @@ const createDeliverySchema = z.object({
         productoId: z.number().int().positive(),
         cantidad: z.number().int().positive().default(1),
         ingredientesExcluidos: z.array(z.number().int().positive()).optional(),
+        agregados: z.array(z.object({
+            id: z.number().int().positive(),
+            nombre: z.string(),
+            precio: z.string()
+        })).optional(),
         esCanjePuntos: z.boolean().optional().default(false)
     })).min(1)
 })
@@ -164,6 +181,14 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 if (descuento > 0) {
                     precioBase = precioBase * (1 - descuento / 100)
                 }
+
+                // Sumar el precio de los agregados
+                if (item.agregados && item.agregados.length > 0) {
+                    for (const ag of item.agregados) {
+                        precioBase += parseFloat(ag.precio)
+                    }
+                }
+
                 total += precioBase * item.cantidad
                 if (row.puntos) {
                     puntosGanados += row.puntos.puntosGanados * item.cantidad
@@ -280,6 +305,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 cantidad: item.cantidad,
                 precioUnitario,
                 ingredientesExcluidos: item.ingredientesExcluidos || null,
+                agregados: item.agregados || null,
                 esCanjePuntos: item.esCanjePuntos || false
             })
         }
@@ -385,6 +411,11 @@ const createTakeawaySchema = z.object({
         productoId: z.number().int().positive(),
         cantidad: z.number().int().positive().default(1),
         ingredientesExcluidos: z.array(z.number().int().positive()).optional(),
+        agregados: z.array(z.object({
+            id: z.number().int().positive(),
+            nombre: z.string(),
+            precio: z.string()
+        })).optional(),
         esCanjePuntos: z.boolean().optional().default(false)
     })).min(1)
 })
@@ -430,6 +461,14 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 if (descuento > 0) {
                     precioBase = precioBase * (1 - descuento / 100)
                 }
+
+                // Sumar el precio de los agregados
+                if (item.agregados && item.agregados.length > 0) {
+                    for (const ag of item.agregados) {
+                        precioBase += parseFloat(ag.precio)
+                    }
+                }
+
                 total += precioBase * item.cantidad
                 if (row.puntos) {
                     puntosGanados += row.puntos.puntosGanados * item.cantidad
@@ -512,6 +551,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 cantidad: item.cantidad,
                 precioUnitario,
                 ingredientesExcluidos: item.ingredientesExcluidos || null,
+                agregados: item.agregados || null,
                 esCanjePuntos: item.esCanjePuntos || false
             })
         }

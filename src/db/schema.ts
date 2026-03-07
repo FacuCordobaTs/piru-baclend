@@ -83,6 +83,23 @@ export const productoIngrediente = mysqlTable("producto_ingrediente", {
     uniqueIndex("uq_producto_ingrediente").on(table.productoId, table.ingredienteId)
 ]);
 
+export const agregado = mysqlTable("agregado", {
+    id: int("id").primaryKey().autoincrement(),
+    restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+    nombre: varchar("nombre", { length: 255 }).notNull(),
+    precio: decimal("precio", { precision: 10, scale: 2 }).default('0.00').notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const productoAgregado = mysqlTable("producto_agregado", {
+    id: int("id").primaryKey().autoincrement(),
+    productoId: int("producto_id").references(() => producto.id).notNull(),
+    agregadoId: int("agregado_id").references(() => agregado.id).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+    uniqueIndex("uq_producto_agregado").on(table.productoId, table.agregadoId)
+]);
+
 // Etiquetas de productos (únicas por restaurante, asociadas a un solo producto)
 export const etiqueta = mysqlTable("etiqueta", {
     id: int("id").primaryKey().autoincrement(),
@@ -115,6 +132,7 @@ export const itemPedido = mysqlTable('item_pedido', {
     cantidad: int('cantidad').default(1),
     precioUnitario: decimal('precio_unitario', { precision: 10, scale: 2 }).notNull(),
     ingredientesExcluidos: json('ingredientes_excluidos'), // Array de IDs de ingredientes excluidos
+    agregados: json('agregados'), // Array de { id: number, nombre: string, precio: string } de agregados sumados
     estado: mysqlEnum('estado', ['pending', 'preparing', 'delivered', 'served', 'cancelled']).default('pending'),
     postConfirmacion: boolean('post_confirmacion').default(false), // true si se agregó después de confirmar el pedido
     createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -198,6 +216,7 @@ export const itemPedidoDelivery = mysqlTable('item_pedido_delivery', {
     cantidad: int('cantidad').default(1),
     precioUnitario: decimal('precio_unitario', { precision: 10, scale: 2 }).notNull(),
     ingredientesExcluidos: json('ingredientes_excluidos'),
+    agregados: json('agregados'),
     esCanjePuntos: boolean('es_canje_puntos').default(false),
 });
 
@@ -227,6 +246,7 @@ export const itemPedidoTakeaway = mysqlTable('item_pedido_takeaway', {
     cantidad: int('cantidad').default(1),
     precioUnitario: decimal('precio_unitario', { precision: 10, scale: 2 }).notNull(),
     ingredientesExcluidos: json('ingredientes_excluidos'),
+    agregados: json('agregados'),
     esCanjePuntos: boolean('es_canje_puntos').default(false),
 });
 

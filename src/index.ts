@@ -9,6 +9,7 @@ import { productoRoute } from './routes/producto';
 import { pedidoRoute } from './routes/pedido';
 import { categoriaRoute } from './routes/categoria';
 import { ingredienteRoute } from './routes/ingrediente';
+import { agregadoRoute } from './routes/agregado';
 import { mercadopagoRoute } from './routes/mercadopago';
 import { notificacionRoute } from './routes/notificacion';
 import { deliveryRoute } from './routes/delivery';
@@ -135,6 +136,7 @@ app.basePath('/api')
   .route('/pedido', pedidoRoute)
   .route('/categoria', categoriaRoute)
   .route('/ingrediente', ingredienteRoute)
+  .route('/agregado', agregadoRoute)
   .route('/mp', mercadopagoRoute)
   .route('/notificacion', notificacionRoute)
   .route('/delivery', deliveryRoute)
