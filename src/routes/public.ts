@@ -338,18 +338,20 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             console.error("❌ Error obteniendo datos del restaurante para WhatsApp:", error);
         }
 
-        wsManager.notifyAdmins(restauranteId, {
-            id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            tipo: 'NUEVO_PEDIDO',
-            mesaId: 0,
-            mesaNombre: 'Delivery',
-            mensaje: `Nuevo pedido de Delivery`,
-            detalles: `${nombreCliente || 'Cliente'} - $${total.toFixed(2)}`,
-            timestamp: new Date().toISOString(),
-            leida: false,
-            pedidoId: pedidoId
-        })
-        wsManager.broadcastAdminUpdate(restauranteId, 'delivery')
+        if (!waitToPay) {
+            wsManager.notifyAdmins(restauranteId, {
+                id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                tipo: 'NUEVO_PEDIDO',
+                mesaId: 0,
+                mesaNombre: 'Delivery',
+                mensaje: `Nuevo pedido de Delivery`,
+                detalles: `${nombreCliente || 'Cliente'} - $${total.toFixed(2)}`,
+                timestamp: new Date().toISOString(),
+                leida: false,
+                pedidoId: pedidoId
+            })
+            wsManager.broadcastAdminUpdate(restauranteId, 'delivery')
+        }
 
         return c.json({
             message: 'Pedido de delivery creado correctamente',
@@ -561,18 +563,20 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             console.error("❌ Error obteniendo datos del restaurante para WhatsApp:", error);
         }
 
-        wsManager.notifyAdmins(restauranteId, {
-            id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            tipo: 'NUEVO_PEDIDO',
-            mesaId: 0,
-            mesaNombre: 'Take Away',
-            mensaje: `Nuevo pedido de Take Away`,
-            detalles: `${nombreCliente || 'Cliente'} - $${total.toFixed(2)}`,
-            timestamp: new Date().toISOString(),
-            leida: false,
-            pedidoId: pedidoId
-        })
-        wsManager.broadcastAdminUpdate(restauranteId, 'takeaway')
+        if (!waitToPay) {
+            wsManager.notifyAdmins(restauranteId, {
+                id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                tipo: 'NUEVO_PEDIDO',
+                mesaId: 0,
+                mesaNombre: 'Take Away',
+                mensaje: `Nuevo pedido de Take Away`,
+                detalles: `${nombreCliente || 'Cliente'} - $${total.toFixed(2)}`,
+                timestamp: new Date().toISOString(),
+                leida: false,
+                pedidoId: pedidoId
+            })
+            wsManager.broadcastAdminUpdate(restauranteId, 'takeaway')
+        }
 
         return c.json({
             message: 'Pedido de takeaway creado correctamente',
