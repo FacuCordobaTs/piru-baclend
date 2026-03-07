@@ -304,8 +304,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 productoId: item.productoId,
                 cantidad: item.cantidad,
                 precioUnitario,
-                ingredientesExcluidos: item.ingredientesExcluidos || null,
-                agregados: item.agregados || null,
+                ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
+                agregados: item.agregados?.length ? item.agregados : null,
                 esCanjePuntos: item.esCanjePuntos || false
             })
         }
@@ -550,8 +550,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 productoId: item.productoId,
                 cantidad: item.cantidad,
                 precioUnitario,
-                ingredientesExcluidos: item.ingredientesExcluidos || null,
-                agregados: item.agregados || null,
+                ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
+                agregados: item.agregados?.length ? item.agregados : null,
                 esCanjePuntos: item.esCanjePuntos || false
             })
         }
