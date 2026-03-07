@@ -775,4 +775,27 @@ publicRoute.get('/restaurante/:id/check-zona', async (c) => {
     }
 })
 
+publicRoute.get('/pedido/:tipo/:id/status', async (c) => {
+    const tipo = c.req.param('tipo');
+    const id = Number(c.req.param('id'));
+
+    try {
+        const db = drizzle(pool);
+        let pagado = false;
+
+        if (tipo === 'delivery') {
+            const p = await db.select({ pagado: PedidoDeliveryTable.pagado }).from(PedidoDeliveryTable).where(eq(PedidoDeliveryTable.id, id)).limit(1);
+            if (p.length > 0) pagado = p[0].pagado;
+        } else if (tipo === 'takeaway') {
+            const p = await db.select({ pagado: PedidoTakeawayTable.pagado }).from(PedidoTakeawayTable).where(eq(PedidoTakeawayTable.id, id)).limit(1);
+            if (p.length > 0) pagado = p[0].pagado;
+        }
+
+        return c.json({ success: true, pagado }, 200);
+    } catch (error) {
+        console.error('Error consultando estado del pedido:', error);
+        return c.json({ success: false, error: 'Internal server error' }, 500);
+    }
+});
+
 export { publicRoute }
