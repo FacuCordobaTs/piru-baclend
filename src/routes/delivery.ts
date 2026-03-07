@@ -57,7 +57,7 @@ const deliveryRoute = new Hono()
                 not(and(
                     eq(PedidoDeliveryTable.pagado, false),
                     eq(PedidoDeliveryTable.metodoPago, 'transferencia')
-                ))
+                )!)
             )
         }
 
@@ -173,6 +173,7 @@ const deliveryRoute = new Hono()
                 nombreProducto: ProductoTable.nombre,
                 imagenUrl: ProductoTable.imagenUrl,
                 ingredientesExcluidos: ItemPedidoDeliveryTable.ingredientesExcluidos,
+                agregados: ItemPedidoDeliveryTable.agregados,
             })
             .from(ItemPedidoDeliveryTable)
             .leftJoin(ProductoTable, eq(ItemPedidoDeliveryTable.productoId, ProductoTable.id))

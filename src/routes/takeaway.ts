@@ -56,7 +56,7 @@ const takeawayRoute = new Hono()
                 not(and(
                     eq(PedidoTakeawayTable.pagado, false),
                     eq(PedidoTakeawayTable.metodoPago, 'transferencia')
-                ))
+                )!)
             )
         }
 
@@ -171,6 +171,7 @@ const takeawayRoute = new Hono()
                 nombreProducto: ProductoTable.nombre,
                 imagenUrl: ProductoTable.imagenUrl,
                 ingredientesExcluidos: ItemPedidoTakeawayTable.ingredientesExcluidos,
+                agregados: ItemPedidoTakeawayTable.agregados,
             })
             .from(ItemPedidoTakeawayTable)
             .leftJoin(ProductoTable, eq(ItemPedidoTakeawayTable.productoId, ProductoTable.id))
