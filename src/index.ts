@@ -76,6 +76,7 @@ app.use('*', cors({
     'https://tauri.localhost',  // Protocolo estándar de Tauri v2 en Windows
     'http://tauri.localhost',   // Variación posible
     'https://alfajor.pages.dev',
+    'https://alfajorconpapas.com'
   ],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization', 'Upgrade-Insecure-Requests'], // Agregué Upgrade-Insecure-Requests por si acaso
