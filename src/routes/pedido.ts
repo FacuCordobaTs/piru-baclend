@@ -213,6 +213,7 @@ const pedidoRoute = new Hono()
           createdAt: PedidoTable.createdAt,
           closedAt: PedidoTable.closedAt,
           pagado: PedidoTable.pagado,
+          metodoPago: PedidoTable.metodoPago,
           mesaNombre: MesaTable.nombre,
         })
         .from(PedidoTable)
@@ -281,6 +282,7 @@ const pedidoRoute = new Hono()
           createdAt: PedidoDeliveryTable.createdAt,
           deliveredAt: PedidoDeliveryTable.deliveredAt,
           pagado: PedidoDeliveryTable.pagado,
+          metodoPago: PedidoDeliveryTable.metodoPago,
         })
         .from(PedidoDeliveryTable)
         .where(and(
@@ -325,6 +327,7 @@ const pedidoRoute = new Hono()
           createdAt: PedidoTakeawayTable.createdAt,
           deliveredAt: PedidoTakeawayTable.deliveredAt,
           pagado: PedidoTakeawayTable.pagado,
+          metodoPago: PedidoTakeawayTable.metodoPago,
         })
         .from(PedidoTakeawayTable)
         .where(and(
@@ -416,13 +419,13 @@ const pedidoRoute = new Hono()
 
       // 5. Calculate totals
       const totalMesa = mesaPedidosFinal
-        .filter(p => p.estado !== 'archived' && p.totalItems > 0)
+        .filter(p => p.estado !== 'cancelled' && p.totalItems > 0)
         .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
       const totalDelivery = deliveryPedidosConItems
-        .filter(p => p.estado !== 'archived' && p.estado !== 'cancelled')
+        .filter(p => p.estado !== 'cancelled')
         .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
       const totalTakeaway = takeawayPedidosConItems
-        .filter(p => p.estado !== 'archived' && p.estado !== 'cancelled')
+        .filter(p => p.estado !== 'cancelled')
         .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
 
       // 6. Product summary: aggregate quantity sold per product
@@ -456,9 +459,9 @@ const pedidoRoute = new Hono()
         })
       }
 
-      mesaPedidosFinal.filter(p => p.estado !== 'archived' && p.totalItems > 0).forEach(p => addToSummary(p.items))
+      mesaPedidosFinal.filter(p => p.estado !== 'cancelled' && p.totalItems > 0).forEach(p => addToSummary(p.items))
 
-      deliveryPedidosConItems.filter(p => p.estado !== 'archived' && p.estado !== 'cancelled').forEach(p => {
+      deliveryPedidosConItems.filter(p => p.estado !== 'cancelled').forEach(p => {
         addToSummary(p.items)
 
         // Deducir el envío dinámico
@@ -491,7 +494,7 @@ const pedidoRoute = new Hono()
         }
       })
 
-      takeawayPedidosConItems.filter(p => p.estado !== 'archived' && p.estado !== 'cancelled').forEach(p => addToSummary(p.items))
+      takeawayPedidosConItems.filter(p => p.estado !== 'cancelled').forEach(p => addToSummary(p.items))
 
       const productosVendidos = Array.from(productSummary.values()).sort((a, b) => b.cantidad - a.cantidad)
 
