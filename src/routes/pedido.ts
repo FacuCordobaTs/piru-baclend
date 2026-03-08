@@ -217,7 +217,10 @@ const pedidoRoute = new Hono()
         })
         .from(PedidoTable)
         .leftJoin(MesaTable, eq(PedidoTable.mesaId, MesaTable.id))
-        .where(eq(PedidoTable.restauranteId, restauranteId))
+        .where(and(
+          eq(PedidoTable.restauranteId, restauranteId),
+          eq(PedidoTable.pagado, true)
+        ))
 
       // Get items for all mesa pedidos and filter by last item date
       const mesaPedidosConItems = await Promise.all(allMesaPedidos.map(async (pedido) => {
@@ -231,6 +234,7 @@ const pedidoRoute = new Hono()
             nombreProducto: ProductoTable.nombre,
             estado: ItemPedidoTable.estado,
             createdAt: ItemPedidoTable.createdAt,
+            agregados: ItemPedidoTable.agregados,
           })
           .from(ItemPedidoTable)
           .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
@@ -281,6 +285,7 @@ const pedidoRoute = new Hono()
         .from(PedidoDeliveryTable)
         .where(and(
           eq(PedidoDeliveryTable.restauranteId, restauranteId),
+          eq(PedidoDeliveryTable.pagado, true),
           gte(PedidoDeliveryTable.createdAt, startOfDay),
           lt(PedidoDeliveryTable.createdAt, endOfDay)
         ))
@@ -294,6 +299,7 @@ const pedidoRoute = new Hono()
             cantidad: ItemPedidoDeliveryTable.cantidad,
             precioUnitario: ItemPedidoDeliveryTable.precioUnitario,
             nombreProducto: ProductoTable.nombre,
+            agregados: ItemPedidoDeliveryTable.agregados,
           })
           .from(ItemPedidoDeliveryTable)
           .leftJoin(ProductoTable, eq(ItemPedidoDeliveryTable.productoId, ProductoTable.id))
@@ -323,6 +329,7 @@ const pedidoRoute = new Hono()
         .from(PedidoTakeawayTable)
         .where(and(
           eq(PedidoTakeawayTable.restauranteId, restauranteId),
+          eq(PedidoTakeawayTable.pagado, true),
           gte(PedidoTakeawayTable.createdAt, startOfDay),
           lt(PedidoTakeawayTable.createdAt, endOfDay)
         ))
@@ -336,6 +343,7 @@ const pedidoRoute = new Hono()
             cantidad: ItemPedidoTakeawayTable.cantidad,
             precioUnitario: ItemPedidoTakeawayTable.precioUnitario,
             nombreProducto: ProductoTable.nombre,
+            agregados: ItemPedidoTakeawayTable.agregados,
           })
           .from(ItemPedidoTakeawayTable)
           .leftJoin(ProductoTable, eq(ItemPedidoTakeawayTable.productoId, ProductoTable.id))
@@ -362,6 +370,7 @@ const pedidoRoute = new Hono()
         .from(PedidoTable)
         .where(and(
           eq(PedidoTable.restauranteId, restauranteId),
+          eq(PedidoTable.pagado, true),
           gte(PedidoTable.createdAt, ninetyDaysAgo)
         ))
 
@@ -385,6 +394,7 @@ const pedidoRoute = new Hono()
           .from(PedidoDeliveryTable)
           .where(and(
             eq(PedidoDeliveryTable.restauranteId, restauranteId),
+            eq(PedidoDeliveryTable.pagado, true),
             gte(PedidoDeliveryTable.createdAt, ninetyDaysAgo)
           ))
           .groupBy(sql`DATE(${PedidoDeliveryTable.createdAt})`),
@@ -392,6 +402,7 @@ const pedidoRoute = new Hono()
           .from(PedidoTakeawayTable)
           .where(and(
             eq(PedidoTakeawayTable.restauranteId, restauranteId),
+            eq(PedidoTakeawayTable.pagado, true),
             gte(PedidoTakeawayTable.createdAt, ninetyDaysAgo)
           ))
           .groupBy(sql`DATE(${PedidoTakeawayTable.createdAt})`)
@@ -424,11 +435,62 @@ const pedidoRoute = new Hono()
           existing.cantidad += item.cantidad || 1
           existing.totalVendido += parseFloat(item.precioUnitario || '0') * (item.cantidad || 1)
           productSummary.set(key, existing)
+
+          // Extraer agregados como productos separados
+          let agregadosArray: any[] = []
+          if (item.agregados) {
+            if (typeof item.agregados === 'string') {
+              try { agregadosArray = JSON.parse(item.agregados) } catch (e) { }
+            } else if (Array.isArray(item.agregados)) {
+              agregadosArray = item.agregados
+            }
+          }
+
+          agregadosArray.forEach((agregado: any) => {
+            const agKey = `[Extra] ${agregado.nombre}`
+            const existingAg = productSummary.get(agKey) || { nombre: agKey, cantidad: 0, totalVendido: 0 }
+            existingAg.cantidad += item.cantidad || 1
+            existingAg.totalVendido += parseFloat(agregado.precio || '0') * (item.cantidad || 1)
+            productSummary.set(agKey, existingAg)
+          })
         })
       }
 
       mesaPedidosFinal.filter(p => p.estado !== 'archived' && p.totalItems > 0).forEach(p => addToSummary(p.items))
-      deliveryPedidosConItems.filter(p => p.estado !== 'archived' && p.estado !== 'cancelled').forEach(p => addToSummary(p.items))
+
+      deliveryPedidosConItems.filter(p => p.estado !== 'archived' && p.estado !== 'cancelled').forEach(p => {
+        addToSummary(p.items)
+
+        // Deducir el envío dinámico
+        const pedidoTotal = parseFloat(p.total || '0')
+        let sumItems = 0
+        p.items.forEach(item => {
+          const itemQuantity = item.cantidad || 1
+          sumItems += parseFloat(item.precioUnitario || '0') * itemQuantity
+
+          let agregadosArray: any[] = []
+          if (item.agregados) {
+            if (typeof item.agregados === 'string') {
+              try { agregadosArray = JSON.parse(item.agregados) } catch (e) { }
+            } else if (Array.isArray(item.agregados)) {
+              agregadosArray = item.agregados
+            }
+          }
+          agregadosArray.forEach((agregado: any) => {
+            sumItems += parseFloat(agregado.precio || '0') * itemQuantity
+          })
+        })
+
+        const deliveryFee = pedidoTotal - sumItems
+        if (deliveryFee > 0.01) {
+          const key = 'Delivery'
+          const existing = productSummary.get(key) || { nombre: key, cantidad: 0, totalVendido: 0 }
+          existing.cantidad += 1
+          existing.totalVendido += deliveryFee
+          productSummary.set(key, existing)
+        }
+      })
+
       takeawayPedidosConItems.filter(p => p.estado !== 'archived' && p.estado !== 'cancelled').forEach(p => addToSummary(p.items))
 
       const productosVendidos = Array.from(productSummary.values()).sort((a, b) => b.cantidad - a.cantidad)
