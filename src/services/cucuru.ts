@@ -50,33 +50,11 @@ export async function asignarAliasAPedido({
     const { cucuruApiKey, cucuruCollectorId, id: restauranteId } = restaurante;
 
     return await db.transaction(async (tx: any) => {
-        // 1. Buscar una cuenta disponible
-        // skipLocked es crucial para evitar cuellos de botella y errores en concurrencia
-        const availableAccounts = await tx
-            .select()
-            .from(accountPool)
-            .where(and(
-                eq(accountPool.restauranteId, restauranteId),
-                eq(accountPool.estado, 'disponible')
-            ))
-            .limit(1)
-            .for('update', { skipLocked: true });
+        // Cada pedido obtiene un alias nuevo y exclusivo. Los alias nunca se
+        // reciclan para evitar que webhooks duplicados/retrasados de Cucuru
+        // acrediten el pedido equivocado.
 
-        if (availableAccounts.length > 0) {
-            const cuenta = availableAccounts[0];
-
-            await tx
-                .update(accountPool)
-                .set({ estado: 'asignado', pedidoIdAsignado: pedidoId, updatedAt: new Date() })
-                .where(eq(accountPool.id, cuenta.id));
-
-            return {
-                alias: cuenta.alias,
-                accountNumber: cuenta.accountNumber
-            };
-        }
-
-        // 2. Si no hay disponibles, contar cuántas existen en total
+        // 1. Contar cuántos alias existen en total
         const countQueryRows = await tx
             .select({ count: sql<number>`count(*)` })
             .from(accountPool)

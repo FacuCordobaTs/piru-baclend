@@ -73,15 +73,21 @@ const cucuruWebhookHandler = async (c: any) => {
       }
     }
 
-    // Helper para liberar el alias
-    const freePoolRecord = async () => {
-      if (poolRecordId) {
-        await db.update(AccountPoolTable)
-          .set({ estado: 'disponible', pedidoIdAsignado: null, updatedAt: new Date() })
-          .where(eq(AccountPoolTable.id, poolRecordId));
-        console.log(`♻️ Alias Reciclado: CVU ${collectionAccount} ha sido liberado para futuros pedidos.`);
-      }
-    };
+    // Si el restaurante usa alias dinámicos (cucuruConfigurado) y el pago NO
+    // vino por un alias del pool, rechazar el matcheo por monto para evitar
+    // que pagos al alias principal crucen pedidos.
+    const resConf = await db.select({ cucuruConfigurado: RestauranteTable.cucuruConfigurado })
+      .from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1);
+    const usaDinamicos = resConf.length > 0 && resConf[0].cucuruConfigurado;
+
+    if (usaDinamicos && !assignedPedidoId) {
+      console.log(`⚠️ [Cucuru] Pago de $${amount} al alias principal del restaurante ${restauranteId} ignorado (usa alias dinámicos). collectionId=${collectionId}`);
+      return c.json({ status: 'ignored_no_pool_match' }, 200);
+    }
+
+    // Los alias dinámicos NO se reciclan. Cada pedido mantiene su alias
+    // permanentemente para evitar que webhooks duplicados/retrasados de Cucuru
+    // crucen pagos entre pedidos.
 
     // 1. Buscar en Delivery
     const pedidosDelivery = await db.select()
@@ -133,8 +139,6 @@ const cucuruWebhookHandler = async (c: any) => {
         leida: false,
         pedidoId: pedido.id
       });
-
-      await freePoolRecord();
 
       console.log(`🚀 [Cucuru] Pago acreditado para Delivery #${pedido.id}`);
       wsManager.broadcastAdminUpdate(restauranteId, 'delivery');
@@ -234,8 +238,6 @@ const cucuruWebhookHandler = async (c: any) => {
         pedidoId: pedido.id
       });
 
-      await freePoolRecord();
-
       console.log(`🏃‍♂️ [Cucuru] Pago acreditado para TakeAway #${pedido.id}`);
       wsManager.broadcastAdminUpdate(restauranteId, 'takeaway');
       wsManager.notifyPublicClientPayment('takeaway', pedido.id);
@@ -296,9 +298,6 @@ const cucuruWebhookHandler = async (c: any) => {
 
     if (pedidos.length === 0) {
       console.log('⚠️ Pago Huérfano / Posible Propina (No Match) - Buscado en Delivery, Takeaway y Mesas');
-      // Aun si no lo encontramos para acoplar a un pedido (tal vez alguien transfirió demás),
-      // reciclamos el CVU por seguridad para que no quede incrustado
-      await freePoolRecord();
       return c.json({ status: 'received' }, 200);
     }
 
@@ -338,8 +337,6 @@ const cucuruWebhookHandler = async (c: any) => {
         mensaje: `Pago de $${amount} recibido vía Cucuru`,
         detalles: `Transacción: ${collectionId}`
       });
-
-    await freePoolRecord();
 
     console.log(`🍽️ [Cucuru] Pago acreditado para Mesa #${pedido.mesaId}`);
     if (pedido.mesaId) wsManager.broadcastEstadoToAdmins(pedido.mesaId);
