@@ -72,6 +72,7 @@ const takeawayRoute = new Hono()
                 deliveredAt: PedidoTakeawayTable.deliveredAt,
                 pagado: PedidoTakeawayTable.pagado,
                 metodoPago: PedidoTakeawayTable.metodoPago,
+                impreso: PedidoTakeawayTable.impreso,
             })
             .from(PedidoTakeawayTable)
             .where(estado

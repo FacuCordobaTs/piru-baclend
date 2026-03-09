@@ -120,6 +120,7 @@ export const pedido = mysqlTable("pedido", {
     total: decimal("total", { precision: 10, scale: 2 }).default('0.00'),
     pagado: boolean("pagado").default(false).notNull(),
     metodoPago: varchar('metodo_pago', { length: 50 }),
+    impreso: boolean("impreso").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     closedAt: timestamp("closed_at"),
 });
@@ -204,6 +205,7 @@ export const pedidoDelivery = mysqlTable("pedido_delivery", {
     notas: varchar("notas", { length: 500 }),
     puntosGanados: int("puntos_ganados").default(0),
     puntosUsados: int("puntos_usados").default(0),
+    impreso: boolean("impreso").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     deliveredAt: timestamp("delivered_at"),
 });
@@ -234,6 +236,7 @@ export const pedidoTakeaway = mysqlTable("pedido_takeaway", {
     notas: varchar("notas", { length: 500 }),
     puntosGanados: int("puntos_ganados").default(0),
     puntosUsados: int("puntos_usados").default(0),
+    impreso: boolean("impreso").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     deliveredAt: timestamp("delivered_at"),
 });

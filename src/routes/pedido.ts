@@ -1221,5 +1221,36 @@ const pedidoRoute = new Hono()
     }
   })
 
+  .put('/:tipo/:id/marcar-impreso', async (c) => {
+    const db = drizzle(pool)
+    const tipo = c.req.param('tipo')
+    const id = Number(c.req.param('id'))
+
+    if (!id || isNaN(id)) {
+      return c.json({ success: false, message: 'ID inválido' }, 400)
+    }
+
+    try {
+      switch (tipo) {
+        case 'mesa':
+          await db.update(PedidoTable).set({ impreso: true }).where(eq(PedidoTable.id, id))
+          break
+        case 'delivery':
+          await db.update(PedidoDeliveryTable).set({ impreso: true }).where(eq(PedidoDeliveryTable.id, id))
+          break
+        case 'takeaway':
+          await db.update(PedidoTakeawayTable).set({ impreso: true }).where(eq(PedidoTakeawayTable.id, id))
+          break
+        default:
+          return c.json({ success: false, message: 'Tipo de pedido inválido. Usar: mesa, delivery, takeaway' }, 400)
+      }
+
+      return c.json({ success: true, message: `Pedido ${tipo} #${id} marcado como impreso` }, 200)
+    } catch (error) {
+      console.error('Error al marcar pedido como impreso:', error)
+      return c.json({ success: false, message: 'Error al marcar como impreso', error: (error as Error).message }, 500)
+    }
+  })
+
 export { pedidoRoute }
 
