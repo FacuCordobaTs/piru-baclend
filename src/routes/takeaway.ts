@@ -207,16 +207,16 @@ const takeawayRoute = new Hono()
         const { nombreCliente, telefono, notas, items } = c.req.valid('json')
 
         // Verificar que todos los productos existen y obtener sus precios
-        const productosIds = items.map(i => i.productoId)
+        const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
         const productos = await db
             .select()
             .from(ProductoTable)
             .where(and(
-                inArray(ProductoTable.id, productosIds),
+                inArray(ProductoTable.id, uniqueProductosIds),
                 eq(ProductoTable.restauranteId, restauranteId)
             ))
 
-        if (productos.length !== productosIds.length) {
+        if (productos.length !== uniqueProductosIds.length) {
             return c.json({ message: 'Algunos productos no fueron encontrados', success: false }, 400)
         }
 

@@ -157,7 +157,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
     const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, items } = c.req.valid('json')
 
     try {
-        const productosIds = items.map(i => i.productoId)
+        const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
         const productos = await db
             .select({
                 producto: ProductoTable,
@@ -166,11 +166,11 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             .from(ProductoTable)
             .leftJoin(ProductoPuntosTable, eq(ProductoTable.id, ProductoPuntosTable.productoId))
             .where(and(
-                require('drizzle-orm').inArray(ProductoTable.id, productosIds),
+                require('drizzle-orm').inArray(ProductoTable.id, uniqueProductosIds),
                 eq(ProductoTable.restauranteId, restauranteId)
             ))
 
-        if (productos.length !== productosIds.length) {
+        if (productos.length !== uniqueProductosIds.length) {
             return c.json({ message: 'Algunos productos no fueron encontrados', success: false }, 400)
         }
 
@@ -437,7 +437,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
     const { restauranteId, nombreCliente, telefono, notas, metodoPago, items } = c.req.valid('json')
 
     try {
-        const productosIds = items.map(i => i.productoId)
+        const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
         const productos = await db
             .select({
                 producto: ProductoTable,
@@ -446,11 +446,11 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             .from(ProductoTable)
             .leftJoin(ProductoPuntosTable, eq(ProductoTable.id, ProductoPuntosTable.productoId))
             .where(and(
-                require('drizzle-orm').inArray(ProductoTable.id, productosIds),
+                require('drizzle-orm').inArray(ProductoTable.id, uniqueProductosIds),
                 eq(ProductoTable.restauranteId, restauranteId)
             ))
 
-        if (productos.length !== productosIds.length) {
+        if (productos.length !== uniqueProductosIds.length) {
             return c.json({ message: 'Algunos productos no fueron encontrados', success: false }, 400)
         }
 
