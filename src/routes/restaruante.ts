@@ -130,6 +130,7 @@ restauranteRoute.get('/profile', async (c) => {
         imagenUrl: ProductoTable.imagenUrl,
         createdAt: ProductoTable.createdAt,
         categoriaNombre: CategoriaTable.nombre,
+        descuento: ProductoTable.descuento,
       })
       .from(ProductoTable)
       .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
@@ -166,6 +167,7 @@ restauranteRoute.get('/profile', async (c) => {
       imagenUrl: p.imagenUrl,
       createdAt: p.createdAt,
       categoria: p.categoriaNombre || null,
+      descuento: p.descuento,
       etiquetas: etiquetasPorProducto.get(p.id) || [],
     }))
 
