@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable } from '../db/schema'
+import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { eq, and } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
@@ -41,6 +41,17 @@ publicRoute.get('/restaurante/:username', async (c) => {
         }
 
         const restauranteId = restaurante[0].id
+
+        // Obtener horarios de atención
+        const horarios = await db
+            .select({
+                id: HorarioRestauranteTable.id,
+                diaSemana: HorarioRestauranteTable.diaSemana,
+                horaApertura: HorarioRestauranteTable.horaApertura,
+                horaCierre: HorarioRestauranteTable.horaCierre,
+            })
+            .from(HorarioRestauranteTable)
+            .where(eq(HorarioRestauranteTable.restauranteId, restauranteId))
 
         // Obtener productos activos con categoría
         const productosRaw = await db
@@ -104,7 +115,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
             success: true,
             data: {
                 restaurante: restaurante[0],
-                productos: productosConIngredientes
+                productos: productosConIngredientes,
+                horarios
             }
         }, 200)
 

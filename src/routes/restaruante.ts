@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { restaurante as RestauranteTable, mesa as MesaTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable } from '../db/schema'
+import { restaurante as RestauranteTable, mesa as MesaTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, horarioRestaurante as HorarioRestauranteTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
@@ -555,6 +555,66 @@ restauranteRoute.post('/configurar-cucuru', zValidator('json', configCucuruSchem
   } catch (error) {
     console.error('Error configurando Cucuru:', error)
     return c.json({ message: 'Error configurando Cucuru', error: (error as Error).message, success: false }, 500)
+  }
+})
+
+// GET horarios del restaurante autenticado
+restauranteRoute.get('/horarios', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const horarios = await db
+      .select({
+        id: HorarioRestauranteTable.id,
+        diaSemana: HorarioRestauranteTable.diaSemana,
+        horaApertura: HorarioRestauranteTable.horaApertura,
+        horaCierre: HorarioRestauranteTable.horaCierre,
+      })
+      .from(HorarioRestauranteTable)
+      .where(eq(HorarioRestauranteTable.restauranteId, restauranteId))
+
+    return c.json({ message: 'Horarios obtenidos', success: true, horarios }, 200)
+  } catch (error) {
+    console.error('Error getting horarios:', error)
+    return c.json({ message: 'Error al obtener horarios', success: false }, 500)
+  }
+})
+
+// PUT reemplazar todos los horarios del restaurante
+const horarioItemSchema = z.object({
+  diaSemana: z.number().int().min(0).max(6),
+  horaApertura: z.string().regex(/^\d{2}:\d{2}$/),
+  horaCierre: z.string().regex(/^\d{2}:\d{2}$/),
+})
+
+const updateHorariosSchema = z.object({
+  horarios: z.array(horarioItemSchema),
+})
+
+restauranteRoute.put('/horarios', zValidator('json', updateHorariosSchema), async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const { horarios } = c.req.valid('json')
+
+  try {
+    await db.delete(HorarioRestauranteTable).where(eq(HorarioRestauranteTable.restauranteId, restauranteId))
+
+    if (horarios.length > 0) {
+      await db.insert(HorarioRestauranteTable).values(
+        horarios.map((h) => ({
+          restauranteId,
+          diaSemana: h.diaSemana,
+          horaApertura: h.horaApertura,
+          horaCierre: h.horaCierre,
+        }))
+      )
+    }
+
+    return c.json({ message: 'Horarios actualizados correctamente', success: true }, 200)
+  } catch (error) {
+    console.error('Error updating horarios:', error)
+    return c.json({ message: 'Error al actualizar horarios', success: false }, 500)
   }
 })
 

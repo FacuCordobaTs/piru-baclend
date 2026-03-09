@@ -269,6 +269,15 @@ export const accountPool = mysqlTable("account_pool", {
     updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Horarios de atención del restaurante (múltiples turnos por día)
+export const horarioRestaurante = mysqlTable("horario_restaurante", {
+    id: int("id").primaryKey().autoincrement(),
+    restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+    diaSemana: int("dia_semana").notNull(), // 0=Domingo, 1=Lunes ... 6=Sábado
+    horaApertura: varchar("hora_apertura", { length: 5 }).notNull(), // "HH:mm"
+    horaCierre: varchar("hora_cierre", { length: 5 }).notNull(), // "HH:mm"
+});
+
 // Zonas de delivery con polígonos y precios dinámicos
 export const zonaDelivery = mysqlTable("zona_delivery", {
     id: int("id").primaryKey().autoincrement(),
