@@ -13,6 +13,7 @@ import { authMiddleware } from '../middleware/auth'
 import { eq, desc, and, inArray, not } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
+import { wsManager } from '../websocket/manager'
 
 // Schemas de validación
 const createDeliverySchema = z.object({
@@ -301,6 +302,10 @@ const deliveryRoute = new Hono()
             .update(PedidoDeliveryTable)
             .set(updateData)
             .where(eq(PedidoDeliveryTable.id, pedidoId))
+
+        if (pedido[0].telefono) {
+            wsManager.notifyTrackingClients(restauranteId, pedido[0].telefono, pedidoId, 'delivery', estado)
+        }
 
         return c.json({
             message: 'Estado actualizado correctamente',

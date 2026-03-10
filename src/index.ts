@@ -256,6 +256,44 @@ app.get(
   })
 )
 
+// WebSocket endpoint for order tracking (customer-facing MisPedidos)
+app.get(
+  '/ws/tracking/:restauranteId/:telefono',
+  upgradeWebSocket(async (c: any) => {
+    const restauranteId = parseInt(c.req.param('restauranteId'), 10);
+    const telefono = decodeURIComponent(c.req.param('telefono'));
+    const key = `tracking-${restauranteId}-${telefono}`;
+
+    return {
+      async onOpen(event: any, ws: any) {
+        if (!wsManager.trackingClients.has(key)) {
+          wsManager.trackingClients.set(key, new Set());
+        }
+        wsManager.trackingClients.get(key)!.add(ws);
+        console.log(`📱 Tracking client conectado: ${key}`);
+      },
+      async onMessage(event: any, ws: any) {
+        try {
+          const data = JSON.parse(typeof event.data === 'string' ? event.data : event.data.toString());
+          if (data.type === 'PING') ws.send(JSON.stringify({ type: 'PONG' }));
+        } catch {}
+      },
+      async onClose(event: any, ws: any) {
+        if (wsManager.trackingClients.has(key)) {
+          wsManager.trackingClients.get(key)!.delete(ws);
+          if (wsManager.trackingClients.get(key)!.size === 0) {
+            wsManager.trackingClients.delete(key);
+          }
+        }
+        console.log(`📱 Tracking client desconectado: ${key}`);
+      },
+      async onError(event: any, ws: any) {
+        console.error('❌ Tracking WebSocket error:', event);
+      }
+    };
+  })
+)
+
 // WebSocket endpoint for public clients (e.g. tracking Delivery/Takeaway payment success)
 app.get(
   '/ws/public/:tipo/:pedidoId',

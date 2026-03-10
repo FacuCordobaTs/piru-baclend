@@ -21,6 +21,7 @@ class WebSocketManager {
   private adminSessions: Map<number, AdminSession> = new Map(); // restauranteId -> AdminSession
   private mesaToRestaurante: Map<number, number> = new Map(); // mesaId -> restauranteId
   public publicClients: Map<string, Set<any>> = new Map(); // key -> Set of ws (key = {tipo}-{pedidoId})
+  public trackingClients: Map<string, Set<any>> = new Map(); // key -> Set of ws (key = tracking-{restauranteId}-{telefono})
   private db = drizzle(pool);
 
   // ==================== ADMIN METHODS ====================
@@ -1261,6 +1262,23 @@ class WebSocketManager {
     } catch (error) {
       console.error('Error verificando si todos pagaron:', error);
       return false; // En caso de error, asumir que no todos pagaron
+    }
+  }
+
+  notifyTrackingClients(restauranteId: number, telefono: string, pedidoId: number, tipo: string, nuevoEstado: string) {
+    const key = `tracking-${restauranteId}-${telefono}`;
+    const clients = this.trackingClients.get(key);
+    if (clients && clients.size > 0) {
+      const message = JSON.stringify({
+        type: 'PEDIDO_ESTADO_ACTUALIZADO',
+        payload: { pedidoId, tipo, estado: nuevoEstado }
+      });
+      clients.forEach(ws => {
+        if (ws.readyState === 1) {
+          try { ws.send(message); } catch (e) { console.error('Error enviando tracking update:', e); }
+        }
+      });
+      console.log(`📱 Tracking update enviado a ${clients.size} cliente(s): ${key} -> ${nuevoEstado}`);
     }
   }
 
