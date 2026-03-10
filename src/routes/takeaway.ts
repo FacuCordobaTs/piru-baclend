@@ -27,7 +27,7 @@ const createTakeawaySchema = z.object({
 })
 
 const updateEstadoSchema = z.object({
-    estado: z.enum(['pending', 'preparing', 'ready', 'delivered', 'cancelled', 'archived'])
+    estado: z.enum(['pending', 'preparing', 'ready', 'dispatched', 'delivered', 'cancelled', 'archived'])
 })
 
 const takeawayRoute = new Hono()

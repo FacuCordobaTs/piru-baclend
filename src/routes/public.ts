@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { pool } from '../db'
 import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, desc } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp } from '../services/whatsapp'
 import { productoPuntos as ProductoPuntosTable, zonaDelivery as ZonaDeliveryTable } from '../db/schema'
@@ -784,6 +784,109 @@ publicRoute.get('/restaurante/:id/check-zona', async (c) => {
     } catch (error) {
         console.error('Error checking delivery zone:', error)
         return c.json({ success: false, message: 'Error al verificar zona' }, 500)
+    }
+})
+
+publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = parseInt(c.req.param('id'), 10)
+    const telefono = c.req.param('telefono')
+
+    if (isNaN(restauranteId) || !telefono) {
+        return c.json({ success: false, message: 'Parámetros inválidos' }, 400)
+    }
+
+    try {
+        const pedidosDelivery = await db
+            .select({
+                id: PedidoDeliveryTable.id,
+                estado: PedidoDeliveryTable.estado,
+                total: PedidoDeliveryTable.total,
+                nombreCliente: PedidoDeliveryTable.nombreCliente,
+                direccion: PedidoDeliveryTable.direccion,
+                notas: PedidoDeliveryTable.notas,
+                metodoPago: PedidoDeliveryTable.metodoPago,
+                pagado: PedidoDeliveryTable.pagado,
+                createdAt: PedidoDeliveryTable.createdAt,
+                deliveredAt: PedidoDeliveryTable.deliveredAt,
+            })
+            .from(PedidoDeliveryTable)
+            .where(and(
+                eq(PedidoDeliveryTable.restauranteId, restauranteId),
+                eq(PedidoDeliveryTable.telefono, telefono)
+            ))
+            .orderBy(desc(PedidoDeliveryTable.createdAt))
+
+        const deliveryConItems = await Promise.all(
+            pedidosDelivery.map(async (p) => {
+                const items = await db
+                    .select({
+                        id: ItemPedidoDeliveryTable.id,
+                        productoId: ItemPedidoDeliveryTable.productoId,
+                        cantidad: ItemPedidoDeliveryTable.cantidad,
+                        precioUnitario: ItemPedidoDeliveryTable.precioUnitario,
+                        ingredientesExcluidos: ItemPedidoDeliveryTable.ingredientesExcluidos,
+                        agregados: ItemPedidoDeliveryTable.agregados,
+                        esCanjePuntos: ItemPedidoDeliveryTable.esCanjePuntos,
+                        productoNombre: ProductoTable.nombre,
+                    })
+                    .from(ItemPedidoDeliveryTable)
+                    .leftJoin(ProductoTable, eq(ItemPedidoDeliveryTable.productoId, ProductoTable.id))
+                    .where(eq(ItemPedidoDeliveryTable.pedidoDeliveryId, p.id))
+
+                const totalItems = items.reduce((sum, i) => sum + (i.cantidad ?? 1), 0)
+                return { ...p, tipo: 'delivery' as const, items, totalItems }
+            })
+        )
+
+        const pedidosTakeaway = await db
+            .select({
+                id: PedidoTakeawayTable.id,
+                estado: PedidoTakeawayTable.estado,
+                total: PedidoTakeawayTable.total,
+                nombreCliente: PedidoTakeawayTable.nombreCliente,
+                notas: PedidoTakeawayTable.notas,
+                metodoPago: PedidoTakeawayTable.metodoPago,
+                pagado: PedidoTakeawayTable.pagado,
+                createdAt: PedidoTakeawayTable.createdAt,
+                deliveredAt: PedidoTakeawayTable.deliveredAt,
+            })
+            .from(PedidoTakeawayTable)
+            .where(and(
+                eq(PedidoTakeawayTable.restauranteId, restauranteId),
+                eq(PedidoTakeawayTable.telefono, telefono)
+            ))
+            .orderBy(desc(PedidoTakeawayTable.createdAt))
+
+        const takeawayConItems = await Promise.all(
+            pedidosTakeaway.map(async (p) => {
+                const items = await db
+                    .select({
+                        id: ItemPedidoTakeawayTable.id,
+                        productoId: ItemPedidoTakeawayTable.productoId,
+                        cantidad: ItemPedidoTakeawayTable.cantidad,
+                        precioUnitario: ItemPedidoTakeawayTable.precioUnitario,
+                        ingredientesExcluidos: ItemPedidoTakeawayTable.ingredientesExcluidos,
+                        agregados: ItemPedidoTakeawayTable.agregados,
+                        esCanjePuntos: ItemPedidoTakeawayTable.esCanjePuntos,
+                        productoNombre: ProductoTable.nombre,
+                    })
+                    .from(ItemPedidoTakeawayTable)
+                    .leftJoin(ProductoTable, eq(ItemPedidoTakeawayTable.productoId, ProductoTable.id))
+                    .where(eq(ItemPedidoTakeawayTable.pedidoTakeawayId, p.id))
+
+                const totalItems = items.reduce((sum, i) => sum + (i.cantidad ?? 1), 0)
+                return { ...p, tipo: 'takeaway' as const, items, totalItems }
+            })
+        )
+
+        const pedidos = [...deliveryConItems, ...takeawayConItems]
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+
+        return c.json({ success: true, data: pedidos }, 200)
+    } catch (error) {
+        console.error('Error fetching mis pedidos:', error)
+        return c.json({ success: false, message: 'Error al obtener pedidos', error: (error as Error).message }, 500)
     }
 })
 
