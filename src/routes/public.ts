@@ -899,16 +899,17 @@ publicRoute.get('/pedido/:tipo/:id/status', async (c) => {
     try {
         const db = drizzle(pool);
         let pagado = false;
+        let estado: string | null = null;
 
         if (tipo === 'delivery') {
-            const p = await db.select({ pagado: PedidoDeliveryTable.pagado }).from(PedidoDeliveryTable).where(eq(PedidoDeliveryTable.id, id)).limit(1);
-            if (p.length > 0) pagado = p[0].pagado;
+            const p = await db.select({ pagado: PedidoDeliveryTable.pagado, estado: PedidoDeliveryTable.estado }).from(PedidoDeliveryTable).where(eq(PedidoDeliveryTable.id, id)).limit(1);
+            if (p.length > 0) { pagado = p[0].pagado; estado = p[0].estado; }
         } else if (tipo === 'takeaway') {
-            const p = await db.select({ pagado: PedidoTakeawayTable.pagado }).from(PedidoTakeawayTable).where(eq(PedidoTakeawayTable.id, id)).limit(1);
-            if (p.length > 0) pagado = p[0].pagado;
+            const p = await db.select({ pagado: PedidoTakeawayTable.pagado, estado: PedidoTakeawayTable.estado }).from(PedidoTakeawayTable).where(eq(PedidoTakeawayTable.id, id)).limit(1);
+            if (p.length > 0) { pagado = p[0].pagado; estado = p[0].estado; }
         }
 
-        return c.json({ success: true, pagado }, 200);
+        return c.json({ success: true, pagado, estado }, 200);
     } catch (error) {
         console.error('Error consultando estado del pedido:', error);
         return c.json({ success: false, error: 'Internal server error' }, 500);
