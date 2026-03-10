@@ -813,7 +813,8 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
             .from(PedidoDeliveryTable)
             .where(and(
                 eq(PedidoDeliveryTable.restauranteId, restauranteId),
-                eq(PedidoDeliveryTable.telefono, telefono)
+                eq(PedidoDeliveryTable.telefono, telefono),
+                eq(PedidoDeliveryTable.pagado, true)
             ))
             .orderBy(desc(PedidoDeliveryTable.createdAt))
 
@@ -854,7 +855,8 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
             .from(PedidoTakeawayTable)
             .where(and(
                 eq(PedidoTakeawayTable.restauranteId, restauranteId),
-                eq(PedidoTakeawayTable.telefono, telefono)
+                eq(PedidoTakeawayTable.telefono, telefono),
+                eq(PedidoTakeawayTable.pagado, true)
             ))
             .orderBy(desc(PedidoTakeawayTable.createdAt))
 
