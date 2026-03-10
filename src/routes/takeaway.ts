@@ -299,6 +299,7 @@ const takeawayRoute = new Hono()
             .set(updateData)
             .where(eq(PedidoTakeawayTable.id, pedidoId))
 
+        wsManager.notifyPublicClientEstado('takeaway', pedidoId, estado)
         if (pedido[0].telefono) {
             wsManager.notifyTrackingClients(restauranteId, pedido[0].telefono, pedidoId, 'takeaway', estado)
         }

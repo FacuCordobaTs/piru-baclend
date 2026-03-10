@@ -303,6 +303,7 @@ const deliveryRoute = new Hono()
             .set(updateData)
             .where(eq(PedidoDeliveryTable.id, pedidoId))
 
+        wsManager.notifyPublicClientEstado('delivery', pedidoId, estado)
         if (pedido[0].telefono) {
             wsManager.notifyTrackingClients(restauranteId, pedido[0].telefono, pedidoId, 'delivery', estado)
         }

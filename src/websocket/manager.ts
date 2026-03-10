@@ -1282,6 +1282,23 @@ class WebSocketManager {
     }
   }
 
+  notifyPublicClientEstado(tipo: string, pedidoId: number, nuevoEstado: string) {
+    const key = `${tipo}-${pedidoId}`;
+    const clients = this.publicClients.get(key);
+    if (clients) {
+      const message = JSON.stringify({
+        type: 'PEDIDO_ESTADO_ACTUALIZADO',
+        payload: { pedidoId, tipo, estado: nuevoEstado }
+      });
+      clients.forEach(ws => {
+        if (ws.readyState === 1) {
+          try { ws.send(message); } catch (e) { console.error('Error enviando estado a public client:', e); }
+        }
+      });
+      console.log(`🔌 Estado update enviado a ${clients.size} public client(s) para ${key} -> ${nuevoEstado}`);
+    }
+  }
+
   // Notificar a cliente público (Delivery/Takeaway) de que su pago se acreditó
   notifyPublicClientPayment(tipo: string, pedidoId: number) {
     const key = `${tipo}-${pedidoId}`;
