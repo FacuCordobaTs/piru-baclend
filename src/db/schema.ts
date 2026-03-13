@@ -37,6 +37,8 @@ export const restaurante = mysqlTable("restaurante", {
     colorPrimario: varchar("color_primario", { length: 50 }),
     colorSecundario: varchar("color_secundario", { length: 50 }),
     disenoAlternativo: boolean("diseno_alternativo").default(false).notNull(),
+    // Rapiboy - integración logística delivery
+    rapiboyToken: varchar("rapiboy_token", { length: 512 }),
 });
 
 export const categoria = mysqlTable("categoria", {
@@ -208,6 +210,9 @@ export const pedidoDelivery = mysqlTable("pedido_delivery", {
     impreso: boolean("impreso").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     deliveredAt: timestamp("delivered_at"),
+    // Rapiboy - tracking de envío
+    rapiboyTrackingUrl: varchar("rapiboy_tracking_url", { length: 512 }),
+    rapiboyTripId: varchar("rapiboy_trip_id", { length: 100 }),
 });
 
 // Items del pedido de delivery
