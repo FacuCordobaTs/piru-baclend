@@ -1282,13 +1282,13 @@ class WebSocketManager {
     }
   }
 
-  notifyPublicClientEstado(tipo: string, pedidoId: number, nuevoEstado: string) {
+  notifyPublicClientEstado(tipo: string, pedidoId: number, nuevoEstado: string, trackingUrl?: string) {
     const key = `${tipo}-${pedidoId}`;
     const clients = this.publicClients.get(key);
     if (clients) {
       const message = JSON.stringify({
         type: 'PEDIDO_ESTADO_ACTUALIZADO',
-        payload: { pedidoId, tipo, estado: nuevoEstado }
+        payload: { pedidoId, tipo, estado: nuevoEstado, trackingUrl }
       });
       clients.forEach(ws => {
         if (ws.readyState === 1) {

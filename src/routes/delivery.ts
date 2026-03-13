@@ -76,6 +76,7 @@ const deliveryRoute = new Hono()
                 pagado: PedidoDeliveryTable.pagado,
                 metodoPago: PedidoDeliveryTable.metodoPago,
                 impreso: PedidoDeliveryTable.impreso,
+                rapiboyTrackingUrl: PedidoDeliveryTable.rapiboyTrackingUrl,
             })
             .from(PedidoDeliveryTable)
             .where(estado
@@ -389,6 +390,78 @@ const deliveryRoute = new Hono()
             message: 'Pedido eliminado correctamente',
             success: true
         }, 200)
+    })
+
+    // Asignar cadete Rapiboy
+    .post('/rapiboy/asignar', zValidator('json', z.object({ pedidoId: z.number() })), async (c) => {
+        const db = drizzle(pool)
+        const restauranteId = (c as any).user.id
+        const { pedidoId } = c.req.valid('json')
+
+        // Obtener datos del restaurante
+        const res = await db.select({ 
+            rapiboyToken: RestauranteTable.rapiboyToken,
+            direccion: RestauranteTable.direccion
+        }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+
+        if (!res || res.length === 0 || !res[0].rapiboyToken) {
+            return c.json({ message: 'Token de Rapiboy no configurado', success: false }, 400)
+        }
+
+        const restaurante = res[0]
+
+        // Obtener datos del pedido
+        const ped = await db.select().from(PedidoDeliveryTable)
+            .where(and(eq(PedidoDeliveryTable.id, pedidoId), eq(PedidoDeliveryTable.restauranteId, restauranteId)))
+            .limit(1)
+
+        if (!ped || ped.length === 0) {
+            return c.json({ message: 'Pedido no encontrado', success: false }, 404)
+        }
+
+        const pedido = ped[0]
+
+        // Llamar a la API de Rapiboy
+        const rapiboyPayload = {
+            DireccionOrigen: restaurante.direccion || 'Dirección no especificada',
+            LatitudOrigen: '0.0',
+            LongitudOrigen: '0.0',
+            DireccionDestino: pedido.direccion || 'Dirección no especificada',
+            LatitudDestino: pedido.latitud ? pedido.latitud.replace(',', '.') : '0.0',
+            LongitudDestino: pedido.longitud ? pedido.longitud.replace(',', '.') : '0.0',
+            ReferenciaExterna: pedido.id.toString(),
+            ValorDeclarado: pedido.total || '0'
+        }
+
+        try {
+            const rapiboyRes = await fetch('https://rapiboy.com/v1/Viaje/Post', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Token': restaurante.rapiboyToken as string
+                },
+                body: JSON.stringify(rapiboyPayload)
+            })
+
+            const rapiboyData = await rapiboyRes.json().catch(() => null)
+
+            if (!rapiboyRes.ok) {
+                console.error('Error de Rapiboy:', rapiboyData)
+                return c.json({ message: 'Error en Rapiboy', details: rapiboyData, success: false }, 400)
+            }
+
+            const tripId = rapiboyData?.id || rapiboyData?.Id || rapiboyData?.IdViaje || 'asignado'
+
+            await db.update(PedidoDeliveryTable)
+                .set({ rapiboyTripId: String(tripId).substring(0, 100) })
+                .where(eq(PedidoDeliveryTable.id, pedidoId))
+
+            return c.json({ message: 'Viaje asignado exitosamente', success: true, tripId }, 200)
+
+        } catch (error) {
+            console.error('Exception calling rapiboy:', error)
+            return c.json({ message: 'Error de conexión con Rapiboy', success: false }, 500)
+        }
     })
 
 export { deliveryRoute }

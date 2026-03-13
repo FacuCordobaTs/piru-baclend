@@ -358,4 +358,76 @@ webhookRoute.get('/cucuru/collection_received/collection_received', (c) => c.jso
 webhookRoute.post('/cucuru', cucuruWebhookHandler);
 webhookRoute.get('/cucuru', (c) => c.json({ status: 'ok' }, 200));
 
+// ======================== RAPIBOY WEBHOOK ========================
+webhookRoute.post('/rapiboy', async (c) => {
+  try {
+    const body = await c.req.json();
+    console.log(`🔔 [webhook] Recibido de Rapiboy (ReferenciaExterna: ${body.ReferenciaExterna})`);
+
+    // Procesar en background para retorno rápido 200 (evitar reintentos bloqueantes de Rapiboy)
+    const processRapiboyWebhook = async () => {
+      try {
+        const db = drizzle(pool);
+        const { ReferenciaExterna, TrackingUrl, Estado } = body;
+
+        if (!ReferenciaExterna) return;
+
+        const pedidoId = parseInt(String(ReferenciaExterna), 10);
+        if (isNaN(pedidoId)) return;
+
+        // Buscar el pedido
+        const pedidos = await db.select().from(PedidoDeliveryTable).where(eq(PedidoDeliveryTable.id, pedidoId)).limit(1);
+        if (pedidos.length === 0) return;
+
+        const pedido = pedidos[0];
+        const updateData: any = {};
+        let changedSomething = false;
+
+        // Determinar si debemos actualizar a "En Camino" (dispatched) o "Entregado" (delivered)
+        // Se buscan palabras clave o convenciones ID 3/4 comunes.
+        const strEstado = String(Estado).toLowerCase();
+        let nuevoEstadoInterno = pedido.estado;
+
+        if (strEstado.includes('en camino') || strEstado === '3' || strEstado.includes('retirado')) {
+           nuevoEstadoInterno = 'dispatched';
+        } else if (strEstado.includes('entregado') || strEstado === '4' || strEstado.includes('finalizado')) {
+           nuevoEstadoInterno = 'delivered';
+        }
+
+        if (TrackingUrl && TrackingUrl !== pedido.rapiboyTrackingUrl) {
+            updateData.rapiboyTrackingUrl = TrackingUrl;
+            changedSomething = true;
+        }
+
+        if (nuevoEstadoInterno !== pedido.estado) {
+            updateData.estado = nuevoEstadoInterno;
+            changedSomething = true;
+        }
+
+        if (changedSomething && pedido.restauranteId !== null) {
+            await db.update(PedidoDeliveryTable).set(updateData).where(eq(PedidoDeliveryTable.id, pedidoId));
+
+            // Actualizar a los administradores
+            wsManager.broadcastAdminUpdate(pedido.restauranteId, 'delivery');
+            
+            // Actualizar a los clientes públicos/tracking
+            wsManager.notifyPublicClientEstado('delivery', pedidoId, updateData.estado || pedido.estado, updateData.rapiboyTrackingUrl || pedido.rapiboyTrackingUrl || undefined);
+            
+            console.log(`✅ [Rapiboy] Pedido ${pedidoId} actualizado. Estado=${updateData.estado || pedido.estado}`);
+        }
+      } catch (err) {
+        console.error('❌ Error interno en Rapiboy webhook:', err);
+      }
+    };
+
+    processRapiboyWebhook(); // fire and forget
+    
+    return c.json({ status: 'ok' }, 200);
+  } catch (error) {
+    console.error('❌ Error parseando webhook Rapiboy:', error);
+    // Devolver 200 en vez de fallar para evitar encolamientos y reintentos innecesarios en la pasarela.
+    return c.json({ status: 'ignored_error' }, 200);
+  }
+});
+
 export { webhookRoute }

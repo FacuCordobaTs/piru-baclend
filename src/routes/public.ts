@@ -809,6 +809,7 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
                 pagado: PedidoDeliveryTable.pagado,
                 createdAt: PedidoDeliveryTable.createdAt,
                 deliveredAt: PedidoDeliveryTable.deliveredAt,
+                rapiboyTrackingUrl: PedidoDeliveryTable.rapiboyTrackingUrl,
             })
             .from(PedidoDeliveryTable)
             .where(and(
@@ -900,16 +901,17 @@ publicRoute.get('/pedido/:tipo/:id/status', async (c) => {
         const db = drizzle(pool);
         let pagado = false;
         let estado: string | null = null;
+        let rapiboyTrackingUrl: string | null = null;
 
         if (tipo === 'delivery') {
-            const p = await db.select({ pagado: PedidoDeliveryTable.pagado, estado: PedidoDeliveryTable.estado }).from(PedidoDeliveryTable).where(eq(PedidoDeliveryTable.id, id)).limit(1);
-            if (p.length > 0) { pagado = p[0].pagado; estado = p[0].estado; }
+            const p = await db.select({ pagado: PedidoDeliveryTable.pagado, estado: PedidoDeliveryTable.estado, trackingUrl: PedidoDeliveryTable.rapiboyTrackingUrl }).from(PedidoDeliveryTable).where(eq(PedidoDeliveryTable.id, id)).limit(1);
+            if (p.length > 0) { pagado = p[0].pagado; estado = p[0].estado; rapiboyTrackingUrl = p[0].trackingUrl; }
         } else if (tipo === 'takeaway') {
             const p = await db.select({ pagado: PedidoTakeawayTable.pagado, estado: PedidoTakeawayTable.estado }).from(PedidoTakeawayTable).where(eq(PedidoTakeawayTable.id, id)).limit(1);
             if (p.length > 0) { pagado = p[0].pagado; estado = p[0].estado; }
         }
 
-        return c.json({ success: true, pagado, estado }, 200);
+        return c.json({ success: true, pagado, estado, rapiboyTrackingUrl }, 200);
     } catch (error) {
         console.error('Error consultando estado del pedido:', error);
         return c.json({ success: false, error: 'Internal server error' }, 500);
