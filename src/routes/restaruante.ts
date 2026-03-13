@@ -558,6 +558,30 @@ restauranteRoute.post('/configurar-cucuru', zValidator('json', configCucuruSchem
   }
 })
 
+// Configurar Rapiboy (Token)
+const configRapiboySchema = z.object({
+  token: z.string().min(1)
+})
+
+restauranteRoute.post('/configurar-rapiboy', zValidator('json', configRapiboySchema), async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const { token } = c.req.valid('json')
+
+  try {
+    await db.update(RestauranteTable)
+      .set({
+        rapiboyToken: token
+      })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({ message: 'Rapiboy configurado exitosamente', success: true }, 200)
+  } catch (error) {
+    console.error('Error configurando Rapiboy:', error)
+    return c.json({ message: 'Error configurando Rapiboy', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 // GET horarios del restaurante autenticado
 restauranteRoute.get('/horarios', async (c) => {
   const db = drizzle(pool)
