@@ -7,11 +7,18 @@ import {
   itemPedido as ItemPedidoTable,
   producto as ProductoTable,
   mesa as MesaTable,
+  sala as SalaTable,
+  restaurante as RestauranteTable,
+  pedidoDelivery as PedidoDeliveryTable,
+  itemPedidoDelivery as ItemPedidoDeliveryTable,
+  pedidoTakeaway as PedidoTakeawayTable,
+  itemPedidoTakeaway as ItemPedidoTakeawayTable,
   ingrediente as IngredienteTable,
   notificacion as NotificacionTable,
   pagoSubtotal as PagoSubtotalTable
 } from '../db/schema';
-import { MesaSession, WebSocketMessage, ItemPedidoWS, AdminSession, AdminNotification, AdminNotificationType } from '../types/websocket';
+import { MesaSession, WebSocketMessage, ItemPedidoWS, AdminSession, AdminNotification, AdminNotificationType, CheckoutDeliveryData } from '../types/websocket';
+import { asignarAliasAPedido } from '../services/cucuru';
 
 // Definir tipo para estado de item
 type ItemEstado = 'pending' | 'preparing' | 'delivered' | 'served' | 'cancelled';
@@ -1168,13 +1175,244 @@ class WebSocketManager {
     console.log(`🔍 [verificarConfirmacion] Mesa ${mesaId}: ${confirmaciones.filter(c => c.confirmado).length}/${confirmaciones.length} confirmaron`);
 
     if (todosConfirmaron) {
-      console.log(`🎉 [verificarConfirmacion] ¡Todos confirmaron! Confirmando pedido...`);
+      console.log(`🎉 [verificarConfirmacion] ¡Todos confirmaron!`);
 
       // Limpiar estado de confirmación
       session.confirmacionGrupal = undefined;
 
-      // Confirmar el pedido
-      await this.confirmarPedido(session.pedidoId, mesaId);
+      // Sala (mesaId >= 1000000): crear pedido_delivery/takeaway y redirigir a pago
+      if (mesaId >= 1000000) {
+        await this.confirmarPedidoSala(session.pedidoId, mesaId, session);
+      } else {
+        await this.confirmarPedido(session.pedidoId, mesaId);
+      }
+    }
+  }
+
+  // Confirmar pedido de sala: crear pedido_delivery/takeaway, asignar Cucuru, broadcast SALA_PEDIDO_CREADO
+  private async confirmarPedidoSala(pedidoId: number, mesaId: number, session: MesaSession) {
+    const salaId = mesaId - 1000000;
+    const checkoutData = session.checkoutDeliveryData;
+
+    if (!checkoutData || !checkoutData.nombre?.trim() || !checkoutData.telefono?.trim()) {
+      console.error('❌ [confirmarPedidoSala] Falta checkoutData o datos incompletos');
+      this.broadcast(mesaId, {
+        type: 'ERROR',
+        payload: { message: 'Faltan datos de envío. Completa nombre, celular y dirección.' }
+      });
+      return;
+    }
+
+    if (checkoutData.tipoPedido === 'delivery' && (!checkoutData.direccion?.trim() || checkoutData.lat == null || checkoutData.lng == null)) {
+      console.error('❌ [confirmarPedidoSala] Delivery sin dirección válida');
+      this.broadcast(mesaId, {
+        type: 'ERROR',
+        payload: { message: 'Falta dirección de entrega válida.' }
+      });
+      return;
+    }
+
+    try {
+      const itemsRaw = await this.db
+        .select({
+          id: ItemPedidoTable.id,
+          productoId: ItemPedidoTable.productoId,
+          clienteNombre: ItemPedidoTable.clienteNombre,
+          cantidad: ItemPedidoTable.cantidad,
+          precioUnitario: ItemPedidoTable.precioUnitario,
+          ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
+          agregados: ItemPedidoTable.agregados,
+          nombreProducto: ProductoTable.nombre,
+        })
+        .from(ItemPedidoTable)
+        .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
+        .where(eq(ItemPedidoTable.pedidoId, pedidoId));
+
+      const items = itemsRaw.map(r => ({
+        ...r,
+        nombreProducto: r.nombreProducto || 'Producto',
+      }));
+
+      if (items.length === 0) {
+        this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'El pedido está vacío.' } });
+        return;
+      }
+
+      const sala = await this.db.select().from(SalaTable).where(eq(SalaTable.id, salaId)).limit(1);
+      if (!sala[0]) {
+        this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'Sala no encontrada.' } });
+        return;
+      }
+
+      const restaurante = await this.db.select({
+        id: RestauranteTable.id,
+        username: RestauranteTable.username,
+        cucuruApiKey: RestauranteTable.cucuruApiKey,
+        cucuruCollectorId: RestauranteTable.cucuruCollectorId,
+        cucuruConfigurado: RestauranteTable.cucuruConfigurado,
+      }).from(RestauranteTable).where(eq(RestauranteTable.id, sala[0].restauranteId!)).limit(1);
+
+      if (!restaurante[0]) {
+        this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'Restaurante no encontrado.' } });
+        return;
+      }
+
+      const total = parseFloat(checkoutData.total || '0');
+      let cuentaCucuru: { alias: string; accountNumber: string } | null = null;
+
+      if (checkoutData.tipoPedido === 'delivery') {
+        const nuevoPedido = await this.db.insert(PedidoDeliveryTable).values({
+          restauranteId: sala[0].restauranteId,
+          direccion: checkoutData.direccion,
+          latitud: checkoutData.lat != null ? String(checkoutData.lat) : null,
+          longitud: checkoutData.lng != null ? String(checkoutData.lng) : null,
+          nombreCliente: checkoutData.nombre,
+          telefono: checkoutData.telefono,
+          notas: checkoutData.notas || null,
+          metodoPago: 'transferencia',
+          estado: 'pending',
+          total: total.toFixed(2),
+          puntosGanados: 0,
+          puntosUsados: 0,
+        });
+
+        const pedidoDeliveryId = Number(nuevoPedido[0].insertId);
+
+        for (const item of items) {
+          await this.db.insert(ItemPedidoDeliveryTable).values({
+            pedidoDeliveryId,
+            productoId: item.productoId,
+            cantidad: item.cantidad || 1,
+            precioUnitario: item.precioUnitario,
+            ingredientesExcluidos: item.ingredientesExcluidos,
+            agregados: item.agregados,
+            esCanjePuntos: false,
+          });
+        }
+
+        if (restaurante[0].cucuruConfigurado && restaurante[0].username) {
+          cuentaCucuru = await asignarAliasAPedido({
+            db: this.db,
+            restaurante: restaurante[0],
+            pedidoId: pedidoDeliveryId,
+            slug: restaurante[0].username,
+          });
+        }
+
+        this.notifyAdmins(sala[0].restauranteId!, this.createNotification(
+          'NUEVO_PEDIDO',
+          0,
+          'Pedido Grupal (Delivery)',
+          `Nuevo pedido grupal`,
+          `${checkoutData.nombre} - $${total.toFixed(2)}`,
+          pedidoDeliveryId
+        ));
+        this.broadcastAdminUpdate(sala[0].restauranteId!, 'delivery');
+
+        const itemsParaFront = items.map(i => ({
+          productoId: i.productoId,
+          cantidad: i.cantidad || 1,
+          precio: i.precioUnitario,
+          nombre: i.nombreProducto,
+          nombreProducto: i.nombreProducto,
+          clienteNombre: i.clienteNombre,
+        }));
+
+        this.broadcast(mesaId, {
+          type: 'SALA_PEDIDO_CREADO',
+          payload: {
+            token: sala[0].token,
+            pedidoId: pedidoDeliveryId,
+            tipoPedido: 'delivery',
+            total: total.toFixed(2),
+            items: itemsParaFront,
+            cucuruAlias: cuentaCucuru?.alias,
+            cucuruAccountNumber: cuentaCucuru?.accountNumber,
+            deliveryFee: checkoutData.deliveryFee,
+            zonaNombre: checkoutData.zonaNombre,
+            direccion: checkoutData.direccion,
+            nombreCliente: checkoutData.nombre,
+            telefono: checkoutData.telefono,
+          },
+        });
+      } else {
+        const nuevoPedido = await this.db.insert(PedidoTakeawayTable).values({
+          restauranteId: sala[0].restauranteId,
+          nombreCliente: checkoutData.nombre,
+          telefono: checkoutData.telefono,
+          notas: checkoutData.notas || null,
+          metodoPago: 'transferencia',
+          estado: 'pending',
+          total: total.toFixed(2),
+          puntosGanados: 0,
+          puntosUsados: 0,
+        });
+
+        const pedidoTakeawayId = Number(nuevoPedido[0].insertId);
+
+        for (const item of items) {
+          await this.db.insert(ItemPedidoTakeawayTable).values({
+            pedidoTakeawayId,
+            productoId: item.productoId,
+            cantidad: item.cantidad || 1,
+            precioUnitario: item.precioUnitario,
+            ingredientesExcluidos: item.ingredientesExcluidos,
+            agregados: item.agregados,
+            esCanjePuntos: false,
+          });
+        }
+
+        if (restaurante[0].cucuruConfigurado && restaurante[0].username) {
+          cuentaCucuru = await asignarAliasAPedido({
+            db: this.db,
+            restaurante: restaurante[0],
+            pedidoId: pedidoTakeawayId,
+            slug: restaurante[0].username,
+          });
+        }
+
+        this.notifyAdmins(sala[0].restauranteId!, this.createNotification(
+          'NUEVO_PEDIDO',
+          0,
+          'Pedido Grupal (Take Away)',
+          `Nuevo pedido grupal`,
+          `${checkoutData.nombre} - $${total.toFixed(2)}`,
+          pedidoTakeawayId
+        ));
+        this.broadcastAdminUpdate(sala[0].restauranteId!, 'takeaway');
+
+        const itemsParaFront = items.map(i => ({
+          productoId: i.productoId,
+          cantidad: i.cantidad || 1,
+          precio: i.precioUnitario,
+          nombre: i.nombreProducto,
+          nombreProducto: i.nombreProducto,
+          clienteNombre: i.clienteNombre,
+        }));
+
+        this.broadcast(mesaId, {
+          type: 'SALA_PEDIDO_CREADO',
+          payload: {
+            token: sala[0].token,
+            pedidoId: pedidoTakeawayId,
+            tipoPedido: 'takeaway',
+            total: total.toFixed(2),
+            items: itemsParaFront,
+            cucuruAlias: cuentaCucuru?.alias,
+            cucuruAccountNumber: cuentaCucuru?.accountNumber,
+            nombreCliente: checkoutData.nombre,
+            telefono: checkoutData.telefono,
+          },
+        });
+      }
+
+      console.log(`✅ [confirmarPedidoSala] Pedido grupal creado, token=${sala[0].token}`);
+    } catch (error) {
+      console.error('❌ [confirmarPedidoSala] Error:', error);
+      this.broadcast(mesaId, {
+        type: 'ERROR',
+        payload: { message: 'Error al crear el pedido. Intenta de nuevo.' }
+      });
     }
   }
 
