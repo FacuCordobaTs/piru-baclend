@@ -1,7 +1,7 @@
 // mesa.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { mesa as MesaTable, sala as SalaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable, restaurante as RestauranteTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, pago as PagoTable, pagoSubtotal as PagoSubtotalTable } from '../db/schema'
+import { mesa as MesaTable, sala as SalaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable, restaurante as RestauranteTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, pago as PagoTable, pagoSubtotal as PagoSubtotalTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
@@ -60,6 +60,7 @@ const mesaRoute = new Hono()
       esCarrito: RestauranteTable.esCarrito,
       splitPayment: RestauranteTable.splitPayment,
       soloCartaDigital: RestauranteTable.soloCartaDigital,
+      disenoAlternativo: RestauranteTable.disenoAlternativo,
     }).from(RestauranteTable).where(eq(RestauranteTable.id, mesa[0].restauranteId!)).limit(1)
 
     let ultimoPedido = await db.select().
@@ -78,6 +79,7 @@ const mesaRoute = new Hono()
         precio: ProductoTable.precio,
         activo: ProductoTable.activo,
         imagenUrl: ProductoTable.imagenUrl,
+        descuento: ProductoTable.descuento,
         createdAt: ProductoTable.createdAt,
         categoria: {
           id: CategoriaTable.id,
@@ -88,22 +90,34 @@ const mesaRoute = new Hono()
       .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
       .where(and(eq(ProductoTable.restauranteId, mesa[0].restauranteId!), eq(ProductoTable.activo, true)))
 
-    // Obtener ingredientes para cada producto
+    // Obtener ingredientes y agregados para cada producto
     const productosConIngredientes = await Promise.all(
       productos.map(async (p) => {
-        const ingredientes = await db
-          .select({
-            id: IngredienteTable.id,
-            nombre: IngredienteTable.nombre,
-          })
-          .from(ProductoIngredienteTable)
-          .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
-          .where(eq(ProductoIngredienteTable.productoId, p.id))
+        const [ingredientes, agregados] = await Promise.all([
+          db
+            .select({
+              id: IngredienteTable.id,
+              nombre: IngredienteTable.nombre,
+            })
+            .from(ProductoIngredienteTable)
+            .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
+            .where(eq(ProductoIngredienteTable.productoId, p.id)),
+          db
+            .select({
+              id: AgregadoTable.id,
+              nombre: AgregadoTable.nombre,
+              precio: AgregadoTable.precio,
+            })
+            .from(ProductoAgregadoTable)
+            .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
+            .where(eq(ProductoAgregadoTable.productoId, p.id))
+        ]);
 
         return {
           ...p,
           categoria: p.categoria?.nombre || null,
           ingredientes: ingredientes,
+          agregados: agregados,
         }
       })
     )
