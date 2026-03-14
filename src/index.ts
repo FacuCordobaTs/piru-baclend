@@ -492,6 +492,7 @@ app.get(
 
               // Enviar estado inicial
               const estadoInicial = await wsManager.getEstadoInicial(currentPedidoId);
+              const sessionWithCheckout = wsManager.getSession(currentMesaId);
               ws.send(JSON.stringify({
                 type: 'ESTADO_INICIAL',
                 payload: {
@@ -501,7 +502,9 @@ app.get(
                   estado: estadoInicial.pedido?.estado || 'pending',
                   clientes: session.clientes,
                   mesaId: currentMesaId,
-                  pedidoId: currentPedidoId
+                  pedidoId: currentPedidoId,
+                  checkoutDeliveryData: sessionWithCheckout?.checkoutDeliveryData,
+                  checkoutEditSemaphore: sessionWithCheckout?.checkoutEditSemaphore
                 }
               }));
 

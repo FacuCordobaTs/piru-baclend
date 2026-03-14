@@ -1055,6 +1055,108 @@ class WebSocketManager {
     });
   }
 
+  // ==================== CHECKOUT GRUPAL (SALA) ====================
+
+  iniciarEdicionCheckout(mesaId: number, clienteId: string, clienteNombre: string) {
+    const session = this.sessions.get(mesaId);
+    if (!session) return;
+
+    // Si ya hay alguien editando y no es este usuario, no permitir
+    if (session.checkoutEditSemaphore && session.checkoutEditSemaphore.clienteId !== clienteId) {
+      this.broadcast(mesaId, {
+        type: 'CHECKOUT_EDITANDO',
+        payload: {
+          editandoPor: session.checkoutEditSemaphore,
+          checkoutData: session.checkoutDeliveryData
+        }
+      });
+      return;
+    }
+
+    session.checkoutEditSemaphore = { clienteId, clienteNombre };
+    this.broadcast(mesaId, {
+      type: 'CHECKOUT_EDITANDO',
+      payload: {
+        editandoPor: session.checkoutEditSemaphore,
+        checkoutData: session.checkoutDeliveryData
+      }
+    });
+  }
+
+  modificarCheckout(mesaId: number, clienteId: string, updates: Partial<{
+    tipoPedido: 'delivery' | 'takeaway';
+    nombre: string;
+    telefono: string;
+    direccion: string;
+    lat: number | null;
+    lng: number | null;
+    notas: string;
+    deliveryFee: number;
+    zonaNombre: string | null;
+    itemsTotal: string;
+    total: string;
+  }>) {
+    const session = this.sessions.get(mesaId);
+    if (!session) return;
+
+    // Solo el que tiene el semáforo puede modificar
+    if (!session.checkoutEditSemaphore || session.checkoutEditSemaphore.clienteId !== clienteId) {
+      return;
+    }
+
+    if (!session.checkoutDeliveryData) {
+      session.checkoutDeliveryData = {
+        tipoPedido: 'delivery',
+        nombre: '',
+        telefono: '',
+        direccion: '',
+        lat: null,
+        lng: null,
+        notas: '',
+        deliveryFee: 0,
+        zonaNombre: null,
+        itemsTotal: '0.00',
+        total: '0.00'
+      };
+    }
+
+    session.checkoutDeliveryData = { ...session.checkoutDeliveryData, ...updates };
+
+    // No broadcast en cada keystroke - solo al aceptar
+  }
+
+  cancelarEdicionCheckout(mesaId: number, clienteId: string) {
+    const session = this.sessions.get(mesaId);
+    if (!session) return;
+
+    if (session.checkoutEditSemaphore?.clienteId === clienteId) {
+      session.checkoutEditSemaphore = undefined;
+      this.broadcast(mesaId, {
+        type: 'CHECKOUT_DATOS_ACTUALIZADOS',
+        payload: {
+          checkoutData: session.checkoutDeliveryData,
+          editandoPor: null
+        }
+      });
+    }
+  }
+
+  aceptarEdicionCheckout(mesaId: number, clienteId: string) {
+    const session = this.sessions.get(mesaId);
+    if (!session) return;
+
+    if (session.checkoutEditSemaphore?.clienteId === clienteId) {
+      session.checkoutEditSemaphore = undefined;
+      this.broadcast(mesaId, {
+        type: 'CHECKOUT_DATOS_ACTUALIZADOS',
+        payload: {
+          checkoutData: session.checkoutDeliveryData,
+          editandoPor: null
+        }
+      });
+    }
+  }
+
   // Verificar si todos confirmaron
   private async verificarConfirmacionCompleta(mesaId: number) {
     const session = this.sessions.get(mesaId);

@@ -30,6 +30,9 @@ export interface WebSocketMessage {
   // Confirmación grupal
   'INICIAR_CONFIRMACION' | 'USUARIO_CONFIRMO' | 'USUARIO_CANCELO' |
   'CONFIRMACION_INICIADA' | 'CONFIRMACION_ACTUALIZADA' | 'CONFIRMACION_CANCELADA' |
+  // Checkout grupal (sala)
+  'INICIAR_EDICION_CHECKOUT' | 'MODIFICAR_CHECKOUT' | 'CANCELAR_EDICION_CHECKOUT' | 'ACEPTAR_EDICION_CHECKOUT' |
+  'CHECKOUT_EDITANDO' | 'CHECKOUT_DATOS_ACTUALIZADOS' |
   // Admin message types
   'ADMIN_CONECTADO' | 'ADMIN_NOTIFICACION' | 'ADMIN_ESTADO_MESAS' | 'ADMIN_SUBTOTALES_ACTUALIZADOS';
   payload: any;
@@ -51,12 +54,36 @@ export interface ConfirmacionGrupal {
   timestamp: string;
 }
 
+// Datos de checkout grupal (sala) - delivery/takeaway
+export interface CheckoutDeliveryData {
+  tipoPedido: 'delivery' | 'takeaway';
+  nombre: string;
+  telefono: string;
+  direccion: string;
+  lat: number | null;
+  lng: number | null;
+  notas: string;
+  deliveryFee: number;
+  zonaNombre: string | null;
+  itemsTotal: string;
+  total: string;
+}
+
+// Semáforo: quién está editando el checkout
+export interface CheckoutEditSemaphore {
+  clienteId: string;
+  clienteNombre: string;
+}
+
 export interface MesaSession {
   mesaId: number;
   pedidoId: number;
   clientes: ClienteConectado[];
   connections: Set<any>;
   confirmacionGrupal?: ConfirmacionGrupal;
+  // Checkout grupal (sala)
+  checkoutDeliveryData?: CheckoutDeliveryData;
+  checkoutEditSemaphore?: CheckoutEditSemaphore;
 }
 
 // Admin notification types (debe coincidir con el enum en schema.ts)
