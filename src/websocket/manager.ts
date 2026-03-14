@@ -179,119 +179,32 @@ class WebSocketManager {
   }
 
   // Obtener estado de todas las mesas de un restaurante
+  // TEMPORAL: No retornar pedidos de mesas - solo delivery/takeaway en Dashboard
   async getEstadoMesasRestaurante(restauranteId: number) {
     const mesas = await this.db.select()
       .from(MesaTable)
       .where(eq(MesaTable.restauranteId, restauranteId));
 
-    const mesasConPedido = await Promise.all(mesas.map(async (mesa) => {
-      // Cache mesaId -> restauranteId
+    const mesasSinPedidos = mesas.map((mesa) => {
       this.mesaToRestaurante.set(mesa.id, restauranteId);
-
-      const ultimoPedido = await this.db.select()
-        .from(PedidoTable)
-        .where(eq(PedidoTable.mesaId, mesa.id))
-        .orderBy(desc(PedidoTable.createdAt))
-        .limit(1);
-
-      const pedido = ultimoPedido[0] || null;
-      let items: any[] = [];
-
-      if (pedido) {
-        const itemsRaw = await this.db
-          .select({
-            id: ItemPedidoTable.id,
-            productoId: ItemPedidoTable.productoId,
-            clienteNombre: ItemPedidoTable.clienteNombre,
-            cantidad: ItemPedidoTable.cantidad,
-            precioUnitario: ItemPedidoTable.precioUnitario,
-            nombreProducto: ProductoTable.nombre,
-            imagenUrl: ProductoTable.imagenUrl,
-            ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
-            agregados: ItemPedidoTable.agregados,
-            postConfirmacion: ItemPedidoTable.postConfirmacion,
-            estado: ItemPedidoTable.estado,
-            createdAt: ItemPedidoTable.createdAt,
-          })
-          .from(ItemPedidoTable)
-          .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
-          .where(eq(ItemPedidoTable.pedidoId, pedido.id))
-          .orderBy(desc(ItemPedidoTable.createdAt));
-
-        // Helper para parsear JSON si viene como string
-        const parseJsonField = (value: any): number[] | null => {
-          if (!value) return null
-          if (Array.isArray(value)) return value
-          if (typeof value === 'string') {
-            try {
-              const parsed = JSON.parse(value)
-              return Array.isArray(parsed) ? parsed : null
-            } catch {
-              return null
-            }
-          }
-          return null
-        }
-
-        // Obtener nombres de ingredientes excluidos para cada item
-        items = await Promise.all(
-          itemsRaw.map(async (item) => {
-            let ingredientesExcluidosNombres: string[] = []
-            const ingredientesExcluidosParsed = parseJsonField(item.ingredientesExcluidos)
-
-            if (ingredientesExcluidosParsed && ingredientesExcluidosParsed.length > 0) {
-              const { inArray } = await import('drizzle-orm')
-              const ingredientes = await this.db
-                .select({
-                  id: IngredienteTable.id,
-                  nombre: IngredienteTable.nombre,
-                })
-                .from(IngredienteTable)
-                .where(inArray(IngredienteTable.id, ingredientesExcluidosParsed))
-
-              ingredientesExcluidosNombres = ingredientes.map(ing => ing.nombre)
-            }
-
-            return {
-              ...item,
-              ingredientesExcluidos: ingredientesExcluidosParsed || [],
-              ingredientesExcluidosNombres,
-              agregados: parseJsonField(item.agregados) || [],
-              postConfirmacion: item.postConfirmacion || false,
-              estado: item.estado || 'pending'
-            }
-          })
-        )
-      }
-
-      // Get connected clients from session
       const session = this.sessions.get(mesa.id);
       const clientesConectados = session?.clientes.filter(
         c => !c.id.startsWith('admin-') && !c.nombre.includes('Admin')
       ) || [];
 
-      // Si el pedido está cerrado o archivado, verificar si todos pagaron
-      let todosPagaron = false;
-      if (pedido && (pedido.estado === 'closed' || pedido.estado === 'archived')) {
-        todosPagaron = await this.verificarTodosPagaron(pedido.id);
-      }
-
       return {
         id: mesa.id,
         nombre: mesa.nombre,
         qrToken: mesa.qrToken,
-        pedido: pedido ? {
-          ...pedido,
-          nombrePedido: pedido.nombrePedido || null
-        } : null,
-        items,
+        pedido: null,
+        items: [],
         clientesConectados,
-        totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0),
-        todosPagaron // Información adicional para el admin
+        totalItems: 0,
+        todosPagaron: false
       };
-    }));
+    });
 
-    return mesasConPedido;
+    return mesasSinPedidos;
   }
 
   // Broadcast estado actualizado a admins

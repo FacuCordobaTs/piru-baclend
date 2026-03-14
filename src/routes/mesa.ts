@@ -51,10 +51,11 @@ const mesaRoute = new Hono()
       }];
     }
 
-    // Obtener información del restaurante (nombre, imagen, estado de MP y modo carrito)
+    // Obtener información del restaurante (nombre, imagen, estado de MP, modo carrito, colores y username)
     const restaurante = await db.select({
       id: RestauranteTable.id,
       nombre: RestauranteTable.nombre,
+      username: RestauranteTable.username,
       imagenUrl: RestauranteTable.imagenUrl,
       direccion: RestauranteTable.direccion,
       mpConnected: RestauranteTable.mpConnected,
@@ -62,6 +63,8 @@ const mesaRoute = new Hono()
       splitPayment: RestauranteTable.splitPayment,
       soloCartaDigital: RestauranteTable.soloCartaDigital,
       disenoAlternativo: RestauranteTable.disenoAlternativo,
+      colorPrimario: RestauranteTable.colorPrimario,
+      colorSecundario: RestauranteTable.colorSecundario,
     }).from(RestauranteTable).where(eq(RestauranteTable.id, mesa[0].restauranteId!)).limit(1)
 
     let ultimoPedido = await db.select().
@@ -360,6 +363,7 @@ const mesaRoute = new Hono()
   })
 
   // Obtener todas las mesas con su pedido actual (para el admin)
+  // TEMPORAL: No fetchear pedidos de mesas - solo delivery/takeaway en Dashboard
   .get('/list-with-pedidos', authMiddleware, async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
@@ -377,90 +381,19 @@ const mesaRoute = new Hono()
       }, 200)
     }
 
-    // Para cada mesa, obtener el último pedido con sus items
-    const mesasConPedidos = await Promise.all(mesas.map(async (mesa) => {
-      // Obtener el último pedido de esta mesa
-      const ultimoPedido = await db.select()
-        .from(PedidoTable)
-        .where(eq(PedidoTable.mesaId, mesa.id))
-        .orderBy(desc(PedidoTable.createdAt))
-        .limit(1)
-
-      let pedidoActual = ultimoPedido[0] || null
-      let items: any[] = []
-
-      // Si hay pedido, obtener sus items con info del producto
-      if (pedidoActual) {
-        const itemsRaw = await db
-          .select({
-            id: ItemPedidoTable.id,
-            productoId: ItemPedidoTable.productoId,
-            clienteNombre: ItemPedidoTable.clienteNombre,
-            cantidad: ItemPedidoTable.cantidad,
-            precioUnitario: ItemPedidoTable.precioUnitario,
-            nombreProducto: ProductoTable.nombre,
-            imagenUrl: ProductoTable.imagenUrl,
-            ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos
-          })
-          .from(ItemPedidoTable)
-          .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
-          .where(eq(ItemPedidoTable.pedidoId, pedidoActual.id))
-
-        // Helper para parsear JSON si viene como string
-        const parseJsonField = (value: any): number[] | null => {
-          if (!value) return null
-          if (Array.isArray(value)) return value
-          if (typeof value === 'string') {
-            try {
-              const parsed = JSON.parse(value)
-              return Array.isArray(parsed) ? parsed : null
-            } catch {
-              return null
-            }
-          }
-          return null
-        }
-
-        // Obtener nombres de ingredientes excluidos para cada item
-        items = await Promise.all(
-          itemsRaw.map(async (item) => {
-            let ingredientesExcluidosNombres: string[] = []
-            const ingredientesExcluidosParsed = parseJsonField(item.ingredientesExcluidos)
-
-            if (ingredientesExcluidosParsed && ingredientesExcluidosParsed.length > 0) {
-              const ingredientes = await db
-                .select({
-                  id: IngredienteTable.id,
-                  nombre: IngredienteTable.nombre,
-                })
-                .from(IngredienteTable)
-                .where(inArray(IngredienteTable.id, ingredientesExcluidosParsed))
-
-              ingredientesExcluidosNombres = ingredientes.map(ing => ing.nombre)
-            }
-
-            return {
-              ...item,
-              ingredientesExcluidos: ingredientesExcluidosParsed || [],
-              ingredientesExcluidosNombres
-            }
-          })
-        )
-      }
-
-      return {
-        ...mesa,
-        pedidoActual,
-        items,
-        itemsCount: items.length,
-        totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0)
-      }
+    // TEMPORAL: retornar mesas sin pedidos (para que Dashboard solo muestre delivery/takeaway)
+    const mesasSinPedidos = mesas.map((mesa) => ({
+      ...mesa,
+      pedidoActual: null,
+      items: [],
+      itemsCount: 0,
+      totalItems: 0
     }))
 
     return c.json({
       message: 'Mesas con pedidos encontradas correctamente',
       success: true,
-      data: mesasConPedidos
+      data: mesasSinPedidos
     }, 200)
   })
 
