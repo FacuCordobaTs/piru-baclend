@@ -547,8 +547,14 @@ app.get(
               // Mantener compatibilidad: si solo hay un cliente, confirmar directamente
               const sessionForConfirm = wsManager.getSession(currentMesaId);
               if (sessionForConfirm && sessionForConfirm.clientes.length <= 1) {
-                console.log(`✅ Confirmando pedido ${currentPedidoId} (cliente único)`);
-                await wsManager.confirmarPedido(currentPedidoId, currentMesaId);
+                // Sala (mesaId >= 1000000): crear delivery/takeaway, no pedido de mesa
+                if (currentMesaId >= 1000000) {
+                  console.log(`✅ Confirmando pedido sala ${currentPedidoId} (cliente único)`);
+                  await wsManager.confirmarPedidoSala(currentPedidoId, currentMesaId, sessionForConfirm);
+                } else {
+                  console.log(`✅ Confirmando pedido ${currentPedidoId} (cliente único)`);
+                  await wsManager.confirmarPedido(currentPedidoId, currentMesaId);
+                }
               } else {
                 console.log(`⚠️ CONFIRMAR_PEDIDO ignorado - usar INICIAR_CONFIRMACION para múltiples clientes`);
               }

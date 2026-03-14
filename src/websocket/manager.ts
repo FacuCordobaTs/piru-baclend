@@ -1120,7 +1120,7 @@ class WebSocketManager {
   }
 
   // Confirmar pedido de sala: crear pedido_delivery/takeaway, asignar Cucuru, broadcast SALA_PEDIDO_CREADO
-  private async confirmarPedidoSala(pedidoId: number, mesaId: number, session: MesaSession) {
+  async confirmarPedidoSala(pedidoId: number, mesaId: number, session: MesaSession) {
     const salaId = mesaId - 1000000;
     const checkoutData = session.checkoutDeliveryData;
 
