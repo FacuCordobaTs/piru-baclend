@@ -107,8 +107,7 @@ export const authRoute = new Hono()
 
       return c.json({ message: 'Inicio de sesión realizado con éxito', restaurante: restauranteResult[0], token }, 200);
   } catch (error) {
-      console.error('ERROR LOGIN RESTAURANTE:', error);
-      return c.json({ error: 'Login failed', details: error }, 500);
+      return c.json({ error: 'Login failed' }, 500);
   }
 })
 

@@ -566,6 +566,26 @@ app.get(
               wsManager.usuarioCancela(currentMesaId, data.payload.clienteId, data.payload.clienteNombre);
               break;
 
+            case 'INICIAR_EDICION_CHECKOUT':
+              console.log(`Checkout: 🔒 Iniciando edición - Mesa ${currentMesaId}, Cliente: ${data.payload.clienteNombre}`);
+              wsManager.iniciarEdicionCheckout(currentMesaId, data.payload.clienteId, data.payload.clienteNombre);
+              break;
+
+            case 'MODIFICAR_CHECKOUT':
+              // Omitimos el log por stroke para no saturar
+              wsManager.modificarCheckout(currentMesaId, data.payload.clienteId, data.payload.updates);
+              break;
+
+            case 'CANCELAR_EDICION_CHECKOUT':
+              console.log(`Checkout: 🔓 Cancelando edición - Mesa ${currentMesaId}, Cliente: ${data.payload.clienteNombre}`);
+              wsManager.cancelarEdicionCheckout(currentMesaId, data.payload.clienteId);
+              break;
+
+            case 'ACEPTAR_EDICION_CHECKOUT':
+              console.log(`Checkout: 💾 Guardando edición - Mesa ${currentMesaId}, Cliente: ${data.payload.clienteNombre}`);
+              wsManager.aceptarEdicionCheckout(currentMesaId, data.payload.clienteId);
+              break;
+
             case 'CERRAR_PEDIDO':
               console.log(`🔒 Cerrando pedido ${currentPedidoId}`);
               await wsManager.cerrarPedido(currentPedidoId, currentMesaId);

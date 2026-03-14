@@ -68,14 +68,6 @@ export const mesa = mysqlTable("mesa", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-export const sala = mysqlTable("sala", {
-  id: int("id").primaryKey().autoincrement(),
-  nombre: varchar("nombre", { length: 255 }).notNull(),
-  restauranteId: int("restaurante_id").references(() => restaurante.id),
-  token: varchar("token", { length: 255 }).unique().notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
-
 export const producto = mysqlTable("producto", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id),
@@ -173,7 +165,6 @@ export const pedido = mysqlTable("pedido", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id),
   mesaId: int("mesa_id").references(() => mesa.id),
-  salaId: int("sala_id").references(() => sala.id),
   nombrePedido: varchar("nombre_pedido", { length: 255 }),
   estado: mysqlEnum("estado", [
     "pending",
@@ -267,7 +258,6 @@ export const notificacion = mysqlTable("notificacion", {
     "PRODUCTO_AGREGADO",
   ]).notNull(),
   mesaId: int("mesa_id").references(() => mesa.id),
-  salaId: int("sala_id").references(() => sala.id),
   mesaNombre: varchar("mesa_nombre", { length: 255 }),
   pedidoId: int("pedido_id"),
   mensaje: varchar("mensaje", { length: 500 }).notNull(),
