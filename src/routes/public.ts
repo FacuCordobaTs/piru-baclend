@@ -143,6 +143,15 @@ const createSalaSchema = z.object({
     nombreCliente: z.string().min(1) // we might not really use it for the table but good to know
 })
 
+publicRoute.get('/sala/:token/order-created', async (c) => {
+    const token = c.req.param('token')
+    const order = wsManager.getSalaOrderFromCache(token)
+    if (!order) {
+      return c.json({ success: false, order: null }, 200)
+    }
+    return c.json({ success: true, order }, 200)
+})
+
 publicRoute.post('/sala/create', zValidator('json', createSalaSchema), async (c) => {
     const db = drizzle(pool)
     const { restauranteId, nombreCliente } = c.req.valid('json')

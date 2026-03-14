@@ -23,12 +23,29 @@ import { asignarAliasAPedido } from '../services/cucuru';
 // Definir tipo para estado de item
 type ItemEstado = 'pending' | 'preparing' | 'delivered' | 'served' | 'cancelled';
 
+// Cache para pedidos de sala recién creados (fallback polling cuando WS no llega)
+export interface SalaOrderCacheEntry {
+  token: string
+  pedidoId: number
+  tipoPedido: 'delivery' | 'takeaway'
+  total: string
+  items: any[]
+  cucuruAlias?: string
+  cucuruAccountNumber?: string
+  deliveryFee?: number
+  zonaNombre?: string
+  direccion?: string
+  nombreCliente?: string
+  telefono?: string
+}
+
 class WebSocketManager {
   private sessions: Map<number, MesaSession> = new Map();
   private adminSessions: Map<number, AdminSession> = new Map(); // restauranteId -> AdminSession
   private mesaToRestaurante: Map<number, number> = new Map(); // mesaId -> restauranteId
   public publicClients: Map<string, Set<any>> = new Map(); // key -> Set of ws (key = {tipo}-{pedidoId})
   public trackingClients: Map<string, Set<any>> = new Map(); // key -> Set of ws (key = tracking-{restauranteId}-{telefono})
+  private salaOrderCache: Map<string, SalaOrderCacheEntry> = new Map(); // token -> order info
   private db = drizzle(pool);
 
   // ==================== ADMIN METHODS ====================
@@ -1318,23 +1335,22 @@ class WebSocketManager {
           clienteNombre: i.clienteNombre,
         }));
 
-        this.broadcast(mesaId, {
-          type: 'SALA_PEDIDO_CREADO',
-          payload: {
-            token: sala[0].token,
-            pedidoId: pedidoDeliveryId,
-            tipoPedido: 'delivery',
-            total: total.toFixed(2),
-            items: itemsParaFront,
-            cucuruAlias: cuentaCucuru?.alias,
-            cucuruAccountNumber: cuentaCucuru?.accountNumber,
-            deliveryFee: checkoutData.deliveryFee,
-            zonaNombre: checkoutData.zonaNombre,
-            direccion: checkoutData.direccion,
-            nombreCliente: checkoutData.nombre,
-            telefono: checkoutData.telefono,
-          },
-        });
+        const payloadDelivery = {
+          token: sala[0].token,
+          pedidoId: pedidoDeliveryId,
+          tipoPedido: 'delivery' as const,
+          total: total.toFixed(2),
+          items: itemsParaFront,
+          cucuruAlias: cuentaCucuru?.alias,
+          cucuruAccountNumber: cuentaCucuru?.accountNumber,
+          deliveryFee: checkoutData.deliveryFee,
+          zonaNombre: checkoutData.zonaNombre,
+          direccion: checkoutData.direccion,
+          nombreCliente: checkoutData.nombre,
+          telefono: checkoutData.telefono,
+        }
+        this.salaOrderCache.set(sala[0].token, payloadDelivery)
+        this.broadcast(mesaId, { type: 'SALA_PEDIDO_CREADO', payload: payloadDelivery });
       } else {
         const nuevoPedido = await this.db.insert(PedidoTakeawayTable).values({
           restauranteId: sala[0].restauranteId,
@@ -1390,20 +1406,19 @@ class WebSocketManager {
           clienteNombre: i.clienteNombre,
         }));
 
-        this.broadcast(mesaId, {
-          type: 'SALA_PEDIDO_CREADO',
-          payload: {
-            token: sala[0].token,
-            pedidoId: pedidoTakeawayId,
-            tipoPedido: 'takeaway',
-            total: total.toFixed(2),
-            items: itemsParaFront,
-            cucuruAlias: cuentaCucuru?.alias,
-            cucuruAccountNumber: cuentaCucuru?.accountNumber,
-            nombreCliente: checkoutData.nombre,
-            telefono: checkoutData.telefono,
-          },
-        });
+        const payloadTakeaway = {
+          token: sala[0].token,
+          pedidoId: pedidoTakeawayId,
+          tipoPedido: 'takeaway' as const,
+          total: total.toFixed(2),
+          items: itemsParaFront,
+          cucuruAlias: cuentaCucuru?.alias,
+          cucuruAccountNumber: cuentaCucuru?.accountNumber,
+          nombreCliente: checkoutData.nombre,
+          telefono: checkoutData.telefono,
+        }
+        this.salaOrderCache.set(sala[0].token, payloadTakeaway)
+        this.broadcast(mesaId, { type: 'SALA_PEDIDO_CREADO', payload: payloadTakeaway });
       }
 
       console.log(`✅ [confirmarPedidoSala] Pedido grupal creado, token=${sala[0].token}`);
@@ -1651,6 +1666,11 @@ class WebSocketManager {
       });
       console.log(`🔌 Notificando PAGO_ACREDITADO a ${clients.size} cliente(s) para ${key}`);
     }
+  }
+
+  // Obtener pedido de sala desde cache (fallback para polling cuando WS no llega)
+  getSalaOrderFromCache(token: string): SalaOrderCacheEntry | null {
+    return this.salaOrderCache.get(token) || null
   }
 }
 
