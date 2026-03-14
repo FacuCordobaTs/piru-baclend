@@ -20,7 +20,7 @@ import { wsManager } from './websocket/manager';
 import type { WebSocketMessage } from './types/websocket';
 import { drizzle } from 'drizzle-orm/mysql2';
 import { pool } from './db';
-import { mesa as MesaTable, pedido as PedidoTable } from './db/schema';
+import { mesa as MesaTable, sala as SalaTable, pedido as PedidoTable } from './db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { createBunWebSocket } from "hono/bun";
 import type { ServerWebSocket } from "bun";
@@ -335,13 +335,26 @@ app.get(
     let pedidoId: number | null = null;
 
     try {
-      const mesa = await db.select()
+      let mesa = await db.select()
         .from(MesaTable)
         .where(eq(MesaTable.qrToken, qrToken))
         .limit(1);
 
+      let isSala = false;
+
       if (!mesa || mesa.length === 0) {
-        throw new Error('Mesa no encontrada');
+        // Try with sala
+        const sala = await db.select().from(SalaTable).where(eq(SalaTable.token, qrToken)).limit(1);
+        if (!sala || sala.length === 0) {
+          throw new Error('Mesa o Sala no encontrada');
+        }
+        // Mock it as a mesa to reuse the rest of the code
+        isSala = true;
+        mesa = [{
+          ...sala[0],
+          id: sala[0].id + 1000000, // Offset to avoid ID collision
+          qrToken: sala[0].token
+        }];
       }
 
       mesaId = mesa[0].id;
@@ -349,14 +362,15 @@ app.get(
       // Buscar último pedido
       const ultimoPedido = await db.select()
         .from(PedidoTable)
-        .where(eq(PedidoTable.mesaId, mesaId))
+        .where(isSala ? eq(PedidoTable.salaId, mesa[0].id - 1000000) : eq(PedidoTable.mesaId, mesaId))
         .orderBy(desc(PedidoTable.createdAt))
         .limit(1);
 
       if (!ultimoPedido || ultimoPedido.length === 0) {
         // No hay pedidos, crear uno nuevo
         const nuevoPedido = await db.insert(PedidoTable).values({
-          mesaId: mesaId,
+          mesaId: isSala ? null : mesaId,
+          salaId: isSala ? mesaId - 1000000 : null,
           restauranteId: mesa[0].restauranteId!,
           estado: 'pending',
           total: '0.00'
@@ -365,7 +379,8 @@ app.get(
       } else if (ultimoPedido[0].estado === 'archived') {
         // El último pedido está archivado, crear uno nuevo directamente
         const nuevoPedido = await db.insert(PedidoTable).values({
-          mesaId: mesaId,
+          mesaId: isSala ? null : mesaId,
+          salaId: isSala ? mesaId - 1000000 : null,
           restauranteId: mesa[0].restauranteId!,
           estado: 'pending',
           total: '0.00'
@@ -378,7 +393,8 @@ app.get(
         if (todosPagaron) {
           // Todos pagaron, crear nuevo pedido
           const nuevoPedido = await db.insert(PedidoTable).values({
-            mesaId: mesaId,
+            mesaId: isSala ? null : mesaId,
+            salaId: isSala ? mesaId - 1000000 : null,
             restauranteId: mesa[0].restauranteId!,
             estado: 'pending',
             total: '0.00'

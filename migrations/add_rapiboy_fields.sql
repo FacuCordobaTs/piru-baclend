@@ -4,6 +4,7 @@
 
 -- 1. Token de API Rapiboy en configuración del restaurante
 ALTER TABLE `restaurante` ADD COLUMN `rapiboy_token` VARCHAR(512) NULL;
+ALTER TABLE `restaurante` ADD COLUMN `rapiboy_mode` ENUM('manual', 'automatico') NOT NULL DEFAULT 'manual';
 
 -- 2. Campos de tracking Rapiboy en pedidos de delivery
 ALTER TABLE `pedido_delivery` ADD COLUMN `rapiboy_tracking_url` VARCHAR(512) NULL;

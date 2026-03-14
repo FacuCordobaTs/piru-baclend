@@ -1,7 +1,7 @@
 // mesa.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { mesa as MesaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable, restaurante as RestauranteTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, pago as PagoTable, pagoSubtotal as PagoSubtotalTable } from '../db/schema'
+import { mesa as MesaTable, sala as SalaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable, restaurante as RestauranteTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, pago as PagoTable, pagoSubtotal as PagoSubtotalTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
@@ -33,10 +33,22 @@ const mesaRoute = new Hono()
     const db = drizzle(pool)
     const qrToken = c.req.param('qrToken')
 
-    const mesa = await db.select().from(MesaTable).where(eq(MesaTable.qrToken, qrToken))
+    let mesa = await db.select().from(MesaTable).where(eq(MesaTable.qrToken, qrToken))
+    let isSala = false;
 
     if (!mesa || mesa.length === 0) {
-      return c.json({ message: 'Mesa no encontrada', success: false }, 404)
+      // Try with sala
+      const sala = await db.select().from(SalaTable).where(eq(SalaTable.token, qrToken))
+      if (!sala || sala.length === 0) {
+        return c.json({ message: 'Mesa o Sala no encontrada', success: false }, 404)
+      }
+      // Mock it as a mesa to reuse the rest of the code
+      isSala = true;
+      mesa = [{
+        ...sala[0],
+        id: sala[0].id + 1000000, // Offset to avoid ID collision
+        qrToken: sala[0].token
+      }];
     }
 
     // Obtener información del restaurante (nombre, imagen, estado de MP y modo carrito)
@@ -52,7 +64,7 @@ const mesaRoute = new Hono()
 
     let ultimoPedido = await db.select().
       from(PedidoTable).
-      where(eq(PedidoTable.mesaId, mesa[0].id)).
+      where(isSala ? eq(PedidoTable.salaId, mesa[0].id - 1000000) : eq(PedidoTable.mesaId, mesa[0].id)).
       orderBy(desc(PedidoTable.createdAt))
       .limit(1)
 
@@ -107,7 +119,8 @@ const mesaRoute = new Hono()
         if (timeSinceCreation > twentyMinutesMs) {
           // Ya pasaron 20 mins, crear nuevo pedido
           const nuevoPedido = await db.insert(PedidoTable).values({
-            mesaId: mesa[0].id,
+            mesaId: isSala ? null : mesa[0].id,
+            salaId: isSala ? mesa[0].id - 1000000 : null,
             restauranteId: mesa[0].restauranteId,
             estado: 'pending',
             total: '0.00'
@@ -126,7 +139,8 @@ const mesaRoute = new Hono()
       } else {
         // No hay pedido anterior, creamos uno nuevo
         const nuevoPedido = await db.insert(PedidoTable).values({
-          mesaId: mesa[0].id,
+          mesaId: isSala ? null : mesa[0].id,
+          salaId: isSala ? mesa[0].id - 1000000 : null,
           restauranteId: mesa[0].restauranteId,
           estado: 'pending',
           total: '0.00'
@@ -144,7 +158,8 @@ const mesaRoute = new Hono()
       if (!pedidoActual) {
         // No hay pedidos, crear uno nuevo
         const nuevoPedido = await db.insert(PedidoTable).values({
-          mesaId: mesa[0].id,
+          mesaId: isSala ? null : mesa[0].id,
+          salaId: isSala ? mesa[0].id - 1000000 : null,
           restauranteId: mesa[0].restauranteId,
           estado: 'pending',
           total: '0.00'
@@ -160,7 +175,8 @@ const mesaRoute = new Hono()
       } else if (pedidoActual.estado === 'archived') {
         // El último pedido está archivado, siempre crear uno nuevo
         const nuevoPedido = await db.insert(PedidoTable).values({
-          mesaId: mesa[0].id,
+          mesaId: isSala ? null : mesa[0].id,
+          salaId: isSala ? mesa[0].id - 1000000 : null,
           restauranteId: mesa[0].restauranteId,
           estado: 'pending',
           total: '0.00'
@@ -246,7 +262,8 @@ const mesaRoute = new Hono()
 
           // Todos pagaron, crear nuevo pedido
           const nuevoPedido = await db.insert(PedidoTable).values({
-            mesaId: mesa[0].id,
+            mesaId: isSala ? null : mesa[0].id,
+            salaId: isSala ? mesa[0].id - 1000000 : null,
             restauranteId: mesa[0].restauranteId,
             estado: 'pending',
             total: '0.00'

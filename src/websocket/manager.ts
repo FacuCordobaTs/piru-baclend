@@ -7,6 +7,7 @@ import {
   itemPedido as ItemPedidoTable,
   producto as ProductoTable,
   mesa as MesaTable,
+  sala as SalaTable,
   ingrediente as IngredienteTable,
   notificacion as NotificacionTable,
   pagoSubtotal as PagoSubtotalTable
@@ -276,13 +277,18 @@ class WebSocketManager {
 
     if (!restauranteId) {
       // Buscar en BD
-      const mesa = await this.db.select()
-        .from(MesaTable)
-        .where(eq(MesaTable.id, mesaId))
-        .limit(1);
+      const isSala = mesaId > 1000000;
+      const realMesaId = isSala ? mesaId - 1000000 : mesaId;
+      
+      let res;
+      if (isSala) {
+        res = await this.db.select().from(SalaTable).where(eq(SalaTable.id, realMesaId)).limit(1);
+      } else {
+        res = await this.db.select().from(MesaTable).where(eq(MesaTable.id, realMesaId)).limit(1);
+      }
 
-      if (mesa[0]?.restauranteId) {
-        restauranteId = mesa[0].restauranteId;
+      if (res[0]?.restauranteId) {
+        restauranteId = res[0].restauranteId;
         this.mesaToRestaurante.set(mesaId, restauranteId);
       }
     }
@@ -355,12 +361,17 @@ class WebSocketManager {
   private async asignarNombrePedidoSiCarrito(mesaId: number, pedidoId: number, nombreCliente: string) {
     try {
       // Obtener la mesa para saber el restaurante
-      const mesa = await this.db.select()
-        .from(MesaTable)
-        .where(eq(MesaTable.id, mesaId))
-        .limit(1);
+      const isSala = mesaId > 1000000;
+      const realMesaId = isSala ? mesaId - 1000000 : mesaId;
+      
+      let mesaResult;
+      if (isSala) {
+        mesaResult = await this.db.select().from(SalaTable).where(eq(SalaTable.id, realMesaId)).limit(1);
+      } else {
+        mesaResult = await this.db.select().from(MesaTable).where(eq(MesaTable.id, realMesaId)).limit(1);
+      }
 
-      if (!mesa[0]?.restauranteId) return;
+      if (!mesaResult[0]?.restauranteId) return;
 
       // Importamos restaurante table
       const { restaurante: RestauranteTable } = await import('../db/schema');
@@ -370,7 +381,7 @@ class WebSocketManager {
         esCarrito: RestauranteTable.esCarrito
       })
         .from(RestauranteTable)
-        .where(eq(RestauranteTable.id, mesa[0].restauranteId))
+        .where(eq(RestauranteTable.id, mesaResult[0].restauranteId))
         .limit(1);
 
       if (!restaurante[0]?.esCarrito) return;
@@ -656,19 +667,27 @@ class WebSocketManager {
     });
 
     // Obtener info de la mesa para notificar admins
-    const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
+    const isSala = mesaId > 1000000;
+    const realMesaId = isSala ? mesaId - 1000000 : mesaId;
+
+    let mesaResult;
+    if (isSala) {
+      mesaResult = await this.db.select().from(SalaTable).where(eq(SalaTable.id, realMesaId)).limit(1);
+    } else {
+      mesaResult = await this.db.select().from(MesaTable).where(eq(MesaTable.id, realMesaId)).limit(1);
+    }
 
     // Si el pedido está confirmado (preparing o delivered), enviar notificación push
     if (estadoActual.pedido && ['preparing', 'delivered', 'served'].includes(estadoActual.pedido.estado || '')) {
-      if (mesa[0]?.restauranteId) {
+      if (mesaResult[0]?.restauranteId) {
         const nombreProducto = itemCompletoConNombres.nombreProducto || 'Producto';
         const cantidad = itemCompletoConNombres.cantidad || 1;
         const clienteNombre = itemCompletoConNombres.clienteNombre || 'Cliente';
 
-        this.notifyAdmins(mesa[0].restauranteId, this.createNotification(
+        this.notifyAdmins(mesaResult[0].restauranteId, this.createNotification(
           'PRODUCTO_AGREGADO',
-          mesaId,
-          mesa[0].nombre,
+          isSala ? 0 : realMesaId,
+          mesaResult[0].nombre,
           `Nuevo producto agregado`,
           `${clienteNombre} agregó ${cantidad}x ${nombreProducto}`,
           pedidoId
@@ -761,8 +780,17 @@ class WebSocketManager {
 
   // Método auxiliar para obtener restauranteId
   private async getRestauranteIdFromMesa(mesaId: number): Promise<number | null> {
-    const mesa = await this.db.select().from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
-    return mesa[0]?.restauranteId || null;
+    const isSala = mesaId > 1000000;
+    const realMesaId = isSala ? mesaId - 1000000 : mesaId;
+
+    let mesaResult;
+    if (isSala) {
+      mesaResult = await this.db.select().from(SalaTable).where(eq(SalaTable.id, realMesaId)).limit(1);
+    } else {
+      mesaResult = await this.db.select().from(MesaTable).where(eq(MesaTable.id, realMesaId)).limit(1);
+    }
+  
+    return mesaResult[0]?.restauranteId || null;
   }
 
   // Recalcular el total del pedido

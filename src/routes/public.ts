@@ -8,6 +8,7 @@ import { sendOrderWhatsApp } from '../services/whatsapp'
 import { productoPuntos as ProductoPuntosTable, zonaDelivery as ZonaDeliveryTable } from '../db/schema'
 import { asignarAliasAPedido } from '../services/cucuru'
 import { findZoneForPoint } from '../utils/geo'
+import UUID = require("uuid-js");
 
 const publicRoute = new Hono()
 
@@ -128,7 +129,47 @@ publicRoute.get('/restaurante/:username', async (c) => {
 
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { pedidoDelivery as PedidoDeliveryTable, itemPedidoDelivery as ItemPedidoDeliveryTable, pedidoTakeaway as PedidoTakeawayTable, itemPedidoTakeaway as ItemPedidoTakeawayTable, cliente as ClienteTable } from '../db/schema'
+import { 
+    pedidoDelivery as PedidoDeliveryTable, 
+    itemPedidoDelivery as ItemPedidoDeliveryTable, 
+    pedidoTakeaway as PedidoTakeawayTable, 
+    itemPedidoTakeaway as ItemPedidoTakeawayTable, 
+    cliente as ClienteTable,
+    sala as SalaTable
+} from '../db/schema'
+
+const createSalaSchema = z.object({
+    restauranteId: z.number().int().positive(),
+    nombreCliente: z.string().min(1) // we might not really use it for the table but good to know
+})
+
+publicRoute.post('/sala/create', zValidator('json', createSalaSchema), async (c) => {
+    const db = drizzle(pool)
+    const { restauranteId, nombreCliente } = c.req.valid('json')
+
+    try {
+        const token = UUID.create().toString()
+
+        // Create the sala with the client's name or a default name
+        const sala = await db.insert(SalaTable).values({
+            nombre: `Pedido de ${nombreCliente}`,
+            restauranteId,
+            token
+        })
+
+        return c.json({
+            message: 'Sala creada correctamente',
+            success: true,
+            data: {
+                id: Number(sala[0].insertId),
+                token
+            }
+        }, 201)
+    } catch (error) {
+        console.error('Error creating sala:', error)
+        return c.json({ message: 'Error creating sala', error: (error as Error).message }, 500)
+    }
+})
 
 const createDeliverySchema = z.object({
     restauranteId: z.number().int().positive(),
