@@ -48,6 +48,7 @@ export const restaurante = mysqlTable("restaurante", {
   colorPrimario: varchar("color_primario", { length: 50 }),
   colorSecundario: varchar("color_secundario", { length: 50 }),
   disenoAlternativo: boolean("diseno_alternativo").default(false).notNull(),
+  orderGroupEnabled: boolean("order_group_enabled").default(true).notNull(),
   // Rapiboy - integración logística delivery
   rapiboyToken: varchar("rapiboy_token", { length: 512 }),
   rapiboyMode: mysqlEnum("rapiboy_mode", ["on_demand", "food"]),

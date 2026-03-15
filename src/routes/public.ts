@@ -32,6 +32,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             colorPrimario: RestauranteTable.colorPrimario,
             colorSecundario: RestauranteTable.colorSecundario,
             disenoAlternativo: RestauranteTable.disenoAlternativo,
+            orderGroupEnabled: RestauranteTable.orderGroupEnabled,
         })
             .from(RestauranteTable)
             .where(eq(RestauranteTable.username, username))

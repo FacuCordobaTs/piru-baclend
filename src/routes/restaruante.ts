@@ -493,6 +493,37 @@ restauranteRoute.put('/toggle-sistema-puntos', async (c) => {
   }
 })
 
+// Toggle pedido entre amigos (order group)
+restauranteRoute.put('/toggle-order-group-enabled', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [restaurante] = await db.select({ orderGroupEnabled: RestauranteTable.orderGroupEnabled })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!restaurante) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    const nuevoEstado = !restaurante.orderGroupEnabled
+
+    await db.update(RestauranteTable)
+      .set({ orderGroupEnabled: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({
+      message: nuevoEstado ? 'Pedido entre amigos activado' : 'Pedido entre amigos desactivado',
+      success: true,
+      orderGroupEnabled: nuevoEstado
+    }, 200)
+  } catch (error) {
+    console.error('Error updating order group enabled:', error)
+    return c.json({ message: 'Error al cambiar configuración', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 // Toggle diseño alternativo
 restauranteRoute.put('/toggle-diseno-alternativo', async (c) => {
   const db = drizzle(pool)
