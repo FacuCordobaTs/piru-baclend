@@ -290,6 +290,30 @@ export const cliente = mysqlTable("cliente", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Códigos de descuento con cupos limitados
+export const codigoDescuento = mysqlTable(
+  "codigo_descuento",
+  {
+    id: int("id").primaryKey().autoincrement(),
+    restauranteId: int("restaurante_id")
+      .references(() => restaurante.id)
+      .notNull(),
+    codigo: varchar("codigo", { length: 50 }).notNull(),
+    tipo: mysqlEnum("tipo", ["porcentaje", "monto_fijo"]).notNull(),
+    valor: decimal("valor", { precision: 10, scale: 2 }).notNull(),
+    limiteUsos: int("limite_usos"),
+    usosActuales: int("usos_actuales").default(0).notNull(),
+    montoMinimo: decimal("monto_minimo", { precision: 10, scale: 2 }).default("0.00"),
+    fechaInicio: timestamp("fecha_inicio"),
+    fechaFin: timestamp("fecha_fin"),
+    activo: boolean("activo").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_restaurante_codigo").on(table.restauranteId, table.codigo),
+  ]
+);
+
 // Pedido de delivery (sin mesa, con dirección)
 export const pedidoDelivery = mysqlTable("pedido_delivery", {
   id: int("id").primaryKey().autoincrement(),
@@ -321,6 +345,9 @@ export const pedidoDelivery = mysqlTable("pedido_delivery", {
   // Rapiboy - tracking de envío
   rapiboyTrackingUrl: varchar("rapiboy_tracking_url", { length: 512 }),
   rapiboyTripId: varchar("rapiboy_trip_id", { length: 100 }),
+  // Descuento aplicado
+  codigoDescuentoId: int("codigo_descuento_id").references(() => codigoDescuento.id),
+  montoDescuento: decimal("monto_descuento", { precision: 10, scale: 2 }).default("0.00"),
 });
 
 // Items del pedido de delivery
@@ -363,6 +390,9 @@ export const pedidoTakeaway = mysqlTable("pedido_takeaway", {
   impreso: boolean("impreso").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   deliveredAt: timestamp("delivered_at"),
+  // Descuento aplicado
+  codigoDescuentoId: int("codigo_descuento_id").references(() => codigoDescuento.id),
+  montoDescuento: decimal("monto_descuento", { precision: 10, scale: 2 }).default("0.00"),
 });
 
 // Items del pedido take away
