@@ -399,6 +399,7 @@ export const accountPool = mysqlTable("account_pool", {
   alias: varchar("alias", { length: 255 }),
   estado: mysqlEnum("estado", ["disponible", "asignado"]).default("disponible"),
   pedidoIdAsignado: int("pedido_id_asignado"),
+  tipoPedido: mysqlEnum("tipo_pedido", ["delivery", "takeaway"]),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 

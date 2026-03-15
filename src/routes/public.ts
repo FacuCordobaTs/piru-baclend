@@ -379,7 +379,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                     db,
                     restaurante: resRestaurante[0],
                     pedidoId,
-                    slug: resRestaurante[0].username!
+                    slug: resRestaurante[0].username!,
+                    tipoPedido: 'delivery'
                 });
             } catch (error) {
                 console.error("❌ Error asignando CVU/Alias de Cucuru:", error);
@@ -625,7 +626,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                     db,
                     restaurante: resRestaurante[0],
                     pedidoId,
-                    slug: resRestaurante[0].username!
+                    slug: resRestaurante[0].username!,
+                    tipoPedido: 'takeaway'
                 });
             } catch (error) {
                 console.error("❌ Error asignando CVU/Alias de Cucuru:", error);

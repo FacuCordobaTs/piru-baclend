@@ -36,12 +36,14 @@ export async function asignarAliasAPedido({
     db,
     restaurante,
     pedidoId,
-    slug
+    slug,
+    tipoPedido
 }: {
     db: any,
     restaurante: any,
     pedidoId: number,
-    slug: string
+    slug: string,
+    tipoPedido: 'delivery' | 'takeaway'
 }) {
     if (!restaurante.cucuruApiKey || !restaurante.cucuruCollectorId) {
         throw new Error("El restaurante no tiene configurado Cucuru.");
@@ -125,7 +127,8 @@ export async function asignarAliasAPedido({
             accountNumber,
             alias: aliasSecuencial,
             estado: 'asignado',
-            pedidoIdAsignado: pedidoId
+            pedidoIdAsignado: pedidoId,
+            tipoPedido
         });
 
         return {

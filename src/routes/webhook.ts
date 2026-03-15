@@ -59,6 +59,8 @@ const cucuruWebhookHandler = async (c: any) => {
 
     let assignedPedidoId: number | null = null;
     let poolRecordId: number | null = null;
+    let poolRestauranteId: number | null = null;
+    let poolTipoPedido: 'delivery' | 'takeaway' | null = null;
 
     if (collectionAccount) {
       const poolRecords = await db.select()
@@ -69,7 +71,9 @@ const cucuruWebhookHandler = async (c: any) => {
       if (poolRecords.length > 0 && poolRecords[0].pedidoIdAsignado) {
         assignedPedidoId = poolRecords[0].pedidoIdAsignado;
         poolRecordId = poolRecords[0].id;
-        console.log(`🔍 Encontrado Alias Dinámico: CVU ${collectionAccount} apunta al Pedido #${assignedPedidoId}`);
+        poolRestauranteId = poolRecords[0].restauranteId;
+        poolTipoPedido = poolRecords[0].tipoPedido as 'delivery' | 'takeaway' | null;
+        console.log(`🔍 Encontrado Alias Dinámico: CVU ${collectionAccount} apunta al Pedido #${assignedPedidoId} (${poolTipoPedido || 'legacy'})`);
       }
     }
 
@@ -88,26 +92,57 @@ const cucuruWebhookHandler = async (c: any) => {
     // Los alias dinámicos NO se reciclan. Cada pedido mantiene su alias
     // permanentemente para evitar que webhooks duplicados/retrasados de Cucuru
     // crucen pagos entre pedidos.
+    // FIX: Delivery y Takeaway tienen IDs independientes (ambos pueden tener id=49).
+    // tipoPedido indica qué tabla consultar primero. Sin eso matcheábamos delivery en vez de takeaway.
 
-    // 1. Buscar en Delivery
-    const pedidosDelivery = await db.select()
-      .from(PedidoDeliveryTable)
-      .where(
-        assignedPedidoId
-          ? eq(PedidoDeliveryTable.id, assignedPedidoId)
-          : and(
-            eq(PedidoDeliveryTable.restauranteId, restauranteId),
-            eq(PedidoDeliveryTable.total, String(amount)),
-            eq(PedidoDeliveryTable.pagado, false),
-            ne(PedidoDeliveryTable.estado, 'delivered'),
-            ne(PedidoDeliveryTable.estado, 'archived'),
-            ne(PedidoDeliveryTable.estado, 'cancelled')
-          )
-      )
-      .limit(1);
+    const effectiveRestauranteId = poolRestauranteId ?? restauranteId;
+    const deliveryWhere = assignedPedidoId
+      ? and(
+          eq(PedidoDeliveryTable.id, assignedPedidoId),
+          eq(PedidoDeliveryTable.restauranteId, effectiveRestauranteId)
+        )
+      : and(
+          eq(PedidoDeliveryTable.restauranteId, restauranteId),
+          eq(PedidoDeliveryTable.total, String(amount)),
+          eq(PedidoDeliveryTable.pagado, false),
+          ne(PedidoDeliveryTable.estado, 'delivered'),
+          ne(PedidoDeliveryTable.estado, 'archived'),
+          ne(PedidoDeliveryTable.estado, 'cancelled')
+        );
+
+    const takeawayWhere = assignedPedidoId
+      ? and(
+          eq(PedidoTakeawayTable.id, assignedPedidoId),
+          eq(PedidoTakeawayTable.restauranteId, effectiveRestauranteId)
+        )
+      : and(
+          eq(PedidoTakeawayTable.restauranteId, restauranteId),
+          eq(PedidoTakeawayTable.total, String(amount)),
+          eq(PedidoTakeawayTable.pagado, false),
+          ne(PedidoTakeawayTable.estado, 'delivered'),
+          ne(PedidoTakeawayTable.estado, 'archived'),
+          ne(PedidoTakeawayTable.estado, 'cancelled')
+        );
+
+    const searchTakeawayFirst = poolTipoPedido === 'takeaway';
+    let pedidosDelivery: typeof PedidoDeliveryTable.$inferSelect[] = [];
+    let pedidosTakeaway: typeof PedidoTakeawayTable.$inferSelect[] = [];
+
+    if (searchTakeawayFirst) {
+      pedidosTakeaway = await db.select().from(PedidoTakeawayTable).where(takeawayWhere).limit(1);
+      if (pedidosTakeaway.length === 0) {
+        pedidosDelivery = await db.select().from(PedidoDeliveryTable).where(deliveryWhere).limit(1);
+      }
+    } else {
+      pedidosDelivery = await db.select().from(PedidoDeliveryTable).where(deliveryWhere).limit(1);
+      if (pedidosDelivery.length === 0) {
+        pedidosTakeaway = await db.select().from(PedidoTakeawayTable).where(takeawayWhere).limit(1);
+      }
+    }
 
     if (pedidosDelivery.length > 0) {
       const pedido = pedidosDelivery[0];
+      const targetRestauranteId = pedido.restauranteId ?? restauranteId;
 
       if (Number(amount) < Number(pedido.total)) {
         console.warn(`⚠️ [Cucuru] Pago insuficiente para Delivery #${pedido.id}. Pagado: $${amount}, Esperado: $${pedido.total}`);
@@ -128,7 +163,7 @@ const cucuruWebhookHandler = async (c: any) => {
       });
 
       const notifId = `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      wsManager.notifyAdmins(restauranteId, {
+      wsManager.notifyAdmins(targetRestauranteId, {
         id: notifId,
         tipo: 'NUEVO_PEDIDO',
         mesaId: 0,
@@ -141,7 +176,7 @@ const cucuruWebhookHandler = async (c: any) => {
       });
 
       console.log(`🚀 [Cucuru] Pago acreditado para Delivery #${pedido.id}`);
-      wsManager.broadcastAdminUpdate(restauranteId, 'delivery');
+      wsManager.broadcastAdminUpdate(targetRestauranteId, 'delivery');
       wsManager.notifyPublicClientPayment('delivery', pedido.id);
 
       // WhatsApp Notification
@@ -150,7 +185,7 @@ const cucuruWebhookHandler = async (c: any) => {
           whatsappEnabled: RestauranteTable.whatsappEnabled,
           whatsappNumber: RestauranteTable.whatsappNumber,
           deliveryFee: RestauranteTable.deliveryFee
-        }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1);
+        }).from(RestauranteTable).where(eq(RestauranteTable.id, targetRestauranteId)).limit(1);
 
         if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
           const itemsRaw = await db.select({
@@ -187,25 +222,9 @@ const cucuruWebhookHandler = async (c: any) => {
       return c.json({ status: 'received' }, 200);
     }
 
-    // 2. Buscar en Takeaway
-    const pedidosTakeaway = await db.select()
-      .from(PedidoTakeawayTable)
-      .where(
-        assignedPedidoId
-          ? eq(PedidoTakeawayTable.id, assignedPedidoId)
-          : and(
-            eq(PedidoTakeawayTable.restauranteId, restauranteId),
-            eq(PedidoTakeawayTable.total, String(amount)),
-            eq(PedidoTakeawayTable.pagado, false),
-            ne(PedidoTakeawayTable.estado, 'delivered'),
-            ne(PedidoTakeawayTable.estado, 'archived'),
-            ne(PedidoTakeawayTable.estado, 'cancelled')
-          )
-      )
-      .limit(1);
-
     if (pedidosTakeaway.length > 0) {
       const pedido = pedidosTakeaway[0];
+      const targetRestauranteId = pedido.restauranteId ?? restauranteId;
 
       if (Number(amount) < Number(pedido.total)) {
         console.warn(`⚠️ [Cucuru] Pago insuficiente para TakeAway #${pedido.id}. Pagado: $${amount}, Esperado: $${pedido.total}`);
@@ -226,7 +245,7 @@ const cucuruWebhookHandler = async (c: any) => {
       });
 
       const notifId = `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      wsManager.notifyAdmins(restauranteId, {
+      wsManager.notifyAdmins(targetRestauranteId, {
         id: notifId,
         tipo: 'NUEVO_PEDIDO',
         mesaId: 0,
@@ -239,7 +258,7 @@ const cucuruWebhookHandler = async (c: any) => {
       });
 
       console.log(`🏃‍♂️ [Cucuru] Pago acreditado para TakeAway #${pedido.id}`);
-      wsManager.broadcastAdminUpdate(restauranteId, 'takeaway');
+      wsManager.broadcastAdminUpdate(targetRestauranteId, 'takeaway');
       wsManager.notifyPublicClientPayment('takeaway', pedido.id);
 
       // WhatsApp Notification
@@ -247,7 +266,7 @@ const cucuruWebhookHandler = async (c: any) => {
         const restaurante = await db.select({
           whatsappEnabled: RestauranteTable.whatsappEnabled,
           whatsappNumber: RestauranteTable.whatsappNumber
-        }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1);
+        }).from(RestauranteTable).where(eq(RestauranteTable.id, targetRestauranteId)).limit(1);
 
         if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
           const itemsRaw = await db.select({

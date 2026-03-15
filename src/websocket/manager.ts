@@ -1226,6 +1226,7 @@ class WebSocketManager {
             restaurante: restaurante[0],
             pedidoId: pedidoDeliveryId,
             slug: restaurante[0].username,
+            tipoPedido: 'delivery',
           });
         }
 
@@ -1297,6 +1298,7 @@ class WebSocketManager {
             restaurante: restaurante[0],
             pedidoId: pedidoTakeawayId,
             slug: restaurante[0].username,
+            tipoPedido: 'takeaway',
           });
         }
 
