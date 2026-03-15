@@ -1295,6 +1295,7 @@ class WebSocketManager {
           direccion: checkoutData.direccion,
           nombreCliente: checkoutData.nombre,
           telefono: checkoutData.telefono,
+          montoDescuento: montoDescuento > 0 ? montoDescuento.toFixed(2) : undefined,
         }
         this.salaOrderCache.set(sala[0].token, payloadDelivery)
         this.broadcast(mesaId, { type: 'SALA_PEDIDO_CREADO', payload: payloadDelivery });
@@ -1366,6 +1367,7 @@ class WebSocketManager {
           cucuruAccountNumber: cuentaCucuru?.accountNumber,
           nombreCliente: checkoutData.nombre,
           telefono: checkoutData.telefono,
+          montoDescuento: montoDescuento > 0 ? montoDescuento.toFixed(2) : undefined,
         }
         this.salaOrderCache.set(sala[0].token, payloadTakeaway)
         this.broadcast(mesaId, { type: 'SALA_PEDIDO_CREADO', payload: payloadTakeaway });

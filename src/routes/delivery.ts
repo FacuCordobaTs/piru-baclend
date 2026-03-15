@@ -77,6 +77,7 @@ const deliveryRoute = new Hono()
                 metodoPago: PedidoDeliveryTable.metodoPago,
                 impreso: PedidoDeliveryTable.impreso,
                 rapiboyTrackingUrl: PedidoDeliveryTable.rapiboyTrackingUrl,
+                montoDescuento: PedidoDeliveryTable.montoDescuento,
             })
             .from(PedidoDeliveryTable)
             .where(estado
