@@ -1,8 +1,8 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable } from '../db/schema'
+import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable, codigoDescuento as CodigoDescuentoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
-import { eq, and, desc } from 'drizzle-orm'
+import { eq, and, desc, or, lt, isNull, sql } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp } from '../services/whatsapp'
 import { productoPuntos as ProductoPuntosTable, zonaDelivery as ZonaDeliveryTable } from '../db/schema'
@@ -181,6 +181,80 @@ publicRoute.post('/sala/create', zValidator('json', createSalaSchema), async (c)
     }
 })
 
+const validarDescuentoSchema = z.object({
+    restauranteId: z.number().int().positive(),
+    codigo: z.string().min(1).max(50).transform((v) => v.toUpperCase().trim()),
+    totalCarrito: z.number().min(0),
+})
+
+publicRoute.post('/descuentos/validar', zValidator('json', validarDescuentoSchema), async (c) => {
+    const db = drizzle(pool)
+    const { restauranteId, codigo, totalCarrito } = c.req.valid('json')
+
+    try {
+        const [cupon] = await db
+            .select()
+            .from(CodigoDescuentoTable)
+            .where(
+                and(
+                    eq(CodigoDescuentoTable.restauranteId, restauranteId),
+                    eq(CodigoDescuentoTable.codigo, codigo)
+                )
+            )
+            .limit(1)
+
+        if (!cupon) {
+            return c.json({ success: false, message: 'Código no encontrado' }, 200)
+        }
+        if (!cupon.activo) {
+            return c.json({ success: false, message: 'Este código ya no está activo' }, 200)
+        }
+
+        const ahora = new Date()
+        if (cupon.fechaInicio && new Date(cupon.fechaInicio) > ahora) {
+            return c.json({ success: false, message: 'Este código aún no está vigente' }, 200)
+        }
+        if (cupon.fechaFin && new Date(cupon.fechaFin) < ahora) {
+            return c.json({ success: false, message: 'Este código ha expirado' }, 200)
+        }
+
+        const montoMin = parseFloat(cupon.montoMinimo || '0')
+        if (totalCarrito < montoMin) {
+            return c.json({
+                success: false,
+                message: `Monto mínimo para este código: $${montoMin.toFixed(0)}`,
+            }, 200)
+        }
+
+        if (cupon.limiteUsos !== null && (cupon.usosActuales || 0) >= cupon.limiteUsos) {
+            return c.json({ success: false, message: 'Este código alcanzó su límite de usos' }, 200)
+        }
+
+        let montoDescuento = 0
+        if (cupon.tipo === 'porcentaje') {
+            const pct = parseFloat(cupon.valor)
+            montoDescuento = totalCarrito * (pct / 100)
+        } else {
+            montoDescuento = parseFloat(cupon.valor)
+        }
+        montoDescuento = Math.min(montoDescuento, totalCarrito)
+        const totalConDescuento = Math.max(0, totalCarrito - montoDescuento)
+
+        return c.json({
+            success: true,
+            data: {
+                codigoDescuentoId: cupon.id,
+                codigo: cupon.codigo,
+                montoDescuento: montoDescuento.toFixed(2),
+                totalConDescuento: totalConDescuento.toFixed(2),
+            },
+        }, 200)
+    } catch (error) {
+        console.error('Error validando descuento:', error)
+        return c.json({ success: false, message: 'Error al validar el código' }, 500)
+    }
+})
+
 const createDeliverySchema = z.object({
     restauranteId: z.number().int().positive(),
     direccion: z.string().min(5),
@@ -190,6 +264,7 @@ const createDeliverySchema = z.object({
     telefono: z.string().optional(),
     notas: z.string().optional(),
     metodoPago: z.string().optional(),
+    codigoDescuentoId: z.number().int().positive().optional(),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
         cantidad: z.number().int().positive().default(1),
@@ -205,7 +280,7 @@ const createDeliverySchema = z.object({
 
 publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, items } = c.req.valid('json')
+    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items } = c.req.valid('json')
 
     try {
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
@@ -337,6 +412,36 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             return c.json({ message: 'Debes ingresar datos de cliente para canjear puntos', success: false }, 400);
         }
 
+        let montoDescuento = 0
+        let codigoDescuentoIdFinal: number | null = null
+        if (codigoDescuentoId) {
+            const [cupon] = await db.select().from(CodigoDescuentoTable).where(eq(CodigoDescuentoTable.id, codigoDescuentoId)).limit(1)
+            if (!cupon || cupon.restauranteId !== restauranteId) {
+                return c.json({ message: 'Código de descuento inválido', success: false }, 400)
+            }
+            let desc = 0
+            if (cupon.tipo === 'porcentaje') desc = total * (parseFloat(cupon.valor) / 100)
+            else desc = parseFloat(cupon.valor)
+            montoDescuento = Math.min(desc, total)
+            const updateResult = await db.update(CodigoDescuentoTable)
+                .set({ usosActuales: sql`${CodigoDescuentoTable.usosActuales} + 1` })
+                .where(
+                    and(
+                        eq(CodigoDescuentoTable.id, codigoDescuentoId),
+                        eq(CodigoDescuentoTable.activo, true),
+                        or(
+                            isNull(CodigoDescuentoTable.limiteUsos),
+                            lt(CodigoDescuentoTable.usosActuales, CodigoDescuentoTable.limiteUsos)
+                        )
+                    )
+                )
+            if (updateResult[0].affectedRows === 0) {
+                return c.json({ message: 'El cupón ya no es válido o alcanzó su límite de usos', success: false }, 400)
+            }
+            total = Math.max(0, total - montoDescuento)
+            codigoDescuentoIdFinal = codigoDescuentoId
+        }
+
         const nuevoPedido = await db.insert(PedidoDeliveryTable).values({
             restauranteId,
             clienteId: clienteId || null,
@@ -350,7 +455,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             estado: 'pending',
             total: total.toFixed(2),
             puntosGanados,
-            puntosUsados
+            puntosUsados,
+            codigoDescuentoId: codigoDescuentoIdFinal,
+            montoDescuento: montoDescuento.toFixed(2),
         })
 
         const pedidoId = Number(nuevoPedido[0].insertId)
@@ -471,6 +578,7 @@ const createTakeawaySchema = z.object({
     telefono: z.string().optional(),
     notas: z.string().optional(),
     metodoPago: z.string().optional(),
+    codigoDescuentoId: z.number().int().positive().optional(),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
         cantidad: z.number().int().positive().default(1),
@@ -486,7 +594,7 @@ const createTakeawaySchema = z.object({
 
 publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, nombreCliente, telefono, notas, metodoPago, items } = c.req.valid('json')
+    const { restauranteId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items } = c.req.valid('json')
 
     try {
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
@@ -587,6 +695,36 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             return c.json({ message: 'Debes ingresar datos de cliente para canjear puntos', success: false }, 400);
         }
 
+        let montoDescuentoTk = 0
+        let codigoDescuentoIdFinalTk: number | null = null
+        if (codigoDescuentoId) {
+            const [cupon] = await db.select().from(CodigoDescuentoTable).where(eq(CodigoDescuentoTable.id, codigoDescuentoId)).limit(1)
+            if (!cupon || cupon.restauranteId !== restauranteId) {
+                return c.json({ message: 'Código de descuento inválido', success: false }, 400)
+            }
+            let desc = 0
+            if (cupon.tipo === 'porcentaje') desc = total * (parseFloat(cupon.valor) / 100)
+            else desc = parseFloat(cupon.valor)
+            montoDescuentoTk = Math.min(desc, total)
+            const updateResult = await db.update(CodigoDescuentoTable)
+                .set({ usosActuales: sql`${CodigoDescuentoTable.usosActuales} + 1` })
+                .where(
+                    and(
+                        eq(CodigoDescuentoTable.id, codigoDescuentoId),
+                        eq(CodigoDescuentoTable.activo, true),
+                        or(
+                            isNull(CodigoDescuentoTable.limiteUsos),
+                            lt(CodigoDescuentoTable.usosActuales, CodigoDescuentoTable.limiteUsos)
+                        )
+                    )
+                )
+            if (updateResult[0].affectedRows === 0) {
+                return c.json({ message: 'El cupón ya no es válido o alcanzó su límite de usos', success: false }, 400)
+            }
+            total = Math.max(0, total - montoDescuentoTk)
+            codigoDescuentoIdFinalTk = codigoDescuentoId
+        }
+
         const nuevoPedido = await db.insert(PedidoTakeawayTable).values({
             restauranteId,
             clienteId: clienteId || null,
@@ -597,7 +735,9 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             estado: 'pending',
             total: total.toFixed(2),
             puntosGanados,
-            puntosUsados
+            puntosUsados,
+            codigoDescuentoId: codigoDescuentoIdFinalTk,
+            montoDescuento: montoDescuentoTk.toFixed(2),
         })
 
         const pedidoId = Number(nuevoPedido[0].insertId)

@@ -67,6 +67,8 @@ export interface CheckoutDeliveryData {
   zonaNombre: string | null;
   itemsTotal: string;
   total: string;
+  codigoDescuentoId?: number | null;
+  montoDescuento?: number;
 }
 
 // Semáforo: quién está editando el checkout

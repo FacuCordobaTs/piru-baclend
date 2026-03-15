@@ -1,6 +1,6 @@
 // src/websocket/manager.ts
 import { drizzle } from 'drizzle-orm/mysql2';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, or, lt, isNull, sql } from 'drizzle-orm';
 import { pool } from '../db';
 import {
   pedido as PedidoTable,
@@ -15,7 +15,8 @@ import {
   itemPedidoTakeaway as ItemPedidoTakeawayTable,
   ingrediente as IngredienteTable,
   notificacion as NotificacionTable,
-  pagoSubtotal as PagoSubtotalTable
+  pagoSubtotal as PagoSubtotalTable,
+  codigoDescuento as CodigoDescuentoTable,
 } from '../db/schema';
 import { MesaSession, WebSocketMessage, ItemPedidoWS, AdminSession, AdminNotification, AdminNotificationType, CheckoutDeliveryData } from '../types/websocket';
 import { asignarAliasAPedido } from '../services/cucuru';
@@ -1187,8 +1188,38 @@ class WebSocketManager {
         return;
       }
 
-      const total = parseFloat(checkoutData.total || '0');
+      let total = parseFloat(checkoutData.total || '0');
       let cuentaCucuru: { alias: string; accountNumber: string } | null = null;
+      let montoDescuento = 0;
+      let codigoDescuentoIdFinal: number | null = null;
+
+      if (checkoutData.codigoDescuentoId) {
+        const [cupon] = await this.db.select().from(CodigoDescuentoTable).where(eq(CodigoDescuentoTable.id, checkoutData.codigoDescuentoId)).limit(1);
+        if (cupon && cupon.restauranteId === sala[0].restauranteId) {
+          let desc = 0;
+          if (cupon.tipo === 'porcentaje') desc = total * (parseFloat(cupon.valor) / 100);
+          else desc = parseFloat(cupon.valor);
+          montoDescuento = Math.min(desc, total);
+          const updateResult = await this.db.update(CodigoDescuentoTable)
+            .set({ usosActuales: sql`${CodigoDescuentoTable.usosActuales} + 1` })
+            .where(
+              and(
+                eq(CodigoDescuentoTable.id, checkoutData.codigoDescuentoId),
+                eq(CodigoDescuentoTable.activo, true),
+                or(
+                  isNull(CodigoDescuentoTable.limiteUsos),
+                  lt(CodigoDescuentoTable.usosActuales, CodigoDescuentoTable.limiteUsos)
+                )
+              )
+            );
+          if (updateResult[0].affectedRows === 0) {
+            this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'El cupón ya no es válido o alcanzó su límite de usos.' } });
+            return;
+          }
+          total = Math.max(0, total - montoDescuento);
+          codigoDescuentoIdFinal = checkoutData.codigoDescuentoId;
+        }
+      }
 
       if (checkoutData.tipoPedido === 'delivery') {
         const nuevoPedido = await this.db.insert(PedidoDeliveryTable).values({
@@ -1204,6 +1235,8 @@ class WebSocketManager {
           total: total.toFixed(2),
           puntosGanados: 0,
           puntosUsados: 0,
+          codigoDescuentoId: codigoDescuentoIdFinal,
+          montoDescuento: montoDescuento.toFixed(2),
         });
 
         const pedidoDeliveryId = Number(nuevoPedido[0].insertId);
@@ -1276,6 +1309,8 @@ class WebSocketManager {
           total: total.toFixed(2),
           puntosGanados: 0,
           puntosUsados: 0,
+          codigoDescuentoId: codigoDescuentoIdFinal,
+          montoDescuento: montoDescuento.toFixed(2),
         });
 
         const pedidoTakeawayId = Number(nuevoPedido[0].insertId);
