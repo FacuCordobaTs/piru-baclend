@@ -63,30 +63,10 @@ const cucuruWebhookHandler = async (c: any) => {
     let poolTipoPedido: 'delivery' | 'takeaway' | null = null;
 
     if (collectionAccount) {
-      const colNorm = String(collectionAccount).trim();
-      const colPadded = colNorm.padStart(22, '0');
-
-      let poolRecords = await db.select()
+      const poolRecords = await db.select()
         .from(AccountPoolTable)
-        .where(eq(AccountPoolTable.accountNumber, colNorm))
+        .where(eq(AccountPoolTable.accountNumber, collectionAccount))
         .limit(1);
-
-      // Fallback: Cucuru puede enviar collection_account con/sin ceros a la izquierda
-      if (poolRecords.length === 0 && colNorm !== colPadded) {
-        poolRecords = await db.select()
-          .from(AccountPoolTable)
-          .where(eq(AccountPoolTable.accountNumber, colPadded))
-          .limit(1);
-      }
-      // Fallback: buscar por coincidencia normalizada (por si Cucuru envía formato distinto)
-      if (poolRecords.length === 0) {
-        const allPool = await db.select()
-          .from(AccountPoolTable)
-          .where(eq(AccountPoolTable.restauranteId, restauranteId));
-        const norm = (s: string) => String(s || '').trim().padStart(22, '0');
-        const match = allPool.find(r => r.accountNumber && norm(r.accountNumber) === colPadded);
-        if (match) poolRecords = [match];
-      }
 
       if (poolRecords.length > 0 && poolRecords[0].pedidoIdAsignado) {
         assignedPedidoId = poolRecords[0].pedidoIdAsignado;
@@ -94,8 +74,6 @@ const cucuruWebhookHandler = async (c: any) => {
         poolRestauranteId = poolRecords[0].restauranteId;
         poolTipoPedido = poolRecords[0].tipoPedido as 'delivery' | 'takeaway' | null;
         console.log(`🔍 Encontrado Alias Dinámico: CVU ${collectionAccount} apunta al Pedido #${assignedPedidoId} (${poolTipoPedido || 'legacy'})`);
-      } else if (colNorm) {
-        console.log(`🔍 [Cucuru] Pool lookup: collection_account="${colNorm}" no encontrado en account_pool`);
       }
     }
 

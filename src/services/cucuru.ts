@@ -93,7 +93,7 @@ export async function asignarAliasAPedido({
             throw new Error("Fallo al crear cuenta CVU virtual en el proveedor.");
         }
 
-        const accountNumber = String(newAccountRes.account_number || '').trim().padStart(22, '0');
+        const accountNumber = newAccountRes.account_number.toString();
         // Construimos el alias con un formato secuencial: piru.[slug].[numero_secuencial]
         const aliasSecuencial = `piru.${slug}.${totalAccounts + 1}`.slice(0, 20); // Asegurar límite de caracteres si aplica según Cucuru
 
