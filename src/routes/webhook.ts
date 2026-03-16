@@ -85,7 +85,7 @@ const cucuruWebhookHandler = async (c: any) => {
     const usaDinamicos = resConf.length > 0 && resConf[0].cucuruConfigurado;
 
     if (usaDinamicos && !assignedPedidoId) {
-      console.log(`⚠️ [Cucuru] Pago de $${amount} al alias principal del restaurante ${restauranteId} ignorado (usa alias dinámicos). collectionId=${collectionId}`);
+      console.log(`⚠️ [Cucuru] Pago de $${amount} al alias principal del restaurante ${restauranteId} ignorado (usa alias dinámicos). collection_account=${collectionAccount || 'N/A'}, collectionId=${collectionId}`);
       return c.json({ status: 'ignored_no_pool_match' }, 200);
     }
 
