@@ -442,6 +442,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             codigoDescuentoIdFinal = codigoDescuentoId
         }
 
+        // CRÍTICO: Cuando cucuruConfigurado, asumir transferencia si no se especificó
+        const metodoPagoEfectivoDelivery = metodoPago || (resRestaurante[0]?.cucuruConfigurado ? 'transferencia' : null)
+
         const nuevoPedido = await db.insert(PedidoDeliveryTable).values({
             restauranteId,
             clienteId: clienteId || null,
@@ -451,7 +454,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             nombreCliente: nombreCliente || null,
             telefono: telefono || null,
             notas: notas || null,
-            metodoPago: metodoPago || null,
+            metodoPago: metodoPagoEfectivoDelivery,
             estado: 'pending',
             total: total.toFixed(2),
             puntosGanados,
@@ -481,7 +484,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         }
 
         let cuentaCucuru = null;
-        if (metodoPago === 'transferencia' && resRestaurante[0]?.cucuruConfigurado) {
+        if (metodoPagoEfectivoDelivery === 'transferencia' && resRestaurante[0]?.cucuruConfigurado) {
             try {
                 cuentaCucuru = await asignarAliasAPedido({
                     db,
@@ -496,7 +499,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         }
 
         // Notificación por WhatsApp
-        const waitToPay = metodoPago === 'transferencia' && resRestaurante[0]?.cucuruConfigurado;
+        const waitToPay = metodoPagoEfectivoDelivery === 'transferencia' && resRestaurante[0]?.cucuruConfigurado;
         try {
             const restaurante = await db.select({
                 whatsappEnabled: RestauranteTable.whatsappEnabled,

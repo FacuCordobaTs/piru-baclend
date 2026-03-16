@@ -589,6 +589,29 @@ restauranteRoute.post('/configurar-cucuru', zValidator('json', configCucuruSchem
   }
 })
 
+// Reenviar webhook Cucuru (usa las credenciales ya guardadas)
+restauranteRoute.post('/reconfigurar-webhook-cucuru', authMiddleware, async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [rest] = await db.select({
+      cucuruApiKey: RestauranteTable.cucuruApiKey,
+      cucuruCollectorId: RestauranteTable.cucuruCollectorId
+    }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+
+    if (!rest?.cucuruApiKey || !rest?.cucuruCollectorId) {
+      return c.json({ message: 'No hay credenciales de Cucuru configuradas', success: false }, 400)
+    }
+
+    await configurarWebhookCliente(rest.cucuruApiKey, rest.cucuruCollectorId)
+    return c.json({ message: 'Webhook Cucuru reenviado correctamente', success: true }, 200)
+  } catch (error) {
+    console.error('Error reconfigurando webhook Cucuru:', error)
+    return c.json({ message: 'Error al reenviar webhook', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 // Configurar Rapiboy (Token)
 const configRapiboySchema = z.object({
   token: z.string().min(1)
