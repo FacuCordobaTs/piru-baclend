@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
 import { drizzle } from 'drizzle-orm/mysql2'
-import { eq, and, ne } from 'drizzle-orm'
+import { eq, and, ne, or } from 'drizzle-orm'
 import {
   pedido as PedidoTable,
   pedidoDelivery as PedidoDeliveryTable,
@@ -28,6 +28,7 @@ webhookRoute.post('/', async (c) => {
 })
 
 const cucuruWebhookHandler = async (c: any) => {
+  console.log(`🔴 [CUCURU] LLEGÓ WEBHOOK: ${c.req.method} ${c.req.path} @ ${new Date().toISOString()}`);
   try {
     let body;
     try {
@@ -62,10 +63,14 @@ const cucuruWebhookHandler = async (c: any) => {
     let poolRestauranteId: number | null = null;
     let poolTipoPedido: 'delivery' | 'takeaway' | null = null;
 
+    // Cucuru puede enviar collection_account como account_number (22 dígitos) o como alias (ej: piru.alfajor.171)
     if (collectionAccount) {
       const poolRecords = await db.select()
         .from(AccountPoolTable)
-        .where(eq(AccountPoolTable.accountNumber, collectionAccount))
+        .where(or(
+          eq(AccountPoolTable.accountNumber, collectionAccount),
+          eq(AccountPoolTable.alias, collectionAccount)
+        ))
         .limit(1);
 
       if (poolRecords.length > 0 && poolRecords[0].pedidoIdAsignado) {
@@ -73,7 +78,9 @@ const cucuruWebhookHandler = async (c: any) => {
         poolRecordId = poolRecords[0].id;
         poolRestauranteId = poolRecords[0].restauranteId;
         poolTipoPedido = poolRecords[0].tipoPedido as 'delivery' | 'takeaway' | null;
-        console.log(`🔍 Encontrado Alias Dinámico: CVU ${collectionAccount} apunta al Pedido #${assignedPedidoId} (${poolTipoPedido || 'legacy'})`);
+        console.log(`🔍 Encontrado Alias Dinámico: collection_account=${collectionAccount} -> Pedido #${assignedPedidoId} (${poolTipoPedido || 'legacy'})`);
+      } else if (amount > 0) {
+        console.log(`🔍 [Cucuru] collection_account=${collectionAccount} no matcheó en account_pool. Buscando por accountNumber y alias.`);
       }
     }
 
