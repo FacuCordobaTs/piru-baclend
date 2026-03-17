@@ -287,23 +287,18 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
     try {
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
-        const productos = await db
-            .select({
-                producto: ProductoTable,
-                puntos: ProductoPuntosTable
-            })
-            .from(ProductoTable)
-            .leftJoin(ProductoPuntosTable, eq(ProductoTable.id, ProductoPuntosTable.productoId))
-            .where(and(
-                require('drizzle-orm').inArray(ProductoTable.id, uniqueProductosIds),
-                eq(ProductoTable.restauranteId, restauranteId)
-            ))
+        const productosRaw = await db.select().from(ProductoTable).where(and(
+            inArray(ProductoTable.id, uniqueProductosIds),
+            eq(ProductoTable.restauranteId, restauranteId)
+        ))
+        const puntosRows = await db.select().from(ProductoPuntosTable).where(inArray(ProductoPuntosTable.productoId, uniqueProductosIds))
+        const puntosMap = new Map(puntosRows.map(pp => [pp.productoId, pp]))
 
-        if (productos.length !== uniqueProductosIds.length) {
+        if (productosRaw.length !== uniqueProductosIds.length) {
             return c.json({ message: 'Algunos productos no fueron encontrados', success: false }, 400)
         }
 
-        const productosMap = new Map(productos.map(p => [p.producto.id, p]))
+        const productosMap = new Map(productosRaw.map(p => [p.id, { producto: p, puntos: puntosMap.get(p.id) ?? null }]))
 
         let total = 0
         let puntosGanados = 0;
@@ -339,7 +334,6 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
         const resRestaurante = await db.select({
             deliveryFee: RestauranteTable.deliveryFee,
-            sistemaPuntos: RestauranteTable.sistemaPuntos,
             cucuruApiKey: RestauranteTable.cucuruApiKey,
             cucuruCollectorId: RestauranteTable.cucuruCollectorId,
             cucuruConfigurado: RestauranteTable.cucuruConfigurado,
@@ -375,7 +369,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         }
 
         total += deliveryFeeAplicado
-        const sistemaPuntosActivo = resRestaurante.length > 0 && resRestaurante[0].sistemaPuntos;
+        const sistemaPuntosActivo = false; // sistemaPuntos comentado en schema
 
         if (!sistemaPuntosActivo) {
             puntosGanados = 0;
@@ -603,23 +597,18 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
 
     try {
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
-        const productos = await db
-            .select({
-                producto: ProductoTable,
-                puntos: ProductoPuntosTable
-            })
-            .from(ProductoTable)
-            .leftJoin(ProductoPuntosTable, eq(ProductoTable.id, ProductoPuntosTable.productoId))
-            .where(and(
-                require('drizzle-orm').inArray(ProductoTable.id, uniqueProductosIds),
-                eq(ProductoTable.restauranteId, restauranteId)
-            ))
+        const productosRaw = await db.select().from(ProductoTable).where(and(
+            inArray(ProductoTable.id, uniqueProductosIds),
+            eq(ProductoTable.restauranteId, restauranteId)
+        ))
+        const puntosRows = await db.select().from(ProductoPuntosTable).where(inArray(ProductoPuntosTable.productoId, uniqueProductosIds))
+        const puntosMap = new Map(puntosRows.map(pp => [pp.productoId, pp]))
 
-        if (productos.length !== uniqueProductosIds.length) {
+        if (productosRaw.length !== uniqueProductosIds.length) {
             return c.json({ message: 'Algunos productos no fueron encontrados', success: false }, 400)
         }
 
-        const productosMap = new Map(productos.map(p => [p.producto.id, p]))
+        const productosMap = new Map(productosRaw.map(p => [p.id, { producto: p, puntos: puntosMap.get(p.id) ?? null }]))
 
         let total = 0
         let puntosGanados = 0;
@@ -654,14 +643,13 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         }
 
         const resRestaurante = await db.select({
-            sistemaPuntos: RestauranteTable.sistemaPuntos,
             cucuruApiKey: RestauranteTable.cucuruApiKey,
             cucuruCollectorId: RestauranteTable.cucuruCollectorId,
             cucuruConfigurado: RestauranteTable.cucuruConfigurado,
             username: RestauranteTable.username,
             id: RestauranteTable.id
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
-        const sistemaPuntosActivo = resRestaurante.length > 0 && resRestaurante[0].sistemaPuntos;
+        const sistemaPuntosActivo = false; // sistemaPuntos comentado en schema
 
         if (!sistemaPuntosActivo) {
             puntosGanados = 0;
