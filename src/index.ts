@@ -679,6 +679,7 @@ export default {
   port: process.env.PORT || 3000,
   fetch: app.fetch,
   websocket, // Exportar el handler de websocket de Hono
+  idleTimeout: 120, // 2 minutos para requests largos (ej: migración de pedidos)
 }
 
 console.log(`🚀 Servidor iniciado en puerto ${process.env.PORT || 3000}`);
