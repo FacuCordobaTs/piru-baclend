@@ -69,6 +69,7 @@ const migrationRoute = new Hono().post("/", async (c) => {
           montoDescuento: pd.montoDescuento ?? null,
           impreso: pd.impreso ?? false,
           deliveredAt: pd.deliveredAt ?? null,
+          createdAt: pd.createdAt ?? undefined,
         });
 
         const nuevoPedidoId = Number(resultDelivery[0].insertId);
@@ -115,6 +116,7 @@ const migrationRoute = new Hono().post("/", async (c) => {
           montoDescuento: pt.montoDescuento ?? null,
           impreso: pt.impreso ?? false,
           deliveredAt: pt.deliveredAt ?? null,
+          createdAt: pt.createdAt ?? undefined,
         });
 
         const nuevoPedidoId = Number(resultTakeaway[0].insertId);
