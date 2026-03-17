@@ -563,8 +563,8 @@ restauranteRoute.put('/toggle-diseno-alternativo', async (c) => {
 // Actualizar proveedor de pasarela de pago y credenciales Talo
 const updatePasarelaPagoSchema = z.object({
   proveedorPago: z.enum(['cucuru', 'talo', 'mercadopago', 'manual']).optional(),
-  taloApiKey: z.string().optional(),
-  taloUserId: z.string().optional(),
+  taloApiKey: z.string().nullish(),
+  taloUserId: z.string().nullish(),
 })
 
 restauranteRoute.put('/pasarela-pago', zValidator('json', updatePasarelaPagoSchema), async (c) => {
