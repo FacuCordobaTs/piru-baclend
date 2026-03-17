@@ -12,8 +12,6 @@ import { ingredienteRoute } from './routes/ingrediente';
 import { agregadoRoute } from './routes/agregado';
 import { mercadopagoRoute } from './routes/mercadopago';
 import { notificacionRoute } from './routes/notificacion';
-import { deliveryRoute } from './routes/delivery';
-import { takeawayRoute } from './routes/takeaway';
 import { publicRoute } from './routes/public';
 import { clientesRoute } from './routes/clientes';
 import { wsManager } from './websocket/manager';
@@ -30,6 +28,7 @@ import { cucuruRoute } from './routes/cucuru';
 import { zonaDeliveryRoute } from './routes/zona-delivery';
 import { codigoDescuentoRoute } from './routes/codigo-descuento';
 import { migrationRoute } from './routes/migration';
+import { pedidoUnificadoRoute } from './routes/pedido-unificado';
 
 // Destructure upgradeWebSocket and websocket from the helper function's return
 const { upgradeWebSocket, websocket } = createBunWebSocket<ServerWebSocket>();
@@ -143,8 +142,6 @@ app.basePath('/api')
   .route('/agregado', agregadoRoute)
   .route('/mp', mercadopagoRoute)
   .route('/notificacion', notificacionRoute)
-  .route('/delivery', deliveryRoute)
-  .route('/takeaway', takeawayRoute)
   .route('/public', publicRoute)
   .route('/clientes', clientesRoute)
   .route('/webhook', webhookRoute)
@@ -152,6 +149,7 @@ app.basePath('/api')
   .route('/zona-delivery', zonaDeliveryRoute)
   .route('/codigo-descuento', codigoDescuentoRoute)
   .route('/migrate-pedidos', migrationRoute)
+  .route('/pedido-unificado', pedidoUnificadoRoute)
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
 // because :qrToken would match "admin" as a token
 app.get(

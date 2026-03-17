@@ -89,9 +89,11 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   // Discriminador principal
   tipo: mysqlEnum("tipo", ["delivery", "takeaway"]).notNull(),
   
-  // Datos comunes
+  // Datos comunes (compatible con delivery/takeaway legacy)
   estado: mysqlEnum("estado", [
     "pending",
+    "preparing",
+    "ready",
     "received",
     "dispatched",   // En camino (delivery)
     "delivered",    // Entregado/Retirado
@@ -132,6 +134,8 @@ export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {
   cantidad: int("cantidad").default(1).notNull(),
   precioUnitario: decimal("precio_unitario", { precision: 10, scale: 2 }).notNull(),
   esCanjePuntos: boolean("es_canje_puntos").default(false),
+  ingredientesExcluidos: json("ingredientes_excluidos"),
+  agregados: json("agregados"),
 });
 
 export const producto = mysqlTable("producto", {

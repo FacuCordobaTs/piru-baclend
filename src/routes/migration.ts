@@ -87,6 +87,8 @@ const migrationRoute = new Hono().post("/", async (c) => {
             cantidad: item.cantidad ?? 1,
             precioUnitario: item.precioUnitario,
             esCanjePuntos: item.esCanjePuntos ?? false,
+            ingredientesExcluidos: item.ingredientesExcluidos ?? null,
+            agregados: item.agregados ?? null,
           });
           summary.delivery.items++;
         }
@@ -134,6 +136,8 @@ const migrationRoute = new Hono().post("/", async (c) => {
             cantidad: item.cantidad ?? 1,
             precioUnitario: item.precioUnitario,
             esCanjePuntos: item.esCanjePuntos ?? false,
+            ingredientesExcluidos: item.ingredientesExcluidos ?? null,
+            agregados: item.agregados ?? null,
           });
           summary.takeaway.items++;
         }

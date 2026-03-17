@@ -131,10 +131,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { 
-    pedidoDelivery as PedidoDeliveryTable, 
-    itemPedidoDelivery as ItemPedidoDeliveryTable, 
-    pedidoTakeaway as PedidoTakeawayTable, 
-    itemPedidoTakeaway as ItemPedidoTakeawayTable, 
+    pedidoUnificado as PedidoUnificadoTable, 
+    itemPedidoUnificado as ItemPedidoUnificadoTable, 
     cliente as ClienteTable,
     sala as SalaTable
 } from '../db/schema'
@@ -445,9 +443,10 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         // CRÍTICO: Cuando cucuruConfigurado, asumir transferencia si no se especificó
         const metodoPagoEfectivoDelivery = metodoPago || (resRestaurante[0]?.cucuruConfigurado ? 'transferencia' : null)
 
-        const nuevoPedido = await db.insert(PedidoDeliveryTable).values({
+        const nuevoPedido = await db.insert(PedidoUnificadoTable).values({
             restauranteId,
             clienteId: clienteId || null,
+            tipo: 'delivery',
             direccion,
             latitud: lat !== undefined ? lat.toString() : null,
             longitud: lng !== undefined ? lng.toString() : null,
@@ -457,8 +456,6 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             metodoPago: metodoPagoEfectivoDelivery,
             estado: 'pending',
             total: total.toFixed(2),
-            puntosGanados,
-            puntosUsados,
             codigoDescuentoId: codigoDescuentoIdFinal,
             montoDescuento: montoDescuento.toFixed(2),
         })
@@ -472,8 +469,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 const descuentoPct = row.producto.descuento || 0
                 precioUnitario = (parseFloat(row.producto.precio) * (1 - descuentoPct / 100)).toFixed(2)
             }
-            await db.insert(ItemPedidoDeliveryTable).values({
-                pedidoDeliveryId: pedidoId,
+            await db.insert(ItemPedidoUnificadoTable).values({
+                pedidoId,
                 productoId: item.productoId,
                 cantidad: item.cantidad,
                 precioUnitario,
@@ -732,17 +729,16 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         // (el frontend solo muestra esa opción en ese caso)
         const metodoPagoEfectivo = metodoPago || (resRestaurante[0]?.cucuruConfigurado ? 'transferencia' : null)
 
-        const nuevoPedido = await db.insert(PedidoTakeawayTable).values({
+        const nuevoPedido = await db.insert(PedidoUnificadoTable).values({
             restauranteId,
             clienteId: clienteId || null,
+            tipo: 'takeaway',
             nombreCliente: nombreCliente || null,
             telefono: telefono || null,
             notas: notas || null,
             metodoPago: metodoPagoEfectivo,
             estado: 'pending',
             total: total.toFixed(2),
-            puntosGanados,
-            puntosUsados,
             codigoDescuentoId: codigoDescuentoIdFinalTk,
             montoDescuento: montoDescuentoTk.toFixed(2),
         })
@@ -756,8 +752,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 const descuentoPct = row.producto.descuento || 0
                 precioUnitario = (parseFloat(row.producto.precio) * (1 - descuentoPct / 100)).toFixed(2)
             }
-            await db.insert(ItemPedidoTakeawayTable).values({
-                pedidoTakeawayId: pedidoId,
+            await db.insert(ItemPedidoUnificadoTable).values({
+                pedidoId,
                 productoId: item.productoId,
                 cantidad: item.cantidad,
                 precioUnitario,
@@ -861,15 +857,15 @@ publicRoute.put('/delivery/:id/metodo-pago', zValidator('json', setMetodoPagoSch
     const { metodoPago } = c.req.valid('json')
 
     try {
-        const result = await db.update(PedidoDeliveryTable)
+        const result = await db.update(PedidoUnificadoTable)
             .set({ metodoPago })
-            .where(eq(PedidoDeliveryTable.id, id))
+            .where(and(eq(PedidoUnificadoTable.id, id), eq(PedidoUnificadoTable.tipo, 'delivery')))
 
         if (result[0].affectedRows === 0) {
             return c.json({ message: 'Pedido no encontrado', success: false }, 404)
         }
 
-        const pedido = await db.select({ restauranteId: PedidoDeliveryTable.restauranteId }).from(PedidoDeliveryTable).where(eq(PedidoDeliveryTable.id, id)).limit(1)
+        const pedido = await db.select({ restauranteId: PedidoUnificadoTable.restauranteId }).from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.id, id)).limit(1)
         if (pedido.length > 0 && pedido[0].restauranteId) {
             wsManager.broadcastAdminUpdate(pedido[0].restauranteId, 'delivery')
         }
@@ -886,15 +882,15 @@ publicRoute.put('/takeaway/:id/metodo-pago', zValidator('json', setMetodoPagoSch
     const { metodoPago } = c.req.valid('json')
 
     try {
-        const result = await db.update(PedidoTakeawayTable)
+        const result = await db.update(PedidoUnificadoTable)
             .set({ metodoPago })
-            .where(eq(PedidoTakeawayTable.id, id))
+            .where(and(eq(PedidoUnificadoTable.id, id), eq(PedidoUnificadoTable.tipo, 'takeaway')))
 
         if (result[0].affectedRows === 0) {
             return c.json({ message: 'Pedido no encontrado', success: false }, 404)
         }
 
-        const pedido = await db.select({ restauranteId: PedidoTakeawayTable.restauranteId }).from(PedidoTakeawayTable).where(eq(PedidoTakeawayTable.id, id)).limit(1)
+        const pedido = await db.select({ restauranteId: PedidoUnificadoTable.restauranteId }).from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.id, id)).limit(1)
         if (pedido.length > 0 && pedido[0].restauranteId) {
             wsManager.broadcastAdminUpdate(pedido[0].restauranteId, 'takeaway')
         }
@@ -999,93 +995,52 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
     }
 
     try {
-        const pedidosDelivery = await db
+        const pedidosDT = await db
             .select({
-                id: PedidoDeliveryTable.id,
-                estado: PedidoDeliveryTable.estado,
-                total: PedidoDeliveryTable.total,
-                nombreCliente: PedidoDeliveryTable.nombreCliente,
-                direccion: PedidoDeliveryTable.direccion,
-                notas: PedidoDeliveryTable.notas,
-                metodoPago: PedidoDeliveryTable.metodoPago,
-                pagado: PedidoDeliveryTable.pagado,
-                createdAt: PedidoDeliveryTable.createdAt,
-                deliveredAt: PedidoDeliveryTable.deliveredAt,
-                rapiboyTrackingUrl: PedidoDeliveryTable.rapiboyTrackingUrl,
+                id: PedidoUnificadoTable.id,
+                tipo: PedidoUnificadoTable.tipo,
+                estado: PedidoUnificadoTable.estado,
+                total: PedidoUnificadoTable.total,
+                nombreCliente: PedidoUnificadoTable.nombreCliente,
+                direccion: PedidoUnificadoTable.direccion,
+                notas: PedidoUnificadoTable.notas,
+                metodoPago: PedidoUnificadoTable.metodoPago,
+                pagado: PedidoUnificadoTable.pagado,
+                createdAt: PedidoUnificadoTable.createdAt,
+                deliveredAt: PedidoUnificadoTable.deliveredAt,
+                rapiboyTrackingUrl: PedidoUnificadoTable.rapiboyTrackingUrl,
             })
-            .from(PedidoDeliveryTable)
+            .from(PedidoUnificadoTable)
             .where(and(
-                eq(PedidoDeliveryTable.restauranteId, restauranteId),
-                eq(PedidoDeliveryTable.telefono, telefono),
-                eq(PedidoDeliveryTable.pagado, true)
+                eq(PedidoUnificadoTable.restauranteId, restauranteId),
+                eq(PedidoUnificadoTable.telefono, telefono),
+                eq(PedidoUnificadoTable.pagado, true)
             ))
-            .orderBy(desc(PedidoDeliveryTable.createdAt))
+            .orderBy(desc(PedidoUnificadoTable.createdAt))
 
-        const deliveryConItems = await Promise.all(
-            pedidosDelivery.map(async (p) => {
+        const pedidosConItems = await Promise.all(
+            pedidosDT.map(async (p) => {
                 const items = await db
                     .select({
-                        id: ItemPedidoDeliveryTable.id,
-                        productoId: ItemPedidoDeliveryTable.productoId,
-                        cantidad: ItemPedidoDeliveryTable.cantidad,
-                        precioUnitario: ItemPedidoDeliveryTable.precioUnitario,
-                        ingredientesExcluidos: ItemPedidoDeliveryTable.ingredientesExcluidos,
-                        agregados: ItemPedidoDeliveryTable.agregados,
-                        esCanjePuntos: ItemPedidoDeliveryTable.esCanjePuntos,
+                        id: ItemPedidoUnificadoTable.id,
+                        productoId: ItemPedidoUnificadoTable.productoId,
+                        cantidad: ItemPedidoUnificadoTable.cantidad,
+                        precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
+                        ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos,
+                        agregados: ItemPedidoUnificadoTable.agregados,
+                        esCanjePuntos: ItemPedidoUnificadoTable.esCanjePuntos,
                         productoNombre: ProductoTable.nombre,
                     })
-                    .from(ItemPedidoDeliveryTable)
-                    .leftJoin(ProductoTable, eq(ItemPedidoDeliveryTable.productoId, ProductoTable.id))
-                    .where(eq(ItemPedidoDeliveryTable.pedidoDeliveryId, p.id))
+                    .from(ItemPedidoUnificadoTable)
+                    .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
+                    .where(eq(ItemPedidoUnificadoTable.pedidoId, p.id))
 
                 const totalItems = items.reduce((sum, i) => sum + (i.cantidad ?? 1), 0)
-                return { ...p, tipo: 'delivery' as const, items, totalItems }
+                return { ...p, items, totalItems }
             })
         )
 
-        const pedidosTakeaway = await db
-            .select({
-                id: PedidoTakeawayTable.id,
-                estado: PedidoTakeawayTable.estado,
-                total: PedidoTakeawayTable.total,
-                nombreCliente: PedidoTakeawayTable.nombreCliente,
-                notas: PedidoTakeawayTable.notas,
-                metodoPago: PedidoTakeawayTable.metodoPago,
-                pagado: PedidoTakeawayTable.pagado,
-                createdAt: PedidoTakeawayTable.createdAt,
-                deliveredAt: PedidoTakeawayTable.deliveredAt,
-            })
-            .from(PedidoTakeawayTable)
-            .where(and(
-                eq(PedidoTakeawayTable.restauranteId, restauranteId),
-                eq(PedidoTakeawayTable.telefono, telefono),
-                eq(PedidoTakeawayTable.pagado, true)
-            ))
-            .orderBy(desc(PedidoTakeawayTable.createdAt))
-
-        const takeawayConItems = await Promise.all(
-            pedidosTakeaway.map(async (p) => {
-                const items = await db
-                    .select({
-                        id: ItemPedidoTakeawayTable.id,
-                        productoId: ItemPedidoTakeawayTable.productoId,
-                        cantidad: ItemPedidoTakeawayTable.cantidad,
-                        precioUnitario: ItemPedidoTakeawayTable.precioUnitario,
-                        ingredientesExcluidos: ItemPedidoTakeawayTable.ingredientesExcluidos,
-                        agregados: ItemPedidoTakeawayTable.agregados,
-                        esCanjePuntos: ItemPedidoTakeawayTable.esCanjePuntos,
-                        productoNombre: ProductoTable.nombre,
-                    })
-                    .from(ItemPedidoTakeawayTable)
-                    .leftJoin(ProductoTable, eq(ItemPedidoTakeawayTable.productoId, ProductoTable.id))
-                    .where(eq(ItemPedidoTakeawayTable.pedidoTakeawayId, p.id))
-
-                const totalItems = items.reduce((sum, i) => sum + (i.cantidad ?? 1), 0)
-                return { ...p, tipo: 'takeaway' as const, items, totalItems }
-            })
-        )
-
-        const pedidos = [...deliveryConItems, ...takeawayConItems]
+        const pedidos = pedidosConItems
             .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 
         return c.json({ success: true, data: pedidos }, 200)
@@ -1105,12 +1060,9 @@ publicRoute.get('/pedido/:tipo/:id/status', async (c) => {
         let estado: string | null = null;
         let rapiboyTrackingUrl: string | null = null;
 
-        if (tipo === 'delivery') {
-            const p = await db.select({ pagado: PedidoDeliveryTable.pagado, estado: PedidoDeliveryTable.estado, trackingUrl: PedidoDeliveryTable.rapiboyTrackingUrl }).from(PedidoDeliveryTable).where(eq(PedidoDeliveryTable.id, id)).limit(1);
-            if (p.length > 0) { pagado = p[0].pagado; estado = p[0].estado; rapiboyTrackingUrl = p[0].trackingUrl; }
-        } else if (tipo === 'takeaway') {
-            const p = await db.select({ pagado: PedidoTakeawayTable.pagado, estado: PedidoTakeawayTable.estado }).from(PedidoTakeawayTable).where(eq(PedidoTakeawayTable.id, id)).limit(1);
-            if (p.length > 0) { pagado = p[0].pagado; estado = p[0].estado; }
+        if (tipo === 'delivery' || tipo === 'takeaway') {
+            const p = await db.select({ pagado: PedidoUnificadoTable.pagado, estado: PedidoUnificadoTable.estado, rapiboyTrackingUrl: PedidoUnificadoTable.rapiboyTrackingUrl }).from(PedidoUnificadoTable).where(and(eq(PedidoUnificadoTable.id, id), eq(PedidoUnificadoTable.tipo, tipo))).limit(1);
+            if (p.length > 0) { pagado = p[0].pagado; estado = p[0].estado; rapiboyTrackingUrl = p[0].rapiboyTrackingUrl; }
         }
 
         return c.json({ success: true, pagado, estado, rapiboyTrackingUrl }, 200);

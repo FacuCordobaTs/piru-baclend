@@ -1,7 +1,7 @@
 // pedido.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable, pago as PagoTable, ingrediente as IngredienteTable, pedidoDelivery as PedidoDeliveryTable, itemPedidoDelivery as ItemPedidoDeliveryTable, pedidoTakeaway as PedidoTakeawayTable, itemPedidoTakeaway as ItemPedidoTakeawayTable } from '../db/schema'
+import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable, pago as PagoTable, ingrediente as IngredienteTable, pedidoUnificado as PedidoUnificadoTable, itemPedidoUnificado as ItemPedidoUnificadoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { eq, desc, and, inArray, gte, lt, sql } from 'drizzle-orm'
@@ -154,96 +154,54 @@ const pedidoRoute = new Hono()
         items: pedido.items // Keep createdAt in items for frontend use
       }))
 
-      // 2. Get all delivery pedidos for the date
-      const deliveryPedidos = await db
+      // 2. Get all delivery + takeaway pedidos from pedido_unificado for the date
+      const dtPedidos = await db
         .select({
-          id: PedidoDeliveryTable.id,
-          direccion: PedidoDeliveryTable.direccion,
-          nombreCliente: PedidoDeliveryTable.nombreCliente,
-          telefono: PedidoDeliveryTable.telefono,
-          estado: PedidoDeliveryTable.estado,
-          total: PedidoDeliveryTable.total,
-          notas: PedidoDeliveryTable.notas,
-          createdAt: PedidoDeliveryTable.createdAt,
-          deliveredAt: PedidoDeliveryTable.deliveredAt,
-          pagado: PedidoDeliveryTable.pagado,
-          metodoPago: PedidoDeliveryTable.metodoPago,
+          id: PedidoUnificadoTable.id,
+          tipo: PedidoUnificadoTable.tipo,
+          direccion: PedidoUnificadoTable.direccion,
+          nombreCliente: PedidoUnificadoTable.nombreCliente,
+          telefono: PedidoUnificadoTable.telefono,
+          estado: PedidoUnificadoTable.estado,
+          total: PedidoUnificadoTable.total,
+          notas: PedidoUnificadoTable.notas,
+          createdAt: PedidoUnificadoTable.createdAt,
+          deliveredAt: PedidoUnificadoTable.deliveredAt,
+          pagado: PedidoUnificadoTable.pagado,
+          metodoPago: PedidoUnificadoTable.metodoPago,
         })
-        .from(PedidoDeliveryTable)
+        .from(PedidoUnificadoTable)
         .where(and(
-          eq(PedidoDeliveryTable.restauranteId, restauranteId),
-          eq(PedidoDeliveryTable.pagado, true),
-          gte(PedidoDeliveryTable.createdAt, startOfDay),
-          lt(PedidoDeliveryTable.createdAt, endOfDay)
+          eq(PedidoUnificadoTable.restauranteId, restauranteId),
+          eq(PedidoUnificadoTable.pagado, true),
+          gte(PedidoUnificadoTable.createdAt, startOfDay),
+          lt(PedidoUnificadoTable.createdAt, endOfDay)
         ))
-        .orderBy(desc(PedidoDeliveryTable.createdAt))
+        .orderBy(desc(PedidoUnificadoTable.createdAt))
 
-      const deliveryPedidosConItems = await Promise.all(deliveryPedidos.map(async (pedido) => {
+      const dtPedidosConItems = await Promise.all(dtPedidos.map(async (pedido) => {
         const items = await db
           .select({
-            id: ItemPedidoDeliveryTable.id,
-            productoId: ItemPedidoDeliveryTable.productoId,
-            cantidad: ItemPedidoDeliveryTable.cantidad,
-            precioUnitario: ItemPedidoDeliveryTable.precioUnitario,
+            id: ItemPedidoUnificadoTable.id,
+            productoId: ItemPedidoUnificadoTable.productoId,
+            cantidad: ItemPedidoUnificadoTable.cantidad,
+            precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
             nombreProducto: ProductoTable.nombre,
-            agregados: ItemPedidoDeliveryTable.agregados,
+            agregados: ItemPedidoUnificadoTable.agregados,
           })
-          .from(ItemPedidoDeliveryTable)
-          .leftJoin(ProductoTable, eq(ItemPedidoDeliveryTable.productoId, ProductoTable.id))
-          .where(eq(ItemPedidoDeliveryTable.pedidoDeliveryId, pedido.id))
+          .from(ItemPedidoUnificadoTable)
+          .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
+          .where(eq(ItemPedidoUnificadoTable.pedidoId, pedido.id))
 
         return {
           ...pedido,
-          tipo: 'delivery' as const,
           items,
           totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0)
         }
       }))
 
-      // 3. Get all takeaway pedidos for the date
-      const takeawayPedidos = await db
-        .select({
-          id: PedidoTakeawayTable.id,
-          nombreCliente: PedidoTakeawayTable.nombreCliente,
-          telefono: PedidoTakeawayTable.telefono,
-          estado: PedidoTakeawayTable.estado,
-          total: PedidoTakeawayTable.total,
-          notas: PedidoTakeawayTable.notas,
-          createdAt: PedidoTakeawayTable.createdAt,
-          deliveredAt: PedidoTakeawayTable.deliveredAt,
-          pagado: PedidoTakeawayTable.pagado,
-          metodoPago: PedidoTakeawayTable.metodoPago,
-        })
-        .from(PedidoTakeawayTable)
-        .where(and(
-          eq(PedidoTakeawayTable.restauranteId, restauranteId),
-          eq(PedidoTakeawayTable.pagado, true),
-          gte(PedidoTakeawayTable.createdAt, startOfDay),
-          lt(PedidoTakeawayTable.createdAt, endOfDay)
-        ))
-        .orderBy(desc(PedidoTakeawayTable.createdAt))
-
-      const takeawayPedidosConItems = await Promise.all(takeawayPedidos.map(async (pedido) => {
-        const items = await db
-          .select({
-            id: ItemPedidoTakeawayTable.id,
-            productoId: ItemPedidoTakeawayTable.productoId,
-            cantidad: ItemPedidoTakeawayTable.cantidad,
-            precioUnitario: ItemPedidoTakeawayTable.precioUnitario,
-            nombreProducto: ProductoTable.nombre,
-            agregados: ItemPedidoTakeawayTable.agregados,
-          })
-          .from(ItemPedidoTakeawayTable)
-          .leftJoin(ProductoTable, eq(ItemPedidoTakeawayTable.productoId, ProductoTable.id))
-          .where(eq(ItemPedidoTakeawayTable.pedidoTakeawayId, pedido.id))
-
-        return {
-          ...pedido,
-          tipo: 'takeaway' as const,
-          items,
-          totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0)
-        }
-      }))
+      const deliveryPedidosConItems = dtPedidosConItems.filter(p => p.tipo === 'delivery')
+      const takeawayPedidosConItems = dtPedidosConItems.filter(p => p.tipo === 'takeaway')
 
       // 4. Get available dates (distinct dates that have orders) - last 90 days
       // For mesa pedidos, use the date of the last item added, not the pedido creation date
@@ -277,24 +235,18 @@ const pedidoRoute = new Hono()
         .filter(date => date !== null)
         .map(date => ({ fecha: sql<string>`DATE(${date})` }))
 
-      const [deliveryDates, takeawayDates] = await Promise.all([
-        db.select({ fecha: sql<string>`DATE(${PedidoDeliveryTable.createdAt})` })
-          .from(PedidoDeliveryTable)
-          .where(and(
-            eq(PedidoDeliveryTable.restauranteId, restauranteId),
-            eq(PedidoDeliveryTable.pagado, true),
-            gte(PedidoDeliveryTable.createdAt, ninetyDaysAgo)
-          ))
-          .groupBy(sql`DATE(${PedidoDeliveryTable.createdAt})`),
-        db.select({ fecha: sql<string>`DATE(${PedidoTakeawayTable.createdAt})` })
-          .from(PedidoTakeawayTable)
-          .where(and(
-            eq(PedidoTakeawayTable.restauranteId, restauranteId),
-            eq(PedidoTakeawayTable.pagado, true),
-            gte(PedidoTakeawayTable.createdAt, ninetyDaysAgo)
-          ))
-          .groupBy(sql`DATE(${PedidoTakeawayTable.createdAt})`)
-      ])
+      const pedidoUnificadoDates = await db
+        .select({ fecha: sql<string>`DATE(${PedidoUnificadoTable.createdAt})` })
+        .from(PedidoUnificadoTable)
+        .where(and(
+          eq(PedidoUnificadoTable.restauranteId, restauranteId),
+          eq(PedidoUnificadoTable.pagado, true),
+          gte(PedidoUnificadoTable.createdAt, ninetyDaysAgo)
+        ))
+        .groupBy(sql`DATE(${PedidoUnificadoTable.createdAt})`)
+
+      const deliveryDates = pedidoUnificadoDates
+      const takeawayDates = pedidoUnificadoDates
 
       const allDatesSet = new Set<string>()
         ;[...mesaDates, ...deliveryDates, ...takeawayDates].forEach(d => {
@@ -1121,10 +1073,8 @@ const pedidoRoute = new Hono()
           await db.update(PedidoTable).set({ impreso: true }).where(eq(PedidoTable.id, id))
           break
         case 'delivery':
-          await db.update(PedidoDeliveryTable).set({ impreso: true }).where(eq(PedidoDeliveryTable.id, id))
-          break
         case 'takeaway':
-          await db.update(PedidoTakeawayTable).set({ impreso: true }).where(eq(PedidoTakeawayTable.id, id))
+          await db.update(PedidoUnificadoTable).set({ impreso: true }).where(eq(PedidoUnificadoTable.id, id))
           break
         default:
           return c.json({ success: false, message: 'Tipo de pedido inválido. Usar: mesa, delivery, takeaway' }, 400)

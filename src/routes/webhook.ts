@@ -4,13 +4,11 @@ import { drizzle } from 'drizzle-orm/mysql2'
 import { eq, and, ne, or } from 'drizzle-orm'
 import {
   pedido as PedidoTable,
-  pedidoDelivery as PedidoDeliveryTable,
-  pedidoTakeaway as PedidoTakeawayTable,
+  pedidoUnificado as PedidoUnificadoTable,
+  itemPedidoUnificado as ItemPedidoUnificadoTable,
   pago as PagoTable,
   notificacion as NotificacionTable,
   accountPool as AccountPoolTable,
-  itemPedidoDelivery as ItemPedidoDeliveryTable,
-  itemPedidoTakeaway as ItemPedidoTakeawayTable,
   producto as ProductoTable,
   restaurante as RestauranteTable
 } from '../db/schema'
@@ -105,86 +103,95 @@ const cucuruWebhookHandler = async (c: any) => {
     const effectiveRestauranteId = poolRestauranteId ?? restauranteId;
     const deliveryWhere = assignedPedidoId
       ? and(
-          eq(PedidoDeliveryTable.id, assignedPedidoId),
-          eq(PedidoDeliveryTable.restauranteId, effectiveRestauranteId)
+          eq(PedidoUnificadoTable.id, assignedPedidoId),
+          eq(PedidoUnificadoTable.restauranteId, effectiveRestauranteId),
+          eq(PedidoUnificadoTable.tipo, 'delivery')
         )
       : and(
-          eq(PedidoDeliveryTable.restauranteId, restauranteId),
-          eq(PedidoDeliveryTable.total, String(amount)),
-          eq(PedidoDeliveryTable.pagado, false),
-          ne(PedidoDeliveryTable.estado, 'delivered'),
-          ne(PedidoDeliveryTable.estado, 'archived'),
-          ne(PedidoDeliveryTable.estado, 'cancelled')
+          eq(PedidoUnificadoTable.restauranteId, restauranteId),
+          eq(PedidoUnificadoTable.tipo, 'delivery'),
+          eq(PedidoUnificadoTable.total, String(amount)),
+          eq(PedidoUnificadoTable.pagado, false),
+          ne(PedidoUnificadoTable.estado, 'delivered'),
+          ne(PedidoUnificadoTable.estado, 'archived'),
+          ne(PedidoUnificadoTable.estado, 'cancelled')
         );
 
     const takeawayWhere = assignedPedidoId
       ? and(
-          eq(PedidoTakeawayTable.id, assignedPedidoId),
-          eq(PedidoTakeawayTable.restauranteId, effectiveRestauranteId)
+          eq(PedidoUnificadoTable.id, assignedPedidoId),
+          eq(PedidoUnificadoTable.restauranteId, effectiveRestauranteId),
+          eq(PedidoUnificadoTable.tipo, 'takeaway')
         )
       : and(
-          eq(PedidoTakeawayTable.restauranteId, restauranteId),
-          eq(PedidoTakeawayTable.total, String(amount)),
-          eq(PedidoTakeawayTable.pagado, false),
-          ne(PedidoTakeawayTable.estado, 'delivered'),
-          ne(PedidoTakeawayTable.estado, 'archived'),
-          ne(PedidoTakeawayTable.estado, 'cancelled')
+          eq(PedidoUnificadoTable.restauranteId, restauranteId),
+          eq(PedidoUnificadoTable.tipo, 'takeaway'),
+          eq(PedidoUnificadoTable.total, String(amount)),
+          eq(PedidoUnificadoTable.pagado, false),
+          ne(PedidoUnificadoTable.estado, 'delivered'),
+          ne(PedidoUnificadoTable.estado, 'archived'),
+          ne(PedidoUnificadoTable.estado, 'cancelled')
         );
 
     const searchTakeawayFirst = poolTipoPedido === 'takeaway';
-    let pedidosDelivery: typeof PedidoDeliveryTable.$inferSelect[] = [];
-    let pedidosTakeaway: typeof PedidoTakeawayTable.$inferSelect[] = [];
+    let pedidosEncontrados: typeof PedidoUnificadoTable.$inferSelect[] = [];
+    let tipoEncontrado: 'delivery' | 'takeaway' | null = null;
 
     if (searchTakeawayFirst) {
-      pedidosTakeaway = await db.select().from(PedidoTakeawayTable).where(takeawayWhere).limit(1);
-      if (pedidosTakeaway.length === 0) {
-        pedidosDelivery = await db.select().from(PedidoDeliveryTable).where(deliveryWhere).limit(1);
+      pedidosEncontrados = await db.select().from(PedidoUnificadoTable).where(takeawayWhere).limit(1);
+      tipoEncontrado = pedidosEncontrados.length > 0 ? 'takeaway' : null;
+      if (pedidosEncontrados.length === 0) {
+        pedidosEncontrados = await db.select().from(PedidoUnificadoTable).where(deliveryWhere).limit(1);
+        tipoEncontrado = pedidosEncontrados.length > 0 ? 'delivery' : null;
       }
     } else {
-      pedidosDelivery = await db.select().from(PedidoDeliveryTable).where(deliveryWhere).limit(1);
-      if (pedidosDelivery.length === 0) {
-        pedidosTakeaway = await db.select().from(PedidoTakeawayTable).where(takeawayWhere).limit(1);
+      pedidosEncontrados = await db.select().from(PedidoUnificadoTable).where(deliveryWhere).limit(1);
+      tipoEncontrado = pedidosEncontrados.length > 0 ? 'delivery' : null;
+      if (pedidosEncontrados.length === 0) {
+        pedidosEncontrados = await db.select().from(PedidoUnificadoTable).where(takeawayWhere).limit(1);
+        tipoEncontrado = pedidosEncontrados.length > 0 ? 'takeaway' : null;
       }
     }
 
-    if (pedidosDelivery.length > 0) {
-      const pedido = pedidosDelivery[0];
+    if (pedidosEncontrados.length > 0 && tipoEncontrado) {
+      const pedido = pedidosEncontrados[0];
       const targetRestauranteId = pedido.restauranteId ?? restauranteId;
 
       if (Number(amount) < Number(pedido.total)) {
-        console.warn(`⚠️ [Cucuru] Pago insuficiente para Delivery #${pedido.id}. Pagado: $${amount}, Esperado: $${pedido.total}`);
+        console.warn(`⚠️ [Cucuru] Pago insuficiente para ${tipoEncontrado} #${pedido.id}. Pagado: $${amount}, Esperado: $${pedido.total}`);
         return c.json({ status: 'ignored_insufficient' }, 200);
       }
 
-      await db.update(PedidoDeliveryTable).set({
+      await db.update(PedidoUnificadoTable).set({
         pagado: true,
         metodoPago: 'transferencia'
-      }).where(eq(PedidoDeliveryTable.id, pedido.id));
+      }).where(eq(PedidoUnificadoTable.id, pedido.id));
 
       await db.insert(PagoTable).values({
-        pedidoDeliveryId: pedido.id,
+        pedidoUnificadoId: pedido.id,
         metodo: 'transferencia',
         estado: 'paid',
         monto: String(amount),
         mpPaymentId: collectionId
       });
 
+      const mesaNombre = tipoEncontrado === 'delivery' ? 'Delivery' : 'Take Away';
       const notifId = `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
       wsManager.notifyAdmins(targetRestauranteId, {
         id: notifId,
         tipo: 'NUEVO_PEDIDO',
         mesaId: 0,
-        mesaNombre: 'Delivery',
-        mensaje: `Nuevo pedido de Delivery (Pagado)`,
+        mesaNombre,
+        mensaje: `Nuevo pedido de ${mesaNombre} (Pagado)`,
         detalles: `${pedido.nombreCliente || 'Cliente'} - $${pedido.total}`,
         timestamp: new Date().toISOString(),
         leida: false,
         pedidoId: pedido.id
       });
 
-      console.log(`🚀 [Cucuru] Pago acreditado para Delivery #${pedido.id}`);
-      wsManager.broadcastAdminUpdate(targetRestauranteId, 'delivery');
-      wsManager.notifyPublicClientPayment('delivery', pedido.id);
+      console.log(`🚀 [Cucuru] Pago acreditado para ${tipoEncontrado} #${pedido.id}`);
+      wsManager.broadcastAdminUpdate(targetRestauranteId, tipoEncontrado);
+      wsManager.notifyPublicClientPayment(tipoEncontrado, pedido.id);
 
       // WhatsApp Notification
       try {
@@ -196,104 +203,27 @@ const cucuruWebhookHandler = async (c: any) => {
 
         if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
           const itemsRaw = await db.select({
-            cantidad: ItemPedidoDeliveryTable.cantidad,
+            cantidad: ItemPedidoUnificadoTable.cantidad,
             nombreProducto: ProductoTable.nombre,
-            esCanjePuntos: ItemPedidoDeliveryTable.esCanjePuntos
+            esCanjePuntos: ItemPedidoUnificadoTable.esCanjePuntos
           })
-            .from(ItemPedidoDeliveryTable)
-            .leftJoin(ProductoTable, eq(ItemPedidoDeliveryTable.productoId, ProductoTable.id))
-            .where(eq(ItemPedidoDeliveryTable.pedidoDeliveryId, pedido.id));
+            .from(ItemPedidoUnificadoTable)
+            .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
+            .where(eq(ItemPedidoUnificadoTable.pedidoId, pedido.id));
 
           const orderItemsForWa = itemsRaw.map(item => ({
             name: item.esCanjePuntos ? `${item.nombreProducto} (Canje Puntos)` : item.nombreProducto!,
             quantity: item.cantidad!
           }));
 
-          if (restaurante[0].deliveryFee) {
+          if (tipoEncontrado === 'delivery' && restaurante[0].deliveryFee) {
             orderItemsForWa.push({ name: 'Delivery', quantity: 1 });
           }
 
           sendOrderWhatsApp(c, {
             phone: restaurante[0].whatsappNumber,
             customerName: pedido.nombreCliente || 'Cliente no especificado',
-            address: pedido.direccion || 'Sin dirección',
-            total: `${pedido.total} (transferencia)`,
-            items: orderItemsForWa,
-            orderId: pedido.id.toString()
-          }).catch(console.error);
-        }
-      } catch (error) {
-        console.error("❌ Error enviando WhatsApp post-pago:", error);
-      }
-
-      return c.json({ status: 'received' }, 200);
-    }
-
-    if (pedidosTakeaway.length > 0) {
-      const pedido = pedidosTakeaway[0];
-      const targetRestauranteId = pedido.restauranteId ?? restauranteId;
-
-      if (Number(amount) < Number(pedido.total)) {
-        console.warn(`⚠️ [Cucuru] Pago insuficiente para TakeAway #${pedido.id}. Pagado: $${amount}, Esperado: $${pedido.total}`);
-        return c.json({ status: 'ignored_insufficient' }, 200);
-      }
-
-      await db.update(PedidoTakeawayTable).set({
-        pagado: true,
-        metodoPago: 'transferencia'
-      }).where(eq(PedidoTakeawayTable.id, pedido.id));
-
-      await db.insert(PagoTable).values({
-        pedidoTakeawayId: pedido.id,
-        metodo: 'transferencia',
-        estado: 'paid',
-        monto: String(amount),
-        mpPaymentId: collectionId
-      });
-
-      const notifId = `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      wsManager.notifyAdmins(targetRestauranteId, {
-        id: notifId,
-        tipo: 'NUEVO_PEDIDO',
-        mesaId: 0,
-        mesaNombre: 'Take Away',
-        mensaje: `Nuevo pedido de Take Away (Pagado)`,
-        detalles: `${pedido.nombreCliente || 'Cliente'} - $${pedido.total}`,
-        timestamp: new Date().toISOString(),
-        leida: false,
-        pedidoId: pedido.id
-      });
-
-      console.log(`🏃‍♂️ [Cucuru] Pago acreditado para TakeAway #${pedido.id}`);
-      wsManager.broadcastAdminUpdate(targetRestauranteId, 'takeaway');
-      wsManager.notifyPublicClientPayment('takeaway', pedido.id);
-
-      // WhatsApp Notification
-      try {
-        const restaurante = await db.select({
-          whatsappEnabled: RestauranteTable.whatsappEnabled,
-          whatsappNumber: RestauranteTable.whatsappNumber
-        }).from(RestauranteTable).where(eq(RestauranteTable.id, targetRestauranteId)).limit(1);
-
-        if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
-          const itemsRaw = await db.select({
-            cantidad: ItemPedidoTakeawayTable.cantidad,
-            nombreProducto: ProductoTable.nombre,
-            esCanjePuntos: ItemPedidoTakeawayTable.esCanjePuntos
-          })
-            .from(ItemPedidoTakeawayTable)
-            .leftJoin(ProductoTable, eq(ItemPedidoTakeawayTable.productoId, ProductoTable.id))
-            .where(eq(ItemPedidoTakeawayTable.pedidoTakeawayId, pedido.id));
-
-          const orderItemsForWa = itemsRaw.map(item => ({
-            name: item.esCanjePuntos ? `${item.nombreProducto} (Canje Puntos)` : item.nombreProducto!,
-            quantity: item.cantidad!
-          }));
-
-          sendOrderWhatsApp(c, {
-            phone: restaurante[0].whatsappNumber,
-            customerName: pedido.nombreCliente || 'Cliente no especificado',
-            address: 'Retira en local (Take Away)',
+            address: tipoEncontrado === 'delivery' ? (pedido.direccion || 'Sin dirección') : 'Retira en local (Take Away)',
             total: `${pedido.total} (transferencia)`,
             items: orderItemsForWa,
             orderId: pedido.id.toString()
@@ -401,8 +331,8 @@ webhookRoute.post('/rapiboy', async (c) => {
         const pedidoId = parseInt(String(ReferenciaExterna), 10);
         if (isNaN(pedidoId)) return;
 
-        // Buscar el pedido
-        const pedidos = await db.select().from(PedidoDeliveryTable).where(eq(PedidoDeliveryTable.id, pedidoId)).limit(1);
+        // Buscar el pedido (pedido_unificado tipo delivery)
+        const pedidos = await db.select().from(PedidoUnificadoTable).where(and(eq(PedidoUnificadoTable.id, pedidoId), eq(PedidoUnificadoTable.tipo, 'delivery'))).limit(1);
         if (pedidos.length === 0) return;
 
         const pedido = pedidos[0];
@@ -431,7 +361,7 @@ webhookRoute.post('/rapiboy', async (c) => {
         }
 
         if (changedSomething && pedido.restauranteId !== null) {
-            await db.update(PedidoDeliveryTable).set(updateData).where(eq(PedidoDeliveryTable.id, pedidoId));
+            await db.update(PedidoUnificadoTable).set(updateData).where(eq(PedidoUnificadoTable.id, pedidoId));
 
             // Actualizar a los administradores
             wsManager.broadcastAdminUpdate(pedido.restauranteId, 'delivery');
