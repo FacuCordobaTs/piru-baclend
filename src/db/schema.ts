@@ -21,61 +21,117 @@ export const restaurante = mysqlTable("restaurante", {
   imagenUrl: varchar("imagen_url", { length: 255 }),
   imagenLightUrl: varchar("imagen_light_url", { length: 255 }),
   username: varchar("username", { length: 255 }).unique(),
-  esCarrito: boolean("es_carrito").default(false).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  // Campos legacy (se pueden eliminar después de migrar)
-  mercadoPagoPublicKey: varchar("mercado_pago_public_key", { length: 255 }),
-  mercadoPagoPrivateKey: varchar("mercado_pago_private_key", { length: 255 }),
-  // Campos OAuth de MercadoPago para Marketplace
+  
   mpAccessToken: varchar("mp_access_token", { length: 512 }),
   mpPublicKey: varchar("mp_public_key", { length: 255 }),
   mpRefreshToken: varchar("mp_refresh_token", { length: 512 }),
   mpUserId: varchar("mp_user_id", { length: 50 }),
   mpConnected: boolean("mp_connected").default(false),
-  splitPayment: boolean("split_payment").default(true).notNull(),
-  itemTracking: boolean("item_tracking").default(false).notNull(),
-  soloCartaDigital: boolean("solo_carta_digital").default(false).notNull(),
+  
+  
+
   deliveryFee: decimal("delivery_fee", { precision: 10, scale: 2 })
     .default("0.00")
     .notNull(),
+
   cucuruApiKey: varchar("cucuru_api_key", { length: 255 }),
   cucuruCollectorId: varchar("cucuru_collector_id", { length: 255 }),
   cucuruConfigurado: boolean("cucuru_configurado").default(false).notNull(),
+
   whatsappEnabled: boolean("whatsapp_enabled").default(false).notNull(),
   whatsappNumber: varchar("whatsapp_number", { length: 50 }),
+
   transferenciaAlias: varchar("transferencia_alias", { length: 255 }),
-  sistemaPuntos: boolean("sistema_puntos").default(false).notNull(),
+  
   colorPrimario: varchar("color_primario", { length: 50 }),
   colorSecundario: varchar("color_secundario", { length: 50 }),
   disenoAlternativo: boolean("diseno_alternativo").default(false).notNull(),
+
   orderGroupEnabled: boolean("order_group_enabled").default(true).notNull(),
   // Rapiboy - integración logística delivery
   rapiboyToken: varchar("rapiboy_token", { length: 512 }),
   rapiboyMode: mysqlEnum("rapiboy_mode", ["on_demand", "food"]),
+
+  
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+
+  // ----- Agregar mas adelante cuando ya tenga talo configurado ------
+
+  // proveedorPago: mysqlEnum("proveedor_pago", [
+  //   "cucuru",
+  //   "talo",
+  //   "mercadopago",
+  //   "manual",
+  // ]).default("manual"),
+  // taloApiKey: varchar("talo_api_key", { length: 255 }),
+  // taloUserId: varchar("talo_user_id", { length: 255 }),
+  
+
+
+
+
+  // ------ COLUMNAS A ELIMINAR ------
+  
+  // sistemaPuntos: boolean("sistema_puntos").default(false).notNull(),
+  // mercadoPagoPublicKey: varchar("mercado_pago_public_key", { length: 255 }),
+  // mercadoPagoPrivateKey: varchar("mercado_pago_private_key", { length: 255 }),
+  // esCarrito: boolean("es_carrito").default(false).notNull(),
+  // splitPayment: boolean("split_payment").default(true).notNull(),
+  // itemTracking: boolean("item_tracking").default(false).notNull(),
+  // soloCartaDigital: boolean("solo_carta_digital").default(false).notNull(),
 });
 
-export const categoria = mysqlTable("categoria", {
+export const pedidoUnificado = mysqlTable("pedido_unificado", {
   id: int("id").primaryKey().autoincrement(),
-  restauranteId: int("restaurante_id").references(() => restaurante.id),
-  nombre: varchar("nombre", { length: 255 }).notNull(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  clienteId: int("cliente_id").references(() => cliente.id), // Nullable si no se registró
+  
+  // Discriminador principal
+  tipo: mysqlEnum("tipo", ["delivery", "takeaway"]).notNull(),
+  
+  // Datos comunes
+  estado: mysqlEnum("estado", [
+    "pending",
+    "received",
+    "dispatched",   // En camino (delivery)
+    "delivered",    // Entregado/Retirado
+    "cancelled",
+    "archived",
+  ]).default("pending").notNull(),
+
+  nombreCliente: varchar("nombre_cliente", { length: 255 }),
+  telefono: varchar("telefono", { length: 50 }),
+  notas: varchar("notas", { length: 500 }),
+  
+  // Totales y Pagos
+  total: decimal("total", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  pagado: boolean("pagado").default(false).notNull(),
+  metodoPago: varchar("metodo_pago", { length: 50 }),
+  
+  // Datos exclusivos de Delivery (pueden ser nulos si es takeaway)
+  direccion: varchar("direccion", { length: 255 }),
+  latitud: varchar("latitud", { length: 50 }),
+  longitud: varchar("longitud", { length: 50 }),
+  rapiboyTrackingUrl: varchar("rapiboy_tracking_url", { length: 512 }),
+  rapiboyTripId: varchar("rapiboy_trip_id", { length: 100 }),
+  
+  // Puntos y Descuentos
+  codigoDescuentoId: int("codigo_descuento_id").references(() => codigoDescuento.id),
+  montoDescuento: decimal("monto_descuento", { precision: 10, scale: 2 }).default("0.00"),
+  
+  // Trazabilidad
+  impreso: boolean("impreso").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  deliveredAt: timestamp("delivered_at"),
 });
 
-export const mesa = mysqlTable("mesa", {
+export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {
   id: int("id").primaryKey().autoincrement(),
-  nombre: varchar("nombre", { length: 255 }).notNull(),
-  restauranteId: int("restaurante_id").references(() => restaurante.id),
-  qrToken: varchar("qr_token", { length: 255 }).unique().notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
-
-// Sala: equivalente a mesa para pedidos grupales (link in bio, sin QR físico)
-export const sala = mysqlTable("sala", {
-  id: int("id").primaryKey().autoincrement(),
-  nombre: varchar("nombre", { length: 255 }).notNull(),
-  restauranteId: int("restaurante_id").references(() => restaurante.id),
-  token: varchar("token", { length: 255 }).unique().notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+  pedidoId: int("pedido_id").references(() => pedidoUnificado.id, { onDelete: 'cascade' }).notNull(),
+  productoId: int("producto_id").notNull(), // No le ponemos fk estricta por si borran el producto, no romper el historial
+  cantidad: int("cantidad").default(1).notNull(),
+  precioUnitario: decimal("precio_unitario", { precision: 10, scale: 2 }).notNull(),
+  esCanjePuntos: boolean("es_canje_puntos").default(false),
 });
 
 export const producto = mysqlTable("producto", {
@@ -88,6 +144,22 @@ export const producto = mysqlTable("producto", {
   activo: boolean("activo").default(true),
   imagenUrl: varchar("imagen_url", { length: 255 }),
   descuento: int("descuento").default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const categoria = mysqlTable("categoria", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Sala: equivalente a mesa para pedidos grupales (link in bio, sin QR físico)
+export const sala = mysqlTable("sala", {
+  id: int("id").primaryKey().autoincrement(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id),
+  token: varchar("token", { length: 255 }).unique().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -171,6 +243,123 @@ export const etiqueta = mysqlTable(
   ],
 );
 
+
+export const cliente = mysqlTable("cliente", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id")
+    .references(() => restaurante.id)
+    .notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  telefono: varchar("telefono", { length: 50 }).notNull(),
+  direccion: varchar("direccion", { length: 255 }),
+  puntos: int("puntos").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Códigos de descuento con cupos limitados
+export const codigoDescuento = mysqlTable(
+  "codigo_descuento",
+  {
+    id: int("id").primaryKey().autoincrement(),
+    restauranteId: int("restaurante_id")
+      .references(() => restaurante.id)
+      .notNull(),
+    codigo: varchar("codigo", { length: 50 }).notNull(),
+    tipo: mysqlEnum("tipo", ["porcentaje", "monto_fijo"]).notNull(),
+    valor: decimal("valor", { precision: 10, scale: 2 }).notNull(),
+    limiteUsos: int("limite_usos"),
+    usosActuales: int("usos_actuales").default(0).notNull(),
+    montoMinimo: decimal("monto_minimo", { precision: 10, scale: 2 }).default("0.00"),
+    fechaInicio: timestamp("fecha_inicio"),
+    fechaFin: timestamp("fecha_fin"),
+    activo: boolean("activo").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_restaurante_codigo").on(table.restauranteId, table.codigo),
+  ]
+);
+
+// Horarios de atención del restaurante (múltiples turnos por día)
+export const horarioRestaurante = mysqlTable("horario_restaurante", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id")
+    .references(() => restaurante.id)
+    .notNull(),
+  diaSemana: int("dia_semana").notNull(), // 0=Domingo, 1=Lunes ... 6=Sábado
+  horaApertura: varchar("hora_apertura", { length: 5 }).notNull(), // "HH:mm"
+  horaCierre: varchar("hora_cierre", { length: 5 }).notNull(), // "HH:mm"
+});
+
+// Zonas de delivery con polígonos y precios dinámicos
+export const zonaDelivery = mysqlTable("zona_delivery", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id")
+    .references(() => restaurante.id)
+    .notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  precio: decimal("precio", { precision: 10, scale: 2 }).notNull(),
+  poligono: json("poligono").notNull(), // Array de {lat: number, lng: number}
+  color: varchar("color", { length: 50 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+
+
+// ------- Quitar esto una vez que ya esta resuelto lo de TALO -------
+
+export const accountPool = mysqlTable("account_pool", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id),
+  accountNumber: varchar("account_number", { length: 255 }),
+  alias: varchar("alias", { length: 255 }),
+  estado: mysqlEnum("estado", ["disponible", "asignado"]).default("disponible"),
+  pedidoIdAsignado: int("pedido_id_asignado"),
+  tipoPedido: mysqlEnum("tipo_pedido", ["delivery", "takeaway"]),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+
+export const productoPuntos = mysqlTable("producto_puntos", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id")
+    .references(() => restaurante.id)
+    .notNull(),
+  productoId: int("producto_id")
+    .references(() => producto.id)
+    .notNull(),
+  puntosNecesarios: int("puntos_necesarios").notNull(),
+  puntosGanados: int("puntos_ganados").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// ----------- DEBAJO ESTA LA ARQUITECTURA VIEJA QUE YA NO QUIERO USAR -----------------
+export const mesa = mysqlTable("mesa", {
+  id: int("id").primaryKey().autoincrement(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id),
+  qrToken: varchar("qr_token", { length: 255 }).unique().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+
+export const pago = mysqlTable("pago", {
+  id: int("id").primaryKey().autoincrement(),
+  pedidoId: int("pedido_id"), // Ya no es .notNull()
+  pedidoDeliveryId: int("pedido_delivery_id"), // Nuevo
+  pedidoTakeawayId: int("pedido_takeaway_id"), // Nuevo
+  pedidoUnificadoId: int("pedido_unificado_id"), // Migración: pedidos unificados
+  metodo: mysqlEnum("metodo", [
+    "efectivo",
+    "mercadopago",
+    "transferencia",
+  ]).notNull(),
+  estado: mysqlEnum("estado", ["pending", "paid", "failed"]).default("pending"),
+  monto: decimal("monto", { precision: 10, scale: 2 }).notNull(),
+  mpPaymentId: varchar("mp_payment_id", { length: 255 }),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const pedido = mysqlTable("pedido", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id),
@@ -214,22 +403,6 @@ export const itemPedido = mysqlTable("item_pedido", {
   ]).default("pending"),
   postConfirmacion: boolean("post_confirmacion").default(false), // true si se agregó después de confirmar el pedido
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
-
-export const pago = mysqlTable("pago", {
-  id: int("id").primaryKey().autoincrement(),
-  pedidoId: int("pedido_id"), // Ya no es .notNull()
-  pedidoDeliveryId: int("pedido_delivery_id"), // Nuevo
-  pedidoTakeawayId: int("pedido_takeaway_id"), // Nuevo
-  metodo: mysqlEnum("metodo", [
-    "efectivo",
-    "mercadopago",
-    "transferencia",
-  ]).notNull(),
-  estado: mysqlEnum("estado", ["pending", "paid", "failed"]).default("pending"),
-  monto: decimal("monto", { precision: 10, scale: 2 }).notNull(),
-  mpPaymentId: varchar("mp_payment_id", { length: 255 }),
-  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // Tabla para trackear pagos de subtotales individuales (split payment)
@@ -277,42 +450,6 @@ export const notificacion = mysqlTable("notificacion", {
   timestamp: timestamp("timestamp").defaultNow().notNull(),
   leida: boolean("leida").default(false).notNull(),
 });
-
-export const cliente = mysqlTable("cliente", {
-  id: int("id").primaryKey().autoincrement(),
-  restauranteId: int("restaurante_id")
-    .references(() => restaurante.id)
-    .notNull(),
-  nombre: varchar("nombre", { length: 255 }).notNull(),
-  telefono: varchar("telefono", { length: 50 }).notNull(),
-  direccion: varchar("direccion", { length: 255 }),
-  puntos: int("puntos").default(0).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
-
-// Códigos de descuento con cupos limitados
-export const codigoDescuento = mysqlTable(
-  "codigo_descuento",
-  {
-    id: int("id").primaryKey().autoincrement(),
-    restauranteId: int("restaurante_id")
-      .references(() => restaurante.id)
-      .notNull(),
-    codigo: varchar("codigo", { length: 50 }).notNull(),
-    tipo: mysqlEnum("tipo", ["porcentaje", "monto_fijo"]).notNull(),
-    valor: decimal("valor", { precision: 10, scale: 2 }).notNull(),
-    limiteUsos: int("limite_usos"),
-    usosActuales: int("usos_actuales").default(0).notNull(),
-    montoMinimo: decimal("monto_minimo", { precision: 10, scale: 2 }).default("0.00"),
-    fechaInicio: timestamp("fecha_inicio"),
-    fechaFin: timestamp("fecha_fin"),
-    activo: boolean("activo").default(true).notNull(),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
-  (table) => [
-    uniqueIndex("uq_restaurante_codigo").on(table.restauranteId, table.codigo),
-  ]
-);
 
 // Pedido de delivery (sin mesa, con dirección)
 export const pedidoDelivery = mysqlTable("pedido_delivery", {
@@ -410,50 +547,3 @@ export const itemPedidoTakeaway = mysqlTable("item_pedido_takeaway", {
   esCanjePuntos: boolean("es_canje_puntos").default(false),
 });
 
-export const productoPuntos = mysqlTable("producto_puntos", {
-  id: int("id").primaryKey().autoincrement(),
-  restauranteId: int("restaurante_id")
-    .references(() => restaurante.id)
-    .notNull(),
-  productoId: int("producto_id")
-    .references(() => producto.id)
-    .notNull(),
-  puntosNecesarios: int("puntos_necesarios").notNull(),
-  puntosGanados: int("puntos_ganados").default(0).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
-
-export const accountPool = mysqlTable("account_pool", {
-  id: int("id").primaryKey().autoincrement(),
-  restauranteId: int("restaurante_id").references(() => restaurante.id),
-  accountNumber: varchar("account_number", { length: 255 }),
-  alias: varchar("alias", { length: 255 }),
-  estado: mysqlEnum("estado", ["disponible", "asignado"]).default("disponible"),
-  pedidoIdAsignado: int("pedido_id_asignado"),
-  tipoPedido: mysqlEnum("tipo_pedido", ["delivery", "takeaway"]),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-// Horarios de atención del restaurante (múltiples turnos por día)
-export const horarioRestaurante = mysqlTable("horario_restaurante", {
-  id: int("id").primaryKey().autoincrement(),
-  restauranteId: int("restaurante_id")
-    .references(() => restaurante.id)
-    .notNull(),
-  diaSemana: int("dia_semana").notNull(), // 0=Domingo, 1=Lunes ... 6=Sábado
-  horaApertura: varchar("hora_apertura", { length: 5 }).notNull(), // "HH:mm"
-  horaCierre: varchar("hora_cierre", { length: 5 }).notNull(), // "HH:mm"
-});
-
-// Zonas de delivery con polígonos y precios dinámicos
-export const zonaDelivery = mysqlTable("zona_delivery", {
-  id: int("id").primaryKey().autoincrement(),
-  restauranteId: int("restaurante_id")
-    .references(() => restaurante.id)
-    .notNull(),
-  nombre: varchar("nombre", { length: 255 }).notNull(),
-  precio: decimal("precio", { precision: 10, scale: 2 }).notNull(),
-  poligono: json("poligono").notNull(), // Array de {lat: number, lng: number}
-  color: varchar("color", { length: 50 }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});

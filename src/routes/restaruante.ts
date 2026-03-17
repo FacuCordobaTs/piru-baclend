@@ -560,6 +560,50 @@ restauranteRoute.put('/toggle-diseno-alternativo', async (c) => {
   }
 })
 
+// Actualizar proveedor de pasarela de pago y credenciales Talo
+const updatePasarelaPagoSchema = z.object({
+  proveedorPago: z.enum(['cucuru', 'talo', 'mercadopago', 'manual']).optional(),
+  taloApiKey: z.string().optional(),
+  taloUserId: z.string().optional(),
+})
+
+restauranteRoute.put('/pasarela-pago', zValidator('json', updatePasarelaPagoSchema), async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const body = c.req.valid('json')
+
+  try {
+    const updateData: { [key: string]: any } = {}
+
+    if (body.proveedorPago !== undefined) updateData.proveedorPago = body.proveedorPago
+    if (body.taloApiKey !== undefined) updateData.taloApiKey = body.taloApiKey || null
+    if (body.taloUserId !== undefined) updateData.taloUserId = body.taloUserId || null
+
+    if (Object.keys(updateData).length === 0) {
+      return c.json({ message: 'No se proporcionaron datos para actualizar', success: false }, 400)
+    }
+
+    await db.update(RestauranteTable)
+      .set(updateData)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    const [updated] = await db.select({
+      proveedorPago: RestauranteTable.proveedorPago,
+      taloApiKey: RestauranteTable.taloApiKey,
+      taloUserId: RestauranteTable.taloUserId,
+    }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+
+    return c.json({
+      message: 'Pasarela de pago actualizada correctamente',
+      success: true,
+      data: updated,
+    }, 200)
+  } catch (error) {
+    console.error('Error actualizando pasarela de pago:', error)
+    return c.json({ message: 'Error al actualizar pasarela de pago', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 // Configurar Cucuru (Webhook)
 const configCucuruSchema = z.object({
   apiKey: z.string().min(1),
