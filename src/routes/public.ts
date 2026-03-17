@@ -28,7 +28,6 @@ publicRoute.get('/restaurante/:username', async (c) => {
             cucuruConfigurado: RestauranteTable.cucuruConfigurado,
             mpConnected: RestauranteTable.mpConnected,
             transferenciaAlias: RestauranteTable.transferenciaAlias,
-            sistemaPuntos: RestauranteTable.sistemaPuntos,
             colorPrimario: RestauranteTable.colorPrimario,
             colorSecundario: RestauranteTable.colorSecundario,
             disenoAlternativo: RestauranteTable.disenoAlternativo,
