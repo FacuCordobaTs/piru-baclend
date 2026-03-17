@@ -57,14 +57,14 @@ export const restaurante = mysqlTable("restaurante", {
 
   // ----- Agregar mas adelante cuando ya tenga talo configurado ------
 
-  // proveedorPago: mysqlEnum("proveedor_pago", [
-  //   "cucuru",
-  //   "talo",
-  //   "mercadopago",
-  //   "manual",
-  // ]).default("manual"),
-  // taloApiKey: varchar("talo_api_key", { length: 255 }),
-  // taloUserId: varchar("talo_user_id", { length: 255 }),
+  proveedorPago: mysqlEnum("proveedor_pago", [
+    "cucuru",
+    "talo",
+    "mercadopago",
+    "manual",
+  ]).default("manual"),
+  taloApiKey: varchar("talo_api_key", { length: 255 }),
+  taloUserId: varchar("talo_user_id", { length: 255 }),
   
 
 
