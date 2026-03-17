@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { pool } from '../db'
 import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable, codigoDescuento as CodigoDescuentoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
-import { eq, and, desc, or, lt, isNull, sql } from 'drizzle-orm'
+import { eq, and, desc, or, lt, isNull, sql, inArray } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp } from '../services/whatsapp'
 import { productoPuntos as ProductoPuntosTable, zonaDelivery as ZonaDeliveryTable } from '../db/schema'
@@ -55,28 +55,25 @@ publicRoute.get('/restaurante/:username', async (c) => {
             .from(HorarioRestauranteTable)
             .where(eq(HorarioRestauranteTable.restauranteId, restauranteId))
 
-        // Obtener productos activos con categoría (columnas planas para evitar null en Drizzle)
+        // Productos sin joins (evita bug Drizzle orderSelectedFields con leftJoin null)
         const productosRaw = await db
-            .select({
-                id: ProductoTable.id,
-                restauranteId: ProductoTable.restauranteId,
-                categoriaId: ProductoTable.categoriaId,
-                nombre: ProductoTable.nombre,
-                descripcion: ProductoTable.descripcion,
-                precio: ProductoTable.precio,
-                activo: ProductoTable.activo,
-                imagenUrl: ProductoTable.imagenUrl,
-                descuento: ProductoTable.descuento,
-                createdAt: ProductoTable.createdAt,
-                categoriaIdCat: CategoriaTable.id,
-                categoriaNombre: CategoriaTable.nombre,
-                puntosNecesarios: ProductoPuntosTable.puntosNecesarios,
-                puntosGanados: ProductoPuntosTable.puntosGanados,
-            })
+            .select()
             .from(ProductoTable)
-            .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
-            .leftJoin(ProductoPuntosTable, eq(ProductoTable.id, ProductoPuntosTable.productoId))
             .where(and(eq(ProductoTable.restauranteId, restauranteId), eq(ProductoTable.activo, true)))
+
+        // Categorías y puntos en consultas separadas
+        const categoriasMap = new Map<number, string>()
+        const puntosMap = new Map<number, { puntosNecesarios: string | null; puntosGanados: string | null }>()
+        if (productosRaw.length > 0) {
+            const catIds = [...new Set(productosRaw.map((p) => p.categoriaId).filter(Boolean))] as number[]
+            const prodIds = productosRaw.map((p) => p.id)
+            if (catIds.length > 0) {
+                const categorias = await db.select({ id: CategoriaTable.id, nombre: CategoriaTable.nombre }).from(CategoriaTable).where(inArray(CategoriaTable.id, catIds))
+                for (const c of categorias) categoriasMap.set(c.id, c.nombre)
+            }
+            const puntosRows = await db.select().from(ProductoPuntosTable).where(inArray(ProductoPuntosTable.productoId, prodIds))
+            for (const pp of puntosRows) puntosMap.set(pp.productoId, { puntosNecesarios: pp.puntosNecesarios, puntosGanados: pp.puntosGanados })
+        }
 
         // Obtener ingredientes y agregados para cada producto
         const productosConIngredientes = await Promise.all(
@@ -99,14 +96,24 @@ publicRoute.get('/restaurante/:username', async (c) => {
                         .from(ProductoAgregadoTable)
                         .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
                         .where(eq(ProductoAgregadoTable.productoId, p.id))
-                ]);
-
-                const { categoriaIdCat, categoriaNombre, ...rest } = p
+                ])
+                const puntos = puntosMap.get(p.id)
                 return {
-                    ...rest,
-                    categoria: categoriaNombre ?? null,
-                    ingredientes: ingredientes,
-                    agregados: agregados,
+                    id: p.id,
+                    restauranteId: p.restauranteId,
+                    categoriaId: p.categoriaId,
+                    nombre: p.nombre,
+                    descripcion: p.descripcion,
+                    precio: p.precio,
+                    activo: p.activo,
+                    imagenUrl: p.imagenUrl,
+                    descuento: p.descuento,
+                    createdAt: p.createdAt,
+                    categoria: p.categoriaId ? categoriasMap.get(p.categoriaId) ?? null : null,
+                    puntosNecesarios: puntos?.puntosNecesarios ?? null,
+                    puntosGanados: puntos?.puntosGanados ?? null,
+                    ingredientes,
+                    agregados,
                 }
             })
         )
