@@ -55,7 +55,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             .from(HorarioRestauranteTable)
             .where(eq(HorarioRestauranteTable.restauranteId, restauranteId))
 
-        // Obtener productos activos con categoría
+        // Obtener productos activos con categoría (columnas planas para evitar null en Drizzle)
         const productosRaw = await db
             .select({
                 id: ProductoTable.id,
@@ -68,10 +68,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
                 imagenUrl: ProductoTable.imagenUrl,
                 descuento: ProductoTable.descuento,
                 createdAt: ProductoTable.createdAt,
-                categoria: {
-                    id: CategoriaTable.id,
-                    nombre: CategoriaTable.nombre,
-                },
+                categoriaIdCat: CategoriaTable.id,
+                categoriaNombre: CategoriaTable.nombre,
                 puntosNecesarios: ProductoPuntosTable.puntosNecesarios,
                 puntosGanados: ProductoPuntosTable.puntosGanados,
             })
@@ -103,9 +101,10 @@ publicRoute.get('/restaurante/:username', async (c) => {
                         .where(eq(ProductoAgregadoTable.productoId, p.id))
                 ]);
 
+                const { categoriaIdCat, categoriaNombre, ...rest } = p
                 return {
-                    ...p,
-                    categoria: p.categoria?.nombre || null,
+                    ...rest,
+                    categoria: categoriaNombre ?? null,
                     ingredientes: ingredientes,
                     agregados: agregados,
                 }
