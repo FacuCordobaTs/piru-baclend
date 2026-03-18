@@ -31,8 +31,8 @@ export interface SalaOrderCacheEntry {
   tipoPedido: 'delivery' | 'takeaway'
   total: string
   items: any[]
-  cucuruAlias?: string
-  cucuruAccountNumber?: string
+  aliasDinamico?: string
+  cvuDinamico?: string
   deliveryFee?: number
   zonaNombre?: string
   direccion?: string
@@ -1288,8 +1288,8 @@ class WebSocketManager {
           tipoPedido: 'delivery' as const,
           total: total.toFixed(2),
           items: itemsParaFront,
-          cucuruAlias: cuentaCucuru?.alias,
-          cucuruAccountNumber: cuentaCucuru?.accountNumber,
+          aliasDinamico: cuentaCucuru?.alias ?? null,
+          cvuDinamico: cuentaCucuru?.accountNumber ?? null,
           deliveryFee: checkoutData.deliveryFee,
           zonaNombre: checkoutData.zonaNombre,
           direccion: checkoutData.direccion,
@@ -1363,8 +1363,8 @@ class WebSocketManager {
           tipoPedido: 'takeaway' as const,
           total: total.toFixed(2),
           items: itemsParaFront,
-          cucuruAlias: cuentaCucuru?.alias,
-          cucuruAccountNumber: cuentaCucuru?.accountNumber,
+          aliasDinamico: cuentaCucuru?.alias ?? null,
+          cvuDinamico: cuentaCucuru?.accountNumber ?? null,
           nombreCliente: checkoutData.nombre,
           telefono: checkoutData.telefono,
           montoDescuento: montoDescuento > 0 ? montoDescuento.toFixed(2) : undefined,

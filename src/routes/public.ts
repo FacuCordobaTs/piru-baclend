@@ -7,6 +7,7 @@ import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp } from '../services/whatsapp'
 import { productoPuntos as ProductoPuntosTable, zonaDelivery as ZonaDeliveryTable } from '../db/schema'
 import { asignarAliasAPedido } from '../services/cucuru'
+import { crearPagoTalo } from '../services/talo'
 import { findZoneForPoint } from '../utils/geo'
 import UUID = require("uuid-js");
 
@@ -337,6 +338,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             cucuruApiKey: RestauranteTable.cucuruApiKey,
             cucuruCollectorId: RestauranteTable.cucuruCollectorId,
             cucuruConfigurado: RestauranteTable.cucuruConfigurado,
+            proveedorPago: RestauranteTable.proveedorPago,
+            taloApiKey: RestauranteTable.taloApiKey,
+            taloUserId: RestauranteTable.taloUserId,
             username: RestauranteTable.username,
             id: RestauranteTable.id
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
@@ -439,8 +443,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             codigoDescuentoIdFinal = codigoDescuentoId
         }
 
-        // CRÍTICO: Cuando cucuruConfigurado, asumir transferencia si no se especificó
-        const metodoPagoEfectivoDelivery = metodoPago || (resRestaurante[0]?.cucuruConfigurado ? 'transferencia' : null)
+        // CRÍTICO: Cuando cucuruConfigurado o proveedorPago=talo, asumir transferencia si no se especificó
+        const metodoPagoEfectivoDelivery = metodoPago || (resRestaurante[0]?.cucuruConfigurado || resRestaurante[0]?.proveedorPago === 'talo' ? 'transferencia' : null)
 
         const nuevoPedido = await db.insert(PedidoUnificadoTable).values({
             restauranteId,
@@ -480,22 +484,38 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         }
 
         let cuentaCucuru = null;
-        if (metodoPagoEfectivoDelivery === 'transferencia' && resRestaurante[0]?.cucuruConfigurado) {
-            try {
-                cuentaCucuru = await asignarAliasAPedido({
-                    db,
-                    restaurante: resRestaurante[0],
-                    pedidoId,
-                    slug: resRestaurante[0].username!,
-                    tipoPedido: 'delivery'
-                });
-            } catch (error) {
-                console.error("❌ Error asignando CVU/Alias de Cucuru:", error);
+        let cuentaTalo: { cvu: string; alias: string } | null = null;
+        if (metodoPagoEfectivoDelivery === 'transferencia') {
+            if (resRestaurante[0]?.proveedorPago === 'talo' && resRestaurante[0]?.taloApiKey && resRestaurante[0]?.taloUserId) {
+                try {
+                    const taloRes = await crearPagoTalo({
+                        restauranteId,
+                        total,
+                        pedidoId: pedidoId.toString(),
+                        api_key: resRestaurante[0].taloApiKey,
+                        talo_user_id: resRestaurante[0].taloUserId,
+                    });
+                    cuentaTalo = { cvu: taloRes.cvu, alias: taloRes.alias };
+                } catch (error) {
+                    console.error('[Talo] Error al crear pago para pedido delivery #' + pedidoId + ':', error);
+                }
+            } else if (resRestaurante[0]?.cucuruConfigurado) {
+                try {
+                    cuentaCucuru = await asignarAliasAPedido({
+                        db,
+                        restaurante: resRestaurante[0],
+                        pedidoId,
+                        slug: resRestaurante[0].username!,
+                        tipoPedido: 'delivery'
+                    });
+                } catch (error) {
+                    console.error("❌ Error asignando CVU/Alias de Cucuru:", error);
+                }
             }
         }
 
         // Notificación por WhatsApp
-        const waitToPay = metodoPagoEfectivoDelivery === 'transferencia' && resRestaurante[0]?.cucuruConfigurado;
+        const waitToPay = metodoPagoEfectivoDelivery === 'transferencia' && (resRestaurante[0]?.cucuruConfigurado || resRestaurante[0]?.proveedorPago === 'talo');
         try {
             const restaurante = await db.select({
                 whatsappEnabled: RestauranteTable.whatsappEnabled,
@@ -559,8 +579,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 telefono,
                 total: total.toFixed(2),
                 estado: 'pending',
-                cucuruAlias: cuentaCucuru?.alias,
-                cucuruAccountNumber: cuentaCucuru?.accountNumber,
+                aliasDinamico: cuentaCucuru?.alias || cuentaTalo?.alias || null,
+                cvuDinamico: cuentaCucuru?.accountNumber || cuentaTalo?.cvu || null,
                 deliveryFee: deliveryFeeAplicado.toFixed(2),
                 zonaNombre
             }
@@ -646,6 +666,9 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             cucuruApiKey: RestauranteTable.cucuruApiKey,
             cucuruCollectorId: RestauranteTable.cucuruCollectorId,
             cucuruConfigurado: RestauranteTable.cucuruConfigurado,
+            proveedorPago: RestauranteTable.proveedorPago,
+            taloApiKey: RestauranteTable.taloApiKey,
+            taloUserId: RestauranteTable.taloUserId,
             username: RestauranteTable.username,
             id: RestauranteTable.id
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
@@ -718,9 +741,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             codigoDescuentoIdFinalTk = codigoDescuentoId
         }
 
-        // CRÍTICO: Cuando cucuruConfigurado, asumir transferencia si no se especificó
-        // (el frontend solo muestra esa opción en ese caso)
-        const metodoPagoEfectivo = metodoPago || (resRestaurante[0]?.cucuruConfigurado ? 'transferencia' : null)
+        // CRÍTICO: Cuando cucuruConfigurado o proveedorPago=talo, asumir transferencia si no se especificó
+        const metodoPagoEfectivo = metodoPago || (resRestaurante[0]?.cucuruConfigurado || resRestaurante[0]?.proveedorPago === 'talo' ? 'transferencia' : null)
 
         const nuevoPedido = await db.insert(PedidoUnificadoTable).values({
             restauranteId,
@@ -757,24 +779,40 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         }
 
         let cuentaCucuru = null;
-        if (metodoPagoEfectivo === 'transferencia' && resRestaurante[0]?.cucuruConfigurado) {
-            try {
-                console.log(`🛍️ [Takeaway] Asignando CVU Cucuru para pedido #${pedidoId} (restaurante ${restauranteId})`);
-                cuentaCucuru = await asignarAliasAPedido({
-                    db,
-                    restaurante: resRestaurante[0],
-                    pedidoId,
-                    slug: resRestaurante[0].username!,
-                    tipoPedido: 'takeaway'
-                });
-                console.log(`✅ [Takeaway] CVU asignado: ${cuentaCucuru?.alias} -> pedido #${pedidoId}`);
-            } catch (error) {
-                console.error("❌ [Takeaway] Error asignando CVU/Alias de Cucuru - el pedido NO recibirá webhook automático:", error);
+        let cuentaTalo: { cvu: string; alias: string } | null = null;
+        if (metodoPagoEfectivo === 'transferencia') {
+            if (resRestaurante[0]?.proveedorPago === 'talo' && resRestaurante[0]?.taloApiKey && resRestaurante[0]?.taloUserId) {
+                try {
+                    const taloRes = await crearPagoTalo({
+                        restauranteId,
+                        total,
+                        pedidoId: pedidoId.toString(),
+                        api_key: resRestaurante[0].taloApiKey,
+                        talo_user_id: resRestaurante[0].taloUserId,
+                    });
+                    cuentaTalo = { cvu: taloRes.cvu, alias: taloRes.alias };
+                } catch (error) {
+                    console.error('[Talo] Error al crear pago para pedido takeaway #' + pedidoId + ':', error);
+                }
+            } else if (resRestaurante[0]?.cucuruConfigurado) {
+                try {
+                    console.log(`🛍️ [Takeaway] Asignando CVU Cucuru para pedido #${pedidoId} (restaurante ${restauranteId})`);
+                    cuentaCucuru = await asignarAliasAPedido({
+                        db,
+                        restaurante: resRestaurante[0],
+                        pedidoId,
+                        slug: resRestaurante[0].username!,
+                        tipoPedido: 'takeaway'
+                    });
+                    console.log(`✅ [Takeaway] CVU asignado: ${cuentaCucuru?.alias} -> pedido #${pedidoId}`);
+                } catch (error) {
+                    console.error("❌ [Takeaway] Error asignando CVU/Alias de Cucuru - el pedido NO recibirá webhook automático:", error);
+                }
             }
         }
 
         // Notificación por WhatsApp
-        const waitToPay = metodoPagoEfectivo === 'transferencia' && resRestaurante[0]?.cucuruConfigurado;
+        const waitToPay = metodoPagoEfectivo === 'transferencia' && (resRestaurante[0]?.cucuruConfigurado || resRestaurante[0]?.proveedorPago === 'talo');
         try {
             const restaurante = await db.select({
                 whatsappEnabled: RestauranteTable.whatsappEnabled,
@@ -830,8 +868,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 telefono,
                 total: total.toFixed(2),
                 estado: 'pending',
-                cucuruAlias: cuentaCucuru?.alias,
-                cucuruAccountNumber: cuentaCucuru?.accountNumber
+                aliasDinamico: cuentaCucuru?.alias || cuentaTalo?.alias || null,
+                cvuDinamico: cuentaCucuru?.accountNumber || cuentaTalo?.cvu || null
             }
         }, 201)
     } catch (error) {

@@ -14,6 +14,7 @@ import {
 } from '../db/schema'
 import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp } from '../services/whatsapp'
+import { consultarPagoTalo } from '../services/talo'
 
 const webhookRoute = new Hono()
 
@@ -313,6 +314,151 @@ webhookRoute.get('/cucuru/collection_received/collection_received', (c) => c.jso
 
 webhookRoute.post('/cucuru', cucuruWebhookHandler);
 webhookRoute.get('/cucuru', (c) => c.json({ status: 'ok' }, 200));
+
+// ======================== TALO WEBHOOK ========================
+webhookRoute.post('/talo', async (c) => {
+  let body: { message?: string; paymentId?: string; externalId?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ status: 'ok' }, 200);
+  }
+
+  const paymentId = body?.paymentId;
+  const externalId = body?.externalId;
+
+  if (!paymentId || !externalId) {
+    return c.json({ status: 'ok' }, 200);
+  }
+
+  console.log(`🔔 [Talo] Webhook recibido: paymentId=${paymentId}, externalId=${externalId}`);
+  const envForBackground = c.env;
+
+  (async () => {
+    try {
+      const db = drizzle(pool);
+      const pedidoId = parseInt(String(externalId), 10);
+      if (isNaN(pedidoId)) return;
+
+      const pedidos = await db
+        .select({
+          id: PedidoUnificadoTable.id,
+          restauranteId: PedidoUnificadoTable.restauranteId,
+          tipo: PedidoUnificadoTable.tipo,
+          nombreCliente: PedidoUnificadoTable.nombreCliente,
+          direccion: PedidoUnificadoTable.direccion,
+          total: PedidoUnificadoTable.total,
+        })
+        .from(PedidoUnificadoTable)
+        .where(eq(PedidoUnificadoTable.id, pedidoId))
+        .limit(1);
+
+      if (pedidos.length === 0) return;
+
+      const pedido = pedidos[0];
+      const restauranteId = pedido.restauranteId;
+
+      const restaurantes = await db
+        .select({ taloApiKey: RestauranteTable.taloApiKey })
+        .from(RestauranteTable)
+        .where(eq(RestauranteTable.id, restauranteId))
+        .limit(1);
+
+      if (restaurantes.length === 0 || !restaurantes[0].taloApiKey) {
+        console.error('[Talo] Restaurante sin taloApiKey para pedido #' + pedidoId);
+        return;
+      }
+
+      const taloData = await consultarPagoTalo(paymentId, restaurantes[0].taloApiKey);
+
+      if (taloData.payment_status === 'OVERPAID' || taloData.payment_status === 'UNDERPAID') {
+        console.warn(
+          `[Talo] Pago con status ${taloData.payment_status} - paymentId: ${paymentId}, externalId: ${externalId}, amount: ${taloData.price?.amount}`
+        );
+      }
+
+      if (taloData.payment_status !== 'SUCCESS') return;
+
+      await db
+        .update(PedidoUnificadoTable)
+        .set({ pagado: true, metodoPago: 'transferencia' })
+        .where(eq(PedidoUnificadoTable.id, pedido.id));
+
+      await db.insert(PagoTable).values({
+        pedidoUnificadoId: pedido.id,
+        metodo: 'transferencia',
+        estado: 'paid',
+        monto: String(taloData.price?.amount ?? pedido.total),
+        mpPaymentId: paymentId,
+      });
+
+      const mesaNombre = pedido.tipo === 'delivery' ? 'Delivery' : 'Take Away';
+      wsManager.notifyAdmins(restauranteId, {
+        id: `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+        tipo: 'NUEVO_PEDIDO',
+        mesaId: 0,
+        mesaNombre,
+        mensaje: `Nuevo pedido de ${mesaNombre} (Pagado)`,
+        detalles: `${pedido.nombreCliente || 'Cliente'} - $${pedido.total}`,
+        timestamp: new Date().toISOString(),
+        leida: false,
+        pedidoId: pedido.id,
+      });
+      wsManager.broadcastAdminUpdate(restauranteId, pedido.tipo);
+      wsManager.notifyPublicClientPayment(pedido.tipo, pedido.id);
+
+      const restaurante = await db
+        .select({
+          whatsappEnabled: RestauranteTable.whatsappEnabled,
+          whatsappNumber: RestauranteTable.whatsappNumber,
+          deliveryFee: RestauranteTable.deliveryFee,
+        })
+        .from(RestauranteTable)
+        .where(eq(RestauranteTable.id, restauranteId))
+        .limit(1);
+
+      if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
+        const itemsRaw = await db
+          .select({
+            cantidad: ItemPedidoUnificadoTable.cantidad,
+            nombreProducto: ProductoTable.nombre,
+            esCanjePuntos: ItemPedidoUnificadoTable.esCanjePuntos,
+          })
+          .from(ItemPedidoUnificadoTable)
+          .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
+          .where(eq(ItemPedidoUnificadoTable.pedidoId, pedido.id));
+
+        const orderItemsForWa = itemsRaw.map((item) => ({
+          name: item.esCanjePuntos ? `${item.nombreProducto} (Canje Puntos)` : item.nombreProducto!,
+          quantity: item.cantidad!,
+        }));
+
+        if (pedido.tipo === 'delivery' && restaurante[0].deliveryFee) {
+          orderItemsForWa.push({ name: 'Delivery', quantity: 1 });
+        }
+
+        sendOrderWhatsApp(
+          { env: envForBackground } as any,
+          {
+            phone: restaurante[0].whatsappNumber,
+            customerName: pedido.nombreCliente || 'Cliente no especificado',
+            address:
+              pedido.tipo === 'delivery' ? (pedido.direccion || 'Sin dirección') : 'Retira en local (Take Away)',
+            total: `${pedido.total} (transferencia)`,
+            items: orderItemsForWa,
+            orderId: pedido.id.toString(),
+          }
+        ).catch(console.error);
+      }
+
+      console.log(`🚀 [Talo] Pago acreditado para ${pedido.tipo} #${pedido.id}`);
+    } catch (err) {
+      console.error('[Talo] Error procesando webhook en background:', err);
+    }
+  })();
+
+  return c.json({ status: 'ok' }, 200);
+});
 
 // ======================== RAPIBOY WEBHOOK ========================
 webhookRoute.post('/rapiboy', async (c) => {
