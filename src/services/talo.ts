@@ -1,5 +1,5 @@
 const TALO_API_BASE =
-  process.env.NODE_ENV === 'production'
+  process.env.TALO_ENV === 'production'
     ? 'https://api.talo.com.ar'
     : 'https://sandbox-api.talo.com.ar';
 
