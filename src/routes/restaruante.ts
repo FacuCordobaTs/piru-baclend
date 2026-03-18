@@ -656,6 +656,32 @@ restauranteRoute.post('/reconfigurar-webhook-cucuru', authMiddleware, async (c) 
   }
 })
 
+// Configurar Talo (API Key y User ID)
+const configTaloSchema = z.object({
+  taloApiKey: z.string().min(1),
+  taloUserId: z.string().min(1),
+})
+
+restauranteRoute.post('/configurar-talo', zValidator('json', configTaloSchema), async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const { taloApiKey, taloUserId } = c.req.valid('json')
+
+  try {
+    await db.update(RestauranteTable)
+      .set({
+        taloApiKey: taloApiKey.trim(),
+        taloUserId: taloUserId.trim(),
+      })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({ message: 'Talo configurado exitosamente', success: true }, 200)
+  } catch (error) {
+    console.error('Error configurando Talo:', error)
+    return c.json({ message: 'Error configurando Talo', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 // Configurar Rapiboy (Token)
 const configRapiboySchema = z.object({
   token: z.string().min(1)
