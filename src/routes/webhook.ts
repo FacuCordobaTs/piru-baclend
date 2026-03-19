@@ -386,7 +386,20 @@ webhookRoute.post('/talo', async (c) => {
       }
       console.log('[Talo Webhook] Restaurante con taloApiKey OK. Llamando consultarPagoTalo...');
 
-      const taloData = await consultarPagoTalo(paymentId, restaurantes[0].taloApiKey);
+      const taloApiKeyRaw = String(restaurantes[0].taloApiKey ?? '');
+      const taloApiKeyMasked = (() => {
+        const k = taloApiKeyRaw.trim();
+        if (!k) return 'empty';
+        return `${k.slice(0, 4)}...${k.slice(-4)} (len=${k.length})`;
+      })();
+
+      console.log('[Talo Webhook] taloApiKey:', {
+        masked: taloApiKeyMasked,
+        length: taloApiKeyRaw.length,
+        hasWhitespace: /\s/.test(taloApiKeyRaw),
+      });
+
+      const taloData = await consultarPagoTalo(paymentId, taloApiKeyRaw);
       console.log('[Talo Webhook] consultarPagoTalo retornó:', taloData);
 
       if (taloData.payment_status === 'OVERPAID' || taloData.payment_status === 'UNDERPAID') {

@@ -37,6 +37,20 @@ interface ConsultarPagoTaloResponse {
   };
 }
 
+const normalizeApiKey = (key: string) => {
+  // Algunas veces la key en DB puede venir con espacios o prefijo "Bearer ".
+  const trimmed = key.trim();
+  return trimmed.replace(/^Bearer\s+/i, '');
+};
+
+const maskSecret = (key: string) => {
+  const k = key.trim();
+  if (!k) return 'empty';
+  const head = k.slice(0, 4);
+  const tail = k.slice(-4);
+  return `${head}...${tail} (len=${k.length})`;
+};
+
 /**
  * Crea un pago por transferencia en Talo y retorna los datos para que el cliente transfiera.
  */
@@ -44,6 +58,7 @@ export async function crearPagoTalo(
   params: CrearPagoTaloParams
 ): Promise<{ cvu: string; alias: string; paymentId: string }> {
   const { total, pedidoId, api_key, talo_user_id } = params;
+  const normalizedApiKey = normalizeApiKey(api_key);
   const webhookUrl = `${WEBHOOK_BASE}/api/webhook/talo`;
 
   console.log('[Talo] crearPagoTalo INICIO:', {
@@ -52,6 +67,8 @@ export async function crearPagoTalo(
     talo_user_id,
     webhookUrl,
     apiBase: TALO_API_BASE,
+    apiKeyMasked: maskSecret(api_key),
+    apiKeyNormalizedMasked: maskSecret(normalizedApiKey),
   });
 
   try {
@@ -67,7 +84,7 @@ export async function crearPagoTalo(
     const response = await fetch(`${TALO_API_BASE}/payments/`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${api_key}`,
+        Authorization: `Bearer ${normalizedApiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
@@ -115,13 +132,19 @@ export async function consultarPagoTalo(
   paymentId: string,
   api_key: string
 ): Promise<ConsultarPagoTaloResponse['data']> {
-  console.log('[Talo] consultarPagoTalo INICIO:', { paymentId, apiBase: TALO_API_BASE });
+  const normalizedApiKey = normalizeApiKey(api_key);
+  console.log('[Talo] consultarPagoTalo INICIO:', {
+    paymentId,
+    apiBase: TALO_API_BASE,
+    apiKeyMasked: maskSecret(api_key),
+    apiKeyNormalizedMasked: maskSecret(normalizedApiKey),
+  });
 
   try {
     const response = await fetch(`${TALO_API_BASE}/payments/${paymentId}`, {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${api_key}`,
+        Authorization: `Bearer ${normalizedApiKey}`,
       },
     });
 
