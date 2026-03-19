@@ -399,8 +399,6 @@ webhookRoute.post('/talo', async (c) => {
         hasWhitespace: /\s/.test(taloApiKeyRaw),
       });
 
-      // Delay defensivo de 1.5s por eventual consistency en el Sandbox de Talo
-      await new Promise((resolve) => setTimeout(resolve, 1500));
       const taloData = await consultarPagoTalo(paymentId, taloApiKeyRaw);
       console.log('[Talo Webhook] consultarPagoTalo retornó:', taloData);
 

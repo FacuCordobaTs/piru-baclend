@@ -141,12 +141,10 @@ export async function consultarPagoTalo(
   });
 
   try {
-    const response = await fetch(`${TALO_API_BASE}/payments/${paymentId}/`, {
+    const response = await fetch(`${TALO_API_BASE}/payments/${paymentId}`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${normalizedApiKey}`,
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
       },
     });
 
