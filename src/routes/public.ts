@@ -33,6 +33,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             colorSecundario: RestauranteTable.colorSecundario,
             disenoAlternativo: RestauranteTable.disenoAlternativo,
             orderGroupEnabled: RestauranteTable.orderGroupEnabled,
+            codigoDescuentoEnabled: RestauranteTable.codigoDescuentoEnabled,
         })
             .from(RestauranteTable)
             .where(eq(RestauranteTable.username, username))
@@ -196,6 +197,20 @@ publicRoute.post('/descuentos/validar', zValidator('json', validarDescuentoSchem
     const { restauranteId, codigo, totalCarrito } = c.req.valid('json')
 
     try {
+        const [restauranteCfg] = await db
+            .select({ codigoDescuentoEnabled: RestauranteTable.codigoDescuentoEnabled })
+            .from(RestauranteTable)
+            .where(eq(RestauranteTable.id, restauranteId))
+            .limit(1)
+
+        if (!restauranteCfg) {
+            return c.json({ success: false, message: 'Restaurante no encontrado' }, 404)
+        }
+
+        if (!restauranteCfg.codigoDescuentoEnabled) {
+            return c.json({ success: false, message: 'Este local no tiene habilitados los códigos de descuento' }, 200)
+        }
+
         const [cupon] = await db
             .select()
             .from(CodigoDescuentoTable)
