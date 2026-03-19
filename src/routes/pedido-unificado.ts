@@ -7,6 +7,7 @@ import {
   producto as ProductoTable,
   ingrediente as IngredienteTable,
   restaurante as RestauranteTable,
+  codigoDescuento as CodigoDescuentoTable,
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
@@ -129,9 +130,15 @@ const pedidoUnificadoRoute = new Hono()
         metodoPago: PedidoUnificadoTable.metodoPago,
         impreso: PedidoUnificadoTable.impreso,
         rapiboyTrackingUrl: PedidoUnificadoTable.rapiboyTrackingUrl,
+        codigoDescuentoId: PedidoUnificadoTable.codigoDescuentoId,
         montoDescuento: PedidoUnificadoTable.montoDescuento,
+        codigoDescuentoCodigo: CodigoDescuentoTable.codigo,
       })
       .from(PedidoUnificadoTable)
+      .leftJoin(
+        CodigoDescuentoTable,
+        eq(PedidoUnificadoTable.codigoDescuentoId, CodigoDescuentoTable.id),
+      )
       .where(whereCondition)
       .orderBy(desc(PedidoUnificadoTable.createdAt))
       .limit(limit)
