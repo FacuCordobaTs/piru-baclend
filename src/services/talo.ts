@@ -46,23 +46,37 @@ export async function crearPagoTalo(
   const { total, pedidoId, api_key, talo_user_id } = params;
   const webhookUrl = `${WEBHOOK_BASE}/api/webhook/talo`;
 
+  console.log('[Talo] crearPagoTalo INICIO:', {
+    pedidoId,
+    total,
+    talo_user_id,
+    webhookUrl,
+    apiBase: TALO_API_BASE,
+  });
+
   try {
+    const body = {
+      user_id: talo_user_id,
+      price: { amount: total, currency: 'ARS' },
+      payment_options: ['transfer'],
+      external_id: pedidoId,
+      webhook_url: webhookUrl,
+    };
+    console.log('[Talo] crearPagoTalo REQUEST body:', JSON.stringify(body));
+
     const response = await fetch(`${TALO_API_BASE}/payments/`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${api_key}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        user_id: talo_user_id,
-        price: { amount: total, currency: 'ARS' },
-        payment_options: ['transfer'],
-        external_id: pedidoId,
-        webhook_url: webhookUrl,
-      }),
+      body: JSON.stringify(body),
     });
 
+    console.log('[Talo] crearPagoTalo RESPONSE status:', response.status);
+
     const json = (await response.json()) as CrearPagoTaloResponse;
+    console.log('[Talo] crearPagoTalo RESPONSE body:', JSON.stringify(json));
 
     if (!response.ok) {
       console.error(
@@ -78,16 +92,16 @@ export async function crearPagoTalo(
     const quote = json.data?.quotes?.[0];
     const cvu = quote?.address ?? quote?.cvu;
     const alias = quote?.alias;
+    console.log('[Talo] crearPagoTalo quote extraído:', { quote, cvu, alias, paymentId: json.data?.id });
+
     if (!cvu && !alias) {
       console.error('[Talo] Respuesta sin CVU/alias:', JSON.stringify(json));
       throw new Error('Talo no devolvió CVU ni alias en la respuesta');
     }
 
-    return {
-      cvu: cvu ?? '',
-      alias: alias ?? '',
-      paymentId: json.data.id,
-    };
+    const result = { cvu: cvu ?? '', alias: alias ?? '', paymentId: json.data.id };
+    console.log('[Talo] crearPagoTalo OK retornando:', result);
+    return result;
   } catch (error) {
     console.error('[Talo] Error al crear pago (pedidoId:', pedidoId, '):', error);
     throw error;
@@ -101,6 +115,8 @@ export async function consultarPagoTalo(
   paymentId: string,
   api_key: string
 ): Promise<ConsultarPagoTaloResponse['data']> {
+  console.log('[Talo] consultarPagoTalo INICIO:', { paymentId, apiBase: TALO_API_BASE });
+
   try {
     const response = await fetch(`${TALO_API_BASE}/payments/${paymentId}`, {
       method: 'GET',
@@ -109,7 +125,10 @@ export async function consultarPagoTalo(
       },
     });
 
+    console.log('[Talo] consultarPagoTalo RESPONSE status:', response.status);
+
     const json = (await response.json()) as ConsultarPagoTaloResponse;
+    console.log('[Talo] consultarPagoTalo RESPONSE body:', JSON.stringify(json));
 
     if (!response.ok) {
       console.error(
@@ -123,6 +142,7 @@ export async function consultarPagoTalo(
       );
     }
 
+    console.log('[Talo] consultarPagoTalo OK data:', json.data);
     return json.data;
   } catch (error) {
     console.error('[Talo] Error al consultar pago (paymentId:', paymentId, '):', error);

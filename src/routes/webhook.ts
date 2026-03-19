@@ -317,10 +317,16 @@ webhookRoute.get('/cucuru', (c) => c.json({ status: 'ok' }, 200));
 
 // ======================== TALO WEBHOOK ========================
 webhookRoute.post('/talo', async (c) => {
+  console.log('[Talo Webhook] POST /talo recibido @', new Date().toISOString());
+
   let body: { message?: string; paymentId?: string; externalId?: string };
   try {
-    body = await c.req.json();
-  } catch {
+    const rawText = await c.req.text();
+    console.log('[Talo Webhook] Body raw:', rawText);
+    body = JSON.parse(rawText) as typeof body;
+    console.log('[Talo Webhook] Body parseado:', body);
+  } catch (err) {
+    console.error('[Talo Webhook] Error parseando JSON:', err);
     return c.json({ status: 'ok' }, 200);
   }
 
@@ -328,17 +334,23 @@ webhookRoute.post('/talo', async (c) => {
   const externalId = body?.externalId;
 
   if (!paymentId || !externalId) {
+    console.log('[Talo Webhook] Rechazado: falta paymentId o externalId. paymentId=', paymentId, 'externalId=', externalId);
     return c.json({ status: 'ok' }, 200);
   }
 
-  console.log(`🔔 [Talo] Webhook recibido: paymentId=${paymentId}, externalId=${externalId}`);
+  console.log('[Talo Webhook] Datos válidos. paymentId=', paymentId, 'externalId=', externalId, 'message=', body?.message);
   const envForBackground = c.env;
 
   (async () => {
+    console.log('[Talo Webhook] Iniciando procesamiento en background para paymentId=', paymentId);
     try {
       const db = drizzle(pool);
       const pedidoId = parseInt(String(externalId), 10);
-      if (isNaN(pedidoId)) return;
+      if (isNaN(pedidoId)) {
+        console.log('[Talo Webhook] externalId no es número válido:', externalId);
+        return;
+      }
+      console.log('[Talo Webhook] Buscando pedido id=', pedidoId);
 
       const pedidos = await db
         .select({
@@ -353,10 +365,14 @@ webhookRoute.post('/talo', async (c) => {
         .where(eq(PedidoUnificadoTable.id, pedidoId))
         .limit(1);
 
-      if (pedidos.length === 0) return;
+      if (pedidos.length === 0) {
+        console.log('[Talo Webhook] Pedido no encontrado:', pedidoId);
+        return;
+      }
 
       const pedido = pedidos[0];
       const restauranteId = pedido.restauranteId;
+      console.log('[Talo Webhook] Pedido encontrado:', { id: pedido.id, tipo: pedido.tipo, restauranteId, total: pedido.total });
 
       const restaurantes = await db
         .select({ taloApiKey: RestauranteTable.taloApiKey })
@@ -365,11 +381,13 @@ webhookRoute.post('/talo', async (c) => {
         .limit(1);
 
       if (restaurantes.length === 0 || !restaurantes[0].taloApiKey) {
-        console.error('[Talo] Restaurante sin taloApiKey para pedido #' + pedidoId);
+        console.error('[Talo Webhook] Restaurante sin taloApiKey para pedido #' + pedidoId, 'restauranteId=', restauranteId);
         return;
       }
+      console.log('[Talo Webhook] Restaurante con taloApiKey OK. Llamando consultarPagoTalo...');
 
       const taloData = await consultarPagoTalo(paymentId, restaurantes[0].taloApiKey);
+      console.log('[Talo Webhook] consultarPagoTalo retornó:', taloData);
 
       if (taloData.payment_status === 'OVERPAID' || taloData.payment_status === 'UNDERPAID') {
         console.warn(
@@ -377,8 +395,12 @@ webhookRoute.post('/talo', async (c) => {
         );
       }
 
-      if (taloData.payment_status !== 'SUCCESS') return;
+      if (taloData.payment_status !== 'SUCCESS') {
+        console.log('[Talo Webhook] Status no es SUCCESS, ignorando. status=', taloData.payment_status);
+        return;
+      }
 
+      console.log('[Talo Webhook] Actualizando pedido pagado=true, metodoPago=transferencia...');
       await db
         .update(PedidoUnificadoTable)
         .set({ pagado: true, metodoPago: 'transferencia' })
@@ -391,6 +413,7 @@ webhookRoute.post('/talo', async (c) => {
         monto: String(taloData.price?.amount ?? pedido.total),
         mpPaymentId: paymentId,
       });
+      console.log('[Talo Webhook] Pago insertado en PagoTable. Notificando WebSockets...');
 
       const mesaNombre = pedido.tipo === 'delivery' ? 'Delivery' : 'Take Away';
       wsManager.notifyAdmins(restauranteId, {
@@ -406,6 +429,7 @@ webhookRoute.post('/talo', async (c) => {
       });
       wsManager.broadcastAdminUpdate(restauranteId, pedido.tipo);
       wsManager.notifyPublicClientPayment(pedido.tipo, pedido.id);
+      console.log('[Talo Webhook] WebSockets enviados. Verificando WhatsApp...');
 
       const restaurante = await db
         .select({
@@ -448,15 +472,19 @@ webhookRoute.post('/talo', async (c) => {
             items: orderItemsForWa,
             orderId: pedido.id.toString(),
           }
-        ).catch(console.error);
+        ).catch((e) => console.error('[Talo Webhook] Error enviando WhatsApp:', e));
+        console.log('[Talo Webhook] WhatsApp enviado');
+      } else {
+        console.log('[Talo Webhook] WhatsApp no configurado o deshabilitado');
       }
 
-      console.log(`🚀 [Talo] Pago acreditado para ${pedido.tipo} #${pedido.id}`);
+      console.log('[Talo Webhook] ✅ Pago acreditado para', pedido.tipo, '#', pedido.id);
     } catch (err) {
-      console.error('[Talo] Error procesando webhook en background:', err);
+      console.error('[Talo Webhook] ❌ Error procesando webhook en background:', err);
     }
   })();
 
+  console.log('[Talo Webhook] Respondiendo 200 OK inmediatamente (procesamiento en background)');
   return c.json({ status: 'ok' }, 200);
 });
 
