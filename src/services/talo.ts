@@ -13,9 +13,11 @@ export interface CrearPagoTaloParams {
   talo_user_id: string;
 }
 
+// Talo usa "address" para el CVU y "alias" para el alias (no "cvu")
 interface TaloQuote {
-  cvu: string;
-  alias: string;
+  address?: string;
+  alias?: string;
+  cvu?: string; // legacy, algunos endpoints podrían usarlo
 }
 
 interface CrearPagoTaloResponse {
@@ -74,14 +76,16 @@ export async function crearPagoTalo(
     }
 
     const quote = json.data?.quotes?.[0];
-    if (!quote?.cvu || !quote?.alias) {
+    const cvu = quote?.address ?? quote?.cvu;
+    const alias = quote?.alias;
+    if (!cvu && !alias) {
       console.error('[Talo] Respuesta sin CVU/alias:', JSON.stringify(json));
       throw new Error('Talo no devolvió CVU ni alias en la respuesta');
     }
 
     return {
-      cvu: quote.cvu,
-      alias: quote.alias,
+      cvu: cvu ?? '',
+      alias: alias ?? '',
       paymentId: json.data.id,
     };
   } catch (error) {
