@@ -46,6 +46,7 @@ export const restaurante = mysqlTable("restaurante", {
   colorPrimario: varchar("color_primario", { length: 50 }),
   colorSecundario: varchar("color_secundario", { length: 50 }),
   disenoAlternativo: boolean("diseno_alternativo").default(false).notNull(),
+  codigoDescuentoEnabled: boolean("codigo_descuento_enabled").default(true).notNull(),
 
   orderGroupEnabled: boolean("order_group_enabled").default(true).notNull(),
   // Rapiboy - integración logística delivery
@@ -63,7 +64,7 @@ export const restaurante = mysqlTable("restaurante", {
     "mercadopago",
     "manual",
   ]).default("manual"),
-  taloApiKey: varchar("talo_api_key", { length: 255 }),
+  taloApiKey: varchar("talo_api_key", { length: 1024 }),
   taloUserId: varchar("talo_user_id", { length: 255 }),
   
 

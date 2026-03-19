@@ -524,6 +524,37 @@ restauranteRoute.put('/toggle-order-group-enabled', async (c) => {
   }
 })
 
+// Toggle habilitar/deshabilitar uso de códigos de descuento en checkout
+restauranteRoute.put('/toggle-codigo-descuento-enabled', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [restaurante] = await db.select({ codigoDescuentoEnabled: RestauranteTable.codigoDescuentoEnabled })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!restaurante) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    const nuevoEstado = !restaurante.codigoDescuentoEnabled
+
+    await db.update(RestauranteTable)
+      .set({ codigoDescuentoEnabled: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({
+      message: nuevoEstado ? 'Códigos de descuento habilitados' : 'Códigos de descuento deshabilitados',
+      success: true,
+      codigoDescuentoEnabled: nuevoEstado
+    }, 200)
+  } catch (error) {
+    console.error('Error updating codigo descuento enabled:', error)
+    return c.json({ message: 'Error al cambiar configuración de códigos de descuento', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 // Toggle diseño alternativo
 restauranteRoute.put('/toggle-diseno-alternativo', async (c) => {
   const db = drizzle(pool)
