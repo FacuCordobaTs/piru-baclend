@@ -11,7 +11,16 @@ import { sendOrderWhatsApp } from '../services/whatsapp'
 const MP_CLIENT_ID = process.env.MP_CLIENT_ID
 const MP_CLIENT_SECRET = process.env.MP_CLIENT_SECRET
 const MP_REDIRECT_URI = process.env.MP_REDIRECT_URI || 'https://api.piru.app/api/mp/callback'
-const MP_MARKETPLACE_FEE = 0 // Tu comisión en pesos
+/** Comisión marketplace Piru (1% del monto cobrado). */
+const MP_MARKETPLACE_FEE_RATE = 0.01
+
+/** Monto fijo en moneda del pago (MP: `marketplace_fee` en preferencias, `application_fee` en Payments API). */
+function marketplaceFeeFromAmount(amount: number): number {
+  const n = Number(amount)
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return Math.round(n * MP_MARKETPLACE_FEE_RATE * 100) / 100
+}
+
 const ADMIN_URL = process.env.ADMIN_URL || 'https://admin.piru.app'
 // Token de acceso de la plataforma (Piru) para consultar webhooks
 const MP_PLATFORM_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN
@@ -399,7 +408,7 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
       },
       body: JSON.stringify({
         items: mpItems,
-        marketplace_fee: MP_MARKETPLACE_FEE, // Tu ganancia como marketplace
+        marketplace_fee: marketplaceFeeFromAmount(totalPago),
         back_urls: {
           success: `https://my.piru.app/pedido-cerrado`,
           failure: `${baseUrl}/pago-fallido?pedido_id=${pedidoId}`,
@@ -524,7 +533,7 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
       },
       body: JSON.stringify({
         items: mpItems,
-        marketplace_fee: MP_MARKETPLACE_FEE,
+        marketplace_fee: marketplaceFeeFromAmount(total),
         back_urls: {
           success: `${baseUrl}/success-delivery/${restauranteId}`, // User will see it processed
           failure: `${baseUrl}/success-delivery/${restauranteId}`,
@@ -579,8 +588,11 @@ mercadopagoRoute.post('/process-brick', async (c) => {
     const tokenValido = await obtenerTokenValido(pedido.restauranteId!)
     if (!tokenValido) return c.json({ success: false, error: 'Error de conexión con Mercado Pago' }, 401)
 
+    const transactionAmount = parseFloat(String(pedido.total))
+    const applicationFee = marketplaceFeeFromAmount(transactionAmount)
+
     const mpPayload: Record<string, unknown> = {
-      transaction_amount: parseFloat(String(pedido.total)),
+      transaction_amount: transactionAmount,
       token,
       description: `Pedido #${pedidoId}`,
       installments,
@@ -591,6 +603,9 @@ mercadopagoRoute.post('/process-brick', async (c) => {
       },
       external_reference: `piru-${pedidoId}`,
       notification_url: `https://api.piru.app/api/mp/webhook`
+    }
+    if (applicationFee > 0) {
+      mpPayload.application_fee = applicationFee
     }
     if (issuer_id != null && issuer_id !== '') {
       mpPayload.issuer_id = Number(issuer_id)
