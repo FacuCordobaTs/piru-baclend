@@ -28,6 +28,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             deliveryFee: RestauranteTable.deliveryFee,
             cucuruConfigurado: RestauranteTable.cucuruConfigurado,
             mpConnected: RestauranteTable.mpConnected,
+            mpPublicKey: RestauranteTable.mpPublicKey,
             transferenciaAlias: RestauranteTable.transferenciaAlias,
             colorPrimario: RestauranteTable.colorPrimario,
             colorSecundario: RestauranteTable.colorSecundario,
@@ -73,7 +74,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
                 for (const c of categorias) categoriasMap.set(c.id, c.nombre)
             }
             const puntosRows = await db.select().from(ProductoPuntosTable).where(inArray(ProductoPuntosTable.productoId, prodIds))
-            for (const pp of puntosRows) puntosMap.set(pp.productoId, { puntosNecesarios: pp.puntosNecesarios, puntosGanados: pp.puntosGanados })
+            for (const pp of puntosRows) puntosMap.set(pp.productoId, { puntosNecesarios: pp.puntosNecesarios.toString(), puntosGanados: pp.puntosGanados.toString() })
         }
 
         // Obtener ingredientes y agregados para cada producto
@@ -357,7 +358,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             taloApiKey: RestauranteTable.taloApiKey,
             taloUserId: RestauranteTable.taloUserId,
             username: RestauranteTable.username,
-            id: RestauranteTable.id
+            id: RestauranteTable.id,
+            mpConnected: RestauranteTable.mpConnected,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
 
         // --- Lógica de zonas de delivery ---
@@ -529,8 +531,10 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             }
         }
 
-        // Notificación por WhatsApp
-        const waitToPay = metodoPagoEfectivoDelivery === 'transferencia' && (resRestaurante[0]?.cucuruConfigurado || resRestaurante[0]?.proveedorPago === 'talo');
+        // Notificación por WhatsApp (esperar acreditación: transfer automática o tarjeta MP)
+        const waitToPay =
+            (metodoPagoEfectivoDelivery === 'transferencia' && (resRestaurante[0]?.cucuruConfigurado || resRestaurante[0]?.proveedorPago === 'talo')) ||
+            (metodoPagoEfectivoDelivery === 'mercadopago' && !!resRestaurante[0]?.mpConnected);
         try {
             const restaurante = await db.select({
                 whatsappEnabled: RestauranteTable.whatsappEnabled,
@@ -685,7 +689,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             taloApiKey: RestauranteTable.taloApiKey,
             taloUserId: RestauranteTable.taloUserId,
             username: RestauranteTable.username,
-            id: RestauranteTable.id
+            id: RestauranteTable.id,
+            mpConnected: RestauranteTable.mpConnected,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
         const sistemaPuntosActivo = false; // sistemaPuntos comentado en schema
 
@@ -826,8 +831,9 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             }
         }
 
-        // Notificación por WhatsApp
-        const waitToPay = metodoPagoEfectivo === 'transferencia' && (resRestaurante[0]?.cucuruConfigurado || resRestaurante[0]?.proveedorPago === 'talo');
+        const waitToPay =
+            (metodoPagoEfectivo === 'transferencia' && (resRestaurante[0]?.cucuruConfigurado || resRestaurante[0]?.proveedorPago === 'talo')) ||
+            (metodoPagoEfectivo === 'mercadopago' && !!resRestaurante[0]?.mpConnected);
         try {
             const restaurante = await db.select({
                 whatsappEnabled: RestauranteTable.whatsappEnabled,

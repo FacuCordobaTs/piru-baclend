@@ -9,7 +9,7 @@ import {
   restaurante as RestauranteTable,
   codigoDescuento as CodigoDescuentoTable,
 } from '../db/schema'
-import { drizzle } from 'drizzle-orm/mysql2'
+import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { eq, desc, and, inArray, not } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
@@ -47,7 +47,7 @@ const updateEstadoSchema = z.object({
   estado: z.enum(['pending', 'preparing', 'ready', 'dispatched', 'delivered', 'cancelled', 'archived']),
 })
 
-async function enrichItemsWithProductInfo(db: ReturnType<typeof drizzle>, itemsRaw: any[]) {
+async function enrichItemsWithProductInfo(db: MySql2Database<Record<string, never>>, itemsRaw: any[]) {
   return Promise.all(
     itemsRaw.map(async (item) => {
       let ingredientesExcluidosNombres: string[] = []

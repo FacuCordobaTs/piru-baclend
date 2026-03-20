@@ -1,11 +1,12 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { restaurante as RestauranteTable, pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, pago as PagoTable, mesa as MesaTable, pagoSubtotal as PagoSubtotalTable, pedidoDelivery as PedidoDeliveryTable, pedidoTakeaway as PedidoTakeawayTable } from '../db/schema'
+import { restaurante as RestauranteTable, pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, pago as PagoTable, mesa as MesaTable, pagoSubtotal as PagoSubtotalTable, pedidoUnificado as PedidoUnificadoTable, itemPedidoUnificado as ItemPedidoUnificadoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { eq, and, inArray } from 'drizzle-orm'
 import { authMiddleware } from '../middleware/auth'
 import { obtenerTokenValido, refrescarTokenRestaurante } from '../utils/mercadopago'
 import { wsManager } from '../websocket/manager'
+import { sendOrderWhatsApp } from '../services/whatsapp'
 
 const MP_CLIENT_ID = process.env.MP_CLIENT_ID
 const MP_CLIENT_SECRET = process.env.MP_CLIENT_SECRET
@@ -34,6 +35,15 @@ function getMozoItemId(key: string): number | null {
 
 function createMozoItemKey(itemId: number): string {
   return `${MOZO_ITEM_PREFIX}${itemId}`
+}
+
+/** `piru-{id}` = pedido unificado. Compatibilidad: `piru-delivery-{id}` / `piru-takeaway-{id}`. */
+function parseMercadoPagoPiruPedidoUnificadoId(externalReference: string): number | null {
+  const unified = externalReference.match(/^piru-(\d+)$/)
+  if (unified) return parseInt(unified[1], 10)
+  const legacy = externalReference.match(/^piru-(?:delivery|takeaway)-(\d+)$/)
+  if (legacy) return parseInt(legacy[1], 10)
+  return null
 }
 
 /**
@@ -232,19 +242,7 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
     const restauranteData = restaurante[0]
 
     // 3. Validar estado del pedido según tipo de restaurante
-    const esCarrito = restauranteData.esCarrito === true;
 
-    if (esCarrito) {
-      // En carrito se puede pagar si está preparing, delivered o closed
-      if (pedidoData.estado === 'pending') {
-        return c.json({ success: false, error: 'El pedido debe estar confirmado para pagarlo' }, 400)
-      }
-    } else {
-      // En restaurante normal, DEBE estar cerrado
-      if (pedidoData.estado !== 'closed') {
-        return c.json({ success: false, error: 'El pedido debe estar cerrado para pagarlo' }, 400)
-      }
-    }
 
     if (!restauranteData.mpAccessToken || !restauranteData.mpConnected) {
       return c.json({ success: false, error: 'Restaurante no configurado para pagos con MercadoPago' }, 400)
@@ -494,39 +492,29 @@ mercadopagoRoute.post('/crear-preferencia', async (c) => {
 mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
   const db = drizzle(pool)
   try {
-    const { pedidoId, tipoPedido } = await c.req.json()
-    if (!pedidoId || !['delivery', 'takeaway'].includes(tipoPedido)) {
-      return c.json({ success: false, error: 'Invalid config' }, 400)
+    const { pedidoId } = await c.req.json()
+    if (!pedidoId) {
+      return c.json({ success: false, error: 'pedidoId es requerido' }, 400)
     }
 
-    let pedido, restauranteId, total, table
-    if (tipoPedido === 'delivery') {
-      const p = await db.select().from(PedidoDeliveryTable).where(eq(PedidoDeliveryTable.id, pedidoId)).limit(1)
-      if (!p.length) return c.json({ success: false, error: 'Pedido no encontrado' }, 404)
-      pedido = p[0]
-      restauranteId = pedido.restauranteId!
-      total = parseFloat(pedido.total || '0')
-    } else {
-      const p = await db.select().from(PedidoTakeawayTable).where(eq(PedidoTakeawayTable.id, pedidoId)).limit(1)
-      if (!p.length) return c.json({ success: false, error: 'Pedido no encontrado' }, 404)
-      pedido = p[0]
-      restauranteId = pedido.restauranteId!
-      total = parseFloat(pedido.total || '0')
-    }
+    const rows = await db.select().from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.id, pedidoId)).limit(1)
+    if (!rows.length) return c.json({ success: false, error: 'Pedido no encontrado' }, 404)
+    const pedido = rows[0]
+    const restauranteId = pedido.restauranteId!
+    const total = parseFloat(String(pedido.total || '0'))
 
     const tokenValido = await obtenerTokenValido(restauranteId)
     if (!tokenValido) return c.json({ success: false, error: 'Restaurante MP error' }, 401)
 
-    // Build the MP Item
     const mpItems = [{
-      title: `Pedido ${tipoPedido} #${pedidoId}`,
+      title: `Pedido #${pedidoId}`,
       quantity: 1,
       currency_id: 'ARS',
       unit_price: total
     }]
 
     const baseUrl = 'https://my.piru.app'
-    const externalReference = `piru-${tipoPedido}-${pedidoId}`
+    const externalReference = `piru-${pedidoId}`
 
     const mpResponse = await fetch('https://api.mercadopago.com/checkout/preferences', {
       method: 'POST',
@@ -563,6 +551,157 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
 
   } catch (err) {
     return c.json({ success: false, error: 'Server err' }, 500)
+  }
+})
+
+mercadopagoRoute.post('/process-brick', async (c) => {
+  const db = drizzle(pool)
+  try {
+    const body = await c.req.json()
+    const { token, installments, payer, payment_method_id, issuer_id, pedidoId } = body
+
+    if (!pedidoId) {
+      return c.json({ success: false, error: 'Datos inválidos' }, 400)
+    }
+    if (!token || !payer?.email) {
+      return c.json({ success: false, error: 'Datos de pago incompletos' }, 400)
+    }
+
+    const pedidos = await db.select()
+      .from(PedidoUnificadoTable)
+      .where(eq(PedidoUnificadoTable.id, pedidoId))
+      .limit(1)
+
+    if (pedidos.length === 0) return c.json({ success: false, error: 'Pedido no encontrado' }, 404)
+    const pedido = pedidos[0]
+    const tipoPedido = pedido.tipo
+
+    const tokenValido = await obtenerTokenValido(pedido.restauranteId!)
+    if (!tokenValido) return c.json({ success: false, error: 'Error de conexión con Mercado Pago' }, 401)
+
+    const mpPayload: Record<string, unknown> = {
+      transaction_amount: parseFloat(String(pedido.total)),
+      token,
+      description: `Pedido #${pedidoId}`,
+      installments,
+      payment_method_id,
+      payer: {
+        email: payer.email,
+        identification: payer.identification
+      },
+      external_reference: `piru-${pedidoId}`,
+      notification_url: `https://api.piru.app/api/mp/webhook`
+    }
+    if (issuer_id != null && issuer_id !== '') {
+      mpPayload.issuer_id = Number(issuer_id)
+    }
+
+    const mpResponse = await fetch('https://api.mercadopago.com/v1/payments', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${tokenValido}`,
+        'X-Idempotency-Key': `${pedidoId}-${Date.now()}`
+      },
+      body: JSON.stringify(mpPayload)
+    })
+
+    const paymentData = await mpResponse.json()
+
+    if (!mpResponse.ok) {
+      console.error('Error MP:', paymentData)
+      return c.json({ success: false, error: 'El pago fue rechazado por la tarjeta.' }, 400)
+    }
+
+    const pedidoWhere = eq(PedidoUnificadoTable.id, pedidoId)
+
+    if (paymentData.status === 'approved') {
+      await db.update(PedidoUnificadoTable)
+        .set({ pagado: true, metodoPago: 'mercadopago' })
+        .where(pedidoWhere)
+
+      await db.insert(PagoTable).values({
+        pedidoUnificadoId: pedidoId,
+        metodo: 'mercadopago',
+        estado: 'paid',
+        monto: String(paymentData.transaction_amount),
+        mpPaymentId: String(paymentData.id)
+      })
+
+      const mesaNombre = tipoPedido === 'delivery' ? 'Delivery' : 'Take Away'
+      void wsManager.notifyAdmins(pedido.restauranteId!, {
+        id: `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+        tipo: 'NUEVO_PEDIDO',
+        mesaId: 0,
+        mesaNombre,
+        mensaje: `Nuevo pedido de ${mesaNombre} (MP Aprobado)`,
+        detalles: `${pedido.nombreCliente || 'Cliente'} - $${pedido.total}`,
+        timestamp: new Date().toISOString(),
+        leida: false,
+        pedidoId: pedidoId
+      })
+
+      wsManager.broadcastAdminUpdate(pedido.restauranteId!, tipoPedido)
+      wsManager.notifyPublicClientPayment(tipoPedido, pedidoId)
+
+      try {
+        const restaurante = await db.select({
+          whatsappEnabled: RestauranteTable.whatsappEnabled,
+          whatsappNumber: RestauranteTable.whatsappNumber,
+          deliveryFee: RestauranteTable.deliveryFee
+        }).from(RestauranteTable).where(eq(RestauranteTable.id, pedido.restauranteId!)).limit(1)
+
+        if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
+          const itemsRaw = await db.select({
+            cantidad: ItemPedidoUnificadoTable.cantidad,
+            nombreProducto: ProductoTable.nombre,
+            esCanjePuntos: ItemPedidoUnificadoTable.esCanjePuntos
+          })
+            .from(ItemPedidoUnificadoTable)
+            .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
+            .where(eq(ItemPedidoUnificadoTable.pedidoId, pedido.id))
+
+          const orderItemsForWa = itemsRaw.map(item => ({
+            name: item.esCanjePuntos ? `${item.nombreProducto} (Canje Puntos)` : item.nombreProducto!,
+            quantity: item.cantidad!
+          }))
+
+          if (tipoPedido === 'delivery' && restaurante[0].deliveryFee) {
+            orderItemsForWa.push({ name: 'Delivery', quantity: 1 })
+          }
+
+          sendOrderWhatsApp(c, {
+            phone: restaurante[0].whatsappNumber,
+            customerName: pedido.nombreCliente || 'Cliente no especificado',
+            address: tipoPedido === 'delivery' ? (pedido.direccion || 'Sin dirección') : 'Retira en local (Take Away)',
+            total: `${pedido.total} (mercadopago)`,
+            items: orderItemsForWa,
+            orderId: pedido.id.toString()
+          }).catch(console.error)
+        }
+      } catch (waErr) {
+        console.error('Error enviando WhatsApp post-pago MP brick:', waErr)
+      }
+
+      return c.json({ success: true, status: 'approved' })
+    }
+
+    if (paymentData.status === 'in_process' || paymentData.status === 'pending') {
+      await db.insert(PagoTable).values({
+        pedidoUnificadoId: pedidoId,
+        metodo: 'mercadopago',
+        estado: 'pending',
+        monto: String(paymentData.transaction_amount),
+        mpPaymentId: String(paymentData.id)
+      })
+
+      return c.json({ success: true, status: 'pending' })
+    }
+
+    return c.json({ success: true, status: 'rejected', message: paymentData.status_detail })
+  } catch (error) {
+    console.error('Error procesando brick:', error)
+    return c.json({ success: false, error: 'Error interno' }, 500)
   }
 })
 
@@ -627,10 +766,7 @@ mercadopagoRoute.get('/estado', authMiddleware, async (c) => {
 })
 
 /**
- * Webhook de MercadoPago
- * Recibe notificaciones de pagos aprobados, rechazados, etc.
- * MercadoPago envía la notificación aquí cuando cambia el estado de un pago
- * Soporta tanto pagos completos como split payments
+ * Webhook de MercadoPago (pedido unificado; external_reference `piru-{id}`).
  */
 mercadopagoRoute.post('/webhook', async (c) => {
   const db = drizzle(pool)
@@ -688,289 +824,134 @@ mercadopagoRoute.post('/webhook', async (c) => {
 
     console.log(`💳 [Webhook] Pago ${paymentId}: status=${status}, ref=${externalReference}, monto=${transactionAmount}`)
 
-    // Validar que sea una referencia de Piru
-    if (!externalReference || !externalReference.startsWith('piru-pedido-')) {
-      console.log(`⏭️ [Webhook] Referencia externa no es de Piru: ${externalReference}`)
-      return c.json({ status: 'ignored', message: 'Not a Piru payment' })
+    if (!externalReference || typeof externalReference !== 'string') {
+      console.log(`⏭️ [Webhook] Sin external_reference`)
+      return c.json({ status: 'ignored' })
     }
 
-    // Detectar si es un split payment o pedido de delivery/takeaway
-    let isDelivery = externalReference.startsWith('piru-delivery-')
-    let isTakeaway = externalReference.startsWith('piru-takeaway-')
-    const isSplitPayment = externalReference.includes('-split-')
-    let pedidoId: number
-    let clientesPagados: string[] = []
-    let mozoItemsPagados: number[] = []
+    const pedidoId = parseMercadoPagoPiruPedidoUnificadoId(externalReference)
 
-    if (isDelivery || isTakeaway) {
-      pedidoId = parseInt(externalReference.replace(isDelivery ? 'piru-delivery-' : 'piru-takeaway-', ''), 10)
-    } else if (isSplitPayment) {
-      // Parsear referencia de split payment
-      const parts = externalReference.split('-split-')
-      pedidoId = parseInt(parts[0].replace('piru-pedido-', ''), 10)
-      try {
-        const dataBase64 = parts[1]
-        const parsedData = JSON.parse(Buffer.from(dataBase64, 'base64').toString('utf-8'))
-
-        // Check if it's the new format or legacy format
-        if (parsedData && typeof parsedData === 'object' && !Array.isArray(parsedData)) {
-          // New format: { clients: [], mozoItems: [] }
-          clientesPagados = parsedData.clients || []
-          mozoItemsPagados = parsedData.mozoItems || []
-          console.log(`🔀 [Webhook] Split payment (new format) - Clients: ${clientesPagados.join(', ')}, MozoItems: ${mozoItemsPagados.join(', ')}`)
-        } else if (Array.isArray(parsedData)) {
-          // Legacy format: ['client1', 'client2']
-          clientesPagados = parsedData
-          console.log(`🔀 [Webhook] Split payment (legacy) - Clientes: ${clientesPagados.join(', ')}`)
-        } else {
-          throw new Error('Unknown split payment format')
-        }
-      } catch (e) {
-        console.error(`❌ [Webhook] Error parseando split payment: ${e}`)
-        return c.json({ status: 'error', message: 'Invalid split reference' })
-      }
-    } else {
-      pedidoId = parseInt(externalReference.replace('piru-pedido-', ''), 10)
+    if (pedidoId == null || isNaN(pedidoId)) {
+      console.log(`⏭️ [Webhook] Referencia no es pedido unificado Piru: ${externalReference}`)
+      return c.json({ status: 'ignored' })
     }
 
-    if (isNaN(pedidoId)) {
-      console.error(`❌ [Webhook] No se pudo parsear pedidoId de: ${externalReference}`)
-      return c.json({ status: 'error', message: 'Invalid external reference' })
-    }
+    const pedidoWhere = eq(PedidoUnificadoTable.id, pedidoId)
 
-    let pedidoData: any
-    let mesaId: number | null = null
-    let restauranteId: number
+    const pedidos = await db.select()
+      .from(PedidoUnificadoTable)
+      .where(pedidoWhere)
+      .limit(1)
 
-    if (isDelivery) {
-      const pedido = await db.select().from(PedidoDeliveryTable).where(eq(PedidoDeliveryTable.id, pedidoId)).limit(1)
-      if (!pedido || pedido.length === 0) return c.json({ status: 'error', message: 'Order not found' })
-      pedidoData = pedido[0]
-      restauranteId = pedidoData.restauranteId!
-    } else if (isTakeaway) {
-      const pedido = await db.select().from(PedidoTakeawayTable).where(eq(PedidoTakeawayTable.id, pedidoId)).limit(1)
-      if (!pedido || pedido.length === 0) return c.json({ status: 'error', message: 'Order not found' })
-      pedidoData = pedido[0]
-      restauranteId = pedidoData.restauranteId!
-    } else {
-      const pedido = await db.select().from(PedidoTable).where(eq(PedidoTable.id, pedidoId)).limit(1)
-      if (!pedido || pedido.length === 0) return c.json({ status: 'error', message: 'Order not found' })
-      pedidoData = pedido[0]
-      restauranteId = pedidoData.restauranteId!
-      mesaId = pedidoData.mesaId!
-    }
+    if (pedidos.length === 0) return c.json({ status: 'error', message: 'Order not found' })
 
-    // Obtener info de la mesa para la notificación si es mesa
-    let mesaNombre = isDelivery ? 'Delivery' : (isTakeaway ? 'Take Away' : `Mesa ${mesaId}`)
-    if (mesaId) {
-      const mesa = await db.select()
-        .from(MesaTable)
-        .where(eq(MesaTable.id, mesaId))
-        .limit(1)
-      if (mesa.length > 0) mesaNombre = mesa[0].nombre
-    }
+    const pedidoData = pedidos[0]
+    const tipoPedido = pedidoData.tipo
+    const restauranteId = pedidoData.restauranteId!
 
-    // Determinar estado del pago
-    let estadoPago: 'pending' | 'paid' | 'failed' = 'pending'
+    const pagoPorMpId = await db.select()
+      .from(PagoTable)
+      .where(eq(PagoTable.mpPaymentId, String(paymentId)))
+      .limit(1)
+
     if (status === 'approved') {
-      estadoPago = 'paid'
-    } else if (status === 'rejected' || status === 'cancelled' || status === 'refunded') {
-      estadoPago = 'failed'
-    }
-
-    if (isSplitPayment) {
-      // ============ SPLIT PAYMENT ============
-      // Build list of all keys to update (clients + Mozo item keys)
-      const allKeysToUpdate: string[] = [...clientesPagados]
-      for (const itemId of mozoItemsPagados) {
-        allKeysToUpdate.push(createMozoItemKey(itemId))
+      if (pedidoData.pagado) {
+        console.log(`⏭️ [Webhook] Pedido ${pedidoId} ya figuraba como pagado.`)
+        return c.json({ status: 'already_processed' })
       }
-
-      // Verificar si los subtotales ya fueron pagados
-      const subtotalesExistentes = await db.select()
-        .from(PagoSubtotalTable)
-        .where(and(
-          eq(PagoSubtotalTable.pedidoId, pedidoId),
-          inArray(PagoSubtotalTable.clienteNombre, allKeysToUpdate),
-          eq(PagoSubtotalTable.estado, 'paid')
-        ))
-
-      if (subtotalesExistentes.length > 0 && status === 'approved') {
-        console.log(`⏭️ [Webhook] Subtotales ya pagados: ${subtotalesExistentes.map(s => s.clienteNombre).join(', ')}`)
+      if (pagoPorMpId.length > 0 && pagoPorMpId[0].estado === 'paid') {
+        console.log(`⏭️ [Webhook] Pago ${paymentId} ya registrado como paid.`)
         return c.json({ status: 'already_processed' })
       }
 
-      // Actualizar registros de pago_subtotal para cada key
-      for (const key of allKeysToUpdate) {
-        // Buscar el registro pendiente más reciente
-        const subtotalPendiente = await db.select()
-          .from(PagoSubtotalTable)
-          .where(and(
-            eq(PagoSubtotalTable.pedidoId, pedidoId),
-            eq(PagoSubtotalTable.clienteNombre, key),
-            eq(PagoSubtotalTable.estado, 'pending')
-          ))
-          .limit(1)
+      await db.update(PedidoUnificadoTable)
+        .set({ pagado: true, metodoPago: 'mercadopago' })
+        .where(pedidoWhere)
 
-        if (subtotalPendiente.length > 0) {
-          await db.update(PagoSubtotalTable)
-            .set({
-              estado: estadoPago,
-              mpPaymentId: String(paymentId)
-            })
-            .where(eq(PagoSubtotalTable.id, subtotalPendiente[0].id))
-          console.log(`✅ [Webhook] Subtotal actualizado: key=${key}, estado=${estadoPago}`)
-        } else {
-          // Si no hay registro pendiente, crear uno nuevo (fallback)
-          // For regular clients, calculate from items
-          // For Mozo items, use the Mozo:item:X format
-          let subtotal = 0
-
-          if (isMozoItemKey(key)) {
-            // Individual Mozo item
-            const itemId = getMozoItemId(key)
-            if (itemId) {
-              const item = await db.select()
-                .from(ItemPedidoTable)
-                .where(and(
-                  eq(ItemPedidoTable.pedidoId, pedidoId),
-                  eq(ItemPedidoTable.id, itemId)
-                ))
-                .limit(1)
-
-              if (item.length > 0) {
-                subtotal = parseFloat(item[0].precioUnitario) * (item[0].cantidad || 1)
-              }
-            }
-          } else {
-            // Regular client
-            const itemsCliente = await db.select()
-              .from(ItemPedidoTable)
-              .where(and(
-                eq(ItemPedidoTable.pedidoId, pedidoId),
-                eq(ItemPedidoTable.clienteNombre, key)
-              ))
-
-            subtotal = itemsCliente.reduce((sum, item) => {
-              return sum + (parseFloat(item.precioUnitario) * (item.cantidad || 1))
-            }, 0)
-          }
-
-          if (subtotal > 0) {
-            await db.insert(PagoSubtotalTable).values({
-              pedidoId,
-              clienteNombre: key,
-              monto: subtotal.toFixed(2),
-              estado: estadoPago,
-              metodo: 'mercadopago',
-              mpPaymentId: String(paymentId)
-            })
-            console.log(`✅ [Webhook] Nuevo subtotal creado: key=${key}, estado=${estadoPago}`)
-          }
-        }
-      }
-
-      // Si el pago fue aprobado, notificar por WebSocket
-      if (status === 'approved') {
-        console.log(`🔔 [Webhook] Notificando pago de subtotales a restaurante ${restauranteId}`)
-
-        // Obtener todos los subtotales del pedido para enviar estado actualizado (incluyendo clientes sin registro)
-        const todosSubtotales = await getSubtotalesCompletos(pedidoId)
-
-        // Notificar via WebSocket a clientes y admin
-        await wsManager.notificarSubtotalesPagados(
-          pedidoId,
-          mesaId as number,
-          allKeysToUpdate,
-          todosSubtotales
-        )
-
-        console.log(`✅ [Webhook] Notificación de split payment enviada - Keys: ${allKeysToUpdate.join(', ')} en ${mesaNombre}`)
-      }
-    } else {
-      // ============ PAGO COMPLETO (LEGACY) ============
-      // Buscar si ya existe un registro de pago para este pedido
-      const pagoExistente = await db.select()
-        .from(PagoTable)
-        .where(eq(PagoTable.mpPaymentId, String(paymentId)))
-        .limit(1)
-
-      // Si el pago ya fue procesado, no hacer nada
-      if (pagoExistente.length > 0 && pagoExistente[0].estado === 'paid') {
-        console.log(`⏭️ [Webhook] Pago ${paymentId} ya fue procesado anteriormente`)
-        return c.json({ status: 'already_processed' })
-      }
-
-      // Insertar o actualizar el registro de pago
-      if (pagoExistente.length === 0) {
-        // Insertar registro de pago
-        const pagoValues: any = {
-          metodo: 'mercadopago',
-          estado: estadoPago,
-          monto: String(transactionAmount || pedidoData.total),
-          mpPaymentId: String(paymentId),
-        }
-        if (isDelivery) pagoValues.pedidoDeliveryId = pedidoId
-        else if (isTakeaway) pagoValues.pedidoTakeawayId = pedidoId
-        else pagoValues.pedidoId = pedidoId
-
-        await db.insert(PagoTable).values(pagoValues)
-        console.log(`✅ [Webhook] Pago registrado: pedido=${pedidoId}, estado=${estadoPago}`)
-
-        // Actualizar tabla principal
-        if (estadoPago === 'paid') {
-          if (isDelivery) await db.update(PedidoDeliveryTable).set({ pagado: true, metodoPago: 'mercadopago' }).where(eq(PedidoDeliveryTable.id, pedidoId))
-          else if (isTakeaway) await db.update(PedidoTakeawayTable).set({ pagado: true, metodoPago: 'mercadopago' }).where(eq(PedidoTakeawayTable.id, pedidoId))
-          else await db.update(PedidoTable).set({ pagado: true, metodoPago: 'mercadopago' }).where(eq(PedidoTable.id, pedidoId))
-        }
-      } else {
-        // Actualizar registro existente
+      const montoStr = String(transactionAmount ?? pedidoData.total)
+      if (pagoPorMpId.length > 0 && pagoPorMpId[0].estado === 'pending') {
         await db.update(PagoTable)
-          .set({
-            estado: estadoPago,
-            monto: String(transactionAmount || pedidoData.total),
-          })
+          .set({ estado: 'paid', monto: montoStr })
           .where(eq(PagoTable.mpPaymentId, String(paymentId)))
-
-        if (estadoPago === 'paid') {
-          if (isDelivery) await db.update(PedidoDeliveryTable).set({ pagado: true, metodoPago: 'mercadopago' }).where(eq(PedidoDeliveryTable.id, pedidoId))
-          else if (isTakeaway) await db.update(PedidoTakeawayTable).set({ pagado: true, metodoPago: 'mercadopago' }).where(eq(PedidoTakeawayTable.id, pedidoId))
-          else await db.update(PedidoTable).set({ pagado: true, metodoPago: 'mercadopago' }).where(eq(PedidoTable.id, pedidoId))
-        }
-
-        console.log(`✅ [Webhook] Pago actualizado: pedido=${pedidoId}, estado=${estadoPago}`)
+      } else {
+        await db.insert(PagoTable).values({
+          pedidoUnificadoId: pedidoId,
+          metodo: 'mercadopago',
+          estado: 'paid',
+          monto: montoStr,
+          mpPaymentId: String(paymentId),
+        })
       }
 
-      // Si el pago fue aprobado, notificar al admin por WebSocket
-      if (status === 'approved') {
-        console.log(`🔔 [Webhook] Notificando pago aprobado a restaurante ${restauranteId}`)
+      console.log(`✅ [Webhook] Pago actualizado: pedido=${pedidoId}, estado=paid`)
 
-        // Usar el mismo método que usa pagarPedido en el websocket manager
-        // Esto enviará la notificación PAGO_RECIBIDO al admin
-        if (!isDelivery && !isTakeaway) {
-          await wsManager.pagarPedido(
-            pedidoId,
-            mesaId as number,
-            'mercadopago',
-            String(transactionAmount || pedidoData.total)
-          )
-        } else {
-          wsManager.broadcastAdminUpdate(restauranteId, isDelivery ? 'delivery' : 'takeaway')
+      const mesaNombre = tipoPedido === 'delivery' ? 'Delivery' : 'Take Away'
 
-          // Also notify WebSocket directly for public to update status
-          const wsRoom = isDelivery ? `public:delivery:${pedidoId}` : `public:takeaway:${pedidoId}`
-          // We'll trust the database refresh, but we can also broadcast it.
+      void wsManager.notifyAdmins(restauranteId, {
+        id: `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+        tipo: 'NUEVO_PEDIDO',
+        mesaId: 0,
+        mesaNombre,
+        mensaje: `Nuevo pedido de ${mesaNombre} (Pagado vía Webhook)`,
+        detalles: `${pedidoData.nombreCliente || 'Cliente'} - $${pedidoData.total}`,
+        timestamp: new Date().toISOString(),
+        leida: false,
+        pedidoId: pedidoId
+      })
+
+      wsManager.broadcastAdminUpdate(restauranteId, tipoPedido)
+      wsManager.notifyPublicClientPayment(tipoPedido, pedidoId)
+
+      try {
+        const restaurante = await db.select({
+          whatsappEnabled: RestauranteTable.whatsappEnabled,
+          whatsappNumber: RestauranteTable.whatsappNumber,
+          deliveryFee: RestauranteTable.deliveryFee
+        }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+
+        if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
+          const itemsRaw = await db.select({
+            cantidad: ItemPedidoUnificadoTable.cantidad,
+            nombreProducto: ProductoTable.nombre,
+            esCanjePuntos: ItemPedidoUnificadoTable.esCanjePuntos
+          })
+            .from(ItemPedidoUnificadoTable)
+            .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
+            .where(eq(ItemPedidoUnificadoTable.pedidoId, pedidoData.id))
+
+          const orderItemsForWa = itemsRaw.map(item => ({
+            name: item.esCanjePuntos ? `${item.nombreProducto} (Canje Puntos)` : item.nombreProducto!,
+            quantity: item.cantidad!
+          }))
+
+          if (tipoPedido === 'delivery' && restaurante[0].deliveryFee) {
+            orderItemsForWa.push({ name: 'Delivery', quantity: 1 })
+          }
+
+          sendOrderWhatsApp(c, {
+            phone: restaurante[0].whatsappNumber,
+            customerName: pedidoData.nombreCliente || 'Cliente no especificado',
+            address: tipoPedido === 'delivery' ? (pedidoData.direccion || 'Sin dirección') : 'Retira en local (Take Away)',
+            total: `${pedidoData.total} (mercadopago webhook)`,
+            items: orderItemsForWa,
+            orderId: pedidoData.id.toString()
+          }).catch(console.error)
         }
-
-        console.log(`✅ [Webhook] Notificación enviada - Pago de $${transactionAmount} en ${mesaNombre}`)
+      } catch (waErr) {
+        console.error('Error enviando WhatsApp post-webhook MP:', waErr)
       }
     }
 
-    if (status === 'rejected') {
-      console.log(`❌ [Webhook] Pago rechazado: ${statusDetail}`)
+    if (status === 'rejected' || status === 'cancelled' || status === 'refunded') {
+      console.log(`❌ [Webhook] Pago no exitoso: ${status} — ${statusDetail}`)
+      if (pagoPorMpId.length > 0 && pagoPorMpId[0].estado === 'pending') {
+        await db.update(PagoTable)
+          .set({ estado: 'failed' })
+          .where(eq(PagoTable.mpPaymentId, String(paymentId)))
+      }
     }
 
-    return c.json({ status: 'ok', processed: true, isSplitPayment })
+    return c.json({ status: 'ok', processed: true })
   } catch (error) {
     console.error('❌ [Webhook] Error procesando webhook:', error)
     // Retornar 200 para evitar reintentos de MercadoPago
@@ -1152,21 +1133,6 @@ mercadopagoRoute.post('/pagar-efectivo', async (c) => {
       .from(RestauranteTable)
       .where(eq(RestauranteTable.id, pedido[0].restauranteId!))
       .limit(1)
-
-    const esCarrito = restaurante[0]?.esCarrito === true;
-
-    // 3. Validar estado
-    if (esCarrito) {
-      // En carrito se puede pagar si NO está pendiente (preparing, delivered, closed ok)
-      if (pedido[0].estado === 'pending') {
-        return c.json({ success: false, error: 'El pedido debe estar confirmado para pagarlo' }, 400)
-      }
-    } else {
-      // En restaurante normal, DEBE estar cerrado
-      if (pedido[0].estado !== 'closed') {
-        return c.json({ success: false, error: 'El pedido debe estar cerrado para pagarlo' }, 400)
-      }
-    }
 
     const mesaId = pedido[0].mesaId!
 
