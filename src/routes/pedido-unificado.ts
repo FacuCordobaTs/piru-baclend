@@ -101,6 +101,14 @@ const pedidoUnificadoRoute = new Hono()
     if (tipo && tipo !== 'all') {
       whereCondition = and(whereCondition, eq(PedidoUnificadoTable.tipo, tipo))
     }
+    // Tarjeta (MP): no mostrar hasta que el pago esté acreditado (webhook marca pagado)
+    whereCondition = and(
+      whereCondition,
+      not(and(
+        eq(PedidoUnificadoTable.pagado, false),
+        eq(PedidoUnificadoTable.metodoPago, 'mercadopago')
+      )!)
+    )
     if (restaurante.length > 0 && restaurante[0].cucuruConfigurado) {
       whereCondition = and(
         whereCondition,
