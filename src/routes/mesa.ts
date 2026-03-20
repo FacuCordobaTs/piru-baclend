@@ -59,6 +59,7 @@ const mesaRoute = new Hono()
       imagenUrl: RestauranteTable.imagenUrl,
       direccion: RestauranteTable.direccion,
       mpConnected: RestauranteTable.mpConnected,
+      mpPublicKey: RestauranteTable.mpPublicKey,
       esCarrito: RestauranteTable.esCarrito,
       splitPayment: RestauranteTable.splitPayment,
       soloCartaDigital: RestauranteTable.soloCartaDigital,

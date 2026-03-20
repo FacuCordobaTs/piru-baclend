@@ -37,6 +37,8 @@ export const restaurante = mysqlTable("restaurante", {
   cucuruApiKey: varchar("cucuru_api_key", { length: 255 }),
   cucuruCollectorId: varchar("cucuru_collector_id", { length: 255 }),
   cucuruConfigurado: boolean("cucuru_configurado").default(false).notNull(),
+  cucuruEnabled: boolean("cucuru_enabled").default(true).notNull(),
+  cardsPaymentsEnabled: boolean("cards_payments_enabled").default(true).notNull(),
 
   whatsappEnabled: boolean("whatsapp_enabled").default(false).notNull(),
   whatsappNumber: varchar("whatsapp_number", { length: 50 }),

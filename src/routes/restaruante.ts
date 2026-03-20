@@ -555,6 +555,68 @@ restauranteRoute.put('/toggle-codigo-descuento-enabled', async (c) => {
   }
 })
 
+// Toggle mostrar pago con tarjeta en checkout (Mercado Pago)
+restauranteRoute.put('/toggle-cards-payments-enabled', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [row] = await db.select({ cardsPaymentsEnabled: RestauranteTable.cardsPaymentsEnabled })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!row) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    const nuevoEstado = !row.cardsPaymentsEnabled
+
+    await db.update(RestauranteTable)
+      .set({ cardsPaymentsEnabled: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({
+      message: nuevoEstado ? 'Pago con tarjeta visible en checkout' : 'Pago con tarjeta oculto en checkout',
+      success: true,
+      cardsPaymentsEnabled: nuevoEstado
+    }, 200)
+  } catch (error) {
+    console.error('Error updating cards payments enabled:', error)
+    return c.json({ message: 'Error al cambiar configuración de tarjetas', error: (error as Error).message, success: false }, 500)
+  }
+})
+
+// Toggle mostrar transferencia en checkout (Cucuru / alias manual)
+restauranteRoute.put('/toggle-cucuru-enabled', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [row] = await db.select({ cucuruEnabled: RestauranteTable.cucuruEnabled })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!row) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    const nuevoEstado = !row.cucuruEnabled
+
+    await db.update(RestauranteTable)
+      .set({ cucuruEnabled: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({
+      message: nuevoEstado ? 'Transferencia visible en checkout' : 'Transferencia oculta en checkout',
+      success: true,
+      cucuruEnabled: nuevoEstado
+    }, 200)
+  } catch (error) {
+    console.error('Error updating cucuru enabled:', error)
+    return c.json({ message: 'Error al cambiar configuración de transferencias', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 // Toggle diseño alternativo
 restauranteRoute.put('/toggle-diseno-alternativo', async (c) => {
   const db = drizzle(pool)

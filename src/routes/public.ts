@@ -27,6 +27,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
             telefono: RestauranteTable.telefono,
             deliveryFee: RestauranteTable.deliveryFee,
             cucuruConfigurado: RestauranteTable.cucuruConfigurado,
+            cucuruEnabled: RestauranteTable.cucuruEnabled,
+            cardsPaymentsEnabled: RestauranteTable.cardsPaymentsEnabled,
             mpConnected: RestauranteTable.mpConnected,
             mpPublicKey: RestauranteTable.mpPublicKey,
             transferenciaAlias: RestauranteTable.transferenciaAlias,
@@ -354,12 +356,16 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             cucuruApiKey: RestauranteTable.cucuruApiKey,
             cucuruCollectorId: RestauranteTable.cucuruCollectorId,
             cucuruConfigurado: RestauranteTable.cucuruConfigurado,
+            cucuruEnabled: RestauranteTable.cucuruEnabled,
+            transferenciaAlias: RestauranteTable.transferenciaAlias,
             proveedorPago: RestauranteTable.proveedorPago,
             taloApiKey: RestauranteTable.taloApiKey,
             taloUserId: RestauranteTable.taloUserId,
             username: RestauranteTable.username,
             id: RestauranteTable.id,
             mpConnected: RestauranteTable.mpConnected,
+            mpPublicKey: RestauranteTable.mpPublicKey,
+            cardsPaymentsEnabled: RestauranteTable.cardsPaymentsEnabled,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
 
         // --- Lógica de zonas de delivery ---
@@ -460,8 +466,23 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             codigoDescuentoIdFinal = codigoDescuentoId
         }
 
-        // CRÍTICO: Cuando cucuruConfigurado o proveedorPago=talo, asumir transferencia si no se especificó
-        const metodoPagoEfectivoDelivery = metodoPago || (resRestaurante[0]?.cucuruConfigurado || resRestaurante[0]?.proveedorPago === 'talo' ? 'transferencia' : null)
+        const rDel = resRestaurante[0]!
+        const transferAutoDel = !!(rDel.cucuruConfigurado || rDel.proveedorPago === 'talo')
+        const teDel = rDel.cucuruEnabled !== false
+        const aliasOkDel = !!(rDel.transferenciaAlias && String(rDel.transferenciaAlias).trim())
+        const transferAllowedDel = teDel && (transferAutoDel || aliasOkDel)
+        const cardAllowedDel = !!(rDel.mpConnected && rDel.mpPublicKey && rDel.cardsPaymentsEnabled !== false)
+
+        let metodoPagoEfectivoDelivery = metodoPago ?? null
+        if (!metodoPagoEfectivoDelivery && transferAutoDel && transferAllowedDel) {
+            metodoPagoEfectivoDelivery = 'transferencia'
+        }
+        if (metodoPagoEfectivoDelivery === 'mercadopago' && !cardAllowedDel) {
+            return c.json({ message: 'Pago con tarjeta no disponible', success: false }, 400)
+        }
+        if (metodoPagoEfectivoDelivery === 'transferencia' && !transferAllowedDel) {
+            return c.json({ message: 'Transferencia no disponible', success: false }, 400)
+        }
 
         const nuevoPedido = await db.insert(PedidoUnificadoTable).values({
             restauranteId,
@@ -533,8 +554,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
         // Notificación por WhatsApp (esperar acreditación: transfer automática o tarjeta MP)
         const waitToPay =
-            (metodoPagoEfectivoDelivery === 'transferencia' && (resRestaurante[0]?.cucuruConfigurado || resRestaurante[0]?.proveedorPago === 'talo')) ||
-            (metodoPagoEfectivoDelivery === 'mercadopago' && !!resRestaurante[0]?.mpConnected);
+            (metodoPagoEfectivoDelivery === 'transferencia' && transferAutoDel) ||
+            (metodoPagoEfectivoDelivery === 'mercadopago' && cardAllowedDel);
         try {
             const restaurante = await db.select({
                 whatsappEnabled: RestauranteTable.whatsappEnabled,
@@ -562,7 +583,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                     phone: restaurante[0].whatsappNumber,
                     customerName: nombreCliente || 'Cliente no especificado',
                     address: direccion || 'Sin dirección',
-                    total: metodoPago ? `${total.toFixed(2)} (${metodoPago})` : total.toFixed(2),
+                    total: metodoPagoEfectivoDelivery ? `${total.toFixed(2)} (${metodoPagoEfectivoDelivery})` : total.toFixed(2),
                     items: orderItemsForWa,
                     orderId: pedidoId.toString()
                 }).catch(err => {
@@ -685,12 +706,16 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             cucuruApiKey: RestauranteTable.cucuruApiKey,
             cucuruCollectorId: RestauranteTable.cucuruCollectorId,
             cucuruConfigurado: RestauranteTable.cucuruConfigurado,
+            cucuruEnabled: RestauranteTable.cucuruEnabled,
+            transferenciaAlias: RestauranteTable.transferenciaAlias,
             proveedorPago: RestauranteTable.proveedorPago,
             taloApiKey: RestauranteTable.taloApiKey,
             taloUserId: RestauranteTable.taloUserId,
             username: RestauranteTable.username,
             id: RestauranteTable.id,
             mpConnected: RestauranteTable.mpConnected,
+            mpPublicKey: RestauranteTable.mpPublicKey,
+            cardsPaymentsEnabled: RestauranteTable.cardsPaymentsEnabled,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
         const sistemaPuntosActivo = false; // sistemaPuntos comentado en schema
 
@@ -761,8 +786,23 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             codigoDescuentoIdFinalTk = codigoDescuentoId
         }
 
-        // CRÍTICO: Cuando cucuruConfigurado o proveedorPago=talo, asumir transferencia si no se especificó
-        const metodoPagoEfectivo = metodoPago || (resRestaurante[0]?.cucuruConfigurado || resRestaurante[0]?.proveedorPago === 'talo' ? 'transferencia' : null)
+        const rTk = resRestaurante[0]!
+        const transferAutoTk = !!(rTk.cucuruConfigurado || rTk.proveedorPago === 'talo')
+        const teTk = rTk.cucuruEnabled !== false
+        const aliasOkTk = !!(rTk.transferenciaAlias && String(rTk.transferenciaAlias).trim())
+        const transferAllowedTk = teTk && (transferAutoTk || aliasOkTk)
+        const cardAllowedTk = !!(rTk.mpConnected && rTk.mpPublicKey && rTk.cardsPaymentsEnabled !== false)
+
+        let metodoPagoEfectivo = metodoPago ?? null
+        if (!metodoPagoEfectivo && transferAutoTk && transferAllowedTk) {
+            metodoPagoEfectivo = 'transferencia'
+        }
+        if (metodoPagoEfectivo === 'mercadopago' && !cardAllowedTk) {
+            return c.json({ message: 'Pago con tarjeta no disponible', success: false }, 400)
+        }
+        if (metodoPagoEfectivo === 'transferencia' && !transferAllowedTk) {
+            return c.json({ message: 'Transferencia no disponible', success: false }, 400)
+        }
 
         const nuevoPedido = await db.insert(PedidoUnificadoTable).values({
             restauranteId,
@@ -832,8 +872,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         }
 
         const waitToPay =
-            (metodoPagoEfectivo === 'transferencia' && (resRestaurante[0]?.cucuruConfigurado || resRestaurante[0]?.proveedorPago === 'talo')) ||
-            (metodoPagoEfectivo === 'mercadopago' && !!resRestaurante[0]?.mpConnected);
+            (metodoPagoEfectivo === 'transferencia' && transferAutoTk) ||
+            (metodoPagoEfectivo === 'mercadopago' && cardAllowedTk);
         try {
             const restaurante = await db.select({
                 whatsappEnabled: RestauranteTable.whatsappEnabled,
@@ -854,7 +894,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                     phone: restaurante[0].whatsappNumber,
                     customerName: nombreCliente || 'Cliente no especificado',
                     address: 'Retira en local (Take Away)',
-                    total: metodoPago ? `${total.toFixed(2)} (${metodoPago})` : total.toFixed(2),
+                    total: metodoPagoEfectivo ? `${total.toFixed(2)} (${metodoPagoEfectivo})` : total.toFixed(2),
                     items: orderItemsForWa,
                     orderId: pedidoId.toString()
                 }).catch(err => {
