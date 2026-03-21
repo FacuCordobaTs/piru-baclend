@@ -143,7 +143,11 @@ export function buildMetodosPublicosList(r: RestaurantePagoRow): MetodoPublicoOp
   const out: MetodoPublicoOption[] = []
 
   if (cfg.mercadopagoCheckout) {
-    out.push({ id: METODO_PAGO.MERCADOPAGO_CHECKOUT, label: 'Tarjeta (Checkout)', automatico: true })
+    out.push({
+      id: METODO_PAGO.MERCADOPAGO_CHECKOUT,
+      label: 'Mercado Pago Checkout (redirección)',
+      automatico: true,
+    })
   }
   if (cfg.mercadopagoBricks) {
     out.push({ id: METODO_PAGO.MERCADOPAGO_BRICKS, label: 'Tarjeta (Bricks)', automatico: true })
