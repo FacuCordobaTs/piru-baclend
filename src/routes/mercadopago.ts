@@ -632,7 +632,7 @@ mercadopagoRoute.post('/process-brick', async (c) => {
 
     if (paymentData.status === 'approved') {
       await db.update(PedidoUnificadoTable)
-        .set({ pagado: true, metodoPago: 'mercadopago' })
+        .set({ pagado: true, metodoPago: 'mercadopago_bricks' })
         .where(pedidoWhere)
 
       await db.insert(PagoTable).values({
@@ -879,8 +879,10 @@ mercadopagoRoute.post('/webhook', async (c) => {
         return c.json({ status: 'already_processed' })
       }
 
+      const mpMetodo =
+        pedidoData.metodoPago === 'mercadopago_bricks' ? 'mercadopago_bricks' : 'mercadopago_checkout'
       await db.update(PedidoUnificadoTable)
-        .set({ pagado: true, metodoPago: 'mercadopago' })
+        .set({ pagado: true, metodoPago: mpMetodo })
         .where(pedidoWhere)
 
       const montoStr = String(transactionAmount ?? pedidoData.total)

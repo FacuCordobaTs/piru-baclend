@@ -42,8 +42,13 @@ export const restaurante = mysqlTable("restaurante", {
 
   whatsappEnabled: boolean("whatsapp_enabled").default(false).notNull(),
   whatsappNumber: varchar("whatsapp_number", { length: 50 }),
+  /** WhatsApp al que los clientes envían comprobantes (transferencia manual); independiente de la API de notificaciones al local. */
+  comprobantesWhatsapp: varchar("comprobantes_whatsapp", { length: 50 }),
 
   transferenciaAlias: varchar("transferencia_alias", { length: 255 }),
+
+  /** Overrides for enabled payment methods; merged in app with legacy columns (see resolveMetodosPagoConfig). */
+  metodosPagoConfig: json("metodos_pago_config"),
   
   colorPrimario: varchar("color_primario", { length: 50 }),
   colorSecundario: varchar("color_secundario", { length: 50 }),
@@ -111,7 +116,8 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   // Totales y Pagos
   total: decimal("total", { precision: 10, scale: 2 }).default("0.00").notNull(),
   pagado: boolean("pagado").default(false).notNull(),
-  metodoPago: varchar("metodo_pago", { length: 50 }),
+  /** Canonical: mercadopago_checkout, mercadopago_bricks, transferencia_automatica_*, manual_transfer, cash; legacy: mercadopago, transferencia, efectivo */
+  metodoPago: varchar("metodo_pago", { length: 64 }),
   
   // Datos exclusivos de Delivery (pueden ser nulos si es takeaway)
   direccion: varchar("direccion", { length: 255 }),
@@ -383,7 +389,8 @@ export const pedido = mysqlTable("pedido", {
   ]).default("pending"),
   total: decimal("total", { precision: 10, scale: 2 }).default("0.00"),
   pagado: boolean("pagado").default(false).notNull(),
-  metodoPago: varchar("metodo_pago", { length: 50 }),
+  /** Canonical: mercadopago_checkout, mercadopago_bricks, transferencia_automatica_*, manual_transfer, cash; legacy: mercadopago, transferencia, efectivo */
+  metodoPago: varchar("metodo_pago", { length: 64 }),
   impreso: boolean("impreso").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   closedAt: timestamp("closed_at"),
@@ -442,6 +449,7 @@ export const notificacion = mysqlTable("notificacion", {
     .notNull(),
   tipo: mysqlEnum("tipo", [
     "NUEVO_PEDIDO",
+    "NUEVO_PEDIDO_PENDIENTE_PAGO",
     "PEDIDO_CONFIRMADO",
     "PEDIDO_CERRADO",
     "LLAMADA_MOZO",
@@ -479,7 +487,8 @@ export const pedidoDelivery = mysqlTable("pedido_delivery", {
   ]).default("pending"),
   total: decimal("total", { precision: 10, scale: 2 }).default("0.00"),
   pagado: boolean("pagado").default(false).notNull(),
-  metodoPago: varchar("metodo_pago", { length: 50 }),
+  /** Canonical: mercadopago_checkout, mercadopago_bricks, transferencia_automatica_*, manual_transfer, cash; legacy: mercadopago, transferencia, efectivo */
+  metodoPago: varchar("metodo_pago", { length: 64 }),
   notas: varchar("notas", { length: 500 }),
   puntosGanados: int("puntos_ganados").default(0),
   puntosUsados: int("puntos_usados").default(0),
@@ -527,7 +536,8 @@ export const pedidoTakeaway = mysqlTable("pedido_takeaway", {
   ]).default("pending"),
   total: decimal("total", { precision: 10, scale: 2 }).default("0.00"),
   pagado: boolean("pagado").default(false).notNull(),
-  metodoPago: varchar("metodo_pago", { length: 50 }),
+  /** Canonical: mercadopago_checkout, mercadopago_bricks, transferencia_automatica_*, manual_transfer, cash; legacy: mercadopago, transferencia, efectivo */
+  metodoPago: varchar("metodo_pago", { length: 64 }),
   notas: varchar("notas", { length: 500 }),
   puntosGanados: int("puntos_ganados").default(0),
   puntosUsados: int("puntos_usados").default(0),

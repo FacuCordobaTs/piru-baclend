@@ -11,10 +11,11 @@ import {
 } from '../db/schema'
 import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
-import { eq, desc, and, inArray, not } from 'drizzle-orm'
+import { eq, desc, and, inArray } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { wsManager } from '../websocket/manager'
+import { rowToPagoRow, restauranteOcultaPedidosNoPagados, resolveMetodosPagoConfig } from '../lib/metodos-pago'
 
 const createDeliverySchema = z.object({
   tipo: z.literal('delivery'),
@@ -92,7 +93,18 @@ const pedidoUnificadoRoute = new Hono()
     const offset = (page - 1) * limit
 
     const restaurante = await db
-      .select({ cucuruConfigurado: RestauranteTable.cucuruConfigurado })
+      .select({
+        metodosPagoConfig: RestauranteTable.metodosPagoConfig,
+        cardsPaymentsEnabled: RestauranteTable.cardsPaymentsEnabled,
+        mpConnected: RestauranteTable.mpConnected,
+        mpPublicKey: RestauranteTable.mpPublicKey,
+        cucuruConfigurado: RestauranteTable.cucuruConfigurado,
+        cucuruEnabled: RestauranteTable.cucuruEnabled,
+        proveedorPago: RestauranteTable.proveedorPago,
+        taloApiKey: RestauranteTable.taloApiKey,
+        taloUserId: RestauranteTable.taloUserId,
+        transferenciaAlias: RestauranteTable.transferenciaAlias,
+      })
       .from(RestauranteTable)
       .where(eq(RestauranteTable.id, restauranteId))
       .limit(1)
@@ -101,22 +113,11 @@ const pedidoUnificadoRoute = new Hono()
     if (tipo && tipo !== 'all') {
       whereCondition = and(whereCondition, eq(PedidoUnificadoTable.tipo, tipo))
     }
-    // Tarjeta (MP): no mostrar hasta que el pago esté acreditado (webhook marca pagado)
-    whereCondition = and(
-      whereCondition,
-      not(and(
-        eq(PedidoUnificadoTable.pagado, false),
-        eq(PedidoUnificadoTable.metodoPago, 'mercadopago')
-      )!)
-    )
-    if (restaurante.length > 0 && restaurante[0].cucuruConfigurado) {
-      whereCondition = and(
-        whereCondition,
-        not(and(
-          eq(PedidoUnificadoTable.pagado, false),
-          eq(PedidoUnificadoTable.metodoPago, 'transferencia')
-        )!)
-      )
+    if (
+      restaurante.length > 0 &&
+      restauranteOcultaPedidosNoPagados(resolveMetodosPagoConfig(rowToPagoRow(restaurante[0])))
+    ) {
+      whereCondition = and(whereCondition, eq(PedidoUnificadoTable.pagado, true))
     }
     if (estado) {
       whereCondition = and(whereCondition, eq(PedidoUnificadoTable.estado, estado as any))
@@ -342,7 +343,7 @@ const pedidoUnificadoRoute = new Hono()
     return c.json({ message: 'Estado actualizado correctamente', success: true }, 200)
   })
 
-  // Marcar/desmarcar pagado
+  // Marcar/desmarcar pagado (admin verifica pago manual → dispara impresión vía cliente)
   .put('/:id/pagado', async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
@@ -362,8 +363,13 @@ const pedidoUnificadoRoute = new Hono()
     }
 
     const body = await c.req.json().catch(() => ({}))
-    const metodoPagoStr = body.metodoPago || null
-    const newPagado = !pedido[0].pagado
+    const explicitPagado = body.pagado
+    const newPagado =
+      typeof explicitPagado === 'boolean' ? explicitPagado : !pedido[0].pagado
+    const metodoPagoStr =
+      body.metodoPago != null && body.metodoPago !== ''
+        ? String(body.metodoPago)
+        : pedido[0].metodoPago
 
     await db
       .update(PedidoUnificadoTable)
@@ -372,6 +378,12 @@ const pedidoUnificadoRoute = new Hono()
         metodoPago: newPagado ? metodoPagoStr : null,
       })
       .where(eq(PedidoUnificadoTable.id, pedidoId))
+
+    const tipo = pedido[0].tipo
+    const becamePaid = newPagado && !pedido[0].pagado
+    if (becamePaid) {
+      wsManager.broadcastAdminUpdate(restauranteId, tipo)
+    }
 
     return c.json({
       message: newPagado ? 'Pedido marcado como pagado' : 'Pedido marcado como no pagado',

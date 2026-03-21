@@ -9,6 +9,7 @@ import { eq, and } from 'drizzle-orm'
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3"
 import UUID = require("uuid-js")
 import { configurarWebhookCliente } from '../services/cucuru'
+import { resolveMetodosPagoConfig, type MetodosPagoConfig } from '../lib/metodos-pago'
 
 // Configuración de R2
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID
@@ -103,6 +104,7 @@ const updateProfileSchema = z.object({
   deliveryFee: z.string().optional(),
   whatsappEnabled: z.boolean().optional(),
   whatsappNumber: z.string().optional(),
+  comprobantesWhatsapp: z.string().nullable().optional(),
   transferenciaAlias: z.string().optional(),
   colorPrimario: z.string().optional(),
   colorSecundario: z.string().optional(),
@@ -198,7 +200,7 @@ restauranteRoute.post('/complete-profile', zValidator('json', completeProfileSch
 restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre, direccion, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, transferenciaAlias, colorPrimario, colorSecundario, disenoAlternativo } = c.req.valid('json')
+  const { nombre, direccion, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, comprobantesWhatsapp, transferenciaAlias, colorPrimario, colorSecundario, disenoAlternativo } = c.req.valid('json')
 
   try {
     // Obtener datos actuales del restaurante
@@ -220,6 +222,10 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
     if (deliveryFee !== undefined) updateData.deliveryFee = deliveryFee
     if (whatsappEnabled !== undefined) updateData.whatsappEnabled = whatsappEnabled
     if (whatsappNumber !== undefined) updateData.whatsappNumber = whatsappNumber
+    if (comprobantesWhatsapp !== undefined) {
+      const v = comprobantesWhatsapp === null || comprobantesWhatsapp === '' ? null : comprobantesWhatsapp
+      updateData.comprobantesWhatsapp = v
+    }
     if (transferenciaAlias !== undefined) updateData.transferenciaAlias = transferenciaAlias
     if (colorPrimario !== undefined) updateData.colorPrimario = colorPrimario
     if (colorSecundario !== undefined) updateData.colorSecundario = colorSecundario
@@ -694,6 +700,69 @@ restauranteRoute.put('/pasarela-pago', zValidator('json', updatePasarelaPagoSche
   } catch (error) {
     console.error('Error actualizando pasarela de pago:', error)
     return c.json({ message: 'Error al actualizar pasarela de pago', error: (error as Error).message, success: false }, 500)
+  }
+})
+
+const updateMetodosPagoSchema = z.object({
+  mercadopagoCheckout: z.boolean().optional(),
+  mercadopagoBricks: z.boolean().optional(),
+  transferenciaAutomatica: z.boolean().optional(),
+  transferenciaManual: z.boolean().optional(),
+  efectivo: z.boolean().optional(),
+  transferenciaAlias: z.string().optional(),
+})
+
+restauranteRoute.put('/metodos-pago', zValidator('json', updateMetodosPagoSchema), async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const body = c.req.valid('json')
+
+  try {
+    const [current] = await db
+      .select()
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
+
+    if (!current) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    const base = resolveMetodosPagoConfig(current as any)
+    const next: MetodosPagoConfig = { ...base }
+    if (body.mercadopagoCheckout !== undefined) next.mercadopagoCheckout = body.mercadopagoCheckout
+    if (body.mercadopagoBricks !== undefined) next.mercadopagoBricks = body.mercadopagoBricks
+    if (body.transferenciaAutomatica !== undefined) next.transferenciaAutomatica = body.transferenciaAutomatica
+    if (body.transferenciaManual !== undefined) next.transferenciaManual = body.transferenciaManual
+    if (body.efectivo !== undefined) next.efectivo = body.efectivo
+
+    const updatePayload: Record<string, unknown> = { metodosPagoConfig: next }
+    if (body.transferenciaAlias !== undefined) {
+      updatePayload.transferenciaAlias = body.transferenciaAlias.trim() || null
+    }
+
+    await db
+      .update(RestauranteTable)
+      .set(updatePayload as any)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    const [updated] = await db
+      .select({
+        metodosPagoConfig: RestauranteTable.metodosPagoConfig,
+        transferenciaAlias: RestauranteTable.transferenciaAlias,
+      })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
+
+    return c.json({
+      message: 'Métodos de pago actualizados',
+      success: true,
+      data: updated,
+    }, 200)
+  } catch (error) {
+    console.error('Error actualizando métodos de pago:', error)
+    return c.json({ message: 'Error al guardar métodos de pago', error: (error as Error).message, success: false }, 500)
   }
 })
 

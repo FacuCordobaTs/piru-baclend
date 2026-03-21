@@ -91,6 +91,7 @@ export interface MesaSession {
 // Admin notification types (debe coincidir con el enum en schema.ts)
 export type AdminNotificationType =
   | 'NUEVO_PEDIDO'
+  | 'NUEVO_PEDIDO_PENDIENTE_PAGO'
   | 'PEDIDO_CONFIRMADO'
   | 'PEDIDO_CERRADO'
   | 'LLAMADA_MOZO'

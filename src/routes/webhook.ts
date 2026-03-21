@@ -165,7 +165,7 @@ const cucuruWebhookHandler = async (c: any) => {
 
       await db.update(PedidoUnificadoTable).set({
         pagado: true,
-        metodoPago: 'transferencia'
+        metodoPago: 'transferencia_automatica_cucuru'
       }).where(eq(PedidoUnificadoTable.id, pedido.id));
 
       await db.insert(PagoTable).values({
@@ -413,10 +413,10 @@ webhookRoute.post('/talo', async (c) => {
         return;
       }
 
-      console.log('[Talo Webhook] Actualizando pedido pagado=true, metodoPago=transferencia...');
+      console.log('[Talo Webhook] Actualizando pedido pagado=true, metodoPago=transferencia_automatica_talo...');
       await db
         .update(PedidoUnificadoTable)
-        .set({ pagado: true, metodoPago: 'transferencia' })
+        .set({ pagado: true, metodoPago: 'transferencia_automatica_talo' })
         .where(eq(PedidoUnificadoTable.id, pedido.id));
 
       await db.insert(PagoTable).values({

@@ -89,7 +89,7 @@ class WebSocketManager {
       await this.db.insert(NotificacionTable).values({
         id: notification.id,
         restauranteId,
-        tipo: notification.tipo as 'NUEVO_PEDIDO' | 'PEDIDO_CONFIRMADO' | 'PEDIDO_CERRADO' | 'LLAMADA_MOZO' | 'PAGO_RECIBIDO' | 'PRODUCTO_AGREGADO',
+        tipo: notification.tipo as 'NUEVO_PEDIDO' | 'NUEVO_PEDIDO_PENDIENTE_PAGO' | 'PEDIDO_CONFIRMADO' | 'PEDIDO_CERRADO' | 'LLAMADA_MOZO' | 'PAGO_RECIBIDO' | 'PRODUCTO_AGREGADO',
         mesaId: notification.mesaId === 0 ? null : notification.mesaId,
         mesaNombre: notification.mesaNombre,
         pedidoId: notification.pedidoId,
