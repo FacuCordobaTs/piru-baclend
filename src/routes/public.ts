@@ -42,7 +42,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             transferenciaAlias: RestauranteTable.transferenciaAlias,
             proveedorPago: RestauranteTable.proveedorPago,
             metodosPagoConfig: RestauranteTable.metodosPagoConfig,
-            taloCredencialesOk: sql<boolean>`(${RestauranteTable.taloApiKey} IS NOT NULL AND ${RestauranteTable.taloUserId} IS NOT NULL)`.as('taloCredencialesOk'),
+            taloCredencialesOk: sql<boolean>`(${RestauranteTable.taloClientId} IS NOT NULL AND ${RestauranteTable.taloClientSecret} IS NOT NULL AND ${RestauranteTable.taloUserId} IS NOT NULL)`.as('taloCredencialesOk'),
             colorPrimario: RestauranteTable.colorPrimario,
             colorSecundario: RestauranteTable.colorSecundario,
             disenoAlternativo: RestauranteTable.disenoAlternativo,
@@ -68,7 +68,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
             cucuruConfigurado: r0.cucuruConfigurado,
             cucuruEnabled: r0.cucuruEnabled,
             proveedorPago: r0.proveedorPago,
-            taloApiKey: r0.taloCredencialesOk ? 'x' : null,
+            taloClientId: r0.taloCredencialesOk ? 'x' : null,
+            taloClientSecret: r0.taloCredencialesOk ? 'x' : null,
             taloUserId: r0.taloCredencialesOk ? 'x' : null,
             transferenciaAlias: r0.transferenciaAlias,
         })
@@ -398,7 +399,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             cucuruEnabled: RestauranteTable.cucuruEnabled,
             transferenciaAlias: RestauranteTable.transferenciaAlias,
             proveedorPago: RestauranteTable.proveedorPago,
-            taloApiKey: RestauranteTable.taloApiKey,
+            taloClientId: RestauranteTable.taloClientId,
+            taloClientSecret: RestauranteTable.taloClientSecret,
             taloUserId: RestauranteTable.taloUserId,
             username: RestauranteTable.username,
             id: RestauranteTable.id,
@@ -554,13 +556,14 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         let cuentaCucuru = null;
         let cuentaTalo: { cvu: string; alias: string } | null = null;
         const provDel = proveedorTransferenciaDinamica(metodoPagoEfectivoDelivery, pagoRowDel)
-        if (provDel === 'talo' && resRestaurante[0]?.taloApiKey && resRestaurante[0]?.taloUserId) {
+        if (provDel === 'talo' && resRestaurante[0]?.taloClientId && resRestaurante[0]?.taloClientSecret && resRestaurante[0]?.taloUserId) {
             try {
                 const taloRes = await crearPagoTalo({
                     restauranteId,
                     total,
                     pedidoId: pedidoId.toString(),
-                    api_key: resRestaurante[0].taloApiKey,
+                    talo_client_id: resRestaurante[0].taloClientId,
+                    talo_client_secret: resRestaurante[0].taloClientSecret,
                     talo_user_id: resRestaurante[0].taloUserId,
                 });
                 cuentaTalo = { cvu: taloRes.cvu, alias: taloRes.alias };
@@ -735,7 +738,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             cucuruEnabled: RestauranteTable.cucuruEnabled,
             transferenciaAlias: RestauranteTable.transferenciaAlias,
             proveedorPago: RestauranteTable.proveedorPago,
-            taloApiKey: RestauranteTable.taloApiKey,
+            taloClientId: RestauranteTable.taloClientId,
+            taloClientSecret: RestauranteTable.taloClientSecret,
             taloUserId: RestauranteTable.taloUserId,
             username: RestauranteTable.username,
             id: RestauranteTable.id,
@@ -858,13 +862,14 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         let cuentaCucuru = null;
         let cuentaTalo: { cvu: string; alias: string } | null = null;
         const provTk = proveedorTransferenciaDinamica(metodoPagoEfectivo, pagoRowTk)
-        if (provTk === 'talo' && resRestaurante[0]?.taloApiKey && resRestaurante[0]?.taloUserId) {
+        if (provTk === 'talo' && resRestaurante[0]?.taloClientId && resRestaurante[0]?.taloClientSecret && resRestaurante[0]?.taloUserId) {
             try {
                 const taloRes = await crearPagoTalo({
                     restauranteId,
                     total,
                     pedidoId: pedidoId.toString(),
-                    api_key: resRestaurante[0].taloApiKey,
+                    talo_client_id: resRestaurante[0].taloClientId,
+                    talo_client_secret: resRestaurante[0].taloClientSecret,
                     talo_user_id: resRestaurante[0].taloUserId,
                 });
                 cuentaTalo = { cvu: taloRes.cvu, alias: taloRes.alias };

@@ -5,11 +5,53 @@ const TALO_API_BASE =
 
 const WEBHOOK_BASE = process.env.API_PUBLIC_URL || 'https://api.piru.app';
 
+// Caché en memoria para tokens JWT de Talo (expiran cada 1h, renovamos a los 50min)
+const tokenCache = new Map<string, { token: string; expiresAt: number }>();
+
+/**
+ * Obtiene un token JWT de Talo, usando caché en memoria.
+ * Si el token cacheado sigue vigente (< 50min), lo retorna directamente.
+ */
+async function obtenerTokenTalo(
+  userId: string,
+  clientId: string,
+  clientSecret: string
+): Promise<string> {
+  const cached = tokenCache.get(userId);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.token;
+  }
+
+  console.log('[Talo] obtenerTokenTalo: solicitando nuevo token para userId:', userId);
+
+  const response = await fetch(`${TALO_API_BASE}/users/${userId}/tokens`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    console.error('[Talo] Error al obtener token:', response.status, errorBody);
+    throw new Error(`Talo Auth Error: ${response.status} - ${errorBody}`);
+  }
+
+  const json = (await response.json()) as { data: { token: string } };
+  const token = json.data.token;
+
+  // Cachear por 50 minutos (tokens duran 60min)
+  tokenCache.set(userId, { token, expiresAt: Date.now() + 50 * 60 * 1000 });
+  console.log('[Talo] obtenerTokenTalo: token obtenido y cacheado para userId:', userId);
+
+  return token;
+}
+
 export interface CrearPagoTaloParams {
   restauranteId: number;
   total: number;
   pedidoId: string;
-  api_key: string;
+  talo_client_id: string;
+  talo_client_secret: string;
   talo_user_id: string;
 }
 
@@ -37,11 +79,7 @@ interface ConsultarPagoTaloResponse {
   };
 }
 
-const normalizeApiKey = (key: string) => {
-  // Algunas veces la key en DB puede venir con espacios o prefijo "Bearer ".
-  const trimmed = key.trim();
-  return trimmed.replace(/^Bearer\s+/i, '');
-};
+
 
 const maskSecret = (key: string) => {
   const k = key.trim();
@@ -57,8 +95,8 @@ const maskSecret = (key: string) => {
 export async function crearPagoTalo(
   params: CrearPagoTaloParams
 ): Promise<{ cvu: string; alias: string; paymentId: string }> {
-  const { total, pedidoId, api_key, talo_user_id } = params;
-  const normalizedApiKey = normalizeApiKey(api_key);
+  const { total, pedidoId, talo_client_id, talo_client_secret, talo_user_id } = params;
+  const jwtToken = await obtenerTokenTalo(talo_user_id, talo_client_id, talo_client_secret);
   const webhookUrl = `${WEBHOOK_BASE}/api/webhook/talo`;
 
   console.log('[Talo] crearPagoTalo INICIO:', {
@@ -67,8 +105,6 @@ export async function crearPagoTalo(
     talo_user_id,
     webhookUrl,
     apiBase: TALO_API_BASE,
-    apiKeyMasked: maskSecret(api_key),
-    apiKeyNormalizedMasked: maskSecret(normalizedApiKey),
   });
 
   try {
@@ -84,7 +120,7 @@ export async function crearPagoTalo(
     const response = await fetch(`${TALO_API_BASE}/payments/`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${normalizedApiKey}`,
+        Authorization: `Bearer ${jwtToken}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
@@ -130,21 +166,22 @@ export async function crearPagoTalo(
  */
 export async function consultarPagoTalo(
   paymentId: string,
-  api_key: string
+  taloUserId: string,
+  taloClientId: string,
+  taloClientSecret: string
 ): Promise<ConsultarPagoTaloResponse['data']> {
-  const normalizedApiKey = normalizeApiKey(api_key);
+  const jwtToken = await obtenerTokenTalo(taloUserId, taloClientId, taloClientSecret);
   console.log('[Talo] consultarPagoTalo INICIO:', {
     paymentId,
     apiBase: TALO_API_BASE,
-    apiKeyMasked: maskSecret(api_key),
-    apiKeyNormalizedMasked: maskSecret(normalizedApiKey),
+    taloUserId,
   });
 
   try {
     const response = await fetch(`${TALO_API_BASE}/payments/${paymentId}`, {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${normalizedApiKey}`,
+        Authorization: `Bearer ${jwtToken}`,
       },
     });
 

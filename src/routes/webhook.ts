@@ -375,31 +375,27 @@ webhookRoute.post('/talo', async (c) => {
       console.log('[Talo Webhook] Pedido encontrado:', { id: pedido.id, tipo: pedido.tipo, restauranteId, total: pedido.total });
 
       const restaurantes = await db
-        .select({ taloApiKey: RestauranteTable.taloApiKey })
+        .select({
+          taloClientId: RestauranteTable.taloClientId,
+          taloClientSecret: RestauranteTable.taloClientSecret,
+          taloUserId: RestauranteTable.taloUserId,
+        })
         .from(RestauranteTable)
         .where(eq(RestauranteTable.id, restauranteId))
         .limit(1);
 
-      if (restaurantes.length === 0 || !restaurantes[0].taloApiKey) {
-        console.error('[Talo Webhook] Restaurante sin taloApiKey para pedido #' + pedidoId, 'restauranteId=', restauranteId);
+      if (restaurantes.length === 0 || !restaurantes[0].taloClientId || !restaurantes[0].taloClientSecret || !restaurantes[0].taloUserId) {
+        console.error('[Talo Webhook] Restaurante sin credenciales Talo para pedido #' + pedidoId, 'restauranteId=', restauranteId);
         return;
       }
-      console.log('[Talo Webhook] Restaurante con taloApiKey OK. Llamando consultarPagoTalo...');
+      console.log('[Talo Webhook] Restaurante con credenciales Talo OK. Llamando consultarPagoTalo...');
 
-      const taloApiKeyRaw = String(restaurantes[0].taloApiKey ?? '');
-      const taloApiKeyMasked = (() => {
-        const k = taloApiKeyRaw.trim();
-        if (!k) return 'empty';
-        return `${k.slice(0, 4)}...${k.slice(-4)} (len=${k.length})`;
-      })();
-
-      console.log('[Talo Webhook] taloApiKey:', {
-        masked: taloApiKeyMasked,
-        length: taloApiKeyRaw.length,
-        hasWhitespace: /\s/.test(taloApiKeyRaw),
-      });
-
-      const taloData = await consultarPagoTalo(paymentId, taloApiKeyRaw);
+      const taloData = await consultarPagoTalo(
+        paymentId,
+        restaurantes[0].taloUserId,
+        restaurantes[0].taloClientId,
+        restaurantes[0].taloClientSecret
+      );
       console.log('[Talo Webhook] consultarPagoTalo retornó:', taloData);
 
       if (taloData.payment_status === 'OVERPAID' || taloData.payment_status === 'UNDERPAID') {

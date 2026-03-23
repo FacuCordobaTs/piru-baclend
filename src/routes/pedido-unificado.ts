@@ -101,7 +101,8 @@ const pedidoUnificadoRoute = new Hono()
         cucuruConfigurado: RestauranteTable.cucuruConfigurado,
         cucuruEnabled: RestauranteTable.cucuruEnabled,
         proveedorPago: RestauranteTable.proveedorPago,
-        taloApiKey: RestauranteTable.taloApiKey,
+        taloClientId: RestauranteTable.taloClientId,
+        taloClientSecret: RestauranteTable.taloClientSecret,
         taloUserId: RestauranteTable.taloUserId,
         transferenciaAlias: RestauranteTable.transferenciaAlias,
       })

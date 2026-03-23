@@ -43,7 +43,8 @@ export type RestaurantePagoRow = {
   cucuruConfigurado: boolean | null
   cucuruEnabled: boolean | null
   proveedorPago: 'cucuru' | 'talo' | 'mercadopago' | 'manual' | null
-  taloApiKey: string | null
+  taloClientId: string | null
+  taloClientSecret: string | null
   taloUserId: string | null
   transferenciaAlias: string | null
 }
@@ -56,7 +57,8 @@ export function rowToPagoRow(r: {
   cucuruConfigurado: boolean | null
   cucuruEnabled: boolean | null
   proveedorPago: 'cucuru' | 'talo' | 'mercadopago' | 'manual' | null
-  taloApiKey: string | null
+  taloClientId: string | null
+  taloClientSecret: string | null
   taloUserId: string | null
   transferenciaAlias: string | null
 }): RestaurantePagoRow {
@@ -68,7 +70,8 @@ export function rowToPagoRow(r: {
     cucuruConfigurado: r.cucuruConfigurado,
     cucuruEnabled: r.cucuruEnabled,
     proveedorPago: r.proveedorPago,
-    taloApiKey: r.taloApiKey,
+    taloClientId: r.taloClientId,
+    taloClientSecret: r.taloClientSecret,
     taloUserId: r.taloUserId,
     transferenciaAlias: r.transferenciaAlias,
   }
@@ -93,7 +96,7 @@ export function resolveMetodosPagoConfig(r: RestaurantePagoRow): MetodosPagoConf
   const mpOk = !!(r.mpConnected && r.mpPublicKey)
   const cardsOn = r.cardsPaymentsEnabled !== false
   const cucuruAuto = !!r.cucuruConfigurado && r.cucuruEnabled !== false
-  const taloAuto = r.proveedorPago === 'talo' && !!(r.taloApiKey && r.taloUserId)
+  const taloAuto = r.proveedorPago === 'talo' && !!(r.taloClientId && r.taloClientSecret && r.taloUserId)
   const autoTransferAvailable = cucuruAuto || taloAuto
   const aliasOk = !!(r.transferenciaAlias && String(r.transferenciaAlias).trim())
 
@@ -153,7 +156,7 @@ export function buildMetodosPublicosList(r: RestaurantePagoRow): MetodoPublicoOp
     out.push({ id: METODO_PAGO.MERCADOPAGO_BRICKS, label: 'Tarjeta (Bricks)', automatico: true })
   }
   if (cfg.transferenciaAutomatica) {
-    if (r.proveedorPago === 'talo' && r.taloApiKey && r.taloUserId) {
+    if (r.proveedorPago === 'talo' && r.taloClientId && r.taloClientSecret && r.taloUserId) {
       out.push({ id: METODO_PAGO.TRANSFERENCIA_AUTO_TALO, label: 'Transferencia (automática Talo)', automatico: true })
     } else if (r.cucuruConfigurado) {
       out.push({ id: METODO_PAGO.TRANSFERENCIA_AUTO_CUCURU, label: 'Transferencia (automática)', automatico: true })
@@ -228,7 +231,7 @@ export function resolverMetodoPagoPedido(
   if (raw === METODO_PAGO.TRANSFERENCIA_LEGACY || raw === 'transferencia') {
     const cfg = resolveMetodosPagoConfig(r)
     if (cfg.transferenciaAutomatica) {
-      if (r.proveedorPago === 'talo' && r.taloApiKey && r.taloUserId) {
+      if (r.proveedorPago === 'talo' && r.taloClientId && r.taloClientSecret && r.taloUserId) {
         normalized = METODO_PAGO.TRANSFERENCIA_AUTO_TALO
       } else {
         normalized = METODO_PAGO.TRANSFERENCIA_AUTO_CUCURU
@@ -256,7 +259,7 @@ export function proveedorTransferenciaDinamica(
   if (metodo === METODO_PAGO.TRANSFERENCIA_AUTO_TALO) return 'talo'
   if (metodo === METODO_PAGO.TRANSFERENCIA_AUTO_CUCURU) return 'cucuru'
   if (metodo === METODO_PAGO.TRANSFERENCIA_LEGACY) {
-    if (r.proveedorPago === 'talo' && r.taloApiKey && r.taloUserId) return 'talo'
+    if (r.proveedorPago === 'talo' && r.taloClientId && r.taloClientSecret && r.taloUserId) return 'talo'
     if (r.cucuruConfigurado) return 'cucuru'
   }
   return null

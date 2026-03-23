@@ -319,13 +319,18 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
   }
 })
 
+// ------ ENDPOINTS LEGACY (columnas eliminadas del schema) ------
+// Los siguientes toggles referencian columnas que ya no existen en la tabla restaurante:
+// esCarrito, splitPayment, itemTracking, soloCartaDigital, sistemaPuntos
+// Se comentan para eliminar errores de lint. Descomentar si se rehabilitan en el schema.
+
+/*
 // Toggle modo carrito
 restauranteRoute.put('/toggle-carrito', async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
 
   try {
-    // Obtener el estado actual
     const [restaurante] = await db.select({ esCarrito: RestauranteTable.esCarrito })
       .from(RestauranteTable)
       .where(eq(RestauranteTable.id, restauranteId))
@@ -334,7 +339,6 @@ restauranteRoute.put('/toggle-carrito', async (c) => {
       return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
     }
 
-    // Toggle
     const nuevoEstado = !restaurante.esCarrito
 
     await db.update(RestauranteTable)
@@ -361,7 +365,6 @@ restauranteRoute.put('/toggle-split-payment', async (c) => {
   const restauranteId = (c as any).user.id
 
   try {
-    // Obtener el estado actual
     const [restaurante] = await db.select({ splitPayment: RestauranteTable.splitPayment })
       .from(RestauranteTable)
       .where(eq(RestauranteTable.id, restauranteId))
@@ -370,7 +373,6 @@ restauranteRoute.put('/toggle-split-payment', async (c) => {
       return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
     }
 
-    // Toggle
     const nuevoEstado = !restaurante.splitPayment
 
     await db.update(RestauranteTable)
@@ -397,7 +399,6 @@ restauranteRoute.put('/toggle-item-tracking', async (c) => {
   const restauranteId = (c as any).user.id
 
   try {
-    // Obtener el estado actual
     const [restaurante] = await db.select({ itemTracking: RestauranteTable.itemTracking })
       .from(RestauranteTable)
       .where(eq(RestauranteTable.id, restauranteId))
@@ -406,7 +407,6 @@ restauranteRoute.put('/toggle-item-tracking', async (c) => {
       return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
     }
 
-    // Toggle
     const nuevoEstado = !restaurante.itemTracking
 
     await db.update(RestauranteTable)
@@ -433,7 +433,6 @@ restauranteRoute.put('/toggle-solo-carta-digital', async (c) => {
   const restauranteId = (c as any).user.id
 
   try {
-    // Obtener el estado actual
     const [restaurante] = await db.select({ soloCartaDigital: RestauranteTable.soloCartaDigital })
       .from(RestauranteTable)
       .where(eq(RestauranteTable.id, restauranteId))
@@ -442,7 +441,6 @@ restauranteRoute.put('/toggle-solo-carta-digital', async (c) => {
       return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
     }
 
-    // Toggle
     const nuevoEstado = !restaurante.soloCartaDigital
 
     await db.update(RestauranteTable)
@@ -469,7 +467,6 @@ restauranteRoute.put('/toggle-sistema-puntos', async (c) => {
   const restauranteId = (c as any).user.id
 
   try {
-    // Obtener el estado actual
     const [restaurante] = await db.select({ sistemaPuntos: RestauranteTable.sistemaPuntos })
       .from(RestauranteTable)
       .where(eq(RestauranteTable.id, restauranteId))
@@ -478,7 +475,6 @@ restauranteRoute.put('/toggle-sistema-puntos', async (c) => {
       return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
     }
 
-    // Toggle
     const nuevoEstado = !restaurante.sistemaPuntos
 
     await db.update(RestauranteTable)
@@ -498,6 +494,7 @@ restauranteRoute.put('/toggle-sistema-puntos', async (c) => {
     return c.json({ message: 'Error al cambiar sistema de puntos', error: (error as Error).message, success: false }, 500)
   }
 })
+*/
 
 // Toggle pedido entre amigos (order group)
 restauranteRoute.put('/toggle-order-group-enabled', async (c) => {
@@ -662,7 +659,8 @@ restauranteRoute.put('/toggle-diseno-alternativo', async (c) => {
 // Actualizar proveedor de pasarela de pago y credenciales Talo
 const updatePasarelaPagoSchema = z.object({
   proveedorPago: z.enum(['cucuru', 'talo', 'mercadopago', 'manual']).optional(),
-  taloApiKey: z.string().nullish(),
+  taloClientId: z.string().nullish(),
+  taloClientSecret: z.string().nullish(),
   taloUserId: z.string().nullish(),
 })
 
@@ -675,7 +673,8 @@ restauranteRoute.put('/pasarela-pago', zValidator('json', updatePasarelaPagoSche
     const updateData: { [key: string]: any } = {}
 
     if (body.proveedorPago !== undefined) updateData.proveedorPago = body.proveedorPago
-    if (body.taloApiKey !== undefined) updateData.taloApiKey = body.taloApiKey || null
+    if (body.taloClientId !== undefined) updateData.taloClientId = body.taloClientId || null
+    if (body.taloClientSecret !== undefined) updateData.taloClientSecret = body.taloClientSecret || null
     if (body.taloUserId !== undefined) updateData.taloUserId = body.taloUserId || null
 
     if (Object.keys(updateData).length === 0) {
@@ -688,7 +687,8 @@ restauranteRoute.put('/pasarela-pago', zValidator('json', updatePasarelaPagoSche
 
     const [updated] = await db.select({
       proveedorPago: RestauranteTable.proveedorPago,
-      taloApiKey: RestauranteTable.taloApiKey,
+      taloClientId: RestauranteTable.taloClientId,
+      taloClientSecret: RestauranteTable.taloClientSecret,
       taloUserId: RestauranteTable.taloUserId,
     }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
 
@@ -820,19 +820,21 @@ restauranteRoute.post('/reconfigurar-webhook-cucuru', authMiddleware, async (c) 
 
 // Configurar Talo (API Key y User ID)
 const configTaloSchema = z.object({
-  taloApiKey: z.string().min(1),
+  taloClientId: z.string().min(1),
+  taloClientSecret: z.string().min(1),
   taloUserId: z.string().min(1),
 })
 
 restauranteRoute.post('/configurar-talo', zValidator('json', configTaloSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { taloApiKey, taloUserId } = c.req.valid('json')
+  const { taloClientId, taloClientSecret, taloUserId } = c.req.valid('json')
 
   try {
     await db.update(RestauranteTable)
       .set({
-        taloApiKey: taloApiKey.trim(),
+        taloClientId: taloClientId.trim(),
+        taloClientSecret: taloClientSecret.trim(),
         taloUserId: taloUserId.trim(),
       })
       .where(eq(RestauranteTable.id, restauranteId))

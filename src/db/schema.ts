@@ -71,7 +71,8 @@ export const restaurante = mysqlTable("restaurante", {
     "mercadopago",
     "manual",
   ]).default("manual"),
-  taloApiKey: varchar("talo_api_key", { length: 1024 }),
+  taloClientId: varchar("talo_client_id", { length: 255 }),
+  taloClientSecret: varchar("talo_client_secret", { length: 255 }),
   taloUserId: varchar("talo_user_id", { length: 255 }),
   
 
