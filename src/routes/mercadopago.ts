@@ -203,301 +203,11 @@ mercadopagoRoute.get('/callback', async (c) => {
 })
 
 /**
- * Crear preferencia de pago para MercadoPago
- * Esta ruta crea un link de pago usando el access_token del restaurante
- * Soporta pago completo o split payment (pago por subtotales de clientes específicos)
- * También soporta pago de items individuales de Mozo mediante mozoItemIds
+ * Crear preferencia de pago (Checkout Pro) para pedidos unificados.
+ * Usa PedidoUnificadoTable. Sin split payment.
+ * El usuario ya se encuentra en la pantalla /:username/success cuando clickea pagar.
+ * MercadoPago lo redirige de vuelta a esa misma pantalla tras completar el pago.
  */
-mercadopagoRoute.post('/crear-preferencia', async (c) => {
-  const db = drizzle(pool)
-
-  try {
-    const body = await c.req.json()
-    const { pedidoId, qrToken, clientesAPagar, mozoItemIds } = body
-    // clientesAPagar: string[] - array de nombres de clientes cuyos subtotales se van a pagar
-    // mozoItemIds: number[] - array of item_pedido IDs for individual Mozo items
-    // Si ambos están vacíos, se paga el total del pedido
-
-    if (!pedidoId) {
-      return c.json({ success: false, error: 'pedidoId es requerido' }, 400)
-    }
-
-    const hasClientes = clientesAPagar && Array.isArray(clientesAPagar) && clientesAPagar.length > 0
-    const hasMozoItems = mozoItemIds && Array.isArray(mozoItemIds) && mozoItemIds.length > 0
-    const isSplitPayment = hasClientes || hasMozoItems
-
-    // Obtener el pedido con sus items
-    const pedido = await db.select()
-      .from(PedidoTable)
-      .where(eq(PedidoTable.id, pedidoId))
-      .limit(1)
-
-    if (!pedido || pedido.length === 0) {
-      return c.json({ success: false, error: 'Pedido no encontrado' }, 404)
-    }
-
-    const pedidoData = pedido[0]
-
-    // 2. Obtener el restaurante PRIMERO para saber si es carrito
-    const restaurante = await db.select()
-      .from(RestauranteTable)
-      .where(eq(RestauranteTable.id, pedidoData.restauranteId!))
-      .limit(1)
-
-    if (!restaurante || restaurante.length === 0) {
-      return c.json({ success: false, error: 'Restaurante no encontrado' }, 404)
-    }
-
-    const restauranteData = restaurante[0]
-
-    // 3. Validar estado del pedido según tipo de restaurante
-
-
-    if (!restauranteData.mpAccessToken || !restauranteData.mpConnected) {
-      return c.json({ success: false, error: 'Restaurante no configurado para pagos con MercadoPago' }, 400)
-    }
-
-    // Obtener token válido (intenta refrescar si expiró)
-    const tokenValido = await obtenerTokenValido(pedidoData.restauranteId!)
-    if (!tokenValido) {
-      return c.json({ success: false, error: 'El token de MercadoPago ha expirado. El restaurante debe reconectarse.' }, 401)
-    }
-
-    // Obtener items del pedido con nombres de productos y cliente
-    const items = await db
-      .select({
-        id: ItemPedidoTable.id,
-        productoId: ItemPedidoTable.productoId,
-        cantidad: ItemPedidoTable.cantidad,
-        precioUnitario: ItemPedidoTable.precioUnitario,
-        nombreProducto: ProductoTable.nombre,
-        clienteNombre: ItemPedidoTable.clienteNombre,
-      })
-      .from(ItemPedidoTable)
-      .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
-      .where(eq(ItemPedidoTable.pedidoId, pedidoId))
-
-    if (items.length === 0) {
-      return c.json({ success: false, error: 'El pedido no tiene items' }, 400)
-    }
-
-    // Build list of all clienteNombre keys to check (including Mozo:item:X format)
-    const allKeysToCheck: string[] = []
-
-    // Add regular client names (excluding "Mozo" since those are handled via mozoItemIds)
-    if (hasClientes) {
-      for (const cliente of clientesAPagar) {
-        if (cliente !== 'Mozo') {
-          allKeysToCheck.push(cliente)
-        }
-      }
-    }
-
-    // Add Mozo item keys
-    if (hasMozoItems) {
-      for (const itemId of mozoItemIds) {
-        allKeysToCheck.push(createMozoItemKey(itemId))
-      }
-    }
-
-    // Si es split payment, verificar que los clientes/items no estén ya pagados
-    if (isSplitPayment && allKeysToCheck.length > 0) {
-      const subtotalesExistentes = await db
-        .select()
-        .from(PagoSubtotalTable)
-        .where(and(
-          eq(PagoSubtotalTable.pedidoId, pedidoId),
-          inArray(PagoSubtotalTable.clienteNombre, allKeysToCheck),
-          eq(PagoSubtotalTable.estado, 'paid')
-        ))
-
-      if (subtotalesExistentes.length > 0) {
-        const clientesYaPagados = subtotalesExistentes.map(s => s.clienteNombre)
-        return c.json({
-          success: false,
-          error: `Los siguientes ya fueron pagados: ${clientesYaPagados.join(', ')}`,
-          clientesYaPagados
-        }, 400)
-      }
-
-      // También verificar si hay pagos pendientes para evitar duplicados
-      const subtotalesPendientes = await db
-        .select()
-        .from(PagoSubtotalTable)
-        .where(and(
-          eq(PagoSubtotalTable.pedidoId, pedidoId),
-          inArray(PagoSubtotalTable.clienteNombre, allKeysToCheck),
-          eq(PagoSubtotalTable.estado, 'pending')
-        ))
-
-      // Si hay pendientes, marcarlos como fallidos (se creará uno nuevo)
-      if (subtotalesPendientes.length > 0) {
-        for (const subtotal of subtotalesPendientes) {
-          await db.update(PagoSubtotalTable)
-            .set({ estado: 'failed' })
-            .where(eq(PagoSubtotalTable.id, subtotal.id))
-        }
-      }
-    }
-
-    // Filtrar items según si es split payment o pago total
-    let itemsAPagar = items
-
-    if (isSplitPayment) {
-      itemsAPagar = []
-
-      // Add items from selected clients (but not "Mozo" - those come via mozoItemIds)
-      if (hasClientes) {
-        const clienteItems = items.filter(item =>
-          clientesAPagar.includes(item.clienteNombre) && item.clienteNombre !== 'Mozo'
-        )
-        itemsAPagar.push(...clienteItems)
-      }
-
-      // Add specific Mozo items by ID
-      if (hasMozoItems) {
-        const mozoItemsToAdd = items.filter(item =>
-          item.clienteNombre === 'Mozo' && mozoItemIds.includes(item.id)
-        )
-        itemsAPagar.push(...mozoItemsToAdd)
-      }
-    }
-
-    if (itemsAPagar.length === 0) {
-      return c.json({ success: false, error: 'No hay items para pagar' }, 400)
-    }
-
-    // Construir items para MercadoPago
-    const mpItems = itemsAPagar.map(item => ({
-      title: isSplitPayment
-        ? `${item.nombreProducto || `Producto #${item.productoId}`} (${item.clienteNombre === 'Mozo' ? 'Mozo' : item.clienteNombre})`
-        : item.nombreProducto || `Producto #${item.productoId}`,
-      quantity: item.cantidad || 1,
-      currency_id: 'ARS',
-      unit_price: parseFloat(item.precioUnitario)
-    }))
-
-    // Calcular el total de este pago
-    const totalPago = itemsAPagar.reduce((sum, item) => {
-      return sum + (parseFloat(item.precioUnitario) * (item.cantidad || 1))
-    }, 0)
-
-    // URLs de retorno
-    const baseUrl = qrToken ? `https://my.piru.app/mesa/${qrToken}` : 'https://my.piru.app'
-
-    // Construir external_reference
-    // Format: piru-pedido-{id} for full payment
-    // Format: piru-pedido-{id}-split-{base64} for split payment
-    // The base64 encodes: { clients: string[], mozoItems: number[] }
-    let externalReference = `piru-pedido-${pedidoId}`
-    if (isSplitPayment) {
-      const splitData = {
-        clients: hasClientes ? clientesAPagar.filter((c: string) => c !== 'Mozo') : [],
-        mozoItems: hasMozoItems ? mozoItemIds : []
-      }
-      const splitBase64 = Buffer.from(JSON.stringify(splitData)).toString('base64')
-      externalReference = `piru-pedido-${pedidoId}-split-${splitBase64}`
-    }
-
-    // Crear preferencia usando el TOKEN DEL RESTAURANTE (validado/refrescado)
-    const mpResponse = await fetch('https://api.mercadopago.com/checkout/preferences', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${tokenValido}`
-      },
-      body: JSON.stringify({
-        items: mpItems,
-        marketplace_fee: marketplaceFeeFromAmount(totalPago),
-        back_urls: {
-          success: `https://my.piru.app/pedido-cerrado`,
-          failure: `${baseUrl}/pago-fallido?pedido_id=${pedidoId}`,
-          pending: `${baseUrl}/pago-pendiente?pedido_id=${pedidoId}`
-        },
-        auto_return: 'approved',
-        external_reference: externalReference,
-        notification_url: `https://api.piru.app/api/mp/webhook`,
-        statement_descriptor: 'PIRU',
-        expires: true,
-        expiration_date_to: new Date(Date.now() + 30 * 60 * 1000).toISOString(), // 30 minutos
-      })
-    })
-
-    const preference = await mpResponse.json()
-
-    if (!mpResponse.ok) {
-      console.error('❌ Error al crear preferencia de MP:', preference)
-      return c.json({ success: false, error: 'Error al crear preferencia de pago' }, 500)
-    }
-
-    console.log(`✅ Preferencia de pago creada: ${preference.id} para pedido ${pedidoId}${isSplitPayment ? ` (split)` : ''}`)
-
-    // Si es split payment, crear registros en pago_subtotal para cada cliente e item de Mozo
-    if (isSplitPayment) {
-      const registeredKeys: string[] = []
-
-      // Register regular clients (not Mozo)
-      if (hasClientes) {
-        const regularClients = clientesAPagar.filter((c: string) => c !== 'Mozo')
-        for (const cliente of regularClients) {
-          const itemsCliente = itemsAPagar.filter(item => item.clienteNombre === cliente)
-          const subtotal = itemsCliente.reduce((sum, item) => {
-            return sum + (parseFloat(item.precioUnitario) * (item.cantidad || 1))
-          }, 0)
-
-          if (subtotal > 0) {
-            await db.insert(PagoSubtotalTable).values({
-              pedidoId,
-              clienteNombre: cliente,
-              monto: subtotal.toFixed(2),
-              estado: 'pending',
-              metodo: 'mercadopago',
-              mpPreferenceId: preference.id
-            })
-            registeredKeys.push(cliente)
-          }
-        }
-      }
-
-      // Register individual Mozo items
-      if (hasMozoItems) {
-        for (const itemId of mozoItemIds) {
-          const item = itemsAPagar.find(i => i.id === itemId && i.clienteNombre === 'Mozo')
-          if (!item) continue
-
-          const subtotal = parseFloat(item.precioUnitario) * (item.cantidad || 1)
-          const mozoKey = createMozoItemKey(itemId)
-
-          await db.insert(PagoSubtotalTable).values({
-            pedidoId,
-            clienteNombre: mozoKey,
-            monto: subtotal.toFixed(2),
-            estado: 'pending',
-            metodo: 'mercadopago',
-            mpPreferenceId: preference.id
-          })
-          registeredKeys.push(mozoKey)
-        }
-      }
-
-      console.log(`📝 Registros de pago_subtotal creados: ${registeredKeys.join(', ')}`)
-    }
-
-    // Devolver el init_point (URL de pago)
-    return c.json({
-      success: true,
-      url_pago: preference.init_point,
-      preference_id: preference.id,
-      total: totalPago.toFixed(2),
-      isSplitPayment,
-      clientesPagando: isSplitPayment ? allKeysToCheck : null
-    })
-  } catch (error) {
-    console.error('❌ Error creando preferencia de pago:', error)
-    return c.json({ success: false, error: 'Error interno del servidor' }, 500)
-  }
-})
-
 mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
   const db = drizzle(pool)
   try {
@@ -506,14 +216,32 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
       return c.json({ success: false, error: 'pedidoId es requerido' }, 400)
     }
 
+    // 1. Obtener pedido unificado
     const rows = await db.select().from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.id, pedidoId)).limit(1)
     if (!rows.length) return c.json({ success: false, error: 'Pedido no encontrado' }, 404)
     const pedido = rows[0]
     const restauranteId = pedido.restauranteId!
     const total = parseFloat(String(pedido.total || '0'))
 
+    // 2. Obtener token MP válido
     const tokenValido = await obtenerTokenValido(restauranteId)
     if (!tokenValido) return c.json({ success: false, error: 'Restaurante MP error' }, 401)
+
+    // 3. Obtener username del restaurante para construir la URL de retorno
+    const restauranteRows = await db.select({ username: RestauranteTable.username })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
+
+    const username = restauranteRows[0]?.username || 'menu'
+
+    // 4. Construir URL de retorno: caso especial para Alfajor (id=6) con dominio propio
+    let successUrl: string
+    if (restauranteId === 6) {
+      successUrl = 'https://alfajorconpapas.com/success'
+    } else {
+      successUrl = `https://my.piru.app/${username}/success`
+    }
 
     const mpItems = [{
       title: `Pedido #${pedidoId}`,
@@ -522,7 +250,6 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
       unit_price: total
     }]
 
-    const baseUrl = 'https://my.piru.app'
     const externalReference = `piru-${pedidoId}`
 
     const mpResponse = await fetch('https://api.mercadopago.com/checkout/preferences', {
@@ -535,9 +262,9 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
         items: mpItems,
         marketplace_fee: marketplaceFeeFromAmount(total),
         back_urls: {
-          success: `${baseUrl}/success-delivery/${restauranteId}`, // User will see it processed
-          failure: `${baseUrl}/success-delivery/${restauranteId}`,
-          pending: `${baseUrl}/success-delivery/${restauranteId}`
+          success: successUrl,
+          failure: successUrl,
+          pending: successUrl
         },
         auto_return: 'approved',
         external_reference: externalReference,
@@ -549,7 +276,12 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
     })
 
     const preference = await mpResponse.json()
-    if (!mpResponse.ok) return c.json({ success: false, error: 'Error al crear preferencia' }, 500)
+    if (!mpResponse.ok) {
+      console.error('❌ Error al crear preferencia de MP:', preference)
+      return c.json({ success: false, error: 'Error al crear preferencia' }, 500)
+    }
+
+    console.log(`✅ Preferencia de pago creada: ${preference.id} para pedido ${pedidoId} → ${successUrl}`)
 
     return c.json({
       success: true,
@@ -559,6 +291,7 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
     })
 
   } catch (err) {
+    console.error('❌ Error creando preferencia de pago:', err)
     return c.json({ success: false, error: 'Server err' }, 500)
   }
 })
