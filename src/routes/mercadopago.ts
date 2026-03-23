@@ -227,20 +227,18 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
     const tokenValido = await obtenerTokenValido(restauranteId)
     if (!tokenValido) return c.json({ success: false, error: 'Restaurante MP error' }, 401)
 
-    // 3. Obtener username del restaurante para construir la URL de retorno
+    // 3. Obtener username del restaurante (todavía útil para fallback)
     const restauranteRows = await db.select({ username: RestauranteTable.username })
       .from(RestauranteTable)
       .where(eq(RestauranteTable.id, restauranteId))
       .limit(1)
 
-    const username = restauranteRows[0]?.username || 'menu'
-
-    // 4. Construir URL de retorno: caso especial para Alfajor (id=6) con dominio propio
+    // 4. Construir URL de retorno: /pedido/:id — caso especial para Alfajor (id=6) con dominio propio
     let successUrl: string
     if (restauranteId === 6) {
-      successUrl = 'https://alfajorconpapas.com/success'
+      successUrl = `https://alfajorconpapas.com/pedido/${pedidoId}`
     } else {
-      successUrl = `https://my.piru.app/${username}/success`
+      successUrl = `https://my.piru.app/pedido/${pedidoId}`
     }
 
     const mpItems = [{

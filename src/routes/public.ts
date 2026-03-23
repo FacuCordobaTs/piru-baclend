@@ -1178,4 +1178,97 @@ publicRoute.get('/pedido/:tipo/:id/status', async (c) => {
     }
 });
 
+/**
+ * Obtener información completa de un pedido unificado por ID.
+ * Endpoint público usado por la pantalla /pedido/:id (post-pago MP redirect).
+ * Devuelve: pedido + items + datos del restaurante necesarios para la UI.
+ */
+publicRoute.get('/pedido-info/:id', async (c) => {
+    const db = drizzle(pool)
+    const id = Number(c.req.param('id'))
+
+    if (!id || isNaN(id)) {
+        return c.json({ success: false, error: 'ID inválido' }, 400)
+    }
+
+    try {
+        // 1. Obtener pedido
+        const pedidos = await db.select().from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.id, id)).limit(1)
+        if (pedidos.length === 0) {
+            return c.json({ success: false, error: 'Pedido no encontrado' }, 404)
+        }
+        const pedido = pedidos[0]
+
+        // 2. Obtener items con nombres de producto
+        const items = await db
+            .select({
+                id: ItemPedidoUnificadoTable.id,
+                productoId: ItemPedidoUnificadoTable.productoId,
+                cantidad: ItemPedidoUnificadoTable.cantidad,
+                precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
+                ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos,
+                agregados: ItemPedidoUnificadoTable.agregados,
+                esCanjePuntos: ItemPedidoUnificadoTable.esCanjePuntos,
+                nombreProducto: ProductoTable.nombre,
+            })
+            .from(ItemPedidoUnificadoTable)
+            .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
+            .where(eq(ItemPedidoUnificadoTable.pedidoId, id))
+
+        // 3. Obtener datos del restaurante necesarios para la UI
+        const restaurantes = await db.select({
+            id: RestauranteTable.id,
+            nombre: RestauranteTable.nombre,
+            username: RestauranteTable.username,
+            direccion: RestauranteTable.direccion,
+            telefono: RestauranteTable.telefono,
+            deliveryFee: RestauranteTable.deliveryFee,
+            transferenciaAlias: RestauranteTable.transferenciaAlias,
+            mpConnected: RestauranteTable.mpConnected,
+            mpPublicKey: RestauranteTable.mpPublicKey,
+            colorPrimario: RestauranteTable.colorPrimario,
+            colorSecundario: RestauranteTable.colorSecundario,
+            comprobantesWhatsapp: RestauranteTable.comprobantesWhatsapp,
+        }).from(RestauranteTable).where(eq(RestauranteTable.id, pedido.restauranteId)).limit(1)
+
+        const restaurante = restaurantes[0] || null
+
+        return c.json({
+            success: true,
+            data: {
+                pedido: {
+                    id: pedido.id,
+                    tipo: pedido.tipo,
+                    estado: pedido.estado,
+                    total: pedido.total,
+                    pagado: pedido.pagado,
+                    metodoPago: pedido.metodoPago,
+                    nombreCliente: pedido.nombreCliente,
+                    telefono: pedido.telefono,
+                    direccion: pedido.direccion,
+                    notas: pedido.notas,
+                    montoDescuento: pedido.montoDescuento,
+                    rapiboyTrackingUrl: pedido.rapiboyTrackingUrl,
+                    createdAt: pedido.createdAt,
+                },
+                items: items.map(i => ({
+                    id: i.id,
+                    productoId: i.productoId,
+                    cantidad: i.cantidad,
+                    precio: i.precioUnitario,
+                    nombreProducto: i.nombreProducto,
+                    ingredientesExcluidos: i.ingredientesExcluidos,
+                    agregados: i.agregados,
+                    esCanjePuntos: i.esCanjePuntos,
+                })),
+                restaurante,
+            }
+        })
+    } catch (error) {
+        console.error('Error obteniendo info del pedido:', error)
+        return c.json({ success: false, error: 'Internal server error' }, 500)
+    }
+})
+
 export { publicRoute }
+
