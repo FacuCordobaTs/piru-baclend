@@ -870,6 +870,25 @@ restauranteRoute.post('/configurar-rapiboy', zValidator('json', configRapiboySch
   }
 })
 
+// Borrar Rapiboy (Token)
+restauranteRoute.post('/borrar-rapiboy', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    await db.update(RestauranteTable)
+      .set({
+        rapiboyToken: null
+      })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({ message: 'Credenciales de Rapiboy borradas exitosamente', success: true }, 200)
+  } catch (error) {
+    console.error('Error borrando Rapiboy:', error)
+    return c.json({ message: 'Error borrando Rapiboy', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 // GET horarios del restaurante autenticado
 restauranteRoute.get('/horarios', async (c) => {
   const db = drizzle(pool)
