@@ -21,14 +21,14 @@ export const restaurante = mysqlTable("restaurante", {
   imagenUrl: varchar("imagen_url", { length: 255 }),
   imagenLightUrl: varchar("imagen_light_url", { length: 255 }),
   username: varchar("username", { length: 255 }).unique(),
-  
+
   mpAccessToken: varchar("mp_access_token", { length: 512 }),
   mpPublicKey: varchar("mp_public_key", { length: 255 }),
   mpRefreshToken: varchar("mp_refresh_token", { length: 512 }),
   mpUserId: varchar("mp_user_id", { length: 50 }),
   mpConnected: boolean("mp_connected").default(false),
-  
-  
+
+
 
   deliveryFee: decimal("delivery_fee", { precision: 10, scale: 2 })
     .default("0.00")
@@ -49,7 +49,7 @@ export const restaurante = mysqlTable("restaurante", {
 
   /** Overrides for enabled payment methods; merged in app with legacy columns (see resolveMetodosPagoConfig). */
   metodosPagoConfig: json("metodos_pago_config"),
-  
+
   colorPrimario: varchar("color_primario", { length: 50 }),
   colorSecundario: varchar("color_secundario", { length: 50 }),
   disenoAlternativo: boolean("diseno_alternativo").default(false).notNull(),
@@ -60,7 +60,7 @@ export const restaurante = mysqlTable("restaurante", {
   rapiboyToken: varchar("rapiboy_token", { length: 512 }),
   rapiboyMode: mysqlEnum("rapiboy_mode", ["on_demand", "food"]),
 
-  
+
   createdAt: timestamp("created_at").defaultNow().notNull(),
 
   // ----- Agregar mas adelante cuando ya tenga talo configurado ------
@@ -74,13 +74,13 @@ export const restaurante = mysqlTable("restaurante", {
   taloClientId: varchar("talo_client_id", { length: 255 }),
   taloClientSecret: varchar("talo_client_secret", { length: 255 }),
   taloUserId: varchar("talo_user_id", { length: 255 }),
-  
 
+  notificarClientesWhatsapp: boolean("notificar_clientes_whatsapp").default(false),
 
 
 
   // ------ COLUMNAS A ELIMINAR ------
-  
+
   // sistemaPuntos: boolean("sistema_puntos").default(false).notNull(),
   // mercadoPagoPublicKey: varchar("mercado_pago_public_key", { length: 255 }),
   // mercadoPagoPrivateKey: varchar("mercado_pago_private_key", { length: 255 }),
@@ -94,10 +94,10 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
   clienteId: int("cliente_id").references(() => cliente.id), // Nullable si no se registró
-  
+
   // Discriminador principal
   tipo: mysqlEnum("tipo", ["delivery", "takeaway"]).notNull(),
-  
+
   // Datos comunes (compatible con delivery/takeaway legacy)
   estado: mysqlEnum("estado", [
     "pending",
@@ -113,28 +113,31 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   nombreCliente: varchar("nombre_cliente", { length: 255 }),
   telefono: varchar("telefono", { length: 50 }),
   notas: varchar("notas", { length: 500 }),
-  
+
   // Totales y Pagos
   total: decimal("total", { precision: 10, scale: 2 }).default("0.00").notNull(),
   pagado: boolean("pagado").default(false).notNull(),
   /** Canonical: mercadopago_checkout, mercadopago_bricks, transferencia_automatica_*, manual_transfer, cash; legacy: mercadopago, transferencia, efectivo */
   metodoPago: varchar("metodo_pago", { length: 64 }),
-  
+
   // Datos exclusivos de Delivery (pueden ser nulos si es takeaway)
   direccion: varchar("direccion", { length: 255 }),
   latitud: varchar("latitud", { length: 50 }),
   longitud: varchar("longitud", { length: 50 }),
   rapiboyTrackingUrl: varchar("rapiboy_tracking_url", { length: 512 }),
   rapiboyTripId: varchar("rapiboy_trip_id", { length: 100 }),
-  
+
   // Puntos y Descuentos
   codigoDescuentoId: int("codigo_descuento_id").references(() => codigoDescuento.id),
   montoDescuento: decimal("monto_descuento", { precision: 10, scale: 2 }).default("0.00"),
-  
+
   // Trazabilidad
   impreso: boolean("impreso").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   deliveredAt: timestamp("delivered_at"),
+
+  // ─── NUEVO: Notificar a whatsapp ─────────
+  notificarWhatsapp: boolean("notificar_whatsapp").default(false),
 });
 
 export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {

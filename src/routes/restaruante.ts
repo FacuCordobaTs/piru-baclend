@@ -527,6 +527,37 @@ restauranteRoute.put('/toggle-order-group-enabled', async (c) => {
   }
 })
 
+// Toggle habilitar/deshabilitar envio de whatsapp a clientes
+restauranteRoute.put('/toggle-notificar-clientes-whatsapp', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [restaurante] = await db.select({ notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!restaurante) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    const nuevoEstado = !restaurante.notificarClientesWhatsapp
+
+    await db.update(RestauranteTable)
+      .set({ notificarClientesWhatsapp: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({
+      message: nuevoEstado ? 'Notificaciones a clientes por WhatsApp activadas' : 'Notificaciones a clientes por WhatsApp desactivadas',
+      success: true,
+      notificarClientesWhatsapp: nuevoEstado
+    }, 200)
+  } catch (error) {
+    console.error('Error updating notificar clientes whatsapp enabled:', error)
+    return c.json({ message: 'Error al cambiar configuración', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 // Toggle habilitar/deshabilitar uso de códigos de descuento en checkout
 restauranteRoute.put('/toggle-codigo-descuento-enabled', async (c) => {
   const db = drizzle(pool)

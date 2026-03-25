@@ -6,7 +6,7 @@ import { eq, and, inArray } from 'drizzle-orm'
 import { authMiddleware } from '../middleware/auth'
 import { obtenerTokenValido, refrescarTokenRestaurante } from '../utils/mercadopago'
 import { wsManager } from '../websocket/manager'
-import { sendOrderWhatsApp } from '../services/whatsapp'
+import { sendOrderWhatsApp, sendClientPaymentConfirmedWhatsApp } from '../services/whatsapp'
 
 const MP_CLIENT_ID = process.env.MP_CLIENT_ID
 const MP_CLIENT_SECRET = process.env.MP_CLIENT_SECRET
@@ -394,7 +394,9 @@ mercadopagoRoute.post('/process-brick', async (c) => {
         const restaurante = await db.select({
           whatsappEnabled: RestauranteTable.whatsappEnabled,
           whatsappNumber: RestauranteTable.whatsappNumber,
-          deliveryFee: RestauranteTable.deliveryFee
+          deliveryFee: RestauranteTable.deliveryFee,
+          nombre: RestauranteTable.nombre,
+          notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp
         }).from(RestauranteTable).where(eq(RestauranteTable.id, pedido.restauranteId!)).limit(1)
 
         if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
@@ -424,6 +426,16 @@ mercadopagoRoute.post('/process-brick', async (c) => {
             items: orderItemsForWa,
             orderId: pedido.id.toString()
           }).catch(console.error)
+
+          if (pedido.notificarWhatsapp === true && restaurante[0].notificarClientesWhatsapp === true && pedido.telefono) {
+            sendClientPaymentConfirmedWhatsApp(c, {
+              phone: pedido.telefono,
+              customerName: pedido.nombreCliente || 'Cliente',
+              restaurantName: restaurante[0].nombre || 'El local',
+              total: pedido.total?.toString() || '0',
+              orderId: pedido.id.toString()
+            }).catch(console.error)
+          }
         }
       } catch (waErr) {
         console.error('Error enviando WhatsApp post-pago MP brick:', waErr)
@@ -654,7 +666,9 @@ mercadopagoRoute.post('/webhook', async (c) => {
         const restaurante = await db.select({
           whatsappEnabled: RestauranteTable.whatsappEnabled,
           whatsappNumber: RestauranteTable.whatsappNumber,
-          deliveryFee: RestauranteTable.deliveryFee
+          deliveryFee: RestauranteTable.deliveryFee,
+          nombre: RestauranteTable.nombre,
+          notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
 
         if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
@@ -684,6 +698,16 @@ mercadopagoRoute.post('/webhook', async (c) => {
             items: orderItemsForWa,
             orderId: pedidoData.id.toString()
           }).catch(console.error)
+
+          if (pedidoData.notificarWhatsapp === true && restaurante[0].notificarClientesWhatsapp === true && pedidoData.telefono) {
+            sendClientPaymentConfirmedWhatsApp(c, {
+              phone: pedidoData.telefono,
+              customerName: pedidoData.nombreCliente || 'Cliente',
+              restaurantName: restaurante[0].nombre || 'El local',
+              total: pedidoData.total?.toString() || '0',
+              orderId: pedidoData.id.toString()
+            }).catch(console.error)
+          }
         }
       } catch (waErr) {
         console.error('Error enviando WhatsApp post-webhook MP:', waErr)

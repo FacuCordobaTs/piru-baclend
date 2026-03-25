@@ -15,6 +15,7 @@ import { eq, desc, and, inArray } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { wsManager } from '../websocket/manager'
+import { sendClientOrderDispatchedWhatsApp } from '../services/whatsapp'
 import { rowToPagoRow, restauranteOcultaPedidosNoPagados, resolveMetodosPagoConfig } from '../lib/metodos-pago'
 
 const createDeliverySchema = z.object({
@@ -312,18 +313,24 @@ const pedidoUnificadoRoute = new Hono()
     const pedidoId = Number(c.req.param('id'))
     const { estado } = c.req.valid('json')
 
-    const pedido = await db
-      .select()
+    const result = await db
+      .select({
+        pedido: PedidoUnificadoTable,
+        restaurante: RestauranteTable
+      })
       .from(PedidoUnificadoTable)
+      .leftJoin(RestauranteTable, eq(PedidoUnificadoTable.restauranteId, RestauranteTable.id))
       .where(and(
         eq(PedidoUnificadoTable.id, pedidoId),
         eq(PedidoUnificadoTable.restauranteId, restauranteId)
       ))
       .limit(1)
 
-    if (!pedido || pedido.length === 0) {
+    if (!result || result.length === 0) {
       return c.json({ message: 'Pedido no encontrado', success: false }, 404)
     }
+
+    const { pedido, restaurante } = result[0];
 
     const updateData: any = { estado }
     if (estado === 'delivered') {
@@ -335,10 +342,28 @@ const pedidoUnificadoRoute = new Hono()
       .set(updateData)
       .where(eq(PedidoUnificadoTable.id, pedidoId))
 
-    const tipo = pedido[0].tipo
+    if (pedido.notificarWhatsapp && restaurante?.notificarClientesWhatsapp && pedido.telefono) {
+      let dispatchMessage = ''
+      if ((estado === 'dispatched' || estado === 'archived') && pedido.tipo === 'delivery') {
+        dispatchMessage = 'ya está en camino a tu domicilio'
+      } else if ((estado === 'ready' || estado === 'archived') && pedido.tipo === 'takeaway') {
+        dispatchMessage = 'ya está listo en el mostrador para que pases a retirarlo'
+      }
+
+      if (dispatchMessage !== '') {
+        sendClientOrderDispatchedWhatsApp(c, {
+          phone: pedido.telefono,
+          customerName: pedido.nombreCliente || 'Cliente',
+          restaurantName: restaurante.nombre || 'El local',
+          orderStatus: dispatchMessage
+        }).catch(console.error)
+      }
+    }
+
+    const tipo = pedido.tipo
     wsManager.notifyPublicClientEstado(tipo, pedidoId, estado)
-    if (pedido[0].telefono) {
-      wsManager.notifyTrackingClients(restauranteId, pedido[0].telefono, pedidoId, tipo, estado)
+    if (pedido.telefono) {
+      wsManager.notifyTrackingClients(restauranteId, pedido.telefono, pedidoId, tipo, estado)
     }
 
     return c.json({ message: 'Estado actualizado correctamente', success: true }, 200)

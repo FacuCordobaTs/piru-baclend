@@ -4,7 +4,7 @@ import { restaurante as RestauranteTable, producto as ProductoTable, categoria a
 import { drizzle } from 'drizzle-orm/mysql2'
 import { eq, and, desc, or, lt, isNull, sql, inArray } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
-import { sendOrderWhatsApp } from '../services/whatsapp'
+import { sendOrderWhatsApp, sendClientPaymentConfirmedWhatsApp } from '../services/whatsapp'
 import { productoPuntos as ProductoPuntosTable, zonaDelivery as ZonaDeliveryTable } from '../db/schema'
 import { asignarAliasAPedido } from '../services/cucuru'
 import { crearPagoTalo } from '../services/talo'
@@ -49,6 +49,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             orderGroupEnabled: RestauranteTable.orderGroupEnabled,
             codigoDescuentoEnabled: RestauranteTable.codigoDescuentoEnabled,
             comprobantesWhatsapp: RestauranteTable.comprobantesWhatsapp,
+            notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
         })
             .from(RestauranteTable)
             .where(eq(RestauranteTable.username, username))
@@ -327,6 +328,7 @@ const createDeliverySchema = z.object({
     notas: z.string().optional(),
     metodoPago: z.string().optional(),
     codigoDescuentoId: z.number().int().positive().optional(),
+    notificarWhatsapp: z.boolean().optional().default(false),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
         cantidad: z.number().int().positive().default(1),
@@ -342,7 +344,7 @@ const createDeliverySchema = z.object({
 
 publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items } = c.req.valid('json')
+    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp } = c.req.valid('json')
 
     try {
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
@@ -408,6 +410,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             mpPublicKey: RestauranteTable.mpPublicKey,
             cardsPaymentsEnabled: RestauranteTable.cardsPaymentsEnabled,
             metodosPagoConfig: RestauranteTable.metodosPagoConfig,
+            nombre: RestauranteTable.nombre,
+            notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
 
         // --- Lógica de zonas de delivery ---
@@ -531,6 +535,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             total: total.toFixed(2),
             codigoDescuentoId: codigoDescuentoIdFinal,
             montoDescuento: montoDescuento.toFixed(2),
+            notificarWhatsapp: notificarWhatsapp || false,
         })
 
         const pedidoId = Number(nuevoPedido[0].insertId)
@@ -589,6 +594,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             const restaurante = await db.select({
                 whatsappEnabled: RestauranteTable.whatsappEnabled,
                 whatsappNumber: RestauranteTable.whatsappNumber,
+                nombre: RestauranteTable.nombre,
+                notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
             }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1);
 
             if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber && !waitToPay) {
@@ -624,6 +631,23 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         }
 
         if (!waitToPay) {
+            try {
+                if (resRestaurante[0]?.notificarClientesWhatsapp && notificarWhatsapp && telefono) {
+                    console.log("⏳ Iniciando envío de WhatsApp al cliente:", telefono);
+                    sendClientPaymentConfirmedWhatsApp(c, {
+                        phone: telefono,
+                        customerName: nombreCliente || 'Cliente',
+                        restaurantName: resRestaurante[0].nombre || 'El local',
+                        total: total.toFixed(2),
+                        orderId: pedidoId.toString()
+                    }).catch(err => {
+                        console.error("❌ Error en envío de WhatsApp al cliente en background:", err);
+                    });
+                }
+            } catch (err) {
+                console.error("❌ Error obteniendo datos del restaurante para enviar WhatsApp al cliente:", err);
+            }
+
             wsManager.notifyAdmins(restauranteId, {
                 id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
                 tipo: 'NUEVO_PEDIDO_PENDIENTE_PAGO',
@@ -667,6 +691,7 @@ const createTakeawaySchema = z.object({
     notas: z.string().optional(),
     metodoPago: z.string().optional(),
     codigoDescuentoId: z.number().int().positive().optional(),
+    notificarWhatsapp: z.boolean().optional().default(false),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
         cantidad: z.number().int().positive().default(1),
@@ -682,7 +707,7 @@ const createTakeawaySchema = z.object({
 
 publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items } = c.req.valid('json')
+    const { restauranteId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp } = c.req.valid('json')
 
     try {
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
@@ -747,6 +772,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             mpPublicKey: RestauranteTable.mpPublicKey,
             cardsPaymentsEnabled: RestauranteTable.cardsPaymentsEnabled,
             metodosPagoConfig: RestauranteTable.metodosPagoConfig,
+            nombre: RestauranteTable.nombre,
+            notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
         const sistemaPuntosActivo = false; // sistemaPuntos comentado en schema
 
@@ -837,6 +864,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             total: total.toFixed(2),
             codigoDescuentoId: codigoDescuentoIdFinalTk,
             montoDescuento: montoDescuentoTk.toFixed(2),
+            notificarWhatsapp: notificarWhatsapp || false,
         })
 
         const pedidoId = Number(nuevoPedido[0].insertId)
@@ -897,6 +925,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             const restaurante = await db.select({
                 whatsappEnabled: RestauranteTable.whatsappEnabled,
                 whatsappNumber: RestauranteTable.whatsappNumber,
+                nombre: RestauranteTable.nombre,
+                notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
             }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1);
 
             if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber && !waitToPay) {
@@ -925,6 +955,23 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         }
 
         if (!waitToPay) {
+            try {
+                if (resRestaurante[0]?.notificarClientesWhatsapp && notificarWhatsapp && telefono) {
+                    console.log("⏳ Iniciando envío de WhatsApp al cliente:", telefono);
+                    sendClientPaymentConfirmedWhatsApp(c, {
+                        phone: telefono,
+                        customerName: nombreCliente || 'Cliente',
+                        restaurantName: resRestaurante[0].nombre || 'El local',
+                        total: total.toFixed(2),
+                        orderId: pedidoId.toString()
+                    }).catch(err => {
+                        console.error("❌ Error en envío de WhatsApp al cliente en background:", err);
+                    });
+                }
+            } catch (err) {
+                console.error("❌ Error obteniendo datos del restaurante para enviar WhatsApp al cliente:", err);
+            }
+
             wsManager.notifyAdmins(restauranteId, {
                 id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
                 tipo: 'NUEVO_PEDIDO_PENDIENTE_PAGO',
