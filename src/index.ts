@@ -83,6 +83,9 @@ app.use('*', cors({
   allowHeaders: ['Content-Type', 'Authorization', 'Upgrade-Insecure-Requests'], // Agregué Upgrade-Insecure-Requests por si acaso
   credentials: true,
 }))
+
+app.use('/updates/*', serveStatic({ root: './public' }))
+
 app.get('/', (c) => {
   return c.text('Piru API - Servidor corriendo correctamente')
 })
