@@ -29,6 +29,7 @@ import { zonaDeliveryRoute } from './routes/zona-delivery';
 import { codigoDescuentoRoute } from './routes/codigo-descuento';
 import { migrationRoute } from './routes/migration';
 import { pedidoUnificadoRoute } from './routes/pedido-unificado';
+import { metricasRoute } from './routes/metricas';
 import { serveStatic } from 'hono/bun';
 
 // Destructure upgradeWebSocket and websocket from the helper function's return
@@ -154,6 +155,7 @@ app.basePath('/api')
   .route('/codigo-descuento', codigoDescuentoRoute)
   .route('/migrate-pedidos', migrationRoute)
   .route('/pedido-unificado', pedidoUnificadoRoute)
+  .route('/metricas', metricasRoute)
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
 // because :qrToken would match "admin" as a token
 app.get(
