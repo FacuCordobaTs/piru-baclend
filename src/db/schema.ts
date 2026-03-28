@@ -76,6 +76,7 @@ export const restaurante = mysqlTable("restaurante", {
   taloUserId: varchar("talo_user_id", { length: 255 }),
 
   notificarClientesWhatsapp: boolean("notificar_clientes_whatsapp").default(false),
+  completedOnboarding: boolean("completed_onboarding").default(false).notNull(),
 
 
 

@@ -148,16 +148,22 @@ async function getSubtotalesCompletos(pedidoId: number) {
 mercadopagoRoute.get('/callback', async (c) => {
   const db = drizzle(pool)
   const code = c.req.query('code')
-  const state = c.req.query('state') // Este es el ID del restaurante que enviamos antes
+  const rawState = c.req.query('state') || ''
+  
+  // Extraemos id y source (ejemplo: 123_onboarding)
+  const stateParts = rawState.split('_')
+  const restauranteId = stateParts[0]
+  const source = stateParts[1] || 'perfil'
+  const basePath = source === 'onboarding' ? '/onboarding' : '/dashboard/perfil'
 
-  if (!code || !state) {
+  if (!code || !restauranteId) {
     console.error('❌ MP Callback: Faltan code o state')
-    return c.redirect(`${ADMIN_URL}/dashboard/perfil?mp_status=error&mp_error=missing_params`)
+    return c.redirect(`${ADMIN_URL}${basePath}?mp_status=error&mp_error=missing_params`)
   }
 
   if (!MP_CLIENT_ID || !MP_CLIENT_SECRET) {
     console.error('❌ MP Callback: Faltan credenciales de MercadoPago')
-    return c.redirect(`${ADMIN_URL}/dashboard/perfil?mp_status=error&mp_error=config_error`)
+    return c.redirect(`${ADMIN_URL}${basePath}?mp_status=error&mp_error=config_error`)
   }
 
   try {
@@ -178,7 +184,7 @@ mercadopagoRoute.get('/callback', async (c) => {
 
     if (!response.ok) {
       console.error('❌ Error al intercambiar código con MP:', data)
-      return c.redirect(`${ADMIN_URL}/dashboard/perfil?mp_status=error&mp_error=oauth_failed`)
+      return c.redirect(`${ADMIN_URL}${basePath}?mp_status=error&mp_error=oauth_failed`)
     }
 
     // Guardar las credenciales en la DB del restaurante correspondiente
@@ -190,12 +196,12 @@ mercadopagoRoute.get('/callback', async (c) => {
         mpUserId: String(data.user_id),
         mpConnected: true
       })
-      .where(eq(RestauranteTable.id, Number(state)))
+      .where(eq(RestauranteTable.id, Number(restauranteId)))
 
-    console.log(`✅ Restaurante ${state} vinculado con MercadoPago exitosamente`)
+    console.log(`✅ Restaurante ${restauranteId} vinculado con MercadoPago exitosamente`)
 
-    // Redirigir al admin con éxito
-    return c.redirect(`${ADMIN_URL}/dashboard/perfil?mp_status=success`)
+    // Redirigir al admin con éxito o fallo dependiente de la ruta
+    return c.redirect(`${ADMIN_URL}${basePath}?mp_status=success`)
   } catch (error) {
     console.error('❌ Error en callback de MercadoPago:', error)
     return c.redirect(`${ADMIN_URL}/dashboard/perfil?mp_status=error&mp_error=server_error`)

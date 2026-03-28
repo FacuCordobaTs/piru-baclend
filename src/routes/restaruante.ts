@@ -704,9 +704,9 @@ restauranteRoute.put('/pasarela-pago', zValidator('json', updatePasarelaPagoSche
     const updateData: { [key: string]: any } = {}
 
     if (body.proveedorPago !== undefined) updateData.proveedorPago = body.proveedorPago
-    if (body.taloClientId !== undefined) updateData.taloClientId = body.taloClientId || null
-    if (body.taloClientSecret !== undefined) updateData.taloClientSecret = body.taloClientSecret || null
-    if (body.taloUserId !== undefined) updateData.taloUserId = body.taloUserId || null
+    if (typeof body.taloClientId === 'string') updateData.taloClientId = body.taloClientId
+    if (typeof body.taloClientSecret === 'string') updateData.taloClientSecret = body.taloClientSecret
+    if (typeof body.taloUserId === 'string') updateData.taloUserId = body.taloUserId
 
     if (Object.keys(updateData).length === 0) {
       return c.json({ message: 'No se proporcionaron datos para actualizar', success: false }, 400)
