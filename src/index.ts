@@ -32,6 +32,7 @@ import { pedidoUnificadoRoute } from './routes/pedido-unificado';
 import { metricasRoute } from './routes/metricas';
 import { onboardingRoute } from './routes/onboarding';
 import { serveStatic } from 'hono/bun';
+import { readFileSync } from 'node:fs';
 
 // Destructure upgradeWebSocket and websocket from the helper function's return
 const { upgradeWebSocket, websocket } = createBunWebSocket<ServerWebSocket>();
@@ -87,7 +88,27 @@ app.use('*', cors({
   credentials: true,
 }))
 
-app.use('/updates/*', serveStatic({ root: './public' }))
+app.get('/public/updates/latest.json', (c) => {
+  try {
+    const filePath = './public/updates/latest.json'
+    const fileContent = readFileSync(filePath, 'utf8')
+    const data = JSON.parse(fileContent)
+    
+    return c.json(data, 200, {
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      'Access-Control-Allow-Origin': '*', // Crucial para Tauri
+    })
+  } catch (err) {
+    return c.json({ error: 'Update file not found' }, 404)
+  }
+})
+
+app.use('/public/updates/*', serveStatic({ 
+  root: './',
+  rewriteRequestPath: (path) => path // Esto mapea /public/updates -> ./public/updates
+}))
 
 app.get('/', (c) => {
   return c.text('Piru API - Servidor corriendo correctamente')
