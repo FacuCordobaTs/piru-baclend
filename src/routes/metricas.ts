@@ -15,14 +15,33 @@ metricasRoute.get('/', async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
 
+  const monthQuery = c.req.query('month')
+  const yearQuery = c.req.query('year')
+  const fromQuery = c.req.query('from')
+  const toQuery = c.req.query('to')
+
   const now = new Date()
-  const year = now.getFullYear()
-  const month = now.getMonth() + 1 // 1-12
+  const year = yearQuery ? parseInt(yearQuery, 10) : now.getFullYear()
+  const month = monthQuery ? parseInt(monthQuery, 10) : now.getMonth() + 1 // 1-12
+
+  const hasRangeFilter = Boolean(fromQuery && toQuery)
+  const hasValidMonth = Number.isInteger(month) && month >= 1 && month <= 12
+  const hasValidYear = Number.isInteger(year) && year >= 2000 && year <= 3000
+
+  const periodFilter = hasRangeFilter
+    ? and(
+        sql`DATE(${PedidoUnificadoTable.createdAt}) >= ${fromQuery!}`,
+        sql`DATE(${PedidoUnificadoTable.createdAt}) <= ${toQuery!}`
+      )
+    : and(
+        hasValidMonth ? sql`MONTH(${PedidoUnificadoTable.createdAt}) = ${month}` : sql`1 = 1`,
+        hasValidYear ? sql`YEAR(${PedidoUnificadoTable.createdAt}) = ${year}` : sql`1 = 1`
+      )
 
   // 1 & 2. Ingresos Totales del Mes Actual e Histórico
   const ingresosRes = await db
     .select({
-      totalMensual: sql`SUM(CASE WHEN MONTH(${PedidoUnificadoTable.createdAt}) = ${month} AND YEAR(${PedidoUnificadoTable.createdAt}) = ${year} THEN ${PedidoUnificadoTable.total} ELSE 0 END)`,
+      totalMensual: sql`SUM(CASE WHEN ${periodFilter} THEN ${PedidoUnificadoTable.total} ELSE 0 END)`,
       totalHistorico: sql`SUM(${PedidoUnificadoTable.total})`,
     })
     .from(PedidoUnificadoTable)
@@ -38,8 +57,8 @@ metricasRoute.get('/', async (c) => {
   // 3 & 4. Cantidad de Pedidos del Mes Actual e Históricos
   const pedidosRes = await db
     .select({
-      pedidosMensuales: sql`SUM(CASE WHEN MONTH(${PedidoUnificadoTable.createdAt}) = ${month} AND YEAR(${PedidoUnificadoTable.createdAt}) = ${year} THEN 1 ELSE 0 END)`,
-      pedidosMensualesPagados: sql`SUM(CASE WHEN MONTH(${PedidoUnificadoTable.createdAt}) = ${month} AND YEAR(${PedidoUnificadoTable.createdAt}) = ${year} AND ${PedidoUnificadoTable.pagado} = true THEN 1 ELSE 0 END)`,
+      pedidosMensuales: sql`SUM(CASE WHEN ${periodFilter} THEN 1 ELSE 0 END)`,
+      pedidosMensualesPagados: sql`SUM(CASE WHEN ${periodFilter} AND ${PedidoUnificadoTable.pagado} = true THEN 1 ELSE 0 END)`,
       pedidosHistoricos: sql`COUNT(${PedidoUnificadoTable.id})`,
     })
     .from(PedidoUnificadoTable)
@@ -59,8 +78,7 @@ metricasRoute.get('/', async (c) => {
     .where(and(
       eq(PedidoUnificadoTable.restauranteId, restauranteId),
       eq(PedidoUnificadoTable.pagado, true),
-      sql`MONTH(${PedidoUnificadoTable.createdAt}) = ${month}`,
-      sql`YEAR(${PedidoUnificadoTable.createdAt}) = ${year}`
+      periodFilter
     ))
     .groupBy(PedidoUnificadoTable.metodoPago)
 
@@ -83,8 +101,7 @@ metricasRoute.get('/', async (c) => {
     .where(and(
       eq(PedidoUnificadoTable.restauranteId, restauranteId),
       eq(PedidoUnificadoTable.pagado, true),
-      sql`MONTH(${PedidoUnificadoTable.createdAt}) = ${month}`,
-      sql`YEAR(${PedidoUnificadoTable.createdAt}) = ${year}`
+      periodFilter
     ))
     .groupBy(ItemPedidoUnificadoTable.productoId, ProductoTable.nombre)
     .orderBy(sql`SUM(${ItemPedidoUnificadoTable.cantidad}) DESC`)
