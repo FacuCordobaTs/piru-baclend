@@ -11,7 +11,7 @@ import {
   pago as PagoTable,
 } from "../db/schema";
 import { drizzle } from "drizzle-orm/mysql2";
-import { eq, asc } from "drizzle-orm";
+import { eq, asc, inArray } from "drizzle-orm";
 
 // Mapeo de estados legacy -> pedidoUnificado
 const mapEstadoDeliveryTakeaway = (
@@ -34,7 +34,98 @@ const mapEstadoDeliveryTakeaway = (
   }
 };
 
-const migrationRoute = new Hono().post("/", async (c) => {
+const migrationRoute = new Hono();
+
+let hasRunCleanup = false;
+
+migrationRoute.get("/cleanup-duplicates", async (c) => {
+  if (hasRunCleanup) {
+    return c.json({
+      success: false,
+      message: "Esta limpieza ya fue ejecutada anteriormente en esta sesión."
+    }, 400);
+  }
+
+  const db = drizzle(pool);
+  console.log('Iniciando escaneo de duplicados...');
+
+  try {
+    // 1. Traemos todos los pedidos
+    const todosLosPedidos = await db.select({
+      id: PedidoUnificadoTable.id,
+      createdAt: PedidoUnificadoTable.createdAt,
+      total: PedidoUnificadoTable.total,
+      clienteId: PedidoUnificadoTable.clienteId,
+      tipo: PedidoUnificadoTable.tipo
+    }).from(PedidoUnificadoTable);
+
+    // 2. Agrupamos usando una clave única (misma fecha, cliente, tipo y total)
+    const mapPedidos = new Map<string, number[]>();
+
+    for (const pedido of todosLosPedidos) {
+      if (!pedido.createdAt) continue;
+      
+      // Usamos el timestamp como string para la clave
+      const fechaStr = pedido.createdAt.toISOString();
+      const hash = `${fechaStr}-${pedido.clienteId}-${pedido.tipo}-${pedido.total}`;
+      
+      if (!mapPedidos.has(hash)) {
+        mapPedidos.set(hash, []);
+      }
+      mapPedidos.get(hash)!.push(pedido.id);
+    }
+
+    // 3. Identificamos los IDs a eliminar (los clones)
+    const idsAEliminar: number[] = [];
+
+    for (const [hash, ids] of mapPedidos.entries()) {
+      if (ids.length > 1) {
+        // Ordenamos de menor a mayor. Nos quedamos con el original (el index 0)
+        ids.sort((a, b) => a - b);
+        // Agarramos todos los IDs sobrantes
+        const clones = ids.slice(1);
+        idsAEliminar.push(...clones);
+      }
+    }
+
+    if (idsAEliminar.length === 0) {
+      hasRunCleanup = true;
+      return c.json({
+        success: true,
+        message: "No se encontraron pedidos duplicados. Todo en orden."
+      });
+    }
+
+    console.log(`Se encontraron ${idsAEliminar.length} pedidos duplicados. Procediendo a limpiar...`);
+
+    // 4. Primero borramos los items relacionados a esos pedidos clonados (por la Foreign Key)
+    await db.delete(ItemPedidoUnificadoTable)
+      .where(inArray(ItemPedidoUnificadoTable.pedidoId, idsAEliminar));
+    console.log('Items clonados eliminados.');
+
+    // 5. Borramos los pedidos clonados
+    await db.delete(PedidoUnificadoTable)
+      .where(inArray(PedidoUnificadoTable.id, idsAEliminar));
+    console.log('Pedidos clonados eliminados correctamente.');
+
+    hasRunCleanup = true;
+    return c.json({
+      success: true,
+      message: `Limpieza completada exitosamente. Se eliminaron ${idsAEliminar.length} pedidos duplicados.`,
+      deletedCount: idsAEliminar.length
+    });
+
+  } catch (error) {
+    console.error('Error durante la limpieza:', error);
+    return c.json({
+      success: false,
+      message: "Error durante la limpieza de duplicados",
+      error: error instanceof Error ? error.message : String(error)
+    }, 500);
+  }
+});
+
+migrationRoute.post("/", async (c) => {
   const db = drizzle(pool);
 
   const summary = {
