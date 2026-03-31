@@ -2,10 +2,8 @@ import { Hono } from 'hono'
 import { pool } from '../db'
 import {
     cliente as ClienteTable,
-    pedidoDelivery as PedidoDeliveryTable,
-    pedidoTakeaway as PedidoTakeawayTable,
-    itemPedidoDelivery as ItemDeliveryTable,
-    itemPedidoTakeaway as ItemTakeawayTable,
+    pedidoUnificado as PedidoUnificadoTable,
+    itemPedidoUnificado as ItemPedidoUnificadoTable,
     producto as ProductoTable
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
@@ -21,58 +19,39 @@ clientesRoute.get('/list', async (c) => {
     const restauranteId = (c as any).user.id
 
     try {
-        const clientes = await db.select().from(ClienteTable).where(eq(ClienteTable.restauranteId, restauranteId)).orderBy(desc(ClienteTable.createdAt))
+        // 1. Traer todos los clientes del restaurante
+        const clientes = await db.select().from(ClienteTable)
+            .where(eq(ClienteTable.restauranteId, restauranteId))
+            .orderBy(desc(ClienteTable.createdAt))
 
-        const pedidosDelivery = await db.select({
-            clienteId: PedidoDeliveryTable.clienteId,
-            total: PedidoDeliveryTable.total,
-            createdAt: PedidoDeliveryTable.createdAt,
-            id: PedidoDeliveryTable.id,
-        }).from(PedidoDeliveryTable)
-            .where(eq(PedidoDeliveryTable.restauranteId, restauranteId))
+        // 2. Traer todos los pedidos unificados del restaurante
+        const pedidos = await db.select({
+            id: PedidoUnificadoTable.id,
+            clienteId: PedidoUnificadoTable.clienteId,
+            total: PedidoUnificadoTable.total,
+            createdAt: PedidoUnificadoTable.createdAt,
+            tipo: PedidoUnificadoTable.tipo,
+        }).from(PedidoUnificadoTable)
+            .where(eq(PedidoUnificadoTable.restauranteId, restauranteId))
 
-        const pedidosTakeaway = await db.select({
-            clienteId: PedidoTakeawayTable.clienteId,
-            total: PedidoTakeawayTable.total,
-            createdAt: PedidoTakeawayTable.createdAt,
-            id: PedidoTakeawayTable.id,
-        }).from(PedidoTakeawayTable)
-            .where(eq(PedidoTakeawayTable.restauranteId, restauranteId))
-
-        // Fetch items for delivery orders
-        const deliveryIds = pedidosDelivery.map(p => p.id)
-        let itemsDelivery: { pedidoDeliveryId: number, productoId: number, cantidad: number | null, precioUnitario: string }[] = []
-        if (deliveryIds.length > 0) {
-            itemsDelivery = await db.select({
-                pedidoDeliveryId: ItemDeliveryTable.pedidoDeliveryId,
-                productoId: ItemDeliveryTable.productoId,
-                cantidad: ItemDeliveryTable.cantidad,
-                precioUnitario: ItemDeliveryTable.precioUnitario,
-            }).from(ItemDeliveryTable)
-                .where(inArray(ItemDeliveryTable.pedidoDeliveryId, deliveryIds))
+        // 3. Traer todos los items de esos pedidos
+        const pedidoIds = pedidos.map(p => p.id)
+        let itemsRaw: { pedidoId: number, productoId: number, cantidad: number | null, precioUnitario: string }[] = []
+        
+        if (pedidoIds.length > 0) {
+            itemsRaw = await db.select({
+                pedidoId: ItemPedidoUnificadoTable.pedidoId,
+                productoId: ItemPedidoUnificadoTable.productoId,
+                cantidad: ItemPedidoUnificadoTable.cantidad,
+                precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
+            }).from(ItemPedidoUnificadoTable)
+                .where(inArray(ItemPedidoUnificadoTable.pedidoId, pedidoIds))
         }
 
-        // Fetch items for takeaway orders
-        const takeawayIds = pedidosTakeaway.map(p => p.id)
-        let itemsTakeaway: { pedidoTakeawayId: number, productoId: number, cantidad: number | null, precioUnitario: string }[] = []
-        if (takeawayIds.length > 0) {
-            itemsTakeaway = await db.select({
-                pedidoTakeawayId: ItemTakeawayTable.pedidoTakeawayId,
-                productoId: ItemTakeawayTable.productoId,
-                cantidad: ItemTakeawayTable.cantidad,
-                precioUnitario: ItemTakeawayTable.precioUnitario,
-            }).from(ItemTakeawayTable)
-                .where(inArray(ItemTakeawayTable.pedidoTakeawayId, takeawayIds))
-        }
-
-        // Fetch product names
-        const allProductoIds = [
-            ...new Set([
-                ...itemsDelivery.map(i => i.productoId),
-                ...itemsTakeaway.map(i => i.productoId)
-            ])
-        ]
+        // 4. Traer los nombres de los productos para los items
+        const allProductoIds = [...new Set(itemsRaw.map(i => i.productoId))]
         let productosMap: Record<number, string> = {}
+        
         if (allProductoIds.length > 0) {
             const productos = await db.select({
                 id: ProductoTable.id,
@@ -82,41 +61,26 @@ clientesRoute.get('/list', async (c) => {
             productosMap = Object.fromEntries(productos.map(p => [p.id, p.nombre]))
         }
 
-        // Build items map per delivery order
-        const deliveryItemsMap: Record<number, { nombreProducto: string, cantidad: number, precioUnitario: string }[]> = {}
-        for (const item of itemsDelivery) {
-            if (!deliveryItemsMap[item.pedidoDeliveryId]) deliveryItemsMap[item.pedidoDeliveryId] = []
-            deliveryItemsMap[item.pedidoDeliveryId].push({
+        // 5. Armar el mapa de items por pedido unificado
+        const itemsMap: Record<number, { nombreProducto: string, cantidad: number, precioUnitario: string }[]> = {}
+        for (const item of itemsRaw) {
+            if (!itemsMap[item.pedidoId]) itemsMap[item.pedidoId] = []
+            itemsMap[item.pedidoId].push({
                 nombreProducto: productosMap[item.productoId] || 'Producto eliminado',
                 cantidad: item.cantidad ?? 1,
                 precioUnitario: item.precioUnitario,
             })
         }
 
-        // Build items map per takeaway order
-        const takeawayItemsMap: Record<number, { nombreProducto: string, cantidad: number, precioUnitario: string }[]> = {}
-        for (const item of itemsTakeaway) {
-            if (!takeawayItemsMap[item.pedidoTakeawayId]) takeawayItemsMap[item.pedidoTakeawayId] = []
-            takeawayItemsMap[item.pedidoTakeawayId].push({
-                nombreProducto: productosMap[item.productoId] || 'Producto eliminado',
-                cantidad: item.cantidad ?? 1,
-                precioUnitario: item.precioUnitario,
-            })
-        }
+        // 6. Ensamblar los pedidos con sus items
+        const allPedidos = pedidos.map(p => ({
+            ...p,
+            // Casteamos el tipo explícitamente para que coincida con lo que espera el frontend
+            tipo: p.tipo as 'delivery' | 'takeaway', 
+            items: itemsMap[p.id] || []
+        }))
 
-        const allPedidos = [
-            ...pedidosDelivery.map(p => ({
-                ...p,
-                tipo: 'delivery' as const,
-                items: deliveryItemsMap[p.id] || []
-            })),
-            ...pedidosTakeaway.map(p => ({
-                ...p,
-                tipo: 'takeaway' as const,
-                items: takeawayItemsMap[p.id] || []
-            }))
-        ]
-
+        // 7. Calcular métricas para cada cliente
         const clientesConMetricas = clientes.map(cliente => {
             const clientPedidos = allPedidos.filter(p => p.clienteId === cliente.id)
             const cantidadPedidos = clientPedidos.length
@@ -124,15 +88,15 @@ clientesRoute.get('/list', async (c) => {
 
             let ultimoPedidoAt: Date | null = null;
             if (clientPedidos.length > 0) {
-                const dates = clientPedidos.map(p => new Date(p.createdAt));
-                ultimoPedidoAt = new Date(Math.max(...dates.map(Number)));
+                const dates = clientPedidos.map(p => new Date(p.createdAt).getTime());
+                ultimoPedidoAt = new Date(Math.max(...dates));
             }
 
             return {
                 ...cliente,
                 cantidadPedidos,
                 totalGastado,
-                ultimoPedidoAt,
+                ultimoPedidoAt: ultimoPedidoAt ? ultimoPedidoAt.toISOString() : null,
                 pedidos: clientPedidos.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
             }
         })
