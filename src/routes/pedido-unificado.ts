@@ -506,6 +506,8 @@ const pedidoUnificadoRoute = new Hono()
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))
 
+    console.log(`📲 [Notificar Cliente] Iniciando para pedido #${pedidoId}, restaurante=${restauranteId}`)
+
     const result = await db
       .select({
         pedido: PedidoUnificadoTable,
@@ -520,20 +522,17 @@ const pedidoUnificadoRoute = new Hono()
       .limit(1)
 
     if (!result || result.length === 0) {
+      console.log(`📲 [Notificar Cliente] Pedido #${pedidoId} no encontrado`)
       return c.json({ message: 'Pedido no encontrado', success: false }, 404)
     }
 
     const { pedido, restaurante } = result[0]
 
-    if (!restaurante?.notificarClientesWhatsapp) {
-      return c.json({ message: 'Las notificaciones de WhatsApp no están habilitadas', success: false }, 400)
-    }
-
-    if (!pedido.notificarWhatsapp) {
-      return c.json({ message: 'El cliente no solicitó notificaciones por WhatsApp', success: false }, 400)
-    }
+    console.log(`📲 [Notificar Cliente] Pedido #${pedidoId}: tipo=${pedido.tipo}, telefono=${pedido.telefono}, notificarWhatsapp=${pedido.notificarWhatsapp}`)
+    console.log(`📲 [Notificar Cliente] Restaurante: notificarClientesWhatsapp=${restaurante?.notificarClientesWhatsapp}, nombre=${restaurante?.nombre}`)
 
     if (!pedido.telefono) {
+      console.log(`📲 [Notificar Cliente] ❌ Sin teléfono en pedido #${pedidoId}`)
       return c.json({ message: 'El pedido no tiene teléfono del cliente', success: false }, 400)
     }
 
@@ -545,24 +544,28 @@ const pedidoUnificadoRoute = new Hono()
     }
 
     if (dispatchMessage === '') {
+      console.log(`📲 [Notificar Cliente] ❌ Tipo de pedido desconocido: ${pedido.tipo}`)
       return c.json({ message: 'No se pudo determinar el mensaje', success: false }, 400)
     }
 
     try {
+      console.log(`📲 [Notificar Cliente] Enviando WhatsApp a ${pedido.telefono}...`)
       const waResult = await sendClientOrderDispatchedWhatsApp(c, {
         phone: pedido.telefono,
         customerName: pedido.nombreCliente || 'Cliente',
-        restaurantName: restaurante.nombre || 'El local',
+        restaurantName: restaurante?.nombre || 'El local',
         orderStatus: dispatchMessage
       })
 
       if (waResult.success) {
+        console.log(`📲 [Notificar Cliente] ✅ WhatsApp enviado exitosamente a ${pedido.telefono}`)
         return c.json({ message: 'Notificación enviada al cliente', success: true }, 200)
       } else {
+        console.error(`📲 [Notificar Cliente] ❌ Error API WhatsApp:`, waResult.error)
         return c.json({ message: 'Error al enviar notificación', success: false, error: waResult.error }, 500)
       }
     } catch (error) {
-      console.error('❌ Error enviando WhatsApp al cliente:', error)
+      console.error('📲 [Notificar Cliente] ❌ Error enviando WhatsApp al cliente:', error)
       return c.json({ message: 'Error al enviar notificación', success: false }, 500)
     }
   })
