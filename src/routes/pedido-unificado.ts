@@ -8,6 +8,7 @@ import {
   ingrediente as IngredienteTable,
   restaurante as RestauranteTable,
   codigoDescuento as CodigoDescuentoTable,
+  mensajeWhatsapp as MensajeWhatsappTable,
 } from '../db/schema'
 import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
@@ -559,6 +560,14 @@ const pedidoUnificadoRoute = new Hono()
 
       if (waResult.success) {
         console.log(`📲 [Notificar Cliente] ✅ WhatsApp enviado exitosamente a ${pedido.telefono}`)
+
+        // Registrar en historial
+        await db.insert(MensajeWhatsappTable).values({
+          pedidoUnificadoId: pedidoId,
+          restauranteId,
+          telefono: pedido.telefono,
+        })
+
         return c.json({ message: 'Notificación enviada al cliente', success: true }, 200)
       } else {
         console.error(`📲 [Notificar Cliente] ❌ Error API WhatsApp:`, waResult.error)

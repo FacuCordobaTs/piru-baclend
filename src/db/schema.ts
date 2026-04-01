@@ -322,6 +322,15 @@ export const zonaDelivery = mysqlTable("zona_delivery", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Historial de mensajes WhatsApp enviados a clientes
+export const mensajeWhatsapp = mysqlTable("mensaje_whatsapp", {
+  id: int("id").primaryKey().autoincrement(),
+  pedidoUnificadoId: int("pedido_unificado_id").references(() => pedidoUnificado.id),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  telefono: varchar("telefono", { length: 50 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 
 
 // ------- Quitar esto una vez que ya esta resuelto lo de TALO -------
