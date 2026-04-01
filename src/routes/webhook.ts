@@ -13,7 +13,7 @@ import {
   restaurante as RestauranteTable
 } from '../db/schema'
 import { wsManager } from '../websocket/manager'
-import { sendOrderWhatsApp, sendClientPaymentConfirmedWhatsApp } from '../services/whatsapp'
+import { sendOrderWhatsApp } from '../services/whatsapp'
 import { consultarPagoTalo } from '../services/talo'
 
 const webhookRoute = new Hono()
@@ -201,7 +201,6 @@ const cucuruWebhookHandler = async (c: any) => {
           whatsappNumber: RestauranteTable.whatsappNumber,
           deliveryFee: RestauranteTable.deliveryFee,
           nombre: RestauranteTable.nombre,
-          notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp
         }).from(RestauranteTable).where(eq(RestauranteTable.id, targetRestauranteId)).limit(1);
 
         if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
@@ -232,15 +231,7 @@ const cucuruWebhookHandler = async (c: any) => {
             orderId: pedido.id.toString()
           }).catch(console.error);
 
-          if (pedido.notificarWhatsapp === true && restaurante[0].notificarClientesWhatsapp === true && pedido.telefono) {
-            sendClientPaymentConfirmedWhatsApp(c, {
-              phone: pedido.telefono,
-              customerName: pedido.nombreCliente || 'Cliente',
-              restaurantName: restaurante[0].nombre || 'El local',
-              total: pedido.total.toString(),
-              orderId: pedido.id.toString()
-            }).catch(console.error);
-          }
+
         }
       } catch (error) {
         console.error("❌ Error enviando WhatsApp post-pago:", error);
@@ -460,7 +451,6 @@ webhookRoute.post('/talo', async (c) => {
           whatsappNumber: RestauranteTable.whatsappNumber,
           deliveryFee: RestauranteTable.deliveryFee,
           nombre: RestauranteTable.nombre,
-          notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
         })
         .from(RestauranteTable)
         .where(eq(RestauranteTable.id, restauranteId))
@@ -499,18 +489,7 @@ webhookRoute.post('/talo', async (c) => {
           }
         ).catch((e) => console.error('[Talo Webhook] Error enviando WhatsApp:', e));
 
-        if (pedido.notificarWhatsapp === true && restaurante[0].notificarClientesWhatsapp === true && pedido.telefono) {
-          sendClientPaymentConfirmedWhatsApp(
-            { env: envForBackground } as any,
-            {
-              phone: pedido.telefono,
-              customerName: pedido.nombreCliente || 'Cliente',
-              restaurantName: restaurante[0].nombre || 'El local',
-              total: pedido.total.toString(),
-              orderId: pedido.id.toString()
-            }
-          ).catch((e) => console.error('[Talo Webhook] Error enviando WhatsApp Cliente:', e));
-        }
+
         console.log('[Talo Webhook] WhatsApp enviado');
       } else {
         console.log('[Talo Webhook] WhatsApp no configurado o deshabilitado');
