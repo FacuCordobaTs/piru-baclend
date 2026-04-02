@@ -48,6 +48,11 @@ export const sendOrderWhatsApp = async (c: any, data: OrderNotification) => {
     // Preparamos el string de la lista
     const itemsListString = formatOrderSummary(data.items);
 
+    // Formatear el método de pago para que sea amigable en lectura
+    const formattedTotal = data.total
+        .replace('(cash)', '(Efectivo)')
+        .replace('(manual_transfer)', '(Transferencia)');
+
     const body = {
         messaging_product: "whatsapp",
         recipient_type: "individual",
@@ -64,7 +69,7 @@ export const sendOrderWhatsApp = async (c: any, data: OrderNotification) => {
                         { type: "text", parameter_name: "nombre_cliente", text: data.customerName },
                         { type: "text", parameter_name: "direccion_cliente", text: data.address },
                         { type: "text", parameter_name: "lista_items", text: itemsListString },
-                        { type: "text", parameter_name: "monto_total", text: data.total }
+                        { type: "text", parameter_name: "monto_total", text: formattedTotal }
                     ]
                 },
                 {
