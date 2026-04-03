@@ -81,7 +81,8 @@ app.use('*', cors({
     'https://tauri.localhost',  // Protocolo estándar de Tauri v2 en Windows
     'http://tauri.localhost',   // Variación posible
     'https://alfajor.pages.dev',
-    'https://alfajorconpapas.com'
+    'https://alfajorconpapas.com',
+    'https://panther-d5w.pages.dev'
   ],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization', 'Upgrade-Insecure-Requests'], // Agregué Upgrade-Insecure-Requests por si acaso
@@ -93,7 +94,7 @@ app.get('/public/updates/latest.json', (c) => {
     const filePath = './public/updates/latest.json'
     const fileContent = readFileSync(filePath, 'utf8')
     const data = JSON.parse(fileContent)
-    
+
     return c.json(data, 200, {
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
       'Pragma': 'no-cache',
@@ -105,7 +106,7 @@ app.get('/public/updates/latest.json', (c) => {
   }
 })
 
-app.use('/public/updates/*', serveStatic({ 
+app.use('/public/updates/*', serveStatic({
   root: './',
   rewriteRequestPath: (path) => path // Esto mapea /public/updates -> ./public/updates
 }))
@@ -307,7 +308,7 @@ app.get(
         try {
           const data = JSON.parse(typeof event.data === 'string' ? event.data : event.data.toString());
           if (data.type === 'PING') ws.send(JSON.stringify({ type: 'PONG' }));
-        } catch {}
+        } catch { }
       },
       async onClose(event: any, ws: any) {
         if (wsManager.trackingClients.has(key)) {
