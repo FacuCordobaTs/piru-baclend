@@ -9,6 +9,7 @@ import {
   restaurante as RestauranteTable,
   codigoDescuento as CodigoDescuentoTable,
   mensajeWhatsapp as MensajeWhatsappTable,
+  varianteProducto as VarianteProductoTable,
 } from '../db/schema'
 import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
@@ -27,6 +28,7 @@ const createDeliverySchema = z.object({
   notas: z.string().optional(),
   items: z.array(z.object({
     productoId: z.number().int().positive(),
+    varianteId: z.number().int().positive().optional(),
     cantidad: z.number().int().positive().default(1),
     ingredientesExcluidos: z.array(z.number().int().positive()).optional(),
   })).min(1, 'Debe agregar al menos un producto'),
@@ -39,6 +41,7 @@ const createTakeawaySchema = z.object({
   notas: z.string().optional(),
   items: z.array(z.object({
     productoId: z.number().int().positive(),
+    varianteId: z.number().int().positive().optional(),
     cantidad: z.number().int().positive().default(1),
     ingredientesExcluidos: z.array(z.number().int().positive()).optional(),
   })).min(1, 'Debe agregar al menos un producto'),
@@ -162,6 +165,8 @@ const pedidoUnificadoRoute = new Hono()
           .select({
             id: ItemPedidoUnificadoTable.id,
             productoId: ItemPedidoUnificadoTable.productoId,
+            varianteId: ItemPedidoUnificadoTable.varianteId,
+            varianteNombre: ItemPedidoUnificadoTable.varianteNombre,
             cantidad: ItemPedidoUnificadoTable.cantidad,
             precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
             nombreProducto: ProductoTable.nombre,
@@ -213,6 +218,8 @@ const pedidoUnificadoRoute = new Hono()
       .select({
         id: ItemPedidoUnificadoTable.id,
         productoId: ItemPedidoUnificadoTable.productoId,
+        varianteId: ItemPedidoUnificadoTable.varianteId,
+        varianteNombre: ItemPedidoUnificadoTable.varianteNombre,
         cantidad: ItemPedidoUnificadoTable.cantidad,
         precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
         nombreProducto: ProductoTable.nombre,
@@ -258,10 +265,22 @@ const pedidoUnificadoRoute = new Hono()
     }
 
     const productosMap = new Map(productos.map((p) => [p.id, p]))
+
+    const uniqueVariantesIds = [...new Set(items.map((i) => i.varianteId).filter(Boolean))] as number[]
+    let variantesMap = new Map();
+    if (uniqueVariantesIds.length > 0) {
+      const variantesRaw = await db.select().from(VarianteProductoTable).where(inArray(VarianteProductoTable.id, uniqueVariantesIds));
+      variantesMap = new Map(variantesRaw.map(v => [v.id, v]));
+    }
+
     let total = 0
     for (const item of items) {
       const producto = productosMap.get(item.productoId)!
-      total += parseFloat(producto.precio) * item.cantidad
+      let precioUnitario = parseFloat(producto.precio)
+      if (item.varianteId && variantesMap.has(item.varianteId)) {
+         precioUnitario = parseFloat(variantesMap.get(item.varianteId).precio)
+      }
+      total += precioUnitario * item.cantidad
     }
 
     const baseValues: any = {
@@ -283,11 +302,18 @@ const pedidoUnificadoRoute = new Hono()
 
     for (const item of items) {
       const producto = productosMap.get(item.productoId)!
+      let precioUnitario = parseFloat(producto.precio)
+      if (item.varianteId && variantesMap.has(item.varianteId)) {
+        precioUnitario = parseFloat(variantesMap.get(item.varianteId).precio)
+      }
+      
       await db.insert(ItemPedidoUnificadoTable).values({
         pedidoId,
         productoId: item.productoId,
+        varianteId: item.varianteId || null,
+        varianteNombre: item.varianteId && variantesMap.has(item.varianteId) ? variantesMap.get(item.varianteId).nombre : null,
         cantidad: item.cantidad,
-        precioUnitario: producto.precio,
+        precioUnitario: precioUnitario.toFixed(2),
         ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
       })
     }

@@ -145,6 +145,8 @@ export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {
   id: int("id").primaryKey().autoincrement(),
   pedidoId: int("pedido_id").references(() => pedidoUnificado.id, { onDelete: 'cascade' }).notNull(),
   productoId: int("producto_id").notNull(), // No le ponemos fk estricta por si borran el producto, no romper el historial
+  varianteId: int("variante_id"),
+  varianteNombre: varchar("variante_nombre", { length: 255 }),
   cantidad: int("cantidad").default(1).notNull(),
   precioUnitario: decimal("precio_unitario", { precision: 10, scale: 2 }).notNull(),
   esCanjePuntos: boolean("es_canje_puntos").default(false),
@@ -162,6 +164,18 @@ export const producto = mysqlTable("producto", {
   activo: boolean("activo").default(true),
   imagenUrl: varchar("imagen_url", { length: 255 }),
   descuento: int("descuento").default(0),
+  tieneVariantes: boolean("tiene_variantes").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const varianteProducto = mysqlTable("variante_producto", {
+  id: int("id").primaryKey().autoincrement(),
+  productoId: int("producto_id")
+    .references(() => producto.id, { onDelete: "cascade" })
+    .notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  precio: decimal("precio", { precision: 10, scale: 2 }).notNull(),
+  activo: boolean("activo").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -522,6 +536,8 @@ export const itemPedidoDelivery = mysqlTable("item_pedido_delivery", {
   id: int("id").primaryKey().autoincrement(),
   pedidoDeliveryId: int("pedido_delivery_id").notNull(),
   productoId: int("producto_id").notNull(),
+  varianteId: int("variante_id"),
+  varianteNombre: varchar("variante_nombre", { length: 255 }),
   cantidad: int("cantidad").default(1),
   precioUnitario: decimal("precio_unitario", {
     precision: 10,
@@ -568,6 +584,8 @@ export const itemPedidoTakeaway = mysqlTable("item_pedido_takeaway", {
   id: int("id").primaryKey().autoincrement(),
   pedidoTakeawayId: int("pedido_takeaway_id").notNull(),
   productoId: int("producto_id").notNull(),
+  varianteId: int("variante_id"),
+  varianteNombre: varchar("variante_nombre", { length: 255 }),
   cantidad: int("cantidad").default(1),
   precioUnitario: decimal("precio_unitario", {
     precision: 10,

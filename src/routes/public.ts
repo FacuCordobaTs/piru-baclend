@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable, codigoDescuento as CodigoDescuentoTable } from '../db/schema'
+import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable, codigoDescuento as CodigoDescuentoTable, varianteProducto as VarianteProductoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { eq, and, desc, or, lt, isNull, sql, inArray } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
@@ -119,7 +119,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
         // Obtener ingredientes y agregados para cada producto
         const productosConIngredientes = await Promise.all(
             productosRaw.map(async (p) => {
-                const [ingredientes, agregados] = await Promise.all([
+                const [ingredientes, agregados, variantes] = await Promise.all([
                     db
                         .select({
                             id: IngredienteTable.id,
@@ -136,7 +136,15 @@ publicRoute.get('/restaurante/:username', async (c) => {
                         })
                         .from(ProductoAgregadoTable)
                         .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
-                        .where(eq(ProductoAgregadoTable.productoId, p.id))
+                        .where(eq(ProductoAgregadoTable.productoId, p.id)),
+                    db
+                        .select({
+                            id: VarianteProductoTable.id,
+                            nombre: VarianteProductoTable.nombre,
+                            precio: VarianteProductoTable.precio,
+                        })
+                        .from(VarianteProductoTable)
+                        .where(eq(VarianteProductoTable.productoId, p.id))
                 ])
                 const puntos = puntosMap.get(p.id)
                 return {
@@ -155,6 +163,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
                     puntosGanados: puntos?.puntosGanados ?? null,
                     ingredientes,
                     agregados,
+                    variantes,
                 }
             })
         )
@@ -331,6 +340,7 @@ const createDeliverySchema = z.object({
     notificarWhatsapp: z.boolean().optional().default(false),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
+        varianteId: z.number().int().positive().optional(),
         cantidad: z.number().int().positive().default(1),
         ingredientesExcluidos: z.array(z.number().int().positive()).optional(),
         agregados: z.array(z.object({
@@ -361,6 +371,13 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
         const productosMap = new Map(productosRaw.map(p => [p.id, { producto: p, puntos: puntosMap.get(p.id) ?? null }]))
 
+        const uniqueVariantesIds = [...new Set(items.map(i => i.varianteId).filter(Boolean))] as number[];
+        let variantesMap = new Map();
+        if (uniqueVariantesIds.length > 0) {
+            const variantesRaw = await db.select().from(VarianteProductoTable).where(inArray(VarianteProductoTable.id, uniqueVariantesIds));
+            variantesMap = new Map(variantesRaw.map(v => [v.id, v]));
+        }
+
         let total = 0
         let puntosGanados = 0;
         let puntosUsados = 0;
@@ -374,6 +391,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 puntosUsados += row.puntos.puntosNecesarios * item.cantidad
             } else {
                 let precioBase = parseFloat(row.producto.precio)
+                if (item.varianteId && variantesMap.has(item.varianteId)) {
+                    precioBase = parseFloat(variantesMap.get(item.varianteId).precio)
+                }
                 const descuento = row.producto.descuento || 0
                 if (descuento > 0) {
                     precioBase = precioBase * (1 - descuento / 100)
@@ -543,13 +563,23 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         for (const item of items) {
             const row = productosMap.get(item.productoId)!
             let precioUnitario = item.esCanjePuntos ? '0.00' : row.producto.precio
-            if (!item.esCanjePuntos && (row.producto.descuento || 0) > 0) {
+            if (!item.esCanjePuntos) {
+                let precioVal = parseFloat(row.producto.precio)
+                if (item.varianteId && variantesMap.has(item.varianteId)) {
+                    precioVal = parseFloat(variantesMap.get(item.varianteId).precio)
+                }
                 const descuentoPct = row.producto.descuento || 0
-                precioUnitario = (parseFloat(row.producto.precio) * (1 - descuentoPct / 100)).toFixed(2)
+                if (descuentoPct > 0) {
+                    precioUnitario = (precioVal * (1 - descuentoPct / 100)).toFixed(2)
+                } else {
+                    precioUnitario = precioVal.toFixed(2)
+                }
             }
             await db.insert(ItemPedidoUnificadoTable).values({
                 pedidoId,
                 productoId: item.productoId,
+                varianteId: item.varianteId || null,
+                varianteNombre: item.varianteId && variantesMap.has(item.varianteId) ? variantesMap.get(item.varianteId).nombre : null,
                 cantidad: item.cantidad,
                 precioUnitario,
                 ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
@@ -694,6 +724,7 @@ const createTakeawaySchema = z.object({
     notificarWhatsapp: z.boolean().optional().default(false),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
+        varianteId: z.number().int().positive().optional(),
         cantidad: z.number().int().positive().default(1),
         ingredientesExcluidos: z.array(z.number().int().positive()).optional(),
         agregados: z.array(z.object({
@@ -724,6 +755,13 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
 
         const productosMap = new Map(productosRaw.map(p => [p.id, { producto: p, puntos: puntosMap.get(p.id) ?? null }]))
 
+        const uniqueVariantesIds = [...new Set(items.map(i => i.varianteId).filter(Boolean))] as number[];
+        let variantesMap = new Map();
+        if (uniqueVariantesIds.length > 0) {
+            const variantesRaw = await db.select().from(VarianteProductoTable).where(inArray(VarianteProductoTable.id, uniqueVariantesIds));
+            variantesMap = new Map(variantesRaw.map(v => [v.id, v]));
+        }
+
         let total = 0
         let puntosGanados = 0;
         let puntosUsados = 0;
@@ -737,6 +775,9 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 puntosUsados += row.puntos.puntosNecesarios * item.cantidad
             } else {
                 let precioBase = parseFloat(row.producto.precio)
+                if (item.varianteId && variantesMap.has(item.varianteId)) {
+                    precioBase = parseFloat(variantesMap.get(item.varianteId).precio)
+                }
                 const descuento = row.producto.descuento || 0
                 if (descuento > 0) {
                     precioBase = precioBase * (1 - descuento / 100)
@@ -872,13 +913,23 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         for (const item of items) {
             const row = productosMap.get(item.productoId)!
             let precioUnitario = item.esCanjePuntos ? '0.00' : row.producto.precio
-            if (!item.esCanjePuntos && (row.producto.descuento || 0) > 0) {
+            if (!item.esCanjePuntos) {
+                let precioVal = parseFloat(row.producto.precio)
+                if (item.varianteId && variantesMap.has(item.varianteId)) {
+                    precioVal = parseFloat(variantesMap.get(item.varianteId).precio)
+                }
                 const descuentoPct = row.producto.descuento || 0
-                precioUnitario = (parseFloat(row.producto.precio) * (1 - descuentoPct / 100)).toFixed(2)
+                if (descuentoPct > 0) {
+                    precioUnitario = (precioVal * (1 - descuentoPct / 100)).toFixed(2)
+                } else {
+                    precioUnitario = precioVal.toFixed(2)
+                }
             }
             await db.insert(ItemPedidoUnificadoTable).values({
                 pedidoId,
                 productoId: item.productoId,
+                varianteId: item.varianteId || null,
+                varianteNombre: item.varianteId && variantesMap.has(item.varianteId) ? variantesMap.get(item.varianteId).nombre : null,
                 cantidad: item.cantidad,
                 precioUnitario,
                 ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
@@ -1184,6 +1235,8 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
                         productoId: ItemPedidoUnificadoTable.productoId,
                         cantidad: ItemPedidoUnificadoTable.cantidad,
                         precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
+                        varianteId: ItemPedidoUnificadoTable.varianteId,
+                        varianteNombre: ItemPedidoUnificadoTable.varianteNombre,
                         ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos,
                         agregados: ItemPedidoUnificadoTable.agregados,
                         esCanjePuntos: ItemPedidoUnificadoTable.esCanjePuntos,
@@ -1258,6 +1311,8 @@ publicRoute.get('/pedido-info/:id', async (c) => {
                 productoId: ItemPedidoUnificadoTable.productoId,
                 cantidad: ItemPedidoUnificadoTable.cantidad,
                 precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
+                varianteId: ItemPedidoUnificadoTable.varianteId,
+                varianteNombre: ItemPedidoUnificadoTable.varianteNombre,
                 ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos,
                 agregados: ItemPedidoUnificadoTable.agregados,
                 esCanjePuntos: ItemPedidoUnificadoTable.esCanjePuntos,
@@ -1308,6 +1363,8 @@ publicRoute.get('/pedido-info/:id', async (c) => {
                     productoId: i.productoId,
                     cantidad: i.cantidad,
                     precio: i.precioUnitario,
+                    varianteId: i.varianteId,
+                    varianteNombre: i.varianteNombre,
                     nombreProducto: i.nombreProducto,
                     ingredientesExcluidos: i.ingredientesExcluidos,
                     agregados: i.agregados,

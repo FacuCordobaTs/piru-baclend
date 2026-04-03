@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { producto as ProductoTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, itemPedido as ItemPedidoTable, etiqueta as EtiquetaTable, productoPuntos as ProductoPuntosTable, productoAgregado as ProductoAgregadoTable, agregado as AgregadoTable } from '../db/schema'
+import { producto as ProductoTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, itemPedido as ItemPedidoTable, etiqueta as EtiquetaTable, productoPuntos as ProductoPuntosTable, productoAgregado as ProductoAgregadoTable, agregado as AgregadoTable, varianteProducto as VarianteProductoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
@@ -173,6 +173,11 @@ const createProductSchema = z.object({
   puntosGanados: z.number().int().min(0).optional().default(0),
   puntosNecesarios: z.number().int().min(0).optional().default(0),
   descuento: z.number().int().min(0).max(100).optional().default(0),
+  variantes: z.array(z.object({
+    id: z.number().optional(),
+    nombre: z.string().min(1).max(255),
+    precio: z.number().min(0),
+  })).optional(),
 });
 
 const updateProductSchema = z.object({
@@ -189,6 +194,11 @@ const updateProductSchema = z.object({
   puntosGanados: z.number().int().min(0).optional(),
   puntosNecesarios: z.number().int().min(0).optional(),
   descuento: z.number().int().min(0).max(100).optional(),
+  variantes: z.array(z.object({
+    id: z.number().optional(),
+    nombre: z.string().min(1).max(255),
+    precio: z.number().min(0),
+  })).optional(),
 });
 
 const productoRoute = new Hono()
@@ -227,7 +237,7 @@ const productoRoute = new Hono()
     // Obtener ingredientes y etiquetas para cada producto
     const productosConDetalles = await Promise.all(
       productos.map(async (p) => {
-        const [ingredientes, agregadosList, etiquetas] = await Promise.all([
+        const [ingredientes, agregadosList, etiquetas, variantes] = await Promise.all([
           db
             .select({
               id: IngredienteTable.id,
@@ -252,6 +262,14 @@ const productoRoute = new Hono()
             })
             .from(EtiquetaTable)
             .where(eq(EtiquetaTable.productoId, p.id)),
+          db
+            .select({
+              id: VarianteProductoTable.id,
+              nombre: VarianteProductoTable.nombre,
+              precio: VarianteProductoTable.precio,
+            })
+            .from(VarianteProductoTable)
+            .where(eq(VarianteProductoTable.productoId, p.id)),
         ])
 
         return {
@@ -260,6 +278,7 @@ const productoRoute = new Hono()
           ingredientes: ingredientes,
           agregados: agregadosList,
           etiquetas: etiquetas,
+          variantes: variantes,
         }
       })
     )
@@ -274,7 +293,7 @@ const productoRoute = new Hono()
   .post('/create', zValidator('json', createProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, etiquetas, puntosGanados, puntosNecesarios, descuento } = c.req.valid('json')
+    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, etiquetas, puntosGanados, puntosNecesarios, descuento, variantes } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId) {
@@ -313,6 +332,8 @@ const productoRoute = new Hono()
       newImageUrl = await saveImage(image);
     }
 
+    const tieneVariantes = variantes && variantes.length > 0;
+
     const product = await db.insert(ProductoTable).values({
       nombre,
       descripcion,
@@ -321,9 +342,21 @@ const productoRoute = new Hono()
       restauranteId,
       categoriaId: categoriaId || null,
       descuento: descuento || 0,
+      tieneVariantes: tieneVariantes,
     })
 
     const productoId = Number(product[0].insertId)
+
+    // Insertar variantes si se proporcionaron
+    if (tieneVariantes) {
+      await db.insert(VarianteProductoTable).values(
+        variantes!.map(v => ({
+          productoId,
+          nombre: v.nombre,
+          precio: v.precio.toString(),
+        }))
+      )
+    }
 
     // Asociar ingredientes si se proporcionaron
     if (ingredienteIds && ingredienteIds.length > 0) {
@@ -433,7 +466,7 @@ const productoRoute = new Hono()
   .put('/update', zValidator('json', updateProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, activo, etiquetas, puntosGanados, puntosNecesarios, descuento } = c.req.valid('json')
+    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, variantes } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId !== undefined) {
@@ -484,11 +517,56 @@ const productoRoute = new Hono()
     if (categoriaId !== undefined) updateData.categoriaId = categoriaId;
     if (activo !== undefined) updateData.activo = activo;
     if (descuento !== undefined) updateData.descuento = descuento;
+    
+    // Si se enviaron variantes, actualizar el flag
+    if (variantes !== undefined) {
+      updateData.tieneVariantes = variantes.length > 0;
+    }
 
     if (Object.keys(updateData).length > 0) {
       await db.update(ProductoTable)
         .set(updateData)
         .where(and(eq(ProductoTable.id, id), eq(ProductoTable.restauranteId, restauranteId)))
+    }
+
+    // Actualizar variantes si se proporcionaron
+    if (variantes !== undefined) {
+      const variantesIdsNuevas = variantes.filter(v => v.id).map(v => v.id!);
+      
+      // 1. Eliminar variantes que ya no están en el array
+      if (variantesIdsNuevas.length > 0) {
+        await db.delete(VarianteProductoTable)
+          .where(and(
+            eq(VarianteProductoTable.productoId, id),
+            notInArray(VarianteProductoTable.id, variantesIdsNuevas)
+          ));
+      } else {
+        await db.delete(VarianteProductoTable)
+          .where(eq(VarianteProductoTable.productoId, id));
+      }
+
+      // 2. Insertar o actualizar variantes
+      for (const variante of variantes) {
+        if (variante.id) {
+          // Actualizar existente
+          await db.update(VarianteProductoTable)
+            .set({ 
+              nombre: variante.nombre, 
+              precio: variante.precio.toString() 
+            })
+            .where(and(
+              eq(VarianteProductoTable.id, variante.id),
+              eq(VarianteProductoTable.productoId, id)
+            ));
+        } else {
+          // Insertar nueva
+          await db.insert(VarianteProductoTable).values({
+            productoId: id,
+            nombre: variante.nombre,
+            precio: variante.precio.toString(),
+          });
+        }
+      }
     }
 
     // Actualizar ingredientes si se proporcionaron
@@ -665,7 +743,7 @@ const productoRoute = new Hono()
 
     const productosConDetalles = await Promise.all(
       productos.map(async (p) => {
-        const [ingredientes, agregadosList, etiquetas] = await Promise.all([
+        const [ingredientes, agregadosList, etiquetas, variantes] = await Promise.all([
           db
             .select({
               id: IngredienteTable.id,
@@ -690,6 +768,14 @@ const productoRoute = new Hono()
             })
             .from(EtiquetaTable)
             .where(eq(EtiquetaTable.productoId, p.id)),
+          db
+            .select({
+              id: VarianteProductoTable.id,
+              nombre: VarianteProductoTable.nombre,
+              precio: VarianteProductoTable.precio,
+            })
+            .from(VarianteProductoTable)
+            .where(eq(VarianteProductoTable.productoId, p.id)),
         ])
 
         return {
@@ -698,6 +784,7 @@ const productoRoute = new Hono()
           ingredientes,
           agregados: agregadosList,
           etiquetas,
+          variantes,
         }
       })
     )
