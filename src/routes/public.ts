@@ -570,10 +570,14 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 }
                 const descuentoPct = row.producto.descuento || 0
                 if (descuentoPct > 0) {
-                    precioUnitario = (precioVal * (1 - descuentoPct / 100)).toFixed(2)
-                } else {
-                    precioUnitario = precioVal.toFixed(2)
+                    precioVal = precioVal * (1 - descuentoPct / 100)
                 }
+                if (item.agregados && item.agregados.length > 0) {
+                    for (const ag of item.agregados) {
+                        precioVal += parseFloat(ag.precio)
+                    }
+                }
+                precioUnitario = precioVal.toFixed(2)
             }
             await db.insert(ItemPedidoUnificadoTable).values({
                 pedidoId,
@@ -920,10 +924,14 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 }
                 const descuentoPct = row.producto.descuento || 0
                 if (descuentoPct > 0) {
-                    precioUnitario = (precioVal * (1 - descuentoPct / 100)).toFixed(2)
-                } else {
-                    precioUnitario = precioVal.toFixed(2)
+                    precioVal = precioVal * (1 - descuentoPct / 100)
                 }
+                if (item.agregados && item.agregados.length > 0) {
+                    for (const ag of item.agregados) {
+                        precioVal += parseFloat(ag.precio)
+                    }
+                }
+                precioUnitario = precioVal.toFixed(2)
             }
             await db.insert(ItemPedidoUnificadoTable).values({
                 pedidoId,
@@ -1322,6 +1330,26 @@ publicRoute.get('/pedido-info/:id', async (c) => {
             .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
             .where(eq(ItemPedidoUnificadoTable.pedidoId, id))
 
+        const collectExclIds = (raw: unknown): number[] => {
+            if (!raw || !Array.isArray(raw)) return []
+            const out: number[] = []
+            for (const x of raw) {
+                const n = typeof x === 'number' ? x : parseInt(String(x), 10)
+                if (!Number.isNaN(n)) out.push(n)
+            }
+            return out
+        }
+
+        const allExclIds = [...new Set(items.flatMap((i) => collectExclIds(i.ingredientesExcluidos)))]
+        let ingNombreById = new Map<number, string>()
+        if (allExclIds.length > 0) {
+            const ingRows = await db
+                .select({ id: IngredienteTable.id, nombre: IngredienteTable.nombre })
+                .from(IngredienteTable)
+                .where(inArray(IngredienteTable.id, allExclIds))
+            ingNombreById = new Map(ingRows.map((r) => [r.id, r.nombre]))
+        }
+
         // 3. Obtener datos del restaurante necesarios para la UI
         const restaurantes = await db.select({
             id: RestauranteTable.id,
@@ -1340,9 +1368,52 @@ publicRoute.get('/pedido-info/:id', async (c) => {
 
         const restaurante = restaurantes[0] || null
 
+        const extraUnitFromAgregadosJson = (raw: unknown): number => {
+            if (!raw) return 0
+            let arr: unknown = raw
+            if (typeof raw === 'string') {
+                try {
+                    arr = JSON.parse(raw)
+                } catch {
+                    return 0
+                }
+            }
+            if (!Array.isArray(arr)) return 0
+            let s = 0
+            for (const ag of arr) {
+                if (ag && typeof ag === 'object' && ag !== null && 'precio' in ag) {
+                    s += parseFloat(String((ag as { precio?: string }).precio ?? 0)) || 0
+                }
+            }
+            return s
+        }
+
+        const computeDeliveryFeeCobrado = (): string => {
+            if (pedido.tipo !== 'delivery') return '0.00'
+            const T = parseFloat(String(pedido.total))
+            const D = parseFloat(String(pedido.montoDescuento ?? 0))
+            const adjusted = T + D
+            const qty = (i: (typeof items)[number]) => i.cantidad ?? 1
+            const unit = (i: (typeof items)[number]) => parseFloat(String(i.precioUnitario ?? 0)) || 0
+            const sumPlain = items.reduce((s, i) => s + unit(i) * qty(i), 0)
+            const sumWithExtras = items.reduce((s, i) => {
+                const ex = extraUnitFromAgregadosJson(i.agregados)
+                return s + (unit(i) + ex) * qty(i)
+            }, 0)
+            const F1 = adjusted - sumPlain
+            const F2 = adjusted - sumWithExtras
+            const tol = 0.05
+            let F = F1
+            if (F2 >= -tol && F2 < F1 - tol) F = F2
+            return Math.max(0, F).toFixed(2)
+        }
+
+        const deliveryFeeCobrado = computeDeliveryFeeCobrado()
+
         return c.json({
             success: true,
             data: {
+                deliveryFeeCobrado,
                 pedido: {
                     id: pedido.id,
                     tipo: pedido.tipo,
@@ -1358,18 +1429,25 @@ publicRoute.get('/pedido-info/:id', async (c) => {
                     rapiboyTrackingUrl: pedido.rapiboyTrackingUrl,
                     createdAt: pedido.createdAt,
                 },
-                items: items.map(i => ({
-                    id: i.id,
-                    productoId: i.productoId,
-                    cantidad: i.cantidad,
-                    precio: i.precioUnitario,
-                    varianteId: i.varianteId,
-                    varianteNombre: i.varianteNombre,
-                    nombreProducto: i.nombreProducto,
-                    ingredientesExcluidos: i.ingredientesExcluidos,
-                    agregados: i.agregados,
-                    esCanjePuntos: i.esCanjePuntos,
-                })),
+                items: items.map((i) => {
+                    const exIds = collectExclIds(i.ingredientesExcluidos)
+                    const ingredientesExcluidosNombres = exIds
+                        .map((id) => ingNombreById.get(id))
+                        .filter((n): n is string => n != null && n.length > 0)
+                    return {
+                        id: i.id,
+                        productoId: i.productoId,
+                        cantidad: i.cantidad,
+                        precio: i.precioUnitario,
+                        varianteId: i.varianteId,
+                        varianteNombre: i.varianteNombre,
+                        nombreProducto: i.nombreProducto,
+                        ingredientesExcluidos: i.ingredientesExcluidos,
+                        ingredientesExcluidosNombres,
+                        agregados: i.agregados,
+                        esCanjePuntos: i.esCanjePuntos,
+                    }
+                }),
                 restaurante,
             }
         })
