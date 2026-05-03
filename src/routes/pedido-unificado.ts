@@ -19,6 +19,8 @@ import { z } from 'zod'
 import { wsManager } from '../websocket/manager'
 import { sendClientOrderDispatchedWhatsApp } from '../services/whatsapp'
 import { rowToPagoRow, restauranteOcultaPedidosNoPagados, resolveMetodosPagoConfig } from '../lib/metodos-pago'
+import { emitirFacturaPedido } from '../services/afip-billing'
+
 
 const createDeliverySchema = z.object({
   tipo: z.literal('delivery'),
@@ -370,6 +372,34 @@ const pedidoUnificadoRoute = new Hono()
     if (pedido.telefono) {
       wsManager.notifyTrackingClients(restauranteId, pedido.telefono, pedidoId, tipo, estado)
     }
+
+    if (restauranteId === 1 && estado === 'delivered') {
+      try {
+        const cert = await Bun.file('digital-certificate.txt').text()
+        const key  = await Bun.file('private-key.pem').text()
+     
+        const resultado = await emitirFacturaPedido(
+          {
+            cuit:          '20459504428',
+            claveFiscal:   process.env.AFIP_CLAVE_FISCAL!,  // tu clave fiscal en .env
+            cert,
+            key,
+            nombreFantasia: 'Piru Test',
+            // puntoDeVenta: 1, // si ya lo creaste manualmente, descomentá esto
+          },
+          {
+            id:    pedido.id,
+            total: parseFloat(pedido.total),
+          }
+        )
+     
+        console.log('✅ Factura de prueba emitida:', resultado)
+     
+      } catch (e) {
+        console.error('❌ Error factura prueba:', e)
+      }
+    }
+    
 
     return c.json({ message: 'Estado actualizado correctamente', success: true }, 200)
   })
