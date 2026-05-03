@@ -77,7 +77,7 @@ export async function emitirFacturaPedido(
     cert: config.cert,
     key: config.key,
     access_token: process.env.AFIPSDK_ACCESS_TOKEN!,
-    production: true, // Cambiar a false para testing
+    production: false, // Cambiar a false para testing
   })
 
   // 2. Resolver punto de venta: usar el existente o crear uno nuevo
