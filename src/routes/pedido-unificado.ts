@@ -373,6 +373,10 @@ const pedidoUnificadoRoute = new Hono()
       wsManager.notifyTrackingClients(restauranteId, pedido.telefono, pedidoId, tipo, estado)
     }
 
+    console.log("Cambio de estado")
+    console.log("Restaurante ID:", restauranteId)
+    console.log("Estado:", estado)
+
     if (restauranteId === 1 && estado === 'delivered') {
       try {
         const cert = await Bun.file('digital-certificate.txt').text()
