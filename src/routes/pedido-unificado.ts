@@ -377,7 +377,7 @@ const pedidoUnificadoRoute = new Hono()
     console.log("Restaurante ID:", restauranteId)
     console.log("Estado:", estado)
 
-    if (restauranteId === 1 && estado === 'delivered') {
+    if (restauranteId === 1 && estado === 'archived') {
       try {
         const cert = await Bun.file('digital-certificate.txt').text()
         const key  = await Bun.file('private-key.pem').text()
