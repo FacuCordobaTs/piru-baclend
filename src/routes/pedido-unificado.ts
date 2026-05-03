@@ -379,8 +379,8 @@ const pedidoUnificadoRoute = new Hono()
 
     if (restauranteId === 1 && estado === 'archived') {
       try {
-        const cert = await Bun.file('digital-certificate.txt').text()
-        const key  = await Bun.file('private-key.pem').text()
+        const cert = await Bun.file('piru_cert.crt').text()
+        const key  = await Bun.file('piru_privada.key').text()
      
         const resultado = await emitirFacturaPedido(
           {
