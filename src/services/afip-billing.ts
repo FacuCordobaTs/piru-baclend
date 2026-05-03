@@ -2,7 +2,7 @@
 // Servicio de facturación electrónica ARCA via AfipSDK
 // Integrar en el endpoint PUT /:id/estado cuando estado === 'delivered'
 
-import * as Afip from '@afipsdk/afip.js'
+import Afip from '@afipsdk/afip.js'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
