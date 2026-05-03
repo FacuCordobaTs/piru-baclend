@@ -126,6 +126,8 @@ export async function emitirFacturaPedido(
   // createNextVoucher obtiene el último número, le suma 1, y emite
   const res = await afip.ElectronicBilling.createNextVoucher(data)
 
+  console.log('AFIP res raw:', JSON.stringify(res))
+
   return {
     cae: res.CAE,
     caeFchVto: res.CAEFchVto,
