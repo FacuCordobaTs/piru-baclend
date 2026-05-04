@@ -10,6 +10,7 @@ import {
   codigoDescuento as CodigoDescuentoTable,
   mensajeWhatsapp as MensajeWhatsappTable,
   varianteProducto as VarianteProductoTable,
+  sucursal as SucursalTable,
 } from '../db/schema'
 import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
@@ -105,6 +106,7 @@ const pedidoUnificadoRoute = new Hono()
     const estado = c.req.query('estado')
     const tipo = c.req.query('tipo') as 'delivery' | 'takeaway' | 'all' | undefined
     const offset = (page - 1) * limit
+    const sucursalIdParam = c.req.query('sucursalId')
 
     const restaurante = await db
       .select({
@@ -175,6 +177,12 @@ const pedidoUnificadoRoute = new Hono()
     if (estado) {
       whereCondition = and(whereCondition, eq(PedidoUnificadoTable.estado, estado as any))
     }
+    if (sucursalIdParam !== undefined && sucursalIdParam !== '') {
+      const sid = Number(sucursalIdParam)
+      if (!Number.isNaN(sid) && sid > 0) {
+        whereCondition = and(whereCondition, eq(PedidoUnificadoTable.sucursalId, sid))
+      }
+    }
 
     const pedidos = await db
       .select({
@@ -194,6 +202,7 @@ const pedidoUnificadoRoute = new Hono()
         rapiboyTrackingUrl: PedidoUnificadoTable.rapiboyTrackingUrl,
         codigoDescuentoId: PedidoUnificadoTable.codigoDescuentoId,
         montoDescuento: PedidoUnificadoTable.montoDescuento,
+        sucursalId: PedidoUnificadoTable.sucursalId,
         codigoDescuentoCodigo: CodigoDescuentoTable.codigo,
       })
       .from(PedidoUnificadoTable)
@@ -492,7 +501,7 @@ const pedidoUnificadoRoute = new Hono()
     const tipo = pedido[0].tipo
     const becamePaid = newPagado && !pedido[0].pagado
     if (becamePaid) {
-      wsManager.broadcastAdminUpdate(restauranteId, tipo)
+      wsManager.broadcastAdminUpdate(restauranteId, tipo, { sucursalId: pedido[0].sucursalId ?? null })
     }
 
     return c.json({
@@ -547,8 +556,8 @@ const pedidoUnificadoRoute = new Hono()
       .where(eq(RestauranteTable.id, restauranteId))
       .limit(1)
 
-    if (!res || res.length === 0 || !res[0].rapiboyToken) {
-      return c.json({ message: 'Token de Rapiboy no configurado', success: false }, 400)
+    if (!res || res.length === 0) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 400)
     }
 
     const ped = await db
@@ -566,6 +575,24 @@ const pedidoUnificadoRoute = new Hono()
     }
 
     const pedido = ped[0]
+    let rapiboyToken = res[0].rapiboyToken
+    if (pedido.sucursalId) {
+      const [scRb] = await db
+        .select({ rapiboyToken: SucursalTable.rapiboyToken })
+        .from(SucursalTable)
+        .where(and(
+          eq(SucursalTable.id, pedido.sucursalId),
+          eq(SucursalTable.restauranteId, restauranteId),
+        ))
+        .limit(1)
+      if (scRb?.rapiboyToken) {
+        rapiboyToken = scRb.rapiboyToken
+      }
+    }
+
+    if (!rapiboyToken) {
+      return c.json({ message: 'Token de Rapiboy no configurado', success: false }, 400)
+    }
     const rapiboyPayload = {
       DireccionOrigen: res[0].direccion || 'Dirección no especificada',
       LatitudOrigen: '0.0',
@@ -582,7 +609,7 @@ const pedidoUnificadoRoute = new Hono()
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Token: res[0].rapiboyToken as string,
+          Token: rapiboyToken as string,
         },
         body: JSON.stringify(rapiboyPayload),
       })

@@ -91,9 +91,22 @@ export const restaurante = mysqlTable("restaurante", {
   // soloCartaDigital: boolean("solo_carta_digital").default(false).notNull(),
 });
 
+export const sucursal = mysqlTable("sucursal", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  direccion: varchar("direccion", { length: 255 }),
+  whatsappEnabled: boolean("whatsapp_enabled").default(false).notNull(),
+  whatsappNumber: varchar("whatsapp_number", { length: 50 }),
+  rapiboyToken: varchar("rapiboy_token", { length: 512 }),
+  activo: boolean("activo").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const pedidoUnificado = mysqlTable("pedido_unificado", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  sucursalId: int("sucursal_id").references(() => sucursal.id),
   clienteId: int("cliente_id").references(() => cliente.id), // Nullable si no se registró
 
   // Discriminador principal
@@ -329,6 +342,7 @@ export const zonaDelivery = mysqlTable("zona_delivery", {
   restauranteId: int("restaurante_id")
     .references(() => restaurante.id)
     .notNull(),
+  sucursalId: int("sucursal_id").references(() => sucursal.id),
   nombre: varchar("nombre", { length: 255 }).notNull(),
   precio: decimal("precio", { precision: 10, scale: 2 }).notNull(),
   poligono: json("poligono").notNull(), // Array de {lat: number, lng: number}

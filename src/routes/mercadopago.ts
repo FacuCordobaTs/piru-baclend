@@ -394,7 +394,7 @@ mercadopagoRoute.post('/process-brick', async (c) => {
         pedidoId: pedidoId
       })
 
-      wsManager.broadcastAdminUpdate(pedido.restauranteId!, tipoPedido)
+      wsManager.broadcastAdminUpdate(pedido.restauranteId!, tipoPedido, { sucursalId: pedido.sucursalId ?? null })
       wsManager.notifyPublicClientPayment(tipoPedido, pedidoId)
 
       try {
@@ -657,7 +657,7 @@ mercadopagoRoute.post('/webhook', async (c) => {
         pedidoId: pedidoId
       })
 
-      wsManager.broadcastAdminUpdate(restauranteId, tipoPedido)
+      wsManager.broadcastAdminUpdate(restauranteId, tipoPedido, { sucursalId: pedidoData.sucursalId ?? null })
       wsManager.notifyPublicClientPayment(tipoPedido, pedidoId)
 
       try {

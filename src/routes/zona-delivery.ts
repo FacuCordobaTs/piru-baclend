@@ -22,6 +22,7 @@ const createZonaSchema = z.object({
     precio: z.string().min(1, 'El precio es requerido'),
     poligono: z.array(coordenadaSchema).min(3, 'Un polígono necesita al menos 3 puntos'),
     color: z.string().optional(),
+    sucursalId: z.number().int().positive().nullable().optional(),
 })
 
 const updateZonaSchema = z.object({
@@ -29,6 +30,7 @@ const updateZonaSchema = z.object({
     precio: z.string().min(1).optional(),
     poligono: z.array(coordenadaSchema).min(3).optional(),
     color: z.string().optional(),
+    sucursalId: z.number().int().positive().nullable().optional(),
 })
 
 // GET /zona-delivery - Obtener todas las zonas del restaurante
@@ -53,7 +55,7 @@ zonaDeliveryRoute.get('/', async (c) => {
 zonaDeliveryRoute.post('/create', zValidator('json', createZonaSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { nombre, precio, poligono, color } = c.req.valid('json')
+    const { nombre, precio, poligono, color, sucursalId } = c.req.valid('json')
 
     try {
         const result = await db.insert(ZonaDeliveryTable).values({
@@ -62,6 +64,7 @@ zonaDeliveryRoute.post('/create', zValidator('json', createZonaSchema), async (c
             precio,
             poligono,
             color: color || null,
+            sucursalId: sucursalId ?? null,
         })
 
         const insertedId = Number(result[0].insertId)
@@ -89,7 +92,7 @@ zonaDeliveryRoute.put('/:id', zValidator('json', updateZonaSchema), async (c) =>
         return c.json({ success: false, message: 'ID de zona inválido' }, 400)
     }
 
-    const { nombre, precio, poligono, color } = c.req.valid('json')
+    const { nombre, precio, poligono, color, sucursalId } = c.req.valid('json')
 
     try {
         // Verificar que la zona pertenece al restaurante
@@ -107,6 +110,7 @@ zonaDeliveryRoute.put('/:id', zValidator('json', updateZonaSchema), async (c) =>
         if (precio !== undefined) updateData.precio = precio
         if (poligono !== undefined) updateData.poligono = poligono
         if (color !== undefined) updateData.color = color
+        if (sucursalId !== undefined) updateData.sucursalId = sucursalId
 
         if (Object.keys(updateData).length === 0) {
             return c.json({ success: false, message: 'No hay datos para actualizar' }, 400)

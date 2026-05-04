@@ -125,13 +125,22 @@ class WebSocketManager {
   }
 
   // Notificar actualización genérica (para delivery/takeaway)
-  broadcastAdminUpdate(restauranteId: number, updateType: string) {
+  broadcastAdminUpdate(
+    restauranteId: number,
+    updateType: string,
+    meta?: { sucursalId?: number | null },
+  ) {
     const session = this.adminSessions.get(restauranteId);
     if (!session || session.connections.size === 0) return;
 
+    const payload: { updateType: string; sucursalId?: number | null } = { updateType };
+    if (meta !== undefined) {
+      payload.sucursalId = meta.sucursalId ?? null;
+    }
+
     const message = JSON.stringify({
       type: 'ADMIN_UPDATE',
-      payload: { updateType }
+      payload,
     });
 
     session.connections.forEach((client) => {

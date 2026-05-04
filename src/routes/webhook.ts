@@ -191,7 +191,7 @@ const cucuruWebhookHandler = async (c: any) => {
       });
 
       console.log(`🚀 [Cucuru] Pago acreditado para ${tipoEncontrado} #${pedido.id}`);
-      wsManager.broadcastAdminUpdate(targetRestauranteId, tipoEncontrado);
+      wsManager.broadcastAdminUpdate(targetRestauranteId, tipoEncontrado, { sucursalId: pedido.sucursalId ?? null });
       wsManager.notifyPublicClientPayment(tipoEncontrado, pedido.id);
 
       // WhatsApp Notification
@@ -441,7 +441,7 @@ webhookRoute.post('/talo', async (c) => {
         leida: false,
         pedidoId: pedido.id,
       });
-      wsManager.broadcastAdminUpdate(restauranteId, pedido.tipo);
+      wsManager.broadcastAdminUpdate(restauranteId, pedido.tipo, { sucursalId: pedido.sucursalId ?? null });
       wsManager.notifyPublicClientPayment(pedido.tipo, pedido.id);
       console.log('[Talo Webhook] WebSockets enviados. Verificando WhatsApp...');
 
@@ -555,7 +555,7 @@ webhookRoute.post('/rapiboy', async (c) => {
             await db.update(PedidoUnificadoTable).set(updateData).where(eq(PedidoUnificadoTable.id, pedidoId));
 
             // Actualizar a los administradores
-            wsManager.broadcastAdminUpdate(pedido.restauranteId, 'delivery');
+            wsManager.broadcastAdminUpdate(pedido.restauranteId, 'delivery', { sucursalId: pedido.sucursalId ?? null });
             
             // Actualizar a los clientes públicos/tracking
             wsManager.notifyPublicClientEstado('delivery', pedidoId, updateData.estado || pedido.estado, updateData.rapiboyTrackingUrl || pedido.rapiboyTrackingUrl || undefined);

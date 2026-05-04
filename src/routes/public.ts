@@ -96,6 +96,18 @@ publicRoute.get('/restaurante/:username', async (c) => {
             .from(HorarioRestauranteTable)
             .where(eq(HorarioRestauranteTable.restauranteId, restauranteId))
 
+        const sucursales = await db
+            .select({
+                id: SucursalTable.id,
+                nombre: SucursalTable.nombre,
+                direccion: SucursalTable.direccion,
+            })
+            .from(SucursalTable)
+            .where(and(
+                eq(SucursalTable.restauranteId, restauranteId),
+                eq(SucursalTable.activo, true),
+            ))
+
         // Productos sin joins (evita bug Drizzle orderSelectedFields con leftJoin null)
         const productosRaw = await db
             .select()
@@ -178,7 +190,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
                     metodosPago: metodosPagoPublicos,
                 },
                 productos: productosConIngredientes,
-                horarios
+                horarios,
+                sucursales,
             }
         }, 200)
 
@@ -194,7 +207,8 @@ import {
     pedidoUnificado as PedidoUnificadoTable, 
     itemPedidoUnificado as ItemPedidoUnificadoTable, 
     cliente as ClienteTable,
-    sala as SalaTable
+    sala as SalaTable,
+    sucursal as SucursalTable,
 } from '../db/schema'
 
 const createSalaSchema = z.object({
@@ -437,6 +451,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         // --- Lógica de zonas de delivery ---
         let deliveryFeeAplicado = 0
         let zonaNombre: string | null = null
+        let pedidoSucursalId: number | null = null
 
         // 1. Buscar zonas configuradas para este restaurante
         const zonasDelivery = await db.select().from(ZonaDeliveryTable)
@@ -456,6 +471,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
             deliveryFeeAplicado = parseFloat(zonaMatch.precio)
             zonaNombre = zonaMatch.nombre
+            pedidoSucursalId = zonaMatch.sucursalId ?? null
         } else if (resRestaurante.length > 0 && resRestaurante[0].deliveryFee) {
             // Fallback: usar deliveryFee global del restaurante
             deliveryFeeAplicado = parseFloat(resRestaurante[0].deliveryFee)
@@ -544,6 +560,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             restauranteId,
             clienteId: clienteId || null,
             tipo: 'delivery',
+            sucursalId: pedidoSucursalId,
             direccion,
             latitud: lat !== undefined ? lat.toString() : null,
             longitud: lng !== undefined ? lng.toString() : null,
@@ -632,7 +649,28 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
             }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1);
 
-            if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber && !waitToPay) {
+            let whatsappLocalNumber: string | null = null
+            if (pedidoSucursalId) {
+                const [scWa] = await db
+                    .select({
+                        whatsappEnabled: SucursalTable.whatsappEnabled,
+                        whatsappNumber: SucursalTable.whatsappNumber,
+                    })
+                    .from(SucursalTable)
+                    .where(and(
+                        eq(SucursalTable.id, pedidoSucursalId),
+                        eq(SucursalTable.restauranteId, restauranteId),
+                    ))
+                    .limit(1)
+                if (scWa?.whatsappEnabled && scWa?.whatsappNumber) {
+                    whatsappLocalNumber = scWa.whatsappNumber
+                }
+            }
+            if (!whatsappLocalNumber && restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
+                whatsappLocalNumber = restaurante[0].whatsappNumber
+            }
+
+            if (whatsappLocalNumber && !waitToPay) {
                 const orderItemsForWa = items.map(item => {
                     const row = productosMap.get(item.productoId)!;
                     return {
@@ -648,9 +686,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                     });
                 }
 
-                console.log("⏳ Iniciando envío de WhatsApp a:", restaurante[0].whatsappNumber);
+                console.log("⏳ Iniciando envío de WhatsApp a:", whatsappLocalNumber);
                 sendOrderWhatsApp(c, {
-                    phone: restaurante[0].whatsappNumber,
+                    phone: whatsappLocalNumber,
                     customerName: nombreCliente || 'Cliente no especificado',
                     address: direccion || 'Sin dirección',
                     total: metodoPagoEfectivoDelivery ? `${total.toFixed(2)} (${metodoPagoEfectivoDelivery})` : total.toFixed(2),
@@ -693,7 +731,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 leida: false,
                 pedidoId: pedidoId
             })
-            wsManager.broadcastAdminUpdate(restauranteId, 'delivery')
+            wsManager.broadcastAdminUpdate(restauranteId, 'delivery', { sucursalId: pedidoSucursalId ?? null })
         }
 
         return c.json({
@@ -720,6 +758,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
 const createTakeawaySchema = z.object({
     restauranteId: z.number().int().positive(),
+    sucursalId: z.number().int().positive().optional(),
     nombreCliente: z.string().optional(),
     telefono: z.string().optional(),
     notas: z.string().optional(),
@@ -742,7 +781,7 @@ const createTakeawaySchema = z.object({
 
 publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp } = c.req.valid('json')
+    const { restauranteId, sucursalId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp } = c.req.valid('json')
 
     try {
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
@@ -897,10 +936,27 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         }
         const metodoPagoEfectivo = resolvedTk.metodo
 
+        let pedidoSucursalIdTk: number | null = null
+        if (sucursalId != null) {
+            const [scRow] = await db
+                .select({ id: SucursalTable.id })
+                .from(SucursalTable)
+                .where(and(
+                    eq(SucursalTable.id, sucursalId),
+                    eq(SucursalTable.restauranteId, restauranteId),
+                ))
+                .limit(1)
+            if (!scRow) {
+                return c.json({ message: 'Sucursal no encontrada', success: false }, 400)
+            }
+            pedidoSucursalIdTk = scRow.id
+        }
+
         const nuevoPedido = await db.insert(PedidoUnificadoTable).values({
             restauranteId,
             clienteId: clienteId || null,
             tipo: 'takeaway',
+            sucursalId: pedidoSucursalIdTk,
             nombreCliente: nombreCliente || null,
             telefono: telefono || null,
             notas: notas || null,
@@ -988,7 +1044,28 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
             }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1);
 
-            if (restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber && !waitToPay) {
+            let whatsappLocalNumber: string | null = null
+            if (pedidoSucursalIdTk) {
+                const [scWa] = await db
+                    .select({
+                        whatsappEnabled: SucursalTable.whatsappEnabled,
+                        whatsappNumber: SucursalTable.whatsappNumber,
+                    })
+                    .from(SucursalTable)
+                    .where(and(
+                        eq(SucursalTable.id, pedidoSucursalIdTk),
+                        eq(SucursalTable.restauranteId, restauranteId),
+                    ))
+                    .limit(1)
+                if (scWa?.whatsappEnabled && scWa?.whatsappNumber) {
+                    whatsappLocalNumber = scWa.whatsappNumber
+                }
+            }
+            if (!whatsappLocalNumber && restaurante[0]?.whatsappEnabled && restaurante[0]?.whatsappNumber) {
+                whatsappLocalNumber = restaurante[0].whatsappNumber
+            }
+
+            if (whatsappLocalNumber && !waitToPay) {
                 const orderItemsForWa = items.map(item => {
                     const row = productosMap.get(item.productoId)!;
                     return {
@@ -997,9 +1074,9 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                     };
                 });
 
-                console.log("⏳ Iniciando envío de WhatsApp a:", restaurante[0].whatsappNumber);
+                console.log("⏳ Iniciando envío de WhatsApp a:", whatsappLocalNumber);
                 sendOrderWhatsApp(c, {
-                    phone: restaurante[0].whatsappNumber,
+                    phone: whatsappLocalNumber,
                     customerName: nombreCliente || 'Cliente no especificado',
                     address: 'Retira en local (Take Away)',
                     total: metodoPagoEfectivo ? `${total.toFixed(2)} (${metodoPagoEfectivo})` : total.toFixed(2),
@@ -1042,7 +1119,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 leida: false,
                 pedidoId: pedidoId
             })
-            wsManager.broadcastAdminUpdate(restauranteId, 'takeaway')
+            wsManager.broadcastAdminUpdate(restauranteId, 'takeaway', { sucursalId: pedidoSucursalIdTk ?? null })
         }
 
         return c.json({
@@ -1082,9 +1159,12 @@ publicRoute.put('/delivery/:id/metodo-pago', zValidator('json', setMetodoPagoSch
             return c.json({ message: 'Pedido no encontrado', success: false }, 404)
         }
 
-        const pedido = await db.select({ restauranteId: PedidoUnificadoTable.restauranteId }).from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.id, id)).limit(1)
+        const pedido = await db.select({
+            restauranteId: PedidoUnificadoTable.restauranteId,
+            sucursalId: PedidoUnificadoTable.sucursalId,
+        }).from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.id, id)).limit(1)
         if (pedido.length > 0 && pedido[0].restauranteId) {
-            wsManager.broadcastAdminUpdate(pedido[0].restauranteId, 'delivery')
+            wsManager.broadcastAdminUpdate(pedido[0].restauranteId, 'delivery', { sucursalId: pedido[0].sucursalId ?? null })
         }
 
         return c.json({ message: 'Método de pago actualizado', success: true }, 200)
@@ -1107,9 +1187,12 @@ publicRoute.put('/takeaway/:id/metodo-pago', zValidator('json', setMetodoPagoSch
             return c.json({ message: 'Pedido no encontrado', success: false }, 404)
         }
 
-        const pedido = await db.select({ restauranteId: PedidoUnificadoTable.restauranteId }).from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.id, id)).limit(1)
+        const pedido = await db.select({
+            restauranteId: PedidoUnificadoTable.restauranteId,
+            sucursalId: PedidoUnificadoTable.sucursalId,
+        }).from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.id, id)).limit(1)
         if (pedido.length > 0 && pedido[0].restauranteId) {
-            wsManager.broadcastAdminUpdate(pedido[0].restauranteId, 'takeaway')
+            wsManager.broadcastAdminUpdate(pedido[0].restauranteId, 'takeaway', { sucursalId: pedido[0].sucursalId ?? null })
         }
 
         return c.json({ message: 'Método de pago actualizado', success: true }, 200)
@@ -1194,7 +1277,8 @@ publicRoute.get('/restaurante/:id/check-zona', async (c) => {
             success: true,
             tieneZonas: true,
             deliveryFee: zonaMatch.precio,
-            zonaNombre: zonaMatch.nombre
+            zonaNombre: zonaMatch.nombre,
+            sucursalId: zonaMatch.sucursalId ?? null,
         }, 200)
     } catch (error) {
         console.error('Error checking delivery zone:', error)
