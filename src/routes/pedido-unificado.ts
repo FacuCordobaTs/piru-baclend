@@ -13,7 +13,7 @@ import {
 } from '../db/schema'
 import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
-import { eq, desc, and, or, notInArray, isNull, inArray } from 'drizzle-orm'
+import { eq, desc, and, or, not, inArray, notInArray, isNull, sql } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { wsManager } from '../websocket/manager'
@@ -22,7 +22,9 @@ import {
   rowToPagoRow,
   restauranteOcultaPedidosNoPagados,
   resolveMetodosPagoConfig,
+  buildMetodosPublicosList,
   METODOS_PAGO_AUTOMATICOS_EN_PEDIDO,
+  METODOS_PAGO_MANUAL_VERIFICABLE_EN_PEDIDO,
 } from '../lib/metodos-pago'
 import { emitirFacturaPedido } from '../services/afip-billing'
 
@@ -130,12 +132,29 @@ const pedidoUnificadoRoute = new Hono()
       restaurante.length > 0 &&
       restauranteOcultaPedidosNoPagados(resolveMetodosPagoConfig(rowToPagoRow(restaurante[0])))
     ) {
+      const pagoRow = rowToPagoRow(restaurante[0])
+      const metodosPublicosIds = buildMetodosPublicosList(pagoRow).map((o) => o.id)
+      const esperandoWebhook = and(
+        eq(PedidoUnificadoTable.pagado, false),
+        inArray(PedidoUnificadoTable.metodoPago, [...METODOS_PAGO_AUTOMATICOS_EN_PEDIDO]),
+      )
+      const impagoManualNoOfrecido =
+        metodosPublicosIds.length > 0
+          ? and(
+              eq(PedidoUnificadoTable.pagado, false),
+              inArray(PedidoUnificadoTable.metodoPago, [...METODOS_PAGO_MANUAL_VERIFICABLE_EN_PEDIDO]),
+              notInArray(PedidoUnificadoTable.metodoPago, metodosPublicosIds),
+            )
+          : sql`FALSE`
+
+      /** No mostrar: impagos que esperan webhook, o efectivo/transf. manual cuando ya no están en la config pública */
+      const ocultarPedidoImpagoOperaciones = or(esperandoWebhook, impagoManualNoOfrecido)
       whereCondition = and(
         whereCondition,
         or(
           eq(PedidoUnificadoTable.pagado, true),
           isNull(PedidoUnificadoTable.metodoPago),
-          notInArray(PedidoUnificadoTable.metodoPago, [...METODOS_PAGO_AUTOMATICOS_EN_PEDIDO]),
+          not(ocultarPedidoImpagoOperaciones ?? sql`FALSE`),
         ),
       )
     }

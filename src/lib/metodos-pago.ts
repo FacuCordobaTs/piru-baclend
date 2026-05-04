@@ -147,6 +147,13 @@ export const METODOS_PAGO_AUTOMATICOS_EN_PEDIDO: readonly string[] = [
   METODO_PAGO.TRANSFERENCIA_LEGACY,
 ]
 
+/** Valores en `pedido_unificado.metodo_pago` que el cajero verifica en mano (deben coincidir con métodos públicos habilitados). */
+export const METODOS_PAGO_MANUAL_VERIFICABLE_EN_PEDIDO: readonly string[] = [
+  METODO_PAGO.MANUAL_TRANSFER,
+  METODO_PAGO.CASH,
+  METODO_PAGO.EFECTIVO_LEGACY,
+]
+
 export interface MetodoPublicoOption {
   id: MetodoPagoCanonical
   label: string
@@ -202,11 +209,7 @@ export function isMetodoAutomatico(metodo: string | null | undefined): boolean {
 /** Manual transfer or cash — show in dashboard before payment verified. */
 export function isMetodoManualVerificable(metodo: string | null | undefined): boolean {
   if (!metodo) return false
-  return (
-    metodo === METODO_PAGO.MANUAL_TRANSFER ||
-    metodo === METODO_PAGO.CASH ||
-    metodo === METODO_PAGO.EFECTIVO_LEGACY
-  )
+  return (METODOS_PAGO_MANUAL_VERIFICABLE_EN_PEDIDO as readonly string[]).includes(metodo)
 }
 
 /** True = no WS al admin hasta acreditación (MP o transfer automática). */
