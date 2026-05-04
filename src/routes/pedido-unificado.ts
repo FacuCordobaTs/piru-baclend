@@ -13,12 +13,17 @@ import {
 } from '../db/schema'
 import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
-import { eq, desc, and, inArray } from 'drizzle-orm'
+import { eq, desc, and, or, notInArray, isNull, inArray } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { wsManager } from '../websocket/manager'
 import { sendClientOrderDispatchedWhatsApp } from '../services/whatsapp'
-import { rowToPagoRow, restauranteOcultaPedidosNoPagados, resolveMetodosPagoConfig } from '../lib/metodos-pago'
+import {
+  rowToPagoRow,
+  restauranteOcultaPedidosNoPagados,
+  resolveMetodosPagoConfig,
+  METODOS_PAGO_AUTOMATICOS_EN_PEDIDO,
+} from '../lib/metodos-pago'
 import { emitirFacturaPedido } from '../services/afip-billing'
 
 
@@ -125,7 +130,14 @@ const pedidoUnificadoRoute = new Hono()
       restaurante.length > 0 &&
       restauranteOcultaPedidosNoPagados(resolveMetodosPagoConfig(rowToPagoRow(restaurante[0])))
     ) {
-      whereCondition = and(whereCondition, eq(PedidoUnificadoTable.pagado, true))
+      whereCondition = and(
+        whereCondition,
+        or(
+          eq(PedidoUnificadoTable.pagado, true),
+          isNull(PedidoUnificadoTable.metodoPago),
+          notInArray(PedidoUnificadoTable.metodoPago, [...METODOS_PAGO_AUTOMATICOS_EN_PEDIDO]),
+        ),
+      )
     }
     if (estado) {
       whereCondition = and(whereCondition, eq(PedidoUnificadoTable.estado, estado as any))

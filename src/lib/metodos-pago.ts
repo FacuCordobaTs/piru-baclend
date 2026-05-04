@@ -125,15 +125,27 @@ export function hasAnyMetodoAutomatico(cfg: MetodosPagoConfig): boolean {
   )
 }
 
-/** Public checkout must not mix automatic and manual; automatic wins if any auto is on. */
+/**
+ * Checkout público: no mezclar transferencia manual (alias fijo + comprobante) con automatización —
+ * si hay medio automático, la manual se fuerza OFF. El efectivo puede convivir con MP / Cucuru / Talo.
+ */
 export function enforceMetodosPublicos(cfg: MetodosPagoConfig): MetodosPagoConfig {
   if (!hasAnyMetodoAutomatico(cfg)) return cfg
   return {
     ...cfg,
     transferenciaManual: false,
-    efectivo: false,
   }
 }
+
+/** Valores típicos de `pedido_unificado.metodo_pago` que se acreditan solo vía webhook (lista acotada para SQL). */
+export const METODOS_PAGO_AUTOMATICOS_EN_PEDIDO: readonly string[] = [
+  METODO_PAGO.MERCADOPAGO_CHECKOUT,
+  METODO_PAGO.MERCADOPAGO_BRICKS,
+  METODO_PAGO.MERCADOPAGO_LEGACY,
+  METODO_PAGO.TRANSFERENCIA_AUTO_CUCURU,
+  METODO_PAGO.TRANSFERENCIA_AUTO_TALO,
+  METODO_PAGO.TRANSFERENCIA_LEGACY,
+]
 
 export interface MetodoPublicoOption {
   id: MetodoPagoCanonical
@@ -265,7 +277,7 @@ export function proveedorTransferenciaDinamica(
   return null
 }
 
-/** List filter: hide unpaid orders when restaurant only uses automatic settlement. */
+/** True si el listado admin debe ocultar pedidos impagos cuyo método solo se acredita por webhook (MP / transf. auto). */
 export function restauranteOcultaPedidosNoPagados(cfg: MetodosPagoConfig): boolean {
   return hasAnyMetodoAutomatico(enforceMetodosPublicos(cfg))
 }
