@@ -13,7 +13,7 @@ import {
 } from '../db/schema'
 import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
-import { eq, desc, and, or, not, inArray, notInArray, isNull, sql } from 'drizzle-orm'
+import { eq, desc, and, or, not, inArray, notInArray, sql } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { wsManager } from '../websocket/manager'
@@ -138,24 +138,38 @@ const pedidoUnificadoRoute = new Hono()
         eq(PedidoUnificadoTable.pagado, false),
         inArray(PedidoUnificadoTable.metodoPago, [...METODOS_PAGO_AUTOMATICOS_EN_PEDIDO]),
       )
-      const impagoManualNoOfrecido =
-        metodosPublicosIds.length > 0
-          ? and(
-              eq(PedidoUnificadoTable.pagado, false),
-              inArray(PedidoUnificadoTable.metodoPago, [...METODOS_PAGO_MANUAL_VERIFICABLE_EN_PEDIDO]),
-              notInArray(PedidoUnificadoTable.metodoPago, metodosPublicosIds),
-            )
+      /** Impago efectivo/manual si el medio ya no figura entre los métodos públicos (sin manual en público ⇒ ocultamos todo ese perfil impago manual). */
+      const impagoManualNoOfrecido = and(
+        eq(PedidoUnificadoTable.pagado, false),
+        inArray(PedidoUnificadoTable.metodoPago, [...METODOS_PAGO_MANUAL_VERIFICABLE_EN_PEDIDO]),
+        metodosPublicosIds.length === 0
+          ? sql`TRUE`
+          : notInArray(PedidoUnificadoTable.metodoPago, metodosPublicosIds),
+      )
+
+      const ofreceManualEnLinkPublico =
+        metodosPublicosIds.length > 0 &&
+        metodosPublicosIds.some((id) => (METODOS_PAGO_MANUAL_VERIFICABLE_EN_PEDIDO as readonly string[]).includes(id))
+
+      const metodoAusenteSinCobrarEnMostrador = sql`(
+        ${PedidoUnificadoTable.metodoPago} IS NULL
+        OR TRIM(COALESCE(${PedidoUnificadoTable.metodoPago}, '')) = ''
+      )`
+
+      /** Pedidos legacy: sin metodo en columna pero eran efectivo/manual; ocultarlos cuando el checkout ya es solo automatización */
+      const impagoAmbiguoViejoConSoloMediosElectronicos =
+        metodosPublicosIds.length === 0 || !ofreceManualEnLinkPublico
+          ? and(eq(PedidoUnificadoTable.pagado, false), metodoAusenteSinCobrarEnMostrador)
           : sql`FALSE`
 
-      /** No mostrar: impagos que esperan webhook, o efectivo/transf. manual cuando ya no están en la config pública */
-      const ocultarPedidoImpagoOperaciones = or(esperandoWebhook, impagoManualNoOfrecido)
+      const ocultarPedidoImpagoOperaciones = or(
+        esperandoWebhook,
+        impagoManualNoOfrecido,
+        impagoAmbiguoViejoConSoloMediosElectronicos,
+      )
       whereCondition = and(
         whereCondition,
-        or(
-          eq(PedidoUnificadoTable.pagado, true),
-          isNull(PedidoUnificadoTable.metodoPago),
-          not(ocultarPedidoImpagoOperaciones ?? sql`FALSE`),
-        ),
+        or(eq(PedidoUnificadoTable.pagado, true), not(ocultarPedidoImpagoOperaciones ?? sql`FALSE`)),
       )
     }
     if (estado) {
