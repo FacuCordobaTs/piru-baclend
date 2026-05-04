@@ -25,6 +25,11 @@ const ADMIN_URL = process.env.ADMIN_URL || 'https://admin.piru.app'
 // Token de acceso de la plataforma (Piru) para consultar webhooks
 const MP_PLATFORM_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN
 
+/** Single-tenant Burgers del Sur (restaurante id 13): base para `back_urls` de Checkout Pro. Sin barra final. Override: env `BURGERSDELSUR_PUBLIC_ORIGIN`. */
+const BURGERSDELSUR_PUBLIC_ORIGIN = (
+  process.env.BURGERSDELSUR_PUBLIC_ORIGIN || 'https://burgersdelsur.com'
+).replace(/\/$/, '')
+
 const mercadopagoRoute = new Hono()
 
 /**
@@ -211,8 +216,8 @@ mercadopagoRoute.get('/callback', async (c) => {
 /**
  * Crear preferencia de pago (Checkout Pro) para pedidos unificados.
  * Usa PedidoUnificadoTable. Sin split payment.
- * El usuario ya se encuentra en la pantalla /:username/success cuando clickea pagar.
- * MercadoPago lo redirige de vuelta a esa misma pantalla tras completar el pago.
+ * El cliente suele estar en /success (single-tenant o /:username/success en multi-tenant) al iniciar el pago.
+ * MP redirige a /pedido/:id en el origen público del local (my.piru.app, dominio propio, etc.).
  */
 mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
   const db = drizzle(pool)
@@ -233,16 +238,12 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
     const tokenValido = await obtenerTokenValido(restauranteId)
     if (!tokenValido) return c.json({ success: false, error: 'Restaurante MP error' }, 401)
 
-    // 3. Obtener username del restaurante (todavía útil para fallback)
-    const restauranteRows = await db.select({ username: RestauranteTable.username })
-      .from(RestauranteTable)
-      .where(eq(RestauranteTable.id, restauranteId))
-      .limit(1)
-
-    // 4. Construir URL de retorno: /pedido/:id — caso especial para Alfajor (id=6) con dominio propio
+    // 3. URL de retorno Checkout Pro → …/pedido/:id (multi-tenant my.piru.app; dominios propios Alfajor / Burgers del Sur)
     let successUrl: string
     if (restauranteId === 6) {
       successUrl = `https://alfajorconpapas.com/pedido/${pedidoId}`
+    } else if (restauranteId === 13) {
+      successUrl = `https://burgersdelsur.com/pedido/${pedidoId}`
     } else {
       successUrl = `https://my.piru.app/pedido/${pedidoId}`
     }

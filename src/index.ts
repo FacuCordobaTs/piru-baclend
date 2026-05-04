@@ -82,7 +82,10 @@ app.use('*', cors({
     'http://tauri.localhost',   // Variación posible
     'https://alfajor.pages.dev',
     'https://alfajorconpapas.com',
-    'https://panther-d5w.pages.dev'
+    'https://panther-d5w.pages.dev',
+    'https://burgersdelsur.pages.dev',
+    'https://burgersdelsur.com',
+    'https://www.burgersdelsur.com'
   ],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization', 'Upgrade-Insecure-Requests'], // Agregué Upgrade-Insecure-Requests por si acaso
