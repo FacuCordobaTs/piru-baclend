@@ -1,11 +1,11 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { restaurante as RestauranteTable, mesa as MesaTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, horarioRestaurante as HorarioRestauranteTable } from '../db/schema'
+import { restaurante as RestauranteTable, mesa as MesaTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, horarioRestaurante as HorarioRestauranteTable, varianteProducto as VarianteProductoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, inArray } from 'drizzle-orm'
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3"
 import UUID = require("uuid-js")
 import { configurarWebhookCliente } from '../services/cucuru'
@@ -133,6 +133,7 @@ restauranteRoute.get('/profile', async (c) => {
         createdAt: ProductoTable.createdAt,
         categoriaNombre: CategoriaTable.nombre,
         descuento: ProductoTable.descuento,
+        tieneVariantes: ProductoTable.tieneVariantes,
       })
       .from(ProductoTable)
       .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
@@ -157,7 +158,33 @@ restauranteRoute.get('/profile', async (c) => {
       etiquetasPorProducto.get(et.productoId)!.push({ id: et.id, nombre: et.nombre })
     }
 
-    // Enriquecer productos con categoría y etiquetas
+    const productoIds = productosRaw.map((p) => p.id)
+    const todasVariantes =
+      productoIds.length === 0
+        ? []
+        : await db
+            .select({
+              id: VarianteProductoTable.id,
+              nombre: VarianteProductoTable.nombre,
+              precio: VarianteProductoTable.precio,
+              productoId: VarianteProductoTable.productoId,
+            })
+            .from(VarianteProductoTable)
+            .where(inArray(VarianteProductoTable.productoId, productoIds))
+
+    const variantesPorProducto = new Map<number, Array<{ id: number; nombre: string; precio: string }>>()
+    for (const v of todasVariantes) {
+      if (!variantesPorProducto.has(v.productoId)) {
+        variantesPorProducto.set(v.productoId, [])
+      }
+      variantesPorProducto.get(v.productoId)!.push({
+        id: v.id,
+        nombre: v.nombre,
+        precio: typeof v.precio === 'string' ? v.precio : String(v.precio),
+      })
+    }
+
+    // Enriquecer productos con categoría, etiquetas y variantes
     const productos = productosRaw.map((p) => ({
       id: p.id,
       restauranteId: p.restauranteId,
@@ -170,7 +197,9 @@ restauranteRoute.get('/profile', async (c) => {
       createdAt: p.createdAt,
       categoria: p.categoriaNombre || null,
       descuento: p.descuento,
+      tieneVariantes: p.tieneVariantes,
       etiquetas: etiquetasPorProducto.get(p.id) || [],
+      variantes: variantesPorProducto.get(p.id) || [],
     }))
 
     return c.json({ message: 'Profile retrieved successfully', success: true, data: { restaurante, mesas, productos } }, 200)
