@@ -696,7 +696,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                     address: direccion || 'Sin dirección',
                     total: metodoPagoEfectivoDelivery ? `${total.toFixed(2)} (${metodoPagoEfectivoDelivery})` : total.toFixed(2),
                     items: orderItemsForWa,
-                    orderId: pedidoId.toString()
+                    orderId: pedidoId.toString(),
+                    horarioProgramado: horarioProgramado || null,
                 }).catch(err => {
                     console.error("❌ Error en envío de WhatsApp en background:", err);
                 });
@@ -714,7 +715,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                         customerName: nombreCliente || 'Cliente',
                         restaurantName: resRestaurante[0].nombre || 'El local',
                         total: total.toFixed(2),
-                        orderId: pedidoId.toString()
+                        orderId: pedidoId.toString(),
+                        horarioProgramado: horarioProgramado || null,
                     }).catch(err => {
                         console.error("❌ Error en envío de WhatsApp al cliente en background:", err);
                     });
@@ -1088,7 +1090,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                     address: 'Retira en local (Take Away)',
                     total: metodoPagoEfectivo ? `${total.toFixed(2)} (${metodoPagoEfectivo})` : total.toFixed(2),
                     items: orderItemsForWa,
-                    orderId: pedidoId.toString()
+                    orderId: pedidoId.toString(),
+                    horarioProgramado: horarioProgramado || null,
                 }).catch(err => {
                     console.error("❌ Error en envío de WhatsApp en background:", err);
                 });
@@ -1106,7 +1109,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                         customerName: nombreCliente || 'Cliente',
                         restaurantName: resRestaurante[0].nombre || 'El local',
                         total: total.toFixed(2),
-                        orderId: pedidoId.toString()
+                        orderId: pedidoId.toString(),
+                        horarioProgramado: horarioProgramado || null,
                     }).catch(err => {
                         console.error("❌ Error en envío de WhatsApp al cliente en background:", err);
                     });
