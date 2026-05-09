@@ -18,7 +18,7 @@ import { eq, desc, and, or, not, inArray, notInArray, sql } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { wsManager } from '../websocket/manager'
-import { sendClientOrderDispatchedWhatsApp } from '../services/whatsapp'
+import { sendClientOrderDispatchedWhatsApp, sendClientPaymentConfirmedWhatsApp } from '../services/whatsapp'
 import {
   rowToPagoRow,
   restauranteOcultaPedidosNoPagados,
@@ -203,12 +203,20 @@ const pedidoUnificadoRoute = new Hono()
         codigoDescuentoId: PedidoUnificadoTable.codigoDescuentoId,
         montoDescuento: PedidoUnificadoTable.montoDescuento,
         sucursalId: PedidoUnificadoTable.sucursalId,
+        sucursalNombre: SucursalTable.nombre,
         codigoDescuentoCodigo: CodigoDescuentoTable.codigo,
+        demoraMinutos: PedidoUnificadoTable.demoraMinutos,
+        notificarWhatsapp: PedidoUnificadoTable.notificarWhatsapp,
+        horarioProgramado: PedidoUnificadoTable.horarioProgramado,
       })
       .from(PedidoUnificadoTable)
       .leftJoin(
         CodigoDescuentoTable,
         eq(PedidoUnificadoTable.codigoDescuentoId, CodigoDescuentoTable.id),
+      )
+      .leftJoin(
+        SucursalTable,
+        eq(PedidoUnificadoTable.sucursalId, SucursalTable.id),
       )
       .where(whereCondition)
       .orderBy(desc(PedidoUnificadoTable.createdAt))
@@ -289,11 +297,22 @@ const pedidoUnificadoRoute = new Hono()
 
     const items = await enrichItemsWithProductInfo(db, itemsRaw)
 
+    let sucursalNombre: string | null = null
+    if (pedido[0].sucursalId) {
+      const suc = await db
+        .select({ nombre: SucursalTable.nombre })
+        .from(SucursalTable)
+        .where(eq(SucursalTable.id, pedido[0].sucursalId))
+        .limit(1)
+      sucursalNombre = suc[0]?.nombre ?? null
+    }
+
     return c.json({
       message: 'Pedido encontrado',
       success: true,
       data: {
         ...pedido[0],
+        sucursalNombre,
         items,
         totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0),
       },
@@ -708,6 +727,65 @@ const pedidoUnificadoRoute = new Hono()
     } catch (error) {
       console.error('📲 [Notificar Cliente] ❌ Error enviando WhatsApp al cliente:', error)
       return c.json({ message: 'Error al enviar notificación', success: false }, 500)
+    }
+  })
+
+  // Confirmar pedido con demora (modo confirmación manual)
+  .post('/:id/confirmar-con-demora', zValidator('json', z.object({ demoraMinutos: z.number().int().min(0).max(999) })), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const pedidoId = Number(c.req.param('id'))
+    const { demoraMinutos } = c.req.valid('json')
+
+    const result = await db
+      .select({ pedido: PedidoUnificadoTable, restaurante: RestauranteTable })
+      .from(PedidoUnificadoTable)
+      .leftJoin(RestauranteTable, eq(PedidoUnificadoTable.restauranteId, RestauranteTable.id))
+      .where(and(
+        eq(PedidoUnificadoTable.id, pedidoId),
+        eq(PedidoUnificadoTable.restauranteId, restauranteId)
+      ))
+      .limit(1)
+
+    if (!result || result.length === 0) {
+      return c.json({ message: 'Pedido no encontrado', success: false }, 404)
+    }
+
+    const { pedido, restaurante } = result[0]
+
+    await db
+      .update(PedidoUnificadoTable)
+      .set({ demoraMinutos })
+      .where(eq(PedidoUnificadoTable.id, pedidoId))
+
+    if (!pedido.telefono) {
+      return c.json({ message: 'Demora guardada (sin teléfono para notificar)', success: true, demoraMinutos }, 200)
+    }
+
+    try {
+      const waResult = await sendClientPaymentConfirmedWhatsApp(c, {
+        phone: pedido.telefono,
+        customerName: pedido.nombreCliente || 'Cliente',
+        restaurantName: restaurante?.nombre || 'El local',
+        total: pedido.total,
+        orderId: pedidoId.toString(),
+        demoraMinutos,
+      })
+
+      if (waResult.success) {
+        await db.insert(MensajeWhatsappTable).values({
+          pedidoUnificadoId: pedidoId,
+          restauranteId,
+          telefono: pedido.telefono,
+        })
+        return c.json({ message: 'Confirmación con demora enviada al cliente', success: true, demoraMinutos }, 200)
+      } else {
+        console.error('❌ Error API WhatsApp al confirmar con demora:', waResult.error)
+        return c.json({ message: 'Demora guardada pero falló el envío del mensaje', success: true, demoraMinutos, waError: waResult.error }, 200)
+      }
+    } catch (error) {
+      console.error('❌ Error enviando confirmación con demora:', error)
+      return c.json({ message: 'Demora guardada pero falló el envío del mensaje', success: true, demoraMinutos }, 200)
     }
   })
 

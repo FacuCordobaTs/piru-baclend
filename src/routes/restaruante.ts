@@ -587,6 +587,37 @@ restauranteRoute.put('/toggle-notificar-clientes-whatsapp', async (c) => {
   }
 })
 
+// Toggle modo confirmación manual (admin carga demora y envía mensaje manualmente)
+restauranteRoute.put('/toggle-modo-confirmacion-manual', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [restaurante] = await db.select({ modoConfirmacionManual: RestauranteTable.modoConfirmacionManual })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!restaurante) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    const nuevoEstado = !restaurante.modoConfirmacionManual
+
+    await db.update(RestauranteTable)
+      .set({ modoConfirmacionManual: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({
+      message: nuevoEstado ? 'Confirmación manual activada' : 'Confirmación manual desactivada',
+      success: true,
+      modoConfirmacionManual: nuevoEstado
+    }, 200)
+  } catch (error) {
+    console.error('Error updating modo confirmacion manual:', error)
+    return c.json({ message: 'Error al cambiar configuración', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 // Toggle habilitar/deshabilitar uso de códigos de descuento en checkout
 restauranteRoute.put('/toggle-codigo-descuento-enabled', async (c) => {
   const db = drizzle(pool)

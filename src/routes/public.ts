@@ -352,6 +352,7 @@ const createDeliverySchema = z.object({
     metodoPago: z.string().optional(),
     codigoDescuentoId: z.number().int().positive().optional(),
     notificarWhatsapp: z.boolean().optional().default(false),
+    horarioProgramado: z.string().max(20).optional(),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
         varianteId: z.number().int().positive().optional(),
@@ -368,7 +369,7 @@ const createDeliverySchema = z.object({
 
 publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp } = c.req.valid('json')
+    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado } = c.req.valid('json')
 
     try {
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
@@ -446,6 +447,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             metodosPagoConfig: RestauranteTable.metodosPagoConfig,
             nombre: RestauranteTable.nombre,
             notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
+            modoConfirmacionManual: RestauranteTable.modoConfirmacionManual,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
 
         // --- Lógica de zonas de delivery ---
@@ -573,6 +575,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             codigoDescuentoId: codigoDescuentoIdFinal,
             montoDescuento: montoDescuento.toFixed(2),
             notificarWhatsapp: notificarWhatsapp || false,
+            horarioProgramado: horarioProgramado || null,
         })
 
         const pedidoId = Number(nuevoPedido[0].insertId)
@@ -704,7 +707,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
         if (!waitToPay) {
             try {
-                if (resRestaurante[0]?.notificarClientesWhatsapp && notificarWhatsapp && telefono) {
+                if (resRestaurante[0]?.notificarClientesWhatsapp && notificarWhatsapp && telefono && !resRestaurante[0]?.modoConfirmacionManual) {
                     console.log("⏳ Iniciando envío de WhatsApp al cliente:", telefono);
                     sendClientPaymentConfirmedWhatsApp(c, {
                         phone: telefono,
@@ -747,7 +750,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 aliasDinamico: cuentaCucuru?.alias || cuentaTalo?.alias || null,
                 cvuDinamico: cuentaCucuru?.accountNumber || cuentaTalo?.cvu || null,
                 deliveryFee: deliveryFeeAplicado.toFixed(2),
-                zonaNombre
+                zonaNombre,
+                horarioProgramado: horarioProgramado || null,
             }
         }, 201)
     } catch (error) {
@@ -765,6 +769,7 @@ const createTakeawaySchema = z.object({
     metodoPago: z.string().optional(),
     codigoDescuentoId: z.number().int().positive().optional(),
     notificarWhatsapp: z.boolean().optional().default(false),
+    horarioProgramado: z.string().max(20).optional(),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
         varianteId: z.number().int().positive().optional(),
@@ -781,7 +786,7 @@ const createTakeawaySchema = z.object({
 
 publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, sucursalId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp } = c.req.valid('json')
+    const { restauranteId, sucursalId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado } = c.req.valid('json')
 
     try {
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
@@ -858,6 +863,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             metodosPagoConfig: RestauranteTable.metodosPagoConfig,
             nombre: RestauranteTable.nombre,
             notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
+            modoConfirmacionManual: RestauranteTable.modoConfirmacionManual,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
         const sistemaPuntosActivo = false; // sistemaPuntos comentado en schema
 
@@ -966,6 +972,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             codigoDescuentoId: codigoDescuentoIdFinalTk,
             montoDescuento: montoDescuentoTk.toFixed(2),
             notificarWhatsapp: notificarWhatsapp || false,
+            horarioProgramado: horarioProgramado || null,
         })
 
         const pedidoId = Number(nuevoPedido[0].insertId)
@@ -1092,7 +1099,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
 
         if (!waitToPay) {
             try {
-                if (resRestaurante[0]?.notificarClientesWhatsapp && notificarWhatsapp && telefono) {
+                if (resRestaurante[0]?.notificarClientesWhatsapp && notificarWhatsapp && telefono && !resRestaurante[0]?.modoConfirmacionManual) {
                     console.log("⏳ Iniciando envío de WhatsApp al cliente:", telefono);
                     sendClientPaymentConfirmedWhatsApp(c, {
                         phone: telefono,
@@ -1132,7 +1139,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 total: total.toFixed(2),
                 estado: 'pending',
                 aliasDinamico: cuentaCucuru?.alias || cuentaTalo?.alias || null,
-                cvuDinamico: cuentaCucuru?.accountNumber || cuentaTalo?.cvu || null
+                cvuDinamico: cuentaCucuru?.accountNumber || cuentaTalo?.cvu || null,
+                horarioProgramado: horarioProgramado || null,
             }
         }, 201)
     } catch (error) {

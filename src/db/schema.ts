@@ -76,6 +76,7 @@ export const restaurante = mysqlTable("restaurante", {
   taloUserId: varchar("talo_user_id", { length: 255 }),
 
   notificarClientesWhatsapp: boolean("notificar_clientes_whatsapp").default(false),
+  modoConfirmacionManual: boolean("modo_confirmacion_manual").default(false),
   completedOnboarding: boolean("completed_onboarding").default(false).notNull(),
 
 
@@ -152,6 +153,11 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
 
   // ─── NUEVO: Notificar a whatsapp ─────────
   notificarWhatsapp: boolean("notificar_whatsapp").default(false),
+
+  // Demora informada al cliente por el admin (modo confirmación manual)
+  demoraMinutos: int("demora_minutos"),
+  // Horario solicitado por el cliente para recibir el pedido (ej: "21:30")
+  horarioProgramado: varchar("horario_programado", { length: 20 }),
 });
 
 export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {
