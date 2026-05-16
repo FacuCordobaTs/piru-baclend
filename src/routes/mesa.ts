@@ -1,7 +1,7 @@
 // mesa.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { mesa as MesaTable, sala as SalaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable, restaurante as RestauranteTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, pago as PagoTable, pagoSubtotal as PagoSubtotalTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable } from '../db/schema'
+import { mesa as MesaTable, sala as SalaTable, pedido as PedidoTable, producto as ProductoTable, itemPedido as ItemPedidoTable, restaurante as RestauranteTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, pago as PagoTable, pagoSubtotal as PagoSubtotalTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, varianteProducto as VarianteProductoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
@@ -92,10 +92,10 @@ const mesaRoute = new Hono()
       .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
       .where(and(eq(ProductoTable.restauranteId, mesa[0].restauranteId!), eq(ProductoTable.activo, true)))
 
-    // Obtener ingredientes y agregados para cada producto
+    // Obtener ingredientes, agregados y variantes para cada producto
     const productosConIngredientes = await Promise.all(
       productos.map(async (p) => {
-        const [ingredientes, agregados] = await Promise.all([
+        const [ingredientes, agregados, variantes] = await Promise.all([
           db
             .select({
               id: IngredienteTable.id,
@@ -112,7 +112,15 @@ const mesaRoute = new Hono()
             })
             .from(ProductoAgregadoTable)
             .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
-            .where(eq(ProductoAgregadoTable.productoId, p.id))
+            .where(eq(ProductoAgregadoTable.productoId, p.id)),
+          db
+            .select({
+              id: VarianteProductoTable.id,
+              nombre: VarianteProductoTable.nombre,
+              precio: VarianteProductoTable.precio,
+            })
+            .from(VarianteProductoTable)
+            .where(eq(VarianteProductoTable.productoId, p.id)),
         ]);
 
         return {
@@ -120,6 +128,7 @@ const mesaRoute = new Hono()
           categoria: p.categoria?.nombre || null,
           ingredientes: ingredientes,
           agregados: agregados,
+          variantes: variantes,
         }
       })
     )

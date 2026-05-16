@@ -251,7 +251,7 @@ publicRoute.get('/sala/join/:token', async (c) => {
             return c.json({ success: false, message: 'Restaurante no encontrado' }, 404)
         }
 
-        const productos = await db.select({
+        const productosRaw = await db.select({
             id: ProductoTable.id,
             nombre: ProductoTable.nombre,
             descripcion: ProductoTable.descripcion,
@@ -266,6 +266,25 @@ publicRoute.get('/sala/join/:token', async (c) => {
                 eq(ProductoTable.restauranteId, sala[0].restauranteId!),
                 eq(ProductoTable.activo, true)
             ))
+
+        const productos = await Promise.all(
+            productosRaw.map(async (p) => {
+                const [ingredientes, agregados, variantes] = await Promise.all([
+                    db.select({ id: IngredienteTable.id, nombre: IngredienteTable.nombre })
+                        .from(ProductoIngredienteTable)
+                        .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
+                        .where(eq(ProductoIngredienteTable.productoId, p.id)),
+                    db.select({ id: AgregadoTable.id, nombre: AgregadoTable.nombre, precio: AgregadoTable.precio })
+                        .from(ProductoAgregadoTable)
+                        .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
+                        .where(eq(ProductoAgregadoTable.productoId, p.id)),
+                    db.select({ id: VarianteProductoTable.id, nombre: VarianteProductoTable.nombre, precio: VarianteProductoTable.precio })
+                        .from(VarianteProductoTable)
+                        .where(eq(VarianteProductoTable.productoId, p.id)),
+                ])
+                return { ...p, ingredientes, agregados, variantes }
+            })
+        )
 
         return c.json({
             success: true,

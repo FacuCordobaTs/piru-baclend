@@ -547,17 +547,22 @@ class WebSocketManager {
         ingredientesExcluidosNombres = ingredientes.map(i => i.nombre);
       }
 
+      const baseNombre = producto[0]?.nombre || item.nombreProducto || 'Producto';
+      const nombreProducto = item.varianteNombre ? `${baseNombre} - ${item.varianteNombre}` : baseNombre;
+
       const newItem: ItemPedidoWS = {
         id: this.salaItemIdCounter++,
         productoId: item.productoId,
         clienteNombre: item.clienteNombre,
         cantidad: item.cantidad,
         precioUnitario: item.precioUnitario,
-        nombreProducto: producto[0]?.nombre || item.nombreProducto || 'Producto',
+        nombreProducto,
         imagenUrl: producto[0]?.imagenUrl || null,
         ingredientesExcluidos: item.ingredientesExcluidos || [],
         ingredientesExcluidosNombres,
         agregados: item.agregados || [],
+        varianteId: item.varianteId,
+        varianteNombre: item.varianteNombre,
         postConfirmacion: false,
         estado: 'pending',
       };
