@@ -12,6 +12,11 @@ const createAgregadoSchema = z.object({
     precio: z.number().min(0).default(0),
 })
 
+const updateAgregadoSchema = z.object({
+    nombre: z.string().min(1).max(255).optional(),
+    precio: z.number().min(0).optional(),
+})
+
 const agregadoRoute = new Hono()
 
     .use('*', authMiddleware)
@@ -51,6 +56,46 @@ const agregadoRoute = new Hono()
             success: true,
             data: { id: Number(result[0].insertId), nombre, precio: precio.toString(), restauranteId }
         }, 201)
+    })
+
+    // Actualizar agregado (nombre y/o precio)
+    .put('/:id', zValidator('json', updateAgregadoSchema), async (c) => {
+        const db = drizzle(pool)
+        const restauranteId = (c as any).user.id
+        const id = Number(c.req.param('id'))
+        const { nombre, precio } = c.req.valid('json')
+
+        const existing = await db
+            .select()
+            .from(AgregadoTable)
+            .where(and(
+                eq(AgregadoTable.id, id),
+                eq(AgregadoTable.restauranteId, restauranteId)
+            ))
+            .limit(1)
+
+        if (!existing.length) {
+            return c.json({ message: 'Agregado no encontrado', success: false }, 404)
+        }
+
+        const updates: Partial<{ nombre: string; precio: string }> = {}
+        if (nombre !== undefined) updates.nombre = nombre.trim()
+        if (precio !== undefined) updates.precio = precio.toString()
+
+        if (Object.keys(updates).length > 0) {
+            await db
+                .update(AgregadoTable)
+                .set(updates)
+                .where(and(
+                    eq(AgregadoTable.id, id),
+                    eq(AgregadoTable.restauranteId, restauranteId)
+                ))
+        }
+
+        return c.json({
+            message: 'Agregado actualizado correctamente',
+            success: true
+        }, 200)
     })
 
     // Eliminar agregado
