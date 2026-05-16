@@ -9,10 +9,8 @@ import {
   mesa as MesaTable,
   sala as SalaTable,
   restaurante as RestauranteTable,
-  pedidoDelivery as PedidoDeliveryTable,
-  itemPedidoDelivery as ItemPedidoDeliveryTable,
-  pedidoTakeaway as PedidoTakeawayTable,
-  itemPedidoTakeaway as ItemPedidoTakeawayTable,
+  pedidoUnificado as PedidoUnificadoTable,
+  itemPedidoUnificado as ItemPedidoUnificadoTable,
   ingrediente as IngredienteTable,
   notificacion as NotificacionTable,
   pagoSubtotal as PagoSubtotalTable,
@@ -48,6 +46,7 @@ class WebSocketManager {
   public trackingClients: Map<string, Set<any>> = new Map(); // key -> Set of ws (key = tracking-{restauranteId}-{telefono})
   private salaOrderCache: Map<string, SalaOrderCacheEntry> = new Map(); // token -> order info
   private db = drizzle(pool);
+  private salaItemIdCounter = 1;
 
   // ==================== ADMIN METHODS ====================
 
@@ -261,6 +260,7 @@ class WebSocketManager {
 
   // Agregar cliente a la sesión de la mesa
   async addClient(mesaId: number, pedidoId: number, ws: any, clienteId: string, nombre: string) {
+    const isSala = mesaId >= 1000000;
     let session = this.sessions.get(mesaId);
 
     if (!session) {
@@ -268,7 +268,9 @@ class WebSocketManager {
         mesaId,
         pedidoId,
         clientes: [],
-        connections: new Set()
+        connections: new Set(),
+        isSala: isSala || undefined,
+        items: isSala ? [] : undefined,
       };
       this.sessions.set(mesaId, session);
     }
@@ -287,11 +289,12 @@ class WebSocketManager {
         socketId: clienteId
       });
 
-      // Verificar si es modo carrito y asignar nombrePedido si es el primer cliente
-      await this.asignarNombrePedidoSiCarrito(mesaId, pedidoId, nombre);
+      // Modo carrito: solo aplica a mesas legacy, no a sala
+      if (!isSala) {
+        await this.asignarNombrePedidoSiCarrito(mesaId, pedidoId, nombre);
+      }
 
       // Solo actualizar estado de mesas para admins (sin notificación)
-      // Las conexiones/desconexiones de clientes no generan notificaciones
       this.broadcastEstadoToAdmins(mesaId);
     }
 
@@ -423,7 +426,22 @@ class WebSocketManager {
   }
 
   // Obtener estado inicial del pedido
-  async getEstadoInicial(pedidoId: number) {
+  async getEstadoInicial(pedidoId: number, mesaId?: number) {
+    if (mesaId && mesaId >= 1000000) {
+      const session = this.sessions.get(mesaId);
+      return {
+        pedido: null,
+        items: (session?.items || []).map(item => ({
+          ...item,
+          ingredientesExcluidos: item.ingredientesExcluidos || [],
+          ingredientesExcluidosNombres: item.ingredientesExcluidosNombres || [],
+          agregados: item.agregados || [],
+          postConfirmacion: false,
+          estado: item.estado || 'pending',
+        }))
+      };
+    }
+
     const items = await this.db
       .select({
         id: ItemPedidoTable.id,
@@ -504,6 +522,61 @@ class WebSocketManager {
 
   // Agregar item al pedido
   async agregarItem(pedidoId: number, mesaId: number, item: ItemPedidoWS) {
+    // Sala (pedido grupal): items en memoria, sin DB legacy
+    if (mesaId >= 1000000) {
+      const session = this.sessions.get(mesaId);
+      if (!session) return null;
+
+      if (!session.items) session.items = [];
+
+      // Obtener nombre e imagen del producto
+      const producto = await this.db
+        .select({ nombre: ProductoTable.nombre, imagenUrl: ProductoTable.imagenUrl })
+        .from(ProductoTable)
+        .where(eq(ProductoTable.id, item.productoId))
+        .limit(1);
+
+      // Resolver nombres de ingredientes excluidos
+      let ingredientesExcluidosNombres: string[] = [];
+      if (item.ingredientesExcluidos && item.ingredientesExcluidos.length > 0) {
+        const { inArray } = await import('drizzle-orm');
+        const ingredientes = await this.db
+          .select({ nombre: IngredienteTable.nombre })
+          .from(IngredienteTable)
+          .where(inArray(IngredienteTable.id, item.ingredientesExcluidos));
+        ingredientesExcluidosNombres = ingredientes.map(i => i.nombre);
+      }
+
+      const newItem: ItemPedidoWS = {
+        id: this.salaItemIdCounter++,
+        productoId: item.productoId,
+        clienteNombre: item.clienteNombre,
+        cantidad: item.cantidad,
+        precioUnitario: item.precioUnitario,
+        nombreProducto: producto[0]?.nombre || item.nombreProducto || 'Producto',
+        imagenUrl: producto[0]?.imagenUrl || null,
+        ingredientesExcluidos: item.ingredientesExcluidos || [],
+        ingredientesExcluidosNombres,
+        agregados: item.agregados || [],
+        postConfirmacion: false,
+        estado: 'pending',
+      };
+
+      session.items.push(newItem);
+
+      this.broadcast(mesaId, {
+        type: 'PEDIDO_ACTUALIZADO',
+        payload: {
+          items: session.items,
+          pedido: null,
+          nuevoItem: newItem,
+        },
+      });
+
+      this.broadcastEstadoToAdmins(mesaId);
+      return newItem;
+    }
+
     // Verificar estado del pedido para determinar si es post-confirmación
     const pedidoActual = await this.db
       .select({ estado: PedidoTable.estado })
@@ -631,6 +704,18 @@ class WebSocketManager {
 
   // Eliminar item del pedido
   async eliminarItem(itemId: number, pedidoId: number, mesaId: number) {
+    if (mesaId >= 1000000) {
+      const session = this.sessions.get(mesaId);
+      if (!session) return;
+      session.items = (session.items || []).filter(i => i.id !== itemId);
+      this.broadcast(mesaId, {
+        type: 'PEDIDO_ACTUALIZADO',
+        payload: { items: session.items, pedido: null, itemEliminadoId: itemId },
+      });
+      this.broadcastEstadoToAdmins(mesaId);
+      return;
+    }
+
     await this.db
       .delete(ItemPedidoTable)
       .where(eq(ItemPedidoTable.id, itemId));
@@ -655,6 +740,19 @@ class WebSocketManager {
   async actualizarCantidad(itemId: number, cantidad: number, pedidoId: number, mesaId: number) {
     if (cantidad <= 0) {
       await this.eliminarItem(itemId, pedidoId, mesaId);
+      return;
+    }
+
+    if (mesaId >= 1000000) {
+      const session = this.sessions.get(mesaId);
+      if (!session) return;
+      const itemIdx = (session.items || []).findIndex(i => i.id === itemId);
+      if (itemIdx >= 0) session.items![itemIdx].cantidad = cantidad;
+      this.broadcast(mesaId, {
+        type: 'PEDIDO_ACTUALIZADO',
+        payload: { items: session.items || [], pedido: null },
+      });
+      this.broadcastEstadoToAdmins(mesaId);
       return;
     }
 
@@ -1129,7 +1227,7 @@ class WebSocketManager {
     }
   }
 
-  // Confirmar pedido de sala: crear pedido_delivery/takeaway, asignar Cucuru, broadcast SALA_PEDIDO_CREADO
+  // Confirmar pedido de sala: crear pedidoUnificado, asignar Cucuru, broadcast SALA_PEDIDO_CREADO
   async confirmarPedidoSala(pedidoId: number, mesaId: number, session: MesaSession) {
     const salaId = mesaId - 1000000;
     const checkoutData = session.checkoutDeliveryData;
@@ -1153,24 +1251,15 @@ class WebSocketManager {
     }
 
     try {
-      const itemsRaw = await this.db
-        .select({
-          id: ItemPedidoTable.id,
-          productoId: ItemPedidoTable.productoId,
-          clienteNombre: ItemPedidoTable.clienteNombre,
-          cantidad: ItemPedidoTable.cantidad,
-          precioUnitario: ItemPedidoTable.precioUnitario,
-          ingredientesExcluidos: ItemPedidoTable.ingredientesExcluidos,
-          agregados: ItemPedidoTable.agregados,
-          nombreProducto: ProductoTable.nombre,
-        })
-        .from(ItemPedidoTable)
-        .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
-        .where(eq(ItemPedidoTable.pedidoId, pedidoId));
-
-      const items = itemsRaw.map(r => ({
-        ...r,
-        nombreProducto: r.nombreProducto || 'Producto',
+      // Items desde memoria (no desde DB legacy)
+      const items = (session.items || []).map(i => ({
+        productoId: i.productoId,
+        clienteNombre: i.clienteNombre,
+        cantidad: i.cantidad || 1,
+        precioUnitario: i.precioUnitario,
+        ingredientesExcluidos: i.ingredientesExcluidos || null,
+        agregados: i.agregados || null,
+        nombreProducto: i.nombreProducto || 'Producto',
       }));
 
       if (items.length === 0) {
@@ -1230,159 +1319,90 @@ class WebSocketManager {
         }
       }
 
-      if (checkoutData.tipoPedido === 'delivery') {
-        const nuevoPedido = await this.db.insert(PedidoDeliveryTable).values({
-          restauranteId: sala[0].restauranteId,
-          direccion: checkoutData.direccion,
-          latitud: checkoutData.lat != null ? String(checkoutData.lat) : null,
-          longitud: checkoutData.lng != null ? String(checkoutData.lng) : null,
-          nombreCliente: checkoutData.nombre,
-          telefono: checkoutData.telefono,
-          notas: checkoutData.notas || null,
-          metodoPago: 'transferencia',
-          estado: 'pending',
-          total: total.toFixed(2),
-          puntosGanados: 0,
-          puntosUsados: 0,
-          codigoDescuentoId: codigoDescuentoIdFinal,
-          montoDescuento: montoDescuento.toFixed(2),
+      // Crear pedidoUnificado (reemplaza PedidoDeliveryTable / PedidoTakeawayTable)
+      const nuevoPedido = await this.db.insert(PedidoUnificadoTable).values({
+        restauranteId: sala[0].restauranteId!,
+        tipo: checkoutData.tipoPedido,
+        nombreCliente: checkoutData.nombre,
+        telefono: checkoutData.telefono,
+        notas: checkoutData.notas || null,
+        metodoPago: 'transferencia',
+        estado: 'pending',
+        total: total.toFixed(2),
+        direccion: checkoutData.tipoPedido === 'delivery' ? checkoutData.direccion : null,
+        latitud: checkoutData.tipoPedido === 'delivery' && checkoutData.lat != null ? String(checkoutData.lat) : null,
+        longitud: checkoutData.tipoPedido === 'delivery' && checkoutData.lng != null ? String(checkoutData.lng) : null,
+        codigoDescuentoId: codigoDescuentoIdFinal,
+        montoDescuento: montoDescuento.toFixed(2),
+        pagado: false,
+      });
+
+      const pedidoUnificadoId = Number(nuevoPedido[0].insertId);
+
+      for (const item of items) {
+        await this.db.insert(ItemPedidoUnificadoTable).values({
+          pedidoId: pedidoUnificadoId,
+          productoId: item.productoId,
+          cantidad: item.cantidad,
+          precioUnitario: item.precioUnitario,
+          ingredientesExcluidos: item.ingredientesExcluidos,
+          agregados: item.agregados,
+          esCanjePuntos: false,
         });
+      }
 
-        const pedidoDeliveryId = Number(nuevoPedido[0].insertId);
+      if (restaurante[0].cucuruConfigurado && restaurante[0].username) {
+        cuentaCucuru = await asignarAliasAPedido({
+          db: this.db,
+          restaurante: restaurante[0],
+          pedidoId: pedidoUnificadoId,
+          slug: restaurante[0].username,
+          tipoPedido: checkoutData.tipoPedido,
+        });
+      }
 
-        for (const item of items) {
-          await this.db.insert(ItemPedidoDeliveryTable).values({
-            pedidoDeliveryId,
-            productoId: item.productoId,
-            cantidad: item.cantidad || 1,
-            precioUnitario: item.precioUnitario,
-            ingredientesExcluidos: item.ingredientesExcluidos,
-            agregados: item.agregados,
-            esCanjePuntos: false,
-          });
-        }
+      const mesaNombreNotif = checkoutData.tipoPedido === 'delivery' ? 'Pedido Grupal (Delivery)' : 'Pedido Grupal (Take Away)';
+      this.notifyAdmins(sala[0].restauranteId!, this.createNotification(
+        'NUEVO_PEDIDO',
+        0,
+        mesaNombreNotif,
+        `Nuevo pedido grupal`,
+        `${checkoutData.nombre} - $${total.toFixed(2)}`,
+        pedidoUnificadoId
+      ));
+      this.broadcastAdminUpdate(sala[0].restauranteId!, checkoutData.tipoPedido);
 
-        if (restaurante[0].cucuruConfigurado && restaurante[0].username) {
-          cuentaCucuru = await asignarAliasAPedido({
-            db: this.db,
-            restaurante: restaurante[0],
-            pedidoId: pedidoDeliveryId,
-            slug: restaurante[0].username,
-            tipoPedido: 'delivery',
-          });
-        }
+      const itemsParaFront = items.map(i => ({
+        productoId: i.productoId,
+        cantidad: i.cantidad,
+        precio: i.precioUnitario,
+        nombre: i.nombreProducto,
+        nombreProducto: i.nombreProducto,
+        clienteNombre: i.clienteNombre,
+      }));
 
-        this.notifyAdmins(sala[0].restauranteId!, this.createNotification(
-          'NUEVO_PEDIDO',
-          0,
-          'Pedido Grupal (Delivery)',
-          `Nuevo pedido grupal`,
-          `${checkoutData.nombre} - $${total.toFixed(2)}`,
-          pedidoDeliveryId
-        ));
-        this.broadcastAdminUpdate(sala[0].restauranteId!, 'delivery');
-
-        const itemsParaFront = items.map(i => ({
-          productoId: i.productoId,
-          cantidad: i.cantidad || 1,
-          precio: i.precioUnitario,
-          nombre: i.nombreProducto,
-          nombreProducto: i.nombreProducto,
-          clienteNombre: i.clienteNombre,
-        }));
-
-        const payloadDelivery = {
-          token: sala[0].token,
-          pedidoId: pedidoDeliveryId,
-          tipoPedido: 'delivery' as const,
-          total: total.toFixed(2),
-          items: itemsParaFront,
-          aliasDinamico: cuentaCucuru?.alias ?? null,
-          cvuDinamico: cuentaCucuru?.accountNumber ?? null,
+      const payload = {
+        token: sala[0].token,
+        pedidoId: pedidoUnificadoId,
+        tipoPedido: checkoutData.tipoPedido,
+        total: total.toFixed(2),
+        items: itemsParaFront,
+        aliasDinamico: cuentaCucuru?.alias ?? null,
+        cvuDinamico: cuentaCucuru?.accountNumber ?? null,
+        ...(checkoutData.tipoPedido === 'delivery' ? {
           deliveryFee: checkoutData.deliveryFee,
           zonaNombre: checkoutData.zonaNombre,
           direccion: checkoutData.direccion,
-          nombreCliente: checkoutData.nombre,
-          telefono: checkoutData.telefono,
-          montoDescuento: montoDescuento > 0 ? montoDescuento.toFixed(2) : undefined,
-        }
-        this.salaOrderCache.set(sala[0].token, payloadDelivery)
-        this.broadcast(mesaId, { type: 'SALA_PEDIDO_CREADO', payload: payloadDelivery });
-      } else {
-        const nuevoPedido = await this.db.insert(PedidoTakeawayTable).values({
-          restauranteId: sala[0].restauranteId,
-          nombreCliente: checkoutData.nombre,
-          telefono: checkoutData.telefono,
-          notas: checkoutData.notas || null,
-          metodoPago: 'transferencia',
-          estado: 'pending',
-          total: total.toFixed(2),
-          puntosGanados: 0,
-          puntosUsados: 0,
-          codigoDescuentoId: codigoDescuentoIdFinal,
-          montoDescuento: montoDescuento.toFixed(2),
-        });
+        } : {}),
+        nombreCliente: checkoutData.nombre,
+        telefono: checkoutData.telefono,
+        montoDescuento: montoDescuento > 0 ? montoDescuento.toFixed(2) : undefined,
+      };
 
-        const pedidoTakeawayId = Number(nuevoPedido[0].insertId);
+      this.salaOrderCache.set(sala[0].token, payload);
+      this.broadcast(mesaId, { type: 'SALA_PEDIDO_CREADO', payload });
 
-        for (const item of items) {
-          await this.db.insert(ItemPedidoTakeawayTable).values({
-            pedidoTakeawayId,
-            productoId: item.productoId,
-            cantidad: item.cantidad || 1,
-            precioUnitario: item.precioUnitario,
-            ingredientesExcluidos: item.ingredientesExcluidos,
-            agregados: item.agregados,
-            esCanjePuntos: false,
-          });
-        }
-
-        if (restaurante[0].cucuruConfigurado && restaurante[0].username) {
-          cuentaCucuru = await asignarAliasAPedido({
-            db: this.db,
-            restaurante: restaurante[0],
-            pedidoId: pedidoTakeawayId,
-            slug: restaurante[0].username,
-            tipoPedido: 'takeaway',
-          });
-        }
-
-        this.notifyAdmins(sala[0].restauranteId!, this.createNotification(
-          'NUEVO_PEDIDO',
-          0,
-          'Pedido Grupal (Take Away)',
-          `Nuevo pedido grupal`,
-          `${checkoutData.nombre} - $${total.toFixed(2)}`,
-          pedidoTakeawayId
-        ));
-        this.broadcastAdminUpdate(sala[0].restauranteId!, 'takeaway');
-
-        const itemsParaFront = items.map(i => ({
-          productoId: i.productoId,
-          cantidad: i.cantidad || 1,
-          precio: i.precioUnitario,
-          nombre: i.nombreProducto,
-          nombreProducto: i.nombreProducto,
-          clienteNombre: i.clienteNombre,
-        }));
-
-        const payloadTakeaway = {
-          token: sala[0].token,
-          pedidoId: pedidoTakeawayId,
-          tipoPedido: 'takeaway' as const,
-          total: total.toFixed(2),
-          items: itemsParaFront,
-          aliasDinamico: cuentaCucuru?.alias ?? null,
-          cvuDinamico: cuentaCucuru?.accountNumber ?? null,
-          nombreCliente: checkoutData.nombre,
-          telefono: checkoutData.telefono,
-          montoDescuento: montoDescuento > 0 ? montoDescuento.toFixed(2) : undefined,
-        }
-        this.salaOrderCache.set(sala[0].token, payloadTakeaway)
-        this.broadcast(mesaId, { type: 'SALA_PEDIDO_CREADO', payload: payloadTakeaway });
-      }
-
-      console.log(`✅ [confirmarPedidoSala] Pedido grupal creado, token=${sala[0].token}`);
+      console.log(`✅ [confirmarPedidoSala] pedidoUnificado #${pedidoUnificadoId} creado, token=${sala[0].token}`);
     } catch (error) {
       console.error('❌ [confirmarPedidoSala] Error:', error);
       this.broadcast(mesaId, {

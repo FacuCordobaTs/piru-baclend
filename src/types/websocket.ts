@@ -12,8 +12,12 @@ export interface ItemPedidoWS {
   cantidad: number;
   precioUnitario: string;
   nombreProducto?: string;
-  ingredientesExcluidos?: number[]; // Array de IDs de ingredientes excluidos
-  agregados?: Array<{ id: number, nombre: string, precio: string }>; // Array de agregados sumados
+  imagenUrl?: string | null;
+  ingredientesExcluidos?: number[];
+  ingredientesExcluidosNombres?: string[];
+  agregados?: Array<{ id: number, nombre: string, precio: string }>;
+  postConfirmacion?: boolean;
+  estado?: string;
 }
 
 export interface WebSocketMessage {
@@ -82,6 +86,8 @@ export interface MesaSession {
   pedidoId: number;
   clientes: ClienteConectado[];
   connections: Set<any>;
+  isSala?: boolean;
+  items?: ItemPedidoWS[];
   confirmacionGrupal?: ConfirmacionGrupal;
   // Checkout grupal (sala)
   checkoutDeliveryData?: CheckoutDeliveryData;

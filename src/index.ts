@@ -370,6 +370,7 @@ app.get(
     // Buscar mesa y pedido antes de establecer la conexión
     let mesaId: number | null = null;
     let pedidoId: number | null = null;
+    let isSalaConnection = false;
 
     try {
       let mesa = await db.select()
@@ -377,80 +378,70 @@ app.get(
         .where(eq(MesaTable.qrToken, qrToken))
         .limit(1);
 
-      let isSala = false;
-
       if (!mesa || mesa.length === 0) {
         // Try with sala
         const sala = await db.select().from(SalaTable).where(eq(SalaTable.token, qrToken)).limit(1);
         if (!sala || sala.length === 0) {
           throw new Error('Mesa o Sala no encontrada');
         }
-        // Mock it as a mesa to reuse the rest of the code
-        isSala = true;
+        // Sala: use offset ID, pedidoId = 0 (items stored in-memory)
+        isSalaConnection = true;
         mesa = [{
           ...sala[0],
           id: sala[0].id + 1000000, // Offset to avoid ID collision
           qrToken: sala[0].token
         }];
-      }
+        mesaId = mesa[0].id;
+        pedidoId = 0; // Sentinel: no legacy pedido for sala
+      } else {
+        mesaId = mesa[0].id;
 
-      mesaId = mesa[0].id;
+        // Buscar último pedido (solo para mesas legacy)
+        const ultimoPedido = await db.select()
+          .from(PedidoTable)
+          .where(eq(PedidoTable.mesaId, mesaId))
+          .orderBy(desc(PedidoTable.createdAt))
+          .limit(1);
 
-      // Buscar último pedido
-      const ultimoPedido = await db.select()
-        .from(PedidoTable)
-        .where(isSala ? eq(PedidoTable.salaId, mesa[0].id - 1000000) : eq(PedidoTable.mesaId, mesaId))
-        .orderBy(desc(PedidoTable.createdAt))
-        .limit(1);
-
-      if (!ultimoPedido || ultimoPedido.length === 0) {
-        // No hay pedidos, crear uno nuevo
-        const nuevoPedido = await db.insert(PedidoTable).values({
-          mesaId: isSala ? null : mesaId,
-          salaId: isSala ? mesaId - 1000000 : null,
-          restauranteId: mesa[0].restauranteId!,
-          estado: 'pending',
-          total: '0.00'
-        });
-        pedidoId = Number(nuevoPedido[0].insertId);
-      } else if (ultimoPedido[0].estado === 'archived') {
-        // El último pedido está archivado, crear uno nuevo directamente
-        const nuevoPedido = await db.insert(PedidoTable).values({
-          mesaId: isSala ? null : mesaId,
-          salaId: isSala ? mesaId - 1000000 : null,
-          restauranteId: mesa[0].restauranteId!,
-          estado: 'pending',
-          total: '0.00'
-        });
-        pedidoId = Number(nuevoPedido[0].insertId);
-      } else if (ultimoPedido[0].estado === 'closed') {
-        // El último pedido está cerrado, verificar si todos pagaron
-        const todosPagaron = await wsManager.verificarTodosPagaron(ultimoPedido[0].id);
-
-        if (todosPagaron) {
-          // Todos pagaron, crear nuevo pedido
+        if (!ultimoPedido || ultimoPedido.length === 0) {
           const nuevoPedido = await db.insert(PedidoTable).values({
-            mesaId: isSala ? null : mesaId,
-            salaId: isSala ? mesaId - 1000000 : null,
+            mesaId,
             restauranteId: mesa[0].restauranteId!,
             estado: 'pending',
             total: '0.00'
           });
           pedidoId = Number(nuevoPedido[0].insertId);
+        } else if (ultimoPedido[0].estado === 'archived') {
+          const nuevoPedido = await db.insert(PedidoTable).values({
+            mesaId,
+            restauranteId: mesa[0].restauranteId!,
+            estado: 'pending',
+            total: '0.00'
+          });
+          pedidoId = Number(nuevoPedido[0].insertId);
+        } else if (ultimoPedido[0].estado === 'closed') {
+          const todosPagaron = await wsManager.verificarTodosPagaron(ultimoPedido[0].id);
+          if (todosPagaron) {
+            const nuevoPedido = await db.insert(PedidoTable).values({
+              mesaId,
+              restauranteId: mesa[0].restauranteId!,
+              estado: 'pending',
+              total: '0.00'
+            });
+            pedidoId = Number(nuevoPedido[0].insertId);
+          } else {
+            pedidoId = ultimoPedido[0].id;
+          }
         } else {
-          // Aún falta pagar, usar el pedido cerrado
           pedidoId = ultimoPedido[0].id;
         }
-      } else {
-        // Hay un pedido activo (pending, preparing, delivered)
-        pedidoId = ultimoPedido[0].id;
       }
     } catch (error) {
       console.error('Error al buscar mesa/pedido:', error);
     }
 
-    // Validar que tenemos mesaId y pedidoId antes de crear los handlers
-    if (!mesaId || !pedidoId) {
+    // Validar que tenemos mesaId y pedidoId (0 es válido para sala)
+    if (!mesaId || pedidoId === null) {
       // Retornar handlers que rechazan la conexión
       return {
         async onOpen(event: any, ws: any) {
@@ -500,7 +491,7 @@ app.get(
           const currentMesaId = wsData.mesaId;
           const currentPedidoId = wsData.pedidoId;
 
-          if (!currentMesaId || !currentPedidoId) {
+          if (!currentMesaId || currentPedidoId === null || currentPedidoId === undefined) {
             console.error('❌ No se pudo obtener mesaId o pedidoId');
             ws.send(JSON.stringify({
               type: 'ERROR',
@@ -528,7 +519,7 @@ app.get(
               );
 
               // Enviar estado inicial
-              const estadoInicial = await wsManager.getEstadoInicial(currentPedidoId);
+              const estadoInicial = await wsManager.getEstadoInicial(currentPedidoId, currentMesaId);
               const sessionWithCheckout = wsManager.getSession(currentMesaId);
               ws.send(JSON.stringify({
                 type: 'ESTADO_INICIAL',

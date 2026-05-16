@@ -225,6 +225,67 @@ publicRoute.get('/sala/:token/order-created', async (c) => {
     return c.json({ success: true, order }, 200)
 })
 
+// Endpoint para que el cliente se una a una sala (reemplaza /mesa/join/:token para el flujo grupal)
+publicRoute.get('/sala/join/:token', async (c) => {
+    const db = drizzle(pool)
+    const token = c.req.param('token')
+
+    try {
+        const sala = await db.select().from(SalaTable).where(eq(SalaTable.token, token)).limit(1)
+        if (!sala[0]) {
+            return c.json({ success: false, message: 'Sala no encontrada' }, 404)
+        }
+
+        const restaurante = await db.select({
+            id: RestauranteTable.id,
+            nombre: RestauranteTable.nombre,
+            imagenUrl: RestauranteTable.imagenUrl,
+            mpConnected: RestauranteTable.mpConnected,
+            colorPrimario: RestauranteTable.colorPrimario,
+            colorSecundario: RestauranteTable.colorSecundario,
+            direccion: RestauranteTable.direccion,
+            username: RestauranteTable.username,
+        }).from(RestauranteTable).where(eq(RestauranteTable.id, sala[0].restauranteId!)).limit(1)
+
+        if (!restaurante[0]) {
+            return c.json({ success: false, message: 'Restaurante no encontrado' }, 404)
+        }
+
+        const productos = await db.select({
+            id: ProductoTable.id,
+            nombre: ProductoTable.nombre,
+            descripcion: ProductoTable.descripcion,
+            precio: ProductoTable.precio,
+            imagenUrl: ProductoTable.imagenUrl,
+            categoriaId: ProductoTable.categoriaId,
+            categoria: CategoriaTable.nombre,
+        })
+            .from(ProductoTable)
+            .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
+            .where(and(
+                eq(ProductoTable.restauranteId, sala[0].restauranteId!),
+                eq(ProductoTable.activo, true)
+            ))
+
+        return c.json({
+            success: true,
+            data: {
+                sala: {
+                    id: sala[0].id,
+                    nombre: sala[0].nombre,
+                    token: sala[0].token,
+                    restauranteId: sala[0].restauranteId,
+                },
+                productos,
+                restaurante: restaurante[0],
+            }
+        }, 200)
+    } catch (error) {
+        console.error('Error joining sala:', error)
+        return c.json({ success: false, message: 'Error al unirse a la sala' }, 500)
+    }
+})
+
 publicRoute.post('/sala/create', zValidator('json', createSalaSchema), async (c) => {
     const db = drizzle(pool)
     const { restauranteId, nombreCliente } = c.req.valid('json')

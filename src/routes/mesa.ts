@@ -51,7 +51,7 @@ const mesaRoute = new Hono()
       }];
     }
 
-    // Obtener información del restaurante (nombre, imagen, estado de MP, modo carrito, colores y username)
+    // Obtener información del restaurante (nombre, imagen, estado de MP, colores y username)
     const restaurante = await db.select({
       id: RestauranteTable.id,
       nombre: RestauranteTable.nombre,
@@ -60,9 +60,6 @@ const mesaRoute = new Hono()
       direccion: RestauranteTable.direccion,
       mpConnected: RestauranteTable.mpConnected,
       mpPublicKey: RestauranteTable.mpPublicKey,
-      esCarrito: RestauranteTable.esCarrito,
-      splitPayment: RestauranteTable.splitPayment,
-      soloCartaDigital: RestauranteTable.soloCartaDigital,
       disenoAlternativo: RestauranteTable.disenoAlternativo,
       colorPrimario: RestauranteTable.colorPrimario,
       colorSecundario: RestauranteTable.colorSecundario,
@@ -129,51 +126,7 @@ const mesaRoute = new Hono()
 
     let pedidoActual = ultimoPedido[0];
 
-    if (restaurante[0].soloCartaDigital) {
-      if (pedidoActual) {
-        // En modo soloCartaDigital, verificamos si pasaron 20 minutos
-        const timeSinceCreation = new Date().getTime() - new Date(pedidoActual.createdAt).getTime();
-        const twentyMinutesMs = 20 * 60 * 1000;
-
-        if (timeSinceCreation > twentyMinutesMs) {
-          // Ya pasaron 20 mins, crear nuevo pedido
-          const nuevoPedido = await db.insert(PedidoTable).values({
-            mesaId: isSala ? null : mesa[0].id,
-            salaId: isSala ? mesa[0].id - 1000000 : null,
-            restauranteId: mesa[0].restauranteId,
-            estado: 'pending',
-            total: '0.00'
-          })
-
-          ultimoPedido = await db.select().from(PedidoTable).
-            where(eq(PedidoTable.id, Number(nuevoPedido[0].insertId))).
-            orderBy(desc(PedidoTable.createdAt))
-            .limit(1)
-
-          pedidoActual = ultimoPedido[0];
-        } else {
-          // Aún no pasaron 20 mins, seguimos usando el mismo (sin importar su estado)
-          pedidoActual = ultimoPedido[0];
-        }
-      } else {
-        // No hay pedido anterior, creamos uno nuevo
-        const nuevoPedido = await db.insert(PedidoTable).values({
-          mesaId: isSala ? null : mesa[0].id,
-          salaId: isSala ? mesa[0].id - 1000000 : null,
-          restauranteId: mesa[0].restauranteId,
-          estado: 'pending',
-          total: '0.00'
-        })
-
-        ultimoPedido = await db.select().from(PedidoTable).
-          where(eq(PedidoTable.id, Number(nuevoPedido[0].insertId))).
-          orderBy(desc(PedidoTable.createdAt))
-          .limit(1)
-
-        pedidoActual = ultimoPedido[0];
-      }
-    } else {
-      // LOGICA NORMAL
+    {
       if (!pedidoActual) {
         // No hay pedidos, crear uno nuevo
         const nuevoPedido = await db.insert(PedidoTable).values({
