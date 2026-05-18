@@ -551,6 +551,21 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 }, 400)
             }
 
+            if (zonaMatch.sucursalId) {
+                const [sc] = await db
+                    .select({ activo: SucursalTable.activo })
+                    .from(SucursalTable)
+                    .where(eq(SucursalTable.id, zonaMatch.sucursalId))
+                    .limit(1)
+                if (!sc || !sc.activo) {
+                    return c.json({
+                        message: 'El local de esta zona no está disponible en este momento.',
+                        success: false,
+                        code: 'FUERA_DE_ZONA'
+                    }, 400)
+                }
+            }
+
             deliveryFeeAplicado = parseFloat(zonaMatch.precio)
             zonaNombre = zonaMatch.nombre
             pedidoSucursalId = zonaMatch.sucursalId ?? null
@@ -1363,6 +1378,21 @@ publicRoute.get('/restaurante/:id/check-zona', async (c) => {
                 code: 'FUERA_DE_ZONA',
                 message: 'Tu ubicación está fuera de nuestra área de delivery.'
             }, 200) // 200 so the frontend can handle it gracefully
+        }
+
+        if (zonaMatch.sucursalId) {
+            const [sc] = await db
+                .select({ activo: SucursalTable.activo })
+                .from(SucursalTable)
+                .where(eq(SucursalTable.id, zonaMatch.sucursalId))
+                .limit(1)
+            if (!sc || !sc.activo) {
+                return c.json({
+                    success: false,
+                    code: 'FUERA_DE_ZONA',
+                    message: 'El local de esta zona no está disponible en este momento.'
+                }, 200)
+            }
         }
 
         return c.json({
