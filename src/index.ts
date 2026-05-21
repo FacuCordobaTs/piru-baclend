@@ -31,7 +31,8 @@ import { migrationRoute } from './routes/migration';
 import { pedidoUnificadoRoute } from './routes/pedido-unificado';
 import { metricasRoute } from './routes/metricas';
 import { onboardingRoute } from './routes/onboarding';
-import { sucursalesRoute } from './routes/sucursales';
+import { sucursalesRoute } from './routes/sucursales'
+import { repartidoresRoute } from './routes/repartidores';
 import { serveStatic } from 'hono/bun';
 import { readFileSync } from 'node:fs';
 
@@ -185,6 +186,7 @@ app.basePath('/api')
   .route('/metricas', metricasRoute)
   .route('/onboarding', onboardingRoute)
   .route('/sucursales', sucursalesRoute)
+  .route('/repartidores', repartidoresRoute)
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
 // because :qrToken would match "admin" as a token
 app.get(

@@ -11,6 +11,7 @@ import {
   mensajeWhatsapp as MensajeWhatsappTable,
   varianteProducto as VarianteProductoTable,
   sucursal as SucursalTable,
+  repartidor as RepartidorTable,
 } from '../db/schema'
 import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
@@ -210,6 +211,9 @@ const pedidoUnificadoRoute = new Hono()
         horarioProgramado: PedidoUnificadoTable.horarioProgramado,
         latitud: PedidoUnificadoTable.latitud,
         longitud: PedidoUnificadoTable.longitud,
+        deliveryFee: PedidoUnificadoTable.deliveryFee,
+        repartidorId: PedidoUnificadoTable.repartidorId,
+        repartidorNombre: RepartidorTable.nombre,
       })
       .from(PedidoUnificadoTable)
       .leftJoin(
@@ -219,6 +223,10 @@ const pedidoUnificadoRoute = new Hono()
       .leftJoin(
         SucursalTable,
         eq(PedidoUnificadoTable.sucursalId, SucursalTable.id),
+      )
+      .leftJoin(
+        RepartidorTable,
+        eq(PedidoUnificadoTable.repartidorId, RepartidorTable.id),
       )
       .where(whereCondition)
       .orderBy(desc(PedidoUnificadoTable.createdAt))
@@ -730,6 +738,33 @@ const pedidoUnificadoRoute = new Hono()
       console.error('📲 [Notificar Cliente] ❌ Error enviando WhatsApp al cliente:', error)
       return c.json({ message: 'Error al enviar notificación', success: false }, 500)
     }
+  })
+
+  // Asignar repartidor al pedido
+  .put('/:id/repartidor', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const pedidoId = Number(c.req.param('id'))
+    const body = await c.req.json().catch(() => ({}))
+    const repartidorId = body.repartidorId != null ? Number(body.repartidorId) : null
+
+    const pedido = await db
+      .select({ id: PedidoUnificadoTable.id })
+      .from(PedidoUnificadoTable)
+      .where(and(
+        eq(PedidoUnificadoTable.id, pedidoId),
+        eq(PedidoUnificadoTable.restauranteId, restauranteId)
+      ))
+      .limit(1)
+
+    if (!pedido.length) return c.json({ message: 'Pedido no encontrado', success: false }, 404)
+
+    await db
+      .update(PedidoUnificadoTable)
+      .set({ repartidorId })
+      .where(eq(PedidoUnificadoTable.id, pedidoId))
+
+    return c.json({ message: 'Repartidor asignado correctamente', success: true }, 200)
   })
 
   // Confirmar pedido con demora (modo confirmación manual)

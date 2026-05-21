@@ -104,6 +104,14 @@ export const sucursal = mysqlTable("sucursal", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const repartidor = mysqlTable("repartidor", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  estado: mysqlEnum("estado", ["activo", "inactivo"]).default("activo").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const pedidoUnificado = mysqlTable("pedido_unificado", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
@@ -158,6 +166,11 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   demoraMinutos: int("demora_minutos"),
   // Horario solicitado por el cliente para recibir el pedido (ej: "21:30")
   horarioProgramado: varchar("horario_programado", { length: 20 }),
+
+  // Repartidor asignado al pedido de delivery
+  repartidorId: int("repartidor_id").references(() => repartidor.id),
+  // Fee de delivery exacto cobrado al cliente (calculado por zona)
+  deliveryFee: decimal("delivery_fee", { precision: 10, scale: 2 }),
 });
 
 export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {

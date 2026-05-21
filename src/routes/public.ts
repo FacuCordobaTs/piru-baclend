@@ -671,6 +671,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             montoDescuento: montoDescuento.toFixed(2),
             notificarWhatsapp: notificarWhatsapp || false,
             horarioProgramado: horarioProgramado || null,
+            deliveryFee: deliveryFeeAplicado.toFixed(2),
         })
 
         const pedidoId = Number(nuevoPedido[0].insertId)

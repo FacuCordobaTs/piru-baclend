@@ -1,7 +1,7 @@
 // pedido.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable, pago as PagoTable, ingrediente as IngredienteTable, pedidoUnificado as PedidoUnificadoTable, itemPedidoUnificado as ItemPedidoUnificadoTable } from '../db/schema'
+import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable, pago as PagoTable, ingrediente as IngredienteTable, pedidoUnificado as PedidoUnificadoTable, itemPedidoUnificado as ItemPedidoUnificadoTable, repartidor as RepartidorTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { eq, desc, and, inArray, gte, lt, sql } from 'drizzle-orm'
@@ -170,8 +170,12 @@ const pedidoRoute = new Hono()
           pagado: PedidoUnificadoTable.pagado,
           metodoPago: PedidoUnificadoTable.metodoPago,
           montoDescuento: PedidoUnificadoTable.montoDescuento,
+          deliveryFee: PedidoUnificadoTable.deliveryFee,
+          repartidorId: PedidoUnificadoTable.repartidorId,
+          repartidorNombre: RepartidorTable.nombre,
         })
         .from(PedidoUnificadoTable)
+        .leftJoin(RepartidorTable, eq(PedidoUnificadoTable.repartidorId, RepartidorTable.id))
         .where(and(
           eq(PedidoUnificadoTable.restauranteId, restauranteId),
           eq(PedidoUnificadoTable.pagado, true),
