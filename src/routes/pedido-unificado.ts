@@ -208,6 +208,8 @@ const pedidoUnificadoRoute = new Hono()
         demoraMinutos: PedidoUnificadoTable.demoraMinutos,
         notificarWhatsapp: PedidoUnificadoTable.notificarWhatsapp,
         horarioProgramado: PedidoUnificadoTable.horarioProgramado,
+        latitud: PedidoUnificadoTable.latitud,
+        longitud: PedidoUnificadoTable.longitud,
       })
       .from(PedidoUnificadoTable)
       .leftJoin(
