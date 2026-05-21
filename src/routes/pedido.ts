@@ -169,6 +169,7 @@ const pedidoRoute = new Hono()
           deliveredAt: PedidoUnificadoTable.deliveredAt,
           pagado: PedidoUnificadoTable.pagado,
           metodoPago: PedidoUnificadoTable.metodoPago,
+          montoDescuento: PedidoUnificadoTable.montoDescuento,
         })
         .from(PedidoUnificadoTable)
         .where(and(
@@ -301,27 +302,15 @@ const pedidoRoute = new Hono()
       deliveryPedidosConItems.filter(p => p.estado !== 'cancelled').forEach(p => {
         addToSummary(p.items)
 
-        // Deducir el envío dinámico
+        // Deducir el envío dinámico: precioUnitario ya incluye agregados
         const pedidoTotal = parseFloat(p.total || '0')
+        const pedidoDescuento = parseFloat(p.montoDescuento || '0') || 0
         let sumItems = 0
         p.items.forEach(item => {
-          const itemQuantity = item.cantidad || 1
-          sumItems += parseFloat(item.precioUnitario || '0') * itemQuantity
-
-          let agregadosArray: any[] = []
-          if (item.agregados) {
-            if (typeof item.agregados === 'string') {
-              try { agregadosArray = JSON.parse(item.agregados) } catch (e) { }
-            } else if (Array.isArray(item.agregados)) {
-              agregadosArray = item.agregados
-            }
-          }
-          agregadosArray.forEach((agregado: any) => {
-            sumItems += parseFloat(agregado.precio || '0') * itemQuantity
-          })
+          sumItems += parseFloat(item.precioUnitario || '0') * (item.cantidad || 1)
         })
 
-        const deliveryFee = pedidoTotal - sumItems
+        const deliveryFee = Math.max(0, pedidoTotal + pedidoDescuento - sumItems)
         if (deliveryFee > 0.01) {
           const key = 'Delivery'
           const existing = productSummary.get(key) || { nombre: key, cantidad: 0, totalVendido: 0 }
