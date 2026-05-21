@@ -456,37 +456,34 @@ const pedidoUnificadoRoute = new Hono()
       wsManager.notifyTrackingClients(restauranteId, pedido.telefono, pedidoId, tipo, estado)
     }
 
-    console.log("Cambio de estado")
-    console.log("Restaurante ID:", restauranteId)
-    console.log("Estado:", estado)
+    console.log(`[estado] pedido=${pedidoId} restaurante=${restauranteId} estado=${estado} t=${Date.now()}`)
 
-    if (restauranteId === 1 && estado === 'archived') {
-      try {
-        const cert = await Bun.file('piru_cert.crt').text()
-        const key  = await Bun.file('piru_privada.key').text()
-     
-        const resultado = await emitirFacturaPedido(
-          {
-            cuit:          '20459504428',
-            claveFiscal:   process.env.AFIP_CLAVE_FISCAL!,  // tu clave fiscal en .env
-            cert,
-            key,
-            nombreFantasia: 'Piru Test',
-            // puntoDeVenta: 1, // si ya lo creaste manualmente, descomentá esto
-          },
-          {
-            id:    pedido.id,
-            total: parseFloat(pedido.total),
-          }
-        )
-     
-        console.log('✅ Factura de prueba emitida:', resultado)
-     
-      } catch (e) {
-        console.error('❌ Error factura prueba:', e)
-      }
-    }
-    
+    // if (restauranteId === 1 && estado === 'archived') {
+    //   ;(async () => {
+    //     const t0 = Date.now()
+    //     console.log(`[afip] iniciando factura pedido=${pedidoId}`)
+    //     try {
+    //       const cert = await Bun.file('piru_cert.crt').text()
+    //       const key  = await Bun.file('piru_privada.key').text()
+    //       const resultado = await emitirFacturaPedido(
+    //         {
+    //           cuit:          '20459504428',
+    //           claveFiscal:   process.env.AFIP_CLAVE_FISCAL!,
+    //           cert,
+    //           key,
+    //           nombreFantasia: 'Piru Test',
+    //         },
+    //         {
+    //           id:    pedido.id,
+    //           total: parseFloat(pedido.total),
+    //         }
+    //       )
+    //       console.log(`[afip] ✅ factura emitida pedido=${pedidoId} ms=${Date.now() - t0}`, resultado)
+    //     } catch (e) {
+    //       console.error(`[afip] ❌ error factura pedido=${pedidoId} ms=${Date.now() - t0}`, e)
+    //     }
+    //   })()
+    // }
 
     return c.json({ message: 'Estado actualizado correctamente', success: true }, 200)
   })
@@ -742,11 +739,14 @@ const pedidoUnificadoRoute = new Hono()
 
   // Asignar repartidor al pedido
   .put('/:id/repartidor', async (c) => {
+    const t0 = Date.now()
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))
     const body = await c.req.json().catch(() => ({}))
     const repartidorId = body.repartidorId != null ? Number(body.repartidorId) : null
+
+    console.log(`[repartidor] pedido=${pedidoId} repartidor=${repartidorId} restaurante=${restauranteId}`)
 
     const pedido = await db
       .select({ id: PedidoUnificadoTable.id })
@@ -757,13 +757,17 @@ const pedidoUnificadoRoute = new Hono()
       ))
       .limit(1)
 
-    if (!pedido.length) return c.json({ message: 'Pedido no encontrado', success: false }, 404)
+    if (!pedido.length) {
+      console.log(`[repartidor] ❌ pedido no encontrado pedido=${pedidoId}`)
+      return c.json({ message: 'Pedido no encontrado', success: false }, 404)
+    }
 
     await db
       .update(PedidoUnificadoTable)
       .set({ repartidorId })
       .where(eq(PedidoUnificadoTable.id, pedidoId))
 
+    console.log(`[repartidor] ✅ ok pedido=${pedidoId} ms=${Date.now() - t0}`)
     return c.json({ message: 'Repartidor asignado correctamente', success: true }, 200)
   })
 
