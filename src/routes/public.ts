@@ -19,6 +19,14 @@ import {
   rowToPagoRow,
 } from '../lib/metodos-pago'
 
+function isDiscountActive(descuento: number | null, inicio: Date | null, fin: Date | null): boolean {
+  if (!descuento || descuento === 0) return false
+  const now = new Date()
+  if (inicio && inicio > now) return false
+  if (fin && fin < now) return false
+  return true
+}
+
 const publicRoute = new Hono()
 
 publicRoute.get('/restaurante/:username', async (c) => {
@@ -161,6 +169,9 @@ publicRoute.get('/restaurante/:username', async (c) => {
                         .where(eq(VarianteProductoTable.productoId, p.id))
                 ])
                 const puntos = puntosMap.get(p.id)
+                const descuentoActivo = isDiscountActive(p.descuento, p.descuentoFechaInicio, p.descuentoFechaFin)
+                const descuentoEfectivo = descuentoActivo ? (p.descuento ?? 0) : 0
+                const fechaFinEfectiva = descuentoActivo ? p.descuentoFechaFin : null
                 return {
                     id: p.id,
                     restauranteId: p.restauranteId,
@@ -170,7 +181,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
                     precio: p.precio,
                     activo: p.activo,
                     imagenUrl: p.imagenUrl,
-                    descuento: p.descuento,
+                    descuento: descuentoEfectivo,
+                    descuentoFechaFin: fechaFinEfectiva,
                     createdAt: p.createdAt,
                     categoria: p.categoriaId ? categoriasMap.get(p.categoriaId) ?? null : null,
                     puntosNecesarios: puntos?.puntosNecesarios ?? null,
@@ -497,9 +509,10 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 if (item.varianteId && variantesMap.has(item.varianteId)) {
                     precioBase = parseFloat(variantesMap.get(item.varianteId).precio)
                 }
-                const descuento = row.producto.descuento || 0
-                if (descuento > 0) {
-                    precioBase = precioBase * (1 - descuento / 100)
+                const descuentoPct = row.producto.descuento || 0
+                const descuentoAplicable = isDiscountActive(descuentoPct, row.producto.descuentoFechaInicio, row.producto.descuentoFechaFin)
+                if (descuentoAplicable && descuentoPct > 0) {
+                    precioBase = precioBase * (1 - descuentoPct / 100)
                 }
 
                 // Sumar el precio de los agregados
@@ -693,7 +706,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                     precioVal = parseFloat(variantesMap.get(item.varianteId).precio)
                 }
                 const descuentoPct = row.producto.descuento || 0
-                if (descuentoPct > 0) {
+                const descuentoAplicableItem = isDiscountActive(descuentoPct, row.producto.descuentoFechaInicio, row.producto.descuentoFechaFin)
+                if (descuentoAplicableItem && descuentoPct > 0) {
                     precioVal = precioVal * (1 - descuentoPct / 100)
                 }
                 if (item.agregados && item.agregados.length > 0) {
@@ -938,9 +952,10 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 if (item.varianteId && variantesMap.has(item.varianteId)) {
                     precioBase = parseFloat(variantesMap.get(item.varianteId).precio)
                 }
-                const descuento = row.producto.descuento || 0
-                if (descuento > 0) {
-                    precioBase = precioBase * (1 - descuento / 100)
+                const descuentoPctTk = row.producto.descuento || 0
+                const descuentoAplicableTk = isDiscountActive(descuentoPctTk, row.producto.descuentoFechaInicio, row.producto.descuentoFechaFin)
+                if (descuentoAplicableTk && descuentoPctTk > 0) {
+                    precioBase = precioBase * (1 - descuentoPctTk / 100)
                 }
 
                 // Sumar el precio de los agregados
@@ -1097,9 +1112,10 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 if (item.varianteId && variantesMap.has(item.varianteId)) {
                     precioVal = parseFloat(variantesMap.get(item.varianteId).precio)
                 }
-                const descuentoPct = row.producto.descuento || 0
-                if (descuentoPct > 0) {
-                    precioVal = precioVal * (1 - descuentoPct / 100)
+                const descuentoPctItem = row.producto.descuento || 0
+                const descuentoAplicableItem2 = isDiscountActive(descuentoPctItem, row.producto.descuentoFechaInicio, row.producto.descuentoFechaFin)
+                if (descuentoAplicableItem2 && descuentoPctItem > 0) {
+                    precioVal = precioVal * (1 - descuentoPctItem / 100)
                 }
                 if (item.agregados && item.agregados.length > 0) {
                     for (const ag of item.agregados) {

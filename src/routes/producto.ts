@@ -173,6 +173,8 @@ const createProductSchema = z.object({
   puntosGanados: z.number().int().min(0).optional().default(0),
   puntosNecesarios: z.number().int().min(0).optional().default(0),
   descuento: z.number().int().min(0).max(100).optional().default(0),
+  descuentoFechaInicio: z.string().optional().nullable(),
+  descuentoFechaFin: z.string().optional().nullable(),
   variantes: z.array(z.object({
     id: z.number().optional(),
     nombre: z.string().min(1).max(255),
@@ -194,6 +196,8 @@ const updateProductSchema = z.object({
   puntosGanados: z.number().int().min(0).optional(),
   puntosNecesarios: z.number().int().min(0).optional(),
   descuento: z.number().int().min(0).max(100).optional(),
+  descuentoFechaInicio: z.string().optional().nullable(),
+  descuentoFechaFin: z.string().optional().nullable(),
   variantes: z.array(z.object({
     id: z.number().optional(),
     nombre: z.string().min(1).max(255),
@@ -221,6 +225,8 @@ const productoRoute = new Hono()
         activo: ProductoTable.activo,
         imagenUrl: ProductoTable.imagenUrl,
         descuento: ProductoTable.descuento,
+        descuentoFechaInicio: ProductoTable.descuentoFechaInicio,
+        descuentoFechaFin: ProductoTable.descuentoFechaFin,
         createdAt: ProductoTable.createdAt,
         categoria: {
           id: CategoriaTable.id,
@@ -293,7 +299,7 @@ const productoRoute = new Hono()
   .post('/create', zValidator('json', createProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, etiquetas, puntosGanados, puntosNecesarios, descuento, variantes } = c.req.valid('json')
+    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId) {
@@ -342,6 +348,8 @@ const productoRoute = new Hono()
       restauranteId,
       categoriaId: categoriaId || null,
       descuento: descuento || 0,
+      descuentoFechaInicio: descuentoFechaInicio ? new Date(descuentoFechaInicio) : null,
+      descuentoFechaFin: descuentoFechaFin ? new Date(descuentoFechaFin) : null,
       tieneVariantes: tieneVariantes,
     })
 
@@ -466,7 +474,7 @@ const productoRoute = new Hono()
   .put('/update', zValidator('json', updateProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, variantes } = c.req.valid('json')
+    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId !== undefined) {
@@ -517,7 +525,9 @@ const productoRoute = new Hono()
     if (categoriaId !== undefined) updateData.categoriaId = categoriaId;
     if (activo !== undefined) updateData.activo = activo;
     if (descuento !== undefined) updateData.descuento = descuento;
-    
+    if (descuentoFechaInicio !== undefined) updateData.descuentoFechaInicio = descuentoFechaInicio ? new Date(descuentoFechaInicio) : null;
+    if (descuentoFechaFin !== undefined) updateData.descuentoFechaFin = descuentoFechaFin ? new Date(descuentoFechaFin) : null;
+
     // Si se enviaron variantes, actualizar el flag
     if (variantes !== undefined) {
       updateData.tieneVariantes = variantes.length > 0;
@@ -900,6 +910,34 @@ const productoRoute = new Hono()
       asignadas: etiquetasGeneradas.length,
       etiquetas: etiquetasGeneradas,
     }, 200)
+  })
+
+  .put('/bulk-descuento', zValidator('json', z.object({
+    productoIds: z.array(z.number().int().positive()),
+    descuento: z.number().int().min(0).max(100),
+    descuentoFechaInicio: z.string().optional().nullable(),
+    descuentoFechaFin: z.string().optional().nullable(),
+  })), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const { productoIds, descuento, descuentoFechaInicio, descuentoFechaFin } = c.req.valid('json')
+
+    if (productoIds.length === 0) {
+      return c.json({ success: true, updated: 0 }, 200)
+    }
+
+    await db.update(ProductoTable)
+      .set({
+        descuento,
+        descuentoFechaInicio: descuentoFechaInicio ? new Date(descuentoFechaInicio) : null,
+        descuentoFechaFin: descuentoFechaFin ? new Date(descuentoFechaFin) : null,
+      })
+      .where(and(
+        inArray(ProductoTable.id, productoIds),
+        eq(ProductoTable.restauranteId, restauranteId)
+      ))
+
+    return c.json({ success: true, updated: productoIds.length }, 200)
   })
 
   .delete('/delete/:id', async (c) => {

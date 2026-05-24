@@ -198,6 +198,8 @@ export const producto = mysqlTable("producto", {
   activo: boolean("activo").default(true),
   imagenUrl: varchar("imagen_url", { length: 255 }),
   descuento: int("descuento").default(0),
+  descuentoFechaInicio: timestamp("descuento_fecha_inicio"),
+  descuentoFechaFin: timestamp("descuento_fecha_fin"),
   tieneVariantes: boolean("tiene_variantes").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
