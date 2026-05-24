@@ -56,6 +56,8 @@ export const restaurante = mysqlTable("restaurante", {
   codigoDescuentoEnabled: boolean("codigo_descuento_enabled").default(true).notNull(),
 
   orderGroupEnabled: boolean("order_group_enabled").default(true).notNull(),
+  deliveryEnabled: boolean("delivery_enabled").default(true).notNull(),
+  takeawayEnabled: boolean("takeaway_enabled").default(true).notNull(),
   // Rapiboy - integración logística delivery
   rapiboyToken: varchar("rapiboy_token", { length: 512 }),
   rapiboyMode: mysqlEnum("rapiboy_mode", ["on_demand", "food"]),

@@ -525,6 +525,68 @@ restauranteRoute.put('/toggle-sistema-puntos', async (c) => {
 })
 */
 
+// Toggle delivery habilitado
+restauranteRoute.put('/toggle-delivery-enabled', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [row] = await db.select({ deliveryEnabled: RestauranteTable.deliveryEnabled })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!row) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    const nuevoEstado = !row.deliveryEnabled
+
+    await db.update(RestauranteTable)
+      .set({ deliveryEnabled: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({
+      message: nuevoEstado ? 'Delivery activado' : 'Delivery desactivado',
+      success: true,
+      deliveryEnabled: nuevoEstado
+    }, 200)
+  } catch (error) {
+    console.error('Error updating delivery enabled:', error)
+    return c.json({ message: 'Error al cambiar configuración de delivery', error: (error as Error).message, success: false }, 500)
+  }
+})
+
+// Toggle takeaway habilitado
+restauranteRoute.put('/toggle-takeaway-enabled', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [row] = await db.select({ takeawayEnabled: RestauranteTable.takeawayEnabled })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!row) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    const nuevoEstado = !row.takeawayEnabled
+
+    await db.update(RestauranteTable)
+      .set({ takeawayEnabled: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({
+      message: nuevoEstado ? 'Take Away activado' : 'Take Away desactivado',
+      success: true,
+      takeawayEnabled: nuevoEstado
+    }, 200)
+  } catch (error) {
+    console.error('Error updating takeaway enabled:', error)
+    return c.json({ message: 'Error al cambiar configuración de take away', error: (error as Error).message, success: false }, 500)
+  }
+})
+
 // Toggle pedido entre amigos (order group)
 restauranteRoute.put('/toggle-order-group-enabled', async (c) => {
   const db = drizzle(pool)

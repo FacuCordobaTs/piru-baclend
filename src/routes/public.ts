@@ -48,6 +48,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
             disenoAlternativo: RestauranteTable.disenoAlternativo,
             orderGroupEnabled: RestauranteTable.orderGroupEnabled,
             codigoDescuentoEnabled: RestauranteTable.codigoDescuentoEnabled,
+            deliveryEnabled: RestauranteTable.deliveryEnabled,
+            takeawayEnabled: RestauranteTable.takeawayEnabled,
             comprobantesWhatsapp: RestauranteTable.comprobantesWhatsapp,
             notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
         })
@@ -452,6 +454,12 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
     const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado } = c.req.valid('json')
 
     try {
+        const [deliveryCheck] = await db.select({ deliveryEnabled: RestauranteTable.deliveryEnabled })
+            .from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+        if (deliveryCheck && deliveryCheck.deliveryEnabled === false) {
+            return c.json({ message: 'El delivery no está disponible en este momento', success: false }, 400)
+        }
+
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
         const productosRaw = await db.select().from(ProductoTable).where(and(
             inArray(ProductoTable.id, uniqueProductosIds),
@@ -887,6 +895,12 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
     const { restauranteId, sucursalId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado } = c.req.valid('json')
 
     try {
+        const [takeawayCheck] = await db.select({ takeawayEnabled: RestauranteTable.takeawayEnabled })
+            .from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+        if (takeawayCheck && takeawayCheck.takeawayEnabled === false) {
+            return c.json({ message: 'El take away no está disponible en este momento', success: false }, 400)
+        }
+
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
         const productosRaw = await db.select().from(ProductoTable).where(and(
             inArray(ProductoTable.id, uniqueProductosIds),
