@@ -3,6 +3,8 @@ import { pool } from '../db'
 import {
   restaurante as RestauranteTable,
   pedidoUnificado as PedidoUnificadoTable,
+  itemPedidoUnificado as ItemPedidoUnificadoTable,
+  producto as ProductoTable,
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
@@ -11,6 +13,7 @@ import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import Afip from '@afipsdk/afip.js'
 import { emitirFacturaPedido } from '../services/afip-billing'
+import { generarYSubirPdfFactura } from '../services/afip-pdf'
 
 // ─── Cambiar a true cuando estés listo para emitir facturas reales en ARCA ───
 const AFIP_PRODUCTION = false
@@ -201,6 +204,7 @@ const facturacionRoute = new Hono()
     const resRows = await db
       .select({
         nombre: RestauranteTable.nombre,
+        direccion: RestauranteTable.direccion,
         afipHabilitado: RestauranteTable.afipHabilitado,
         afipCuit: RestauranteTable.afipCuit,
         afipClaveFiscal: RestauranteTable.afipClaveFiscal,
@@ -244,6 +248,24 @@ const facturacionRoute = new Hono()
       production: AFIP_PRODUCTION,
     }
 
+    // Precargar items de todos los pedidos en un solo SELECT
+    const todosLosItems = await db
+      .select({
+        pedidoId: ItemPedidoUnificadoTable.pedidoId,
+        nombreProducto: ProductoTable.nombre,
+        cantidad: ItemPedidoUnificadoTable.cantidad,
+        precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
+      })
+      .from(ItemPedidoUnificadoTable)
+      .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
+      .where(inArray(ItemPedidoUnificadoTable.pedidoId, pedidoIds))
+
+    const itemsPorPedido = new Map<number, typeof todosLosItems>()
+    for (const item of todosLosItems) {
+      if (!itemsPorPedido.has(item.pedidoId)) itemsPorPedido.set(item.pedidoId, [])
+      itemsPorPedido.get(item.pedidoId)!.push(item)
+    }
+
     const resultados: { pedidoId: number; success: boolean; cae?: string; error?: string }[] = []
     let puntoDeVentaCreado: number | null = null
 
@@ -271,6 +293,43 @@ const facturacionRoute = new Hono()
           config.puntoDeVenta = resultado.puntoDeVenta
         }
 
+        // Generar PDF en background — no bloquea la respuesta al cliente
+        const total = parseFloat(pedido.total)
+        const neto = parseFloat((total / 1.21).toFixed(2))
+        const iva = parseFloat((total - neto).toFixed(2))
+        const itemsDelPedido = itemsPorPedido.get(pedido.id) ?? []
+        generarYSubirPdfFactura({
+          puntoDeVenta: resultado.puntoDeVenta,
+          numeroComprobante: resultado.numeroComprobante,
+          cae: resultado.cae,
+          caeFchVto: resultado.caeFchVto,
+          fechaEmision: new Date().toISOString().split('T')[0],
+          total,
+          neto,
+          iva,
+          emisorCuit: restaurante.afipCuit!,
+          emisorNombre: restaurante.nombre,
+          emisorDireccion: restaurante.direccion ?? null,
+          emisorCondicionIva: (restaurante.afipCondicionIva as 'RI' | 'MO') ?? 'RI',
+          receptorNombre: pedido.nombreCliente ?? 'Consumidor Final',
+          items: itemsDelPedido.map(i => ({
+            descripcion: i.nombreProducto ?? 'Producto',
+            cantidad: i.cantidad ?? 1,
+            precioUnitario: parseFloat(i.precioUnitario),
+            subtotal: (i.cantidad ?? 1) * parseFloat(i.precioUnitario),
+          })),
+          restauranteId,
+          pedidoId: pedido.id,
+        }).then(async ({ url }) => {
+          await db
+            .update(PedidoUnificadoTable)
+            .set({ afipPdfUrl: url })
+            .where(eq(PedidoUnificadoTable.id, pedido.id))
+          console.log(`[pdf] ✅ Pedido ${pedido.id} → ${url}`)
+        }).catch(e => {
+          console.error(`[pdf] ❌ Pedido ${pedido.id}:`, e?.message)
+        })
+
         resultados.push({ pedidoId: pedido.id, success: true, cae: resultado.cae })
       } catch (error: any) {
         console.error(`[facturar-batch] Error en pedido ${pedido.id}:`, error)
@@ -286,6 +345,108 @@ const facturacionRoute = new Hono()
     }
 
     return c.json({ success: true, data: resultados })
+  })
+
+  // PDF de factura de un pedido
+  .get('/pedidos/:id/factura/pdf', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const pedidoId = parseInt(c.req.param('id'))
+    if (isNaN(pedidoId)) return c.json({ success: false, message: 'ID inválido' }, 400)
+
+    const rows = await db
+      .select({
+        id: PedidoUnificadoTable.id,
+        total: PedidoUnificadoTable.total,
+        nombreCliente: PedidoUnificadoTable.nombreCliente,
+        afipFacturado: PedidoUnificadoTable.afipFacturado,
+        afipCae: PedidoUnificadoTable.afipCae,
+        afipCaeFchVto: PedidoUnificadoTable.afipCaeFchVto,
+        afipNumeroComprobante: PedidoUnificadoTable.afipNumeroComprobante,
+        afipPuntoDeVenta: PedidoUnificadoTable.afipPuntoDeVenta,
+        afipPdfUrl: PedidoUnificadoTable.afipPdfUrl,
+        createdAt: PedidoUnificadoTable.createdAt,
+        restauranteId: PedidoUnificadoTable.restauranteId,
+      })
+      .from(PedidoUnificadoTable)
+      .where(and(
+        eq(PedidoUnificadoTable.id, pedidoId),
+        eq(PedidoUnificadoTable.restauranteId, restauranteId),
+      ))
+      .limit(1)
+
+    if (!rows.length) return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
+
+    const pedido = rows[0]
+
+    if (!pedido.afipCae) return c.json({ success: false, message: 'El pedido no tiene CAE' }, 404)
+
+    // PDF ya generado
+    if (pedido.afipPdfUrl) return c.json({ success: true, url: pedido.afipPdfUrl })
+
+    // Generar on-demand
+    const resRows = await db
+      .select({
+        nombre: RestauranteTable.nombre,
+        direccion: RestauranteTable.direccion,
+        afipCuit: RestauranteTable.afipCuit,
+        afipCondicionIva: RestauranteTable.afipCondicionIva,
+      })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
+
+    if (!resRows.length) return c.json({ success: false, message: 'Restaurante no encontrado' }, 404)
+    const restaurante = resRows[0]
+
+    const itemsRows = await db
+      .select({
+        pedidoId: ItemPedidoUnificadoTable.pedidoId,
+        nombreProducto: ProductoTable.nombre,
+        cantidad: ItemPedidoUnificadoTable.cantidad,
+        precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
+      })
+      .from(ItemPedidoUnificadoTable)
+      .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
+      .where(eq(ItemPedidoUnificadoTable.pedidoId, pedidoId))
+
+    const total = parseFloat(pedido.total)
+    const neto = parseFloat((total / 1.21).toFixed(2))
+    const iva = parseFloat((total - neto).toFixed(2))
+    const fechaEmision = pedido.createdAt instanceof Date
+      ? pedido.createdAt.toISOString().split('T')[0]
+      : String(pedido.createdAt).split('T')[0]
+
+    const { url } = await generarYSubirPdfFactura({
+      puntoDeVenta: pedido.afipPuntoDeVenta!,
+      numeroComprobante: pedido.afipNumeroComprobante!,
+      cae: pedido.afipCae,
+      caeFchVto: pedido.afipCaeFchVto!,
+      fechaEmision,
+      total,
+      neto,
+      iva,
+      emisorCuit: restaurante.afipCuit!,
+      emisorNombre: restaurante.nombre,
+      emisorDireccion: restaurante.direccion ?? null,
+      emisorCondicionIva: (restaurante.afipCondicionIva as 'RI' | 'MO') ?? 'RI',
+      receptorNombre: pedido.nombreCliente ?? 'Consumidor Final',
+      items: itemsRows.map(i => ({
+        descripcion: i.nombreProducto ?? 'Producto',
+        cantidad: i.cantidad ?? 1,
+        precioUnitario: parseFloat(i.precioUnitario),
+        subtotal: (i.cantidad ?? 1) * parseFloat(i.precioUnitario),
+      })),
+      restauranteId,
+      pedidoId,
+    })
+
+    await db
+      .update(PedidoUnificadoTable)
+      .set({ afipPdfUrl: url })
+      .where(eq(PedidoUnificadoTable.id, pedidoId))
+
+    return c.json({ success: true, url })
   })
 
   // Listar pedidos entregados/archivados sin facturar
