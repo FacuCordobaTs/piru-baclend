@@ -89,8 +89,8 @@ const facturacionRoute = new Hono()
         { cuit: afipCuit, username: afipCuit, password: afipClaveFiscal, alias: 'piru' },
         true
       )
-      const cert = (certResult as any).cert
-      const key = (certResult as any).key
+      const cert = (certResult as any).data?.cert ?? (certResult as any).cert
+      const key = (certResult as any).data?.key  ?? (certResult as any).key
 
       if (!cert || !key) {
         console.error('[afip/configurar] certResult inesperado:', certResult)
