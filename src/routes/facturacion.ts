@@ -102,7 +102,7 @@ const facturacionRoute = new Hono()
       console.log(`[afip/configurar] Usando automatización: ${AUTH_WS_AUTOMATION}`)
       await afip.CreateAutomation(
         AUTH_WS_AUTOMATION,
-        { cuit: afipCuit, username: afipCuit, password: afipClaveFiscal, wsid: 'wsfe', alias: 'piru' },
+        { cuit: afipCuit, username: afipCuit, password: afipClaveFiscal, service: 'wsfe', alias: 'piru' },
         true
       )
 
