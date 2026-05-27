@@ -98,46 +98,52 @@ const facturacionRoute = new Hono()
       }
 
       // 2. Autorizar web service wsfe (dev o prod según la constante)
+      // alias debe coincidir con el usado al crear el cert en el paso 1
       console.log(`[afip/configurar] Usando automatización: ${AUTH_WS_AUTOMATION}`)
       await afip.CreateAutomation(
         AUTH_WS_AUTOMATION,
-        { cuit: afipCuit, username: afipCuit, password: afipClaveFiscal, wsid: 'wsfe' },
+        { cuit: afipCuit, username: afipCuit, password: afipClaveFiscal, wsid: 'wsfe', alias: 'piru' },
         true
       )
 
-      // 3. Listar puntos de venta existentes
-      let puntosExistentes: number[] = []
-      try {
-        const listResponse = await afip.CreateAutomation(
-          'list-sales-points',
-          { cuit: afipCuit, username: afipCuit, password: afipClaveFiscal },
-          true
-        )
-        if (Array.isArray(listResponse)) {
-          puntosExistentes = listResponse.map((p: any) => Number(p.numero || p.Nro || p.nro))
-        }
-      } catch {}
-
-      // 4. Elegir próximo número disponible
+      // 3. Punto de venta
+      // En desarrollo no existen puntos de venta reales — siempre se usa el 1
       let numeroPuntoDeVenta = 1
-      while (puntosExistentes.includes(numeroPuntoDeVenta)) {
-        numeroPuntoDeVenta++
-      }
-
       const sistema = afipCondicionIva === 'MO' ? 'FEEM' : 'FEEWS'
 
-      await afip.CreateAutomation(
-        'create-sales-point',
-        {
-          cuit: afipCuit,
-          username: afipCuit,
-          password: afipClaveFiscal,
-          numero: numeroPuntoDeVenta,
-          sistema,
-          nombreFantasia,
-        },
-        true
-      )
+      if (AFIP_PRODUCTION) {
+        // En producción: listar existentes y crear uno nuevo
+        let puntosExistentes: number[] = []
+        try {
+          const listResponse = await afip.CreateAutomation(
+            'list-sales-points',
+            { cuit: afipCuit, username: afipCuit, password: afipClaveFiscal },
+            true
+          )
+          if (Array.isArray(listResponse)) {
+            puntosExistentes = listResponse.map((p: any) => Number(p.numero || p.Nro || p.nro))
+          }
+        } catch {}
+
+        while (puntosExistentes.includes(numeroPuntoDeVenta)) {
+          numeroPuntoDeVenta++
+        }
+
+        await afip.CreateAutomation(
+          'create-sales-point',
+          {
+            cuit: afipCuit,
+            username: afipCuit,
+            password: afipClaveFiscal,
+            numero: numeroPuntoDeVenta,
+            sistema,
+            nombreFantasia,
+          },
+          true
+        )
+      } else {
+        console.log('[afip/configurar] Modo desarrollo: saltando create-sales-point, usando PV=1')
+      }
 
       // 5. Guardar todo en la DB
       await db
