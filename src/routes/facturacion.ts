@@ -164,7 +164,11 @@ const facturacionRoute = new Hono()
         data: { puntoDeVenta: numeroPuntoDeVenta, sistema },
       })
     } catch (error: any) {
-      console.error('[facturacion/configurar] Error:', error)
+      console.error('[facturacion/configurar] Error completo:', JSON.stringify({
+        message: error?.message,
+        status: error?.status,
+        data: error?.data,
+      }, null, 2))
       return c.json({
         success: false,
         message: error?.data?.message || error?.message || 'Error al configurar AFIP',
