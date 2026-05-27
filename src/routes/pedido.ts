@@ -173,6 +173,9 @@ const pedidoRoute = new Hono()
           deliveryFee: PedidoUnificadoTable.deliveryFee,
           repartidorId: PedidoUnificadoTable.repartidorId,
           repartidorNombre: RepartidorTable.nombre,
+          afipFacturado: PedidoUnificadoTable.afipFacturado,
+          afipCae: PedidoUnificadoTable.afipCae,
+          afipNumeroComprobante: PedidoUnificadoTable.afipNumeroComprobante,
         })
         .from(PedidoUnificadoTable)
         .leftJoin(RepartidorTable, eq(PedidoUnificadoTable.repartidorId, RepartidorTable.id))

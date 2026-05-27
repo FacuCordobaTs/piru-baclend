@@ -81,7 +81,14 @@ export const restaurante = mysqlTable("restaurante", {
   modoConfirmacionManual: boolean("modo_confirmacion_manual").default(false),
   completedOnboarding: boolean("completed_onboarding").default(false).notNull(),
 
-
+  // AFIP / ARCA - facturación electrónica
+  afipHabilitado: boolean("afip_habilitado").default(false).notNull(),
+  afipCuit: varchar("afip_cuit", { length: 11 }),
+  afipClaveFiscal: varchar("afip_clave_fiscal", { length: 2048 }),
+  afipCert: varchar("afip_cert", { length: 8192 }),
+  afipKeyPrivada: varchar("afip_key_privada", { length: 8192 }),
+  afipPuntoDeVenta: int("afip_punto_de_venta"),
+  afipCondicionIva: mysqlEnum("afip_condicion_iva", ["RI", "MO"]).default("RI"),
 
   // ------ COLUMNAS A ELIMINAR ------
 
@@ -173,6 +180,14 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   repartidorId: int("repartidor_id").references(() => repartidor.id),
   // Fee de delivery exacto cobrado al cliente (calculado por zona)
   deliveryFee: decimal("delivery_fee", { precision: 10, scale: 2 }),
+
+  // AFIP / ARCA - facturación electrónica
+  afipFacturado: boolean("afip_facturado").default(false).notNull(),
+  afipCae: varchar("afip_cae", { length: 14 }),
+  afipCaeFchVto: varchar("afip_cae_fch_vto", { length: 10 }),
+  afipNumeroComprobante: int("afip_numero_comprobante"),
+  afipPuntoDeVenta: int("afip_punto_de_venta"),
+  afipPdfUrl: varchar("afip_pdf_url", { length: 512 }),
 });
 
 export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {

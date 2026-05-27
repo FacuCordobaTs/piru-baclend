@@ -132,7 +132,7 @@ export async function emitirFacturaPedido(
     cae: res.CAE,
     caeFchVto: res.CAEFchVto,
     puntoDeVenta,
-    numeroComprobante: res.voucher_number,
+    numeroComprobante: res.voucherNumber,
   }
 }
 

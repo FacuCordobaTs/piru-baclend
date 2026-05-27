@@ -28,8 +28,6 @@ import {
   METODOS_PAGO_AUTOMATICOS_EN_PEDIDO,
   METODOS_PAGO_MANUAL_VERIFICABLE_EN_PEDIDO,
 } from '../lib/metodos-pago'
-import { emitirFacturaPedido } from '../services/afip-billing'
-
 
 const createDeliverySchema = z.object({
   tipo: z.literal('delivery'),
@@ -457,33 +455,6 @@ const pedidoUnificadoRoute = new Hono()
     }
 
     console.log(`[estado] pedido=${pedidoId} restaurante=${restauranteId} estado=${estado} t=${Date.now()}`)
-
-    // if (restauranteId === 1 && estado === 'archived') {
-    //   ;(async () => {
-    //     const t0 = Date.now()
-    //     console.log(`[afip] iniciando factura pedido=${pedidoId}`)
-    //     try {
-    //       const cert = await Bun.file('piru_cert.crt').text()
-    //       const key  = await Bun.file('piru_privada.key').text()
-    //       const resultado = await emitirFacturaPedido(
-    //         {
-    //           cuit:          '20459504428',
-    //           claveFiscal:   process.env.AFIP_CLAVE_FISCAL!,
-    //           cert,
-    //           key,
-    //           nombreFantasia: 'Piru Test',
-    //         },
-    //         {
-    //           id:    pedido.id,
-    //           total: parseFloat(pedido.total),
-    //         }
-    //       )
-    //       console.log(`[afip] ✅ factura emitida pedido=${pedidoId} ms=${Date.now() - t0}`, resultado)
-    //     } catch (e) {
-    //       console.error(`[afip] ❌ error factura pedido=${pedidoId} ms=${Date.now() - t0}`, e)
-    //     }
-    //   })()
-    // }
 
     return c.json({ message: 'Estado actualizado correctamente', success: true }, 200)
   })
