@@ -12,6 +12,14 @@ import { z } from 'zod'
 import Afip from '@afipsdk/afip.js'
 import { emitirFacturaPedido } from '../services/afip-billing'
 
+// ─── Cambiar a true cuando estés listo para emitir facturas reales en ARCA ───
+const AFIP_PRODUCTION = false
+
+// Nombres de las automatizaciones según el ambiente
+const CERT_AUTOMATION    = AFIP_PRODUCTION ? 'create-cert-prod'      : 'create-cert-dev'
+const AUTH_WS_AUTOMATION = AFIP_PRODUCTION ? 'auth-web-service-prod' : 'auth-web-service-dev'
+// ─────────────────────────────────────────────────────────────────────────────
+
 const facturacionRoute = new Hono()
   .use('*', authMiddleware)
 
@@ -71,21 +79,28 @@ const facturacionRoute = new Hono()
       const afip = new Afip({
         CUIT: Number(afipCuit),
         access_token: process.env.AFIPSDK_ACCESS_TOKEN!,
-        production: false,
+        production: AFIP_PRODUCTION,
       })
 
-      // 1. Crear certificado digital
+      // 1. Crear certificado digital (dev o prod según la constante)
+      console.log(`[afip/configurar] Usando automatización: ${CERT_AUTOMATION} (production=${AFIP_PRODUCTION})`)
       const certResult = await afip.CreateAutomation(
-        'create-cert-prod',
-        { cuit: afipCuit, username: afipCuit, password: afipClaveFiscal },
+        CERT_AUTOMATION,
+        { cuit: afipCuit, username: afipCuit, password: afipClaveFiscal, alias: 'piru' },
         true
       )
       const cert = (certResult as any).cert
       const key = (certResult as any).key
 
-      // 2. Autorizar web service wsfe
+      if (!cert || !key) {
+        console.error('[afip/configurar] certResult inesperado:', certResult)
+        return c.json({ success: false, message: 'No se pudo obtener el certificado. Verificá CUIT y clave fiscal.' }, 400)
+      }
+
+      // 2. Autorizar web service wsfe (dev o prod según la constante)
+      console.log(`[afip/configurar] Usando automatización: ${AUTH_WS_AUTOMATION}`)
       await afip.CreateAutomation(
-        'auth-web-service-prod',
+        AUTH_WS_AUTOMATION,
         { cuit: afipCuit, username: afipCuit, password: afipClaveFiscal, wsid: 'wsfe' },
         true
       )
@@ -146,8 +161,8 @@ const facturacionRoute = new Hono()
       console.error('[facturacion/configurar] Error:', error)
       return c.json({
         success: false,
-        message: error?.message || 'Error al configurar AFIP',
-        error: error?.response || error?.message || String(error),
+        message: error?.data?.message || error?.message || 'Error al configurar AFIP',
+        error: error?.data || error?.response || error?.message || String(error),
       }, 500)
     }
   })
@@ -216,6 +231,7 @@ const facturacionRoute = new Hono()
       key: restaurante.afipKeyPrivada!,
       nombreFantasia: restaurante.nombre,
       puntoDeVenta: restaurante.afipPuntoDeVenta ?? undefined,
+      production: AFIP_PRODUCTION,
     }
 
     const resultados: { pedidoId: number; success: boolean; cae?: string; error?: string }[] = []
