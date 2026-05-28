@@ -75,6 +75,10 @@ export interface CheckoutDeliveryData {
   total: string;
   codigoDescuentoId?: number | null;
   montoDescuento?: number;
+  metodoPago?: string | null;
+  horarioProgramado?: string;
+  sucursalId?: number | null;
+  tipoDomicilio?: 'casa' | 'departamento' | null;
 }
 
 // Semáforo: quién está editando el checkout

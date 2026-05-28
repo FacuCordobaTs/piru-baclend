@@ -62,6 +62,9 @@ export const restaurante = mysqlTable("restaurante", {
   rapiboyToken: varchar("rapiboy_token", { length: 512 }),
   rapiboyMode: mysqlEnum("rapiboy_mode", ["on_demand", "food"]),
 
+  // Pedidos programados para después del horario
+  permitirPedidosProgramados: boolean("permitir_pedidos_programados").default(false).notNull(),
+  usarFranjasHorario: boolean("usar_franjas_horario").default(false).notNull(),
 
   createdAt: timestamp("created_at").defaultNow().notNull(),
 
@@ -372,6 +375,18 @@ export const horarioRestaurante = mysqlTable("horario_restaurante", {
   diaSemana: int("dia_semana").notNull(), // 0=Domingo, 1=Lunes ... 6=Sábado
   horaApertura: varchar("hora_apertura", { length: 5 }).notNull(), // "HH:mm"
   horaCierre: varchar("hora_cierre", { length: 5 }).notNull(), // "HH:mm"
+});
+
+export const franjaHorarioPedido = mysqlTable("franja_horario_pedido", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id")
+    .references(() => restaurante.id)
+    .notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(), // ej: "Almuerzo", "Cena"
+  horaInicio: varchar("hora_inicio", { length: 5 }).notNull(), // "HH:mm"
+  horaFin: varchar("hora_fin", { length: 5 }).notNull(), // "HH:mm"
+  activo: boolean("activo").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 // Zonas de delivery con polígonos y precios dinámicos

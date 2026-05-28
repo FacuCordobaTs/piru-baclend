@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable, codigoDescuento as CodigoDescuentoTable, varianteProducto as VarianteProductoTable } from '../db/schema'
+import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable, codigoDescuento as CodigoDescuentoTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { eq, and, desc, or, lt, isNull, sql, inArray } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
@@ -60,6 +60,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
             takeawayEnabled: RestauranteTable.takeawayEnabled,
             comprobantesWhatsapp: RestauranteTable.comprobantesWhatsapp,
             notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
+            permitirPedidosProgramados: RestauranteTable.permitirPedidosProgramados,
+            usarFranjasHorario: RestauranteTable.usarFranjasHorario,
         })
             .from(RestauranteTable)
             .where(eq(RestauranteTable.username, username))
@@ -105,6 +107,21 @@ publicRoute.get('/restaurante/:username', async (c) => {
             })
             .from(HorarioRestauranteTable)
             .where(eq(HorarioRestauranteTable.restauranteId, restauranteId))
+
+        // Obtener franjas de horario activas para pedidos programados
+        const franjasActivas = restauranteSeguro.usarFranjasHorario
+            ? await db.select({
+                id: FranjaHorarioPedidoTable.id,
+                nombre: FranjaHorarioPedidoTable.nombre,
+                horaInicio: FranjaHorarioPedidoTable.horaInicio,
+                horaFin: FranjaHorarioPedidoTable.horaFin,
+            })
+                .from(FranjaHorarioPedidoTable)
+                .where(and(
+                    eq(FranjaHorarioPedidoTable.restauranteId, restauranteId),
+                    eq(FranjaHorarioPedidoTable.activo, true),
+                ))
+            : []
 
         const sucursales = await db
             .select({
@@ -206,6 +223,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
                 productos: productosConIngredientes,
                 horarios,
                 sucursales,
+                franjas: franjasActivas,
             }
         }, 200)
 

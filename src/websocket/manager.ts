@@ -1145,6 +1145,12 @@ class WebSocketManager {
     zonaNombre: string | null;
     itemsTotal: string;
     total: string;
+    codigoDescuentoId: number | null;
+    montoDescuento: number;
+    metodoPago: string | null;
+    horarioProgramado: string;
+    sucursalId: number | null;
+    tipoDomicilio: 'casa' | 'departamento' | null;
   }>) {
     const session = this.sessions.get(mesaId);
     if (!session) return;
@@ -1331,7 +1337,7 @@ class WebSocketManager {
         nombreCliente: checkoutData.nombre,
         telefono: checkoutData.telefono,
         notas: checkoutData.notas || null,
-        metodoPago: 'transferencia',
+        metodoPago: checkoutData.metodoPago || 'transferencia',
         estado: 'pending',
         total: total.toFixed(2),
         direccion: checkoutData.tipoPedido === 'delivery' ? checkoutData.direccion : null,
@@ -1339,6 +1345,8 @@ class WebSocketManager {
         longitud: checkoutData.tipoPedido === 'delivery' && checkoutData.lng != null ? String(checkoutData.lng) : null,
         codigoDescuentoId: codigoDescuentoIdFinal,
         montoDescuento: montoDescuento.toFixed(2),
+        sucursalId: checkoutData.sucursalId ?? undefined,
+        horarioProgramado: checkoutData.horarioProgramado || undefined,
         pagado: false,
       });
 

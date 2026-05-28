@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { restaurante as RestauranteTable, mesa as MesaTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, horarioRestaurante as HorarioRestauranteTable, varianteProducto as VarianteProductoTable } from '../db/schema'
+import { restaurante as RestauranteTable, mesa as MesaTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, horarioRestaurante as HorarioRestauranteTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
@@ -1099,6 +1099,154 @@ restauranteRoute.put('/horarios', zValidator('json', updateHorariosSchema), asyn
   } catch (error) {
     console.error('Error updating horarios:', error)
     return c.json({ message: 'Error al actualizar horarios', success: false }, 500)
+  }
+})
+
+// Toggle permitir pedidos programados
+restauranteRoute.put('/toggle-permitir-pedidos-programados', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [row] = await db.select({ permitirPedidosProgramados: RestauranteTable.permitirPedidosProgramados })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!row) return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+
+    const nuevoEstado = !row.permitirPedidosProgramados
+    await db.update(RestauranteTable)
+      .set({ permitirPedidosProgramados: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({ success: true, permitirPedidosProgramados: nuevoEstado }, 200)
+  } catch (error) {
+    console.error('Error toggling permitirPedidosProgramados:', error)
+    return c.json({ message: 'Error al cambiar configuración', success: false }, 500)
+  }
+})
+
+// Toggle usar franjas de horario para pedidos programados
+restauranteRoute.put('/toggle-usar-franjas-horario', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [row] = await db.select({ usarFranjasHorario: RestauranteTable.usarFranjasHorario })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!row) return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+
+    const nuevoEstado = !row.usarFranjasHorario
+    await db.update(RestauranteTable)
+      .set({ usarFranjasHorario: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({ success: true, usarFranjasHorario: nuevoEstado }, 200)
+  } catch (error) {
+    console.error('Error toggling usarFranjasHorario:', error)
+    return c.json({ message: 'Error al cambiar configuración', success: false }, 500)
+  }
+})
+
+// GET franjas de horario
+restauranteRoute.get('/franjas-horario', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const franjas = await db.select()
+      .from(FranjaHorarioPedidoTable)
+      .where(eq(FranjaHorarioPedidoTable.restauranteId, restauranteId))
+
+    return c.json({ franjas, success: true }, 200)
+  } catch (error) {
+    console.error('Error fetching franjas:', error)
+    return c.json({ message: 'Error al obtener franjas', success: false }, 500)
+  }
+})
+
+// POST crear franja de horario
+restauranteRoute.post('/franjas-horario', zValidator('json', z.object({
+  nombre: z.string().min(1).max(255),
+  horaInicio: z.string().regex(/^\d{2}:\d{2}$/),
+  horaFin: z.string().regex(/^\d{2}:\d{2}$/),
+  activo: z.boolean().optional().default(true),
+})), async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const { nombre, horaInicio, horaFin, activo } = c.req.valid('json')
+
+  try {
+    const [result] = await db.insert(FranjaHorarioPedidoTable)
+      .values({ restauranteId, nombre, horaInicio, horaFin, activo })
+
+    const [franja] = await db.select()
+      .from(FranjaHorarioPedidoTable)
+      .where(eq(FranjaHorarioPedidoTable.id, (result as any).insertId))
+
+    return c.json({ franja, success: true }, 201)
+  } catch (error) {
+    console.error('Error creating franja:', error)
+    return c.json({ message: 'Error al crear franja', success: false }, 500)
+  }
+})
+
+// PUT actualizar franja de horario
+restauranteRoute.put('/franjas-horario/:id', zValidator('json', z.object({
+  nombre: z.string().min(1).max(255).optional(),
+  horaInicio: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  horaFin: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  activo: z.boolean().optional(),
+})), async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const franjaId = parseInt(c.req.param('id'))
+  const data = c.req.valid('json')
+
+  try {
+    const [existing] = await db.select({ id: FranjaHorarioPedidoTable.id })
+      .from(FranjaHorarioPedidoTable)
+      .where(and(eq(FranjaHorarioPedidoTable.id, franjaId), eq(FranjaHorarioPedidoTable.restauranteId, restauranteId)))
+
+    if (!existing) return c.json({ message: 'Franja no encontrada', success: false }, 404)
+
+    await db.update(FranjaHorarioPedidoTable)
+      .set(data)
+      .where(eq(FranjaHorarioPedidoTable.id, franjaId))
+
+    const [franja] = await db.select()
+      .from(FranjaHorarioPedidoTable)
+      .where(eq(FranjaHorarioPedidoTable.id, franjaId))
+
+    return c.json({ franja, success: true }, 200)
+  } catch (error) {
+    console.error('Error updating franja:', error)
+    return c.json({ message: 'Error al actualizar franja', success: false }, 500)
+  }
+})
+
+// DELETE franja de horario
+restauranteRoute.delete('/franjas-horario/:id', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const franjaId = parseInt(c.req.param('id'))
+
+  try {
+    const [existing] = await db.select({ id: FranjaHorarioPedidoTable.id })
+      .from(FranjaHorarioPedidoTable)
+      .where(and(eq(FranjaHorarioPedidoTable.id, franjaId), eq(FranjaHorarioPedidoTable.restauranteId, restauranteId)))
+
+    if (!existing) return c.json({ message: 'Franja no encontrada', success: false }, 404)
+
+    await db.delete(FranjaHorarioPedidoTable)
+      .where(eq(FranjaHorarioPedidoTable.id, franjaId))
+
+    return c.json({ message: 'Franja eliminada', success: true }, 200)
+  } catch (error) {
+    console.error('Error deleting franja:', error)
+    return c.json({ message: 'Error al eliminar franja', success: false }, 500)
   }
 })
 
