@@ -93,6 +93,26 @@ const pedidoUnificadoRoute = new Hono()
     }, 200)
   })
 
+  // Obtener pedidos activos (hidratación inicial) — DEBE ir antes de /:id
+  .get('/activos', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = Number((c as any).user?.id)
+    if (!Number.isInteger(restauranteId)) {
+      return c.json({ success: false, message: 'No autenticado' }, 401)
+    }
+    const tipo = c.req.query('tipo') as 'delivery' | 'takeaway' | 'all' | undefined
+    const sucursalIdParam = c.req.query('sucursalId')
+
+    const whereCondition = await buildPedidosWhere(db, restauranteId, tipo, sucursalIdParam, undefined, { excludeArchived: true })
+    const pedidos = await selectPedidosEnriquecidos(db, whereCondition, { limit: 100 })
+
+    return c.json({
+      message: 'Pedidos activos recuperados',
+      success: true,
+      data: pedidos,
+    }, 200)
+  })
+
   // Obtener un pedido por ID
   .get('/:id', async (c) => {
     const db = drizzle(pool)
@@ -628,22 +648,7 @@ const pedidoUnificadoRoute = new Hono()
     }
   })
 
-  // Obtener pedidos activos (hidratación inicial)
-  .get('/activos', async (c) => {
-    const db = drizzle(pool)
-    const restauranteId = (c as any).user.id
-    const tipo = c.req.query('tipo') as 'delivery' | 'takeaway' | 'all' | undefined
-    const sucursalIdParam = c.req.query('sucursalId')
 
-    const whereCondition = await buildPedidosWhere(db, restauranteId, tipo, sucursalIdParam, undefined, { excludeArchived: true })
-    const pedidos = await selectPedidosEnriquecidos(db, whereCondition, { limit: 100 })
-
-    return c.json({
-      message: 'Pedidos activos recuperados',
-      success: true,
-      data: pedidos,
-    }, 200)
-  })
 
   // Claim atómico de impresión
   .put('/:id/impreso', async (c) => {
