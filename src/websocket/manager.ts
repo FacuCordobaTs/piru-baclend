@@ -153,6 +153,38 @@ class WebSocketManager {
     });
   }
 
+  // Enviar evento de pedido (incremental para el dashboard admin)
+  broadcastAdminOrderEvent(
+    restauranteId: number,
+    payload: {
+      event: 'upsert' | 'remove';
+      reason: string;
+      tipo: 'delivery' | 'takeaway';
+      pedidoId: number;
+      sucursalId?: number | null;
+      shouldPrint?: boolean;
+      pedido?: any;
+    }
+  ) {
+    const session = this.adminSessions.get(restauranteId);
+    if (!session || session.connections.size === 0) return;
+
+    const message = JSON.stringify({
+      type: 'ADMIN_ORDER_EVENT',
+      payload
+    });
+
+    session.connections.forEach((client) => {
+      if (client.readyState === 1) {
+        try {
+          client.send(message);
+        } catch (error) {
+          console.error(`Error enviando ADMIN_ORDER_EVENT a admin:`, error);
+        }
+      }
+    });
+  }
+
   // Obtener notificaciones del restaurante desde la BD
   async getNotificacionesRestaurante(restauranteId: number) {
     const notificaciones = await this.db
