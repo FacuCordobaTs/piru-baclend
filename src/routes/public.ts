@@ -1300,7 +1300,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 sucursalId: pedidoSucursalIdTk ?? null,
                 event: 'upsert',
                 reason: 'created',
-                shouldPrint: !waitToPayTk
+                shouldPrint: !waitToPay
             })
         }
 
