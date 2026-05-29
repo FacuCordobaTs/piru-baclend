@@ -28,6 +28,12 @@ import {
   METODOS_PAGO_AUTOMATICOS_EN_PEDIDO,
   METODOS_PAGO_MANUAL_VERIFICABLE_EN_PEDIDO,
 } from '../lib/metodos-pago'
+import {
+  emitirEventoPedido,
+  buildPedidosWhere,
+  selectPedidosEnriquecidos,
+  enrichItemsWithProductInfo,
+} from '../lib/pedidos-activos'
 
 const createDeliverySchema = z.object({
   tipo: z.literal('delivery'),
@@ -62,37 +68,6 @@ const updateEstadoSchema = z.object({
   estado: z.enum(['pending', 'preparing', 'ready', 'dispatched', 'delivered', 'cancelled', 'archived']),
 })
 
-async function enrichItemsWithProductInfo(db: MySql2Database<Record<string, never>>, itemsRaw: any[]) {
-  return Promise.all(
-    itemsRaw.map(async (item) => {
-      let ingredientesExcluidosNombres: string[] = []
-      if (item.ingredientesExcluidos && Array.isArray(item.ingredientesExcluidos) && item.ingredientesExcluidos.length > 0) {
-        const ingredientes = await db
-          .select({ id: IngredienteTable.id, nombre: IngredienteTable.nombre })
-          .from(IngredienteTable)
-          .where(inArray(IngredienteTable.id, item.ingredientesExcluidos as number[]))
-        ingredientesExcluidosNombres = ingredientes.map((ing) => ing.nombre)
-      }
-      let agregadosParsed: any[] = []
-      if (item.agregados) {
-        if (typeof item.agregados === 'string') {
-          try {
-            agregadosParsed = JSON.parse(item.agregados)
-          } catch {}
-        } else if (Array.isArray(item.agregados)) {
-          agregadosParsed = item.agregados
-        }
-      }
-      return {
-        ...item,
-        ingredientesExcluidos: item.ingredientesExcluidos || [],
-        ingredientesExcluidosNombres,
-        agregados: agregadosParsed,
-      }
-    })
-  )
-}
-
 const pedidoUnificadoRoute = new Hono()
   .use('*', authMiddleware)
 
@@ -107,165 +82,14 @@ const pedidoUnificadoRoute = new Hono()
     const offset = (page - 1) * limit
     const sucursalIdParam = c.req.query('sucursalId')
 
-    const restaurante = await db
-      .select({
-        metodosPagoConfig: RestauranteTable.metodosPagoConfig,
-        cardsPaymentsEnabled: RestauranteTable.cardsPaymentsEnabled,
-        mpConnected: RestauranteTable.mpConnected,
-        mpPublicKey: RestauranteTable.mpPublicKey,
-        cucuruConfigurado: RestauranteTable.cucuruConfigurado,
-        cucuruEnabled: RestauranteTable.cucuruEnabled,
-        proveedorPago: RestauranteTable.proveedorPago,
-        taloClientId: RestauranteTable.taloClientId,
-        taloClientSecret: RestauranteTable.taloClientSecret,
-        taloUserId: RestauranteTable.taloUserId,
-        transferenciaAlias: RestauranteTable.transferenciaAlias,
-      })
-      .from(RestauranteTable)
-      .where(eq(RestauranteTable.id, restauranteId))
-      .limit(1)
-
-    let whereCondition: any = eq(PedidoUnificadoTable.restauranteId, restauranteId)
-    if (tipo && tipo !== 'all') {
-      whereCondition = and(whereCondition, eq(PedidoUnificadoTable.tipo, tipo))
-    }
-    if (
-      restaurante.length > 0 &&
-      restauranteOcultaPedidosNoPagados(resolveMetodosPagoConfig(rowToPagoRow(restaurante[0])))
-    ) {
-      const pagoRow = rowToPagoRow(restaurante[0])
-      const metodosPublicosIds = buildMetodosPublicosList(pagoRow).map((o) => o.id)
-      const esperandoWebhook = and(
-        eq(PedidoUnificadoTable.pagado, false),
-        inArray(PedidoUnificadoTable.metodoPago, [...METODOS_PAGO_AUTOMATICOS_EN_PEDIDO]),
-      )
-      /** Impago efectivo/manual si el medio ya no figura entre los métodos públicos (sin manual en público ⇒ ocultamos todo ese perfil impago manual). */
-      const impagoManualNoOfrecido = and(
-        eq(PedidoUnificadoTable.pagado, false),
-        inArray(PedidoUnificadoTable.metodoPago, [...METODOS_PAGO_MANUAL_VERIFICABLE_EN_PEDIDO]),
-        metodosPublicosIds.length === 0
-          ? sql`TRUE`
-          : notInArray(PedidoUnificadoTable.metodoPago, metodosPublicosIds),
-      )
-
-      const ofreceManualEnLinkPublico =
-        metodosPublicosIds.length > 0 &&
-        metodosPublicosIds.some((id) => (METODOS_PAGO_MANUAL_VERIFICABLE_EN_PEDIDO as readonly string[]).includes(id))
-
-      const metodoAusenteSinCobrarEnMostrador = sql`(
-        ${PedidoUnificadoTable.metodoPago} IS NULL
-        OR TRIM(COALESCE(${PedidoUnificadoTable.metodoPago}, '')) = ''
-      )`
-
-      /** Pedidos legacy: sin metodo en columna pero eran efectivo/manual; ocultarlos cuando el checkout ya es solo automatización */
-      const impagoAmbiguoViejoConSoloMediosElectronicos =
-        metodosPublicosIds.length === 0 || !ofreceManualEnLinkPublico
-          ? and(eq(PedidoUnificadoTable.pagado, false), metodoAusenteSinCobrarEnMostrador)
-          : sql`FALSE`
-
-      const ocultarPedidoImpagoOperaciones = or(
-        esperandoWebhook,
-        impagoManualNoOfrecido,
-        impagoAmbiguoViejoConSoloMediosElectronicos,
-      )
-      whereCondition = and(
-        whereCondition,
-        or(eq(PedidoUnificadoTable.pagado, true), not(ocultarPedidoImpagoOperaciones ?? sql`FALSE`)),
-      )
-    }
-    if (estado) {
-      whereCondition = and(whereCondition, eq(PedidoUnificadoTable.estado, estado as any))
-    }
-    if (sucursalIdParam !== undefined && sucursalIdParam !== '') {
-      const sid = Number(sucursalIdParam)
-      if (!Number.isNaN(sid) && sid > 0) {
-        whereCondition = and(whereCondition, eq(PedidoUnificadoTable.sucursalId, sid))
-      }
-    }
-
-    const pedidos = await db
-      .select({
-        id: PedidoUnificadoTable.id,
-        tipo: PedidoUnificadoTable.tipo,
-        direccion: PedidoUnificadoTable.direccion,
-        nombreCliente: PedidoUnificadoTable.nombreCliente,
-        telefono: PedidoUnificadoTable.telefono,
-        estado: PedidoUnificadoTable.estado,
-        total: PedidoUnificadoTable.total,
-        notas: PedidoUnificadoTable.notas,
-        createdAt: PedidoUnificadoTable.createdAt,
-        deliveredAt: PedidoUnificadoTable.deliveredAt,
-        pagado: PedidoUnificadoTable.pagado,
-        metodoPago: PedidoUnificadoTable.metodoPago,
-        impreso: PedidoUnificadoTable.impreso,
-        rapiboyTrackingUrl: PedidoUnificadoTable.rapiboyTrackingUrl,
-        codigoDescuentoId: PedidoUnificadoTable.codigoDescuentoId,
-        montoDescuento: PedidoUnificadoTable.montoDescuento,
-        sucursalId: PedidoUnificadoTable.sucursalId,
-        sucursalNombre: SucursalTable.nombre,
-        codigoDescuentoCodigo: CodigoDescuentoTable.codigo,
-        demoraMinutos: PedidoUnificadoTable.demoraMinutos,
-        notificarWhatsapp: PedidoUnificadoTable.notificarWhatsapp,
-        horarioProgramado: PedidoUnificadoTable.horarioProgramado,
-        latitud: PedidoUnificadoTable.latitud,
-        longitud: PedidoUnificadoTable.longitud,
-        deliveryFee: PedidoUnificadoTable.deliveryFee,
-        repartidorId: PedidoUnificadoTable.repartidorId,
-        repartidorNombre: RepartidorTable.nombre,
-        grupal: PedidoUnificadoTable.grupal,
-      })
-      .from(PedidoUnificadoTable)
-      .leftJoin(
-        CodigoDescuentoTable,
-        eq(PedidoUnificadoTable.codigoDescuentoId, CodigoDescuentoTable.id),
-      )
-      .leftJoin(
-        SucursalTable,
-        eq(PedidoUnificadoTable.sucursalId, SucursalTable.id),
-      )
-      .leftJoin(
-        RepartidorTable,
-        eq(PedidoUnificadoTable.repartidorId, RepartidorTable.id),
-      )
-      .where(whereCondition)
-      .orderBy(desc(PedidoUnificadoTable.createdAt))
-      .limit(limit)
-      .offset(offset)
-
-    const pedidosConItems = await Promise.all(
-      pedidos.map(async (pedido) => {
-        const itemsRaw = await db
-          .select({
-            id: ItemPedidoUnificadoTable.id,
-            productoId: ItemPedidoUnificadoTable.productoId,
-            varianteId: ItemPedidoUnificadoTable.varianteId,
-            varianteNombre: ItemPedidoUnificadoTable.varianteNombre,
-            cantidad: ItemPedidoUnificadoTable.cantidad,
-            precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
-            nombreProducto: ProductoTable.nombre,
-            imagenUrl: ProductoTable.imagenUrl,
-            ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos,
-            agregados: ItemPedidoUnificadoTable.agregados,
-            clienteNombre: ItemPedidoUnificadoTable.clienteNombre,
-          })
-          .from(ItemPedidoUnificadoTable)
-          .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
-          .where(eq(ItemPedidoUnificadoTable.pedidoId, pedido.id))
-
-        const items = await enrichItemsWithProductInfo(db, itemsRaw)
-        return {
-          ...pedido,
-          items,
-          totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0),
-        }
-      })
-    )
+    const whereCondition = await buildPedidosWhere(db, restauranteId, tipo, sucursalIdParam, estado)
+    const pedidosConItems = await selectPedidosEnriquecidos(db, whereCondition, { limit, offset })
 
     return c.json({
       message: 'Pedidos encontrados',
       success: true,
       data: pedidosConItems,
-      pagination: { page, limit, hasMore: pedidos.length === limit },
+      pagination: { page, limit, hasMore: pedidosConItems.length === limit },
     }, 200)
   })
 
@@ -801,6 +625,45 @@ const pedidoUnificadoRoute = new Hono()
     } catch (error) {
       console.error('❌ Error enviando confirmación con demora:', error)
       return c.json({ message: 'Demora guardada pero falló el envío del mensaje', success: true, demoraMinutos }, 200)
+    }
+  })
+
+  // Obtener pedidos activos (hidratación inicial)
+  .get('/activos', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const tipo = c.req.query('tipo') as 'delivery' | 'takeaway' | 'all' | undefined
+    const sucursalIdParam = c.req.query('sucursalId')
+
+    const whereCondition = await buildPedidosWhere(db, restauranteId, tipo, sucursalIdParam, undefined, { excludeArchived: true })
+    const pedidos = await selectPedidosEnriquecidos(db, whereCondition, { limit: 100 })
+
+    return c.json({
+      message: 'Pedidos activos recuperados',
+      success: true,
+      data: pedidos,
+    }, 200)
+  })
+
+  // Claim atómico de impresión
+  .put('/:id/impreso', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const pedidoId = Number(c.req.param('id'))
+
+    const result = await db.execute(sql`
+      UPDATE ${PedidoUnificadoTable}
+      SET impreso = 1
+      WHERE id = ${pedidoId} AND restaurante_id = ${restauranteId} AND impreso = 0
+    `)
+
+    // Dependiendo del driver MySQL (mysql2), rows affected está en la respuesta
+    const affectedRows = (result as any)?.[0]?.affectedRows ?? 0
+
+    if (affectedRows > 0) {
+      return c.json({ message: 'Claim de impresión exitoso', success: true, claimed: true }, 200)
+    } else {
+      return c.json({ message: 'Pedido ya impreso o no encontrado', success: true, claimed: false }, 200)
     }
   })
 

@@ -15,6 +15,7 @@ import {
 import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp } from '../services/whatsapp'
 import { consultarPagoTalo } from '../services/talo'
+import { emitirEventoPedido } from '../lib/pedidos-activos'
 
 const webhookRoute = new Hono()
 
@@ -191,7 +192,15 @@ const cucuruWebhookHandler = async (c: any) => {
       });
 
       console.log(`🚀 [Cucuru] Pago acreditado para ${tipoEncontrado} #${pedido.id}`);
-      wsManager.broadcastAdminUpdate(targetRestauranteId, tipoEncontrado, { sucursalId: pedido.sucursalId ?? null });
+      await emitirEventoPedido(db, {
+        restauranteId: targetRestauranteId,
+        pedidoId: pedido.id,
+        tipo: tipoEncontrado,
+        sucursalId: pedido.sucursalId ?? null,
+        event: 'upsert',
+        reason: 'paid',
+        shouldPrint: true
+      });
       wsManager.notifyPublicClientPayment(tipoEncontrado, pedido.id);
 
       // WhatsApp Notification
@@ -441,7 +450,15 @@ webhookRoute.post('/talo', async (c) => {
         leida: false,
         pedidoId: pedido.id,
       });
-      wsManager.broadcastAdminUpdate(restauranteId, pedido.tipo, { sucursalId: pedido.sucursalId ?? null });
+      await emitirEventoPedido(db, {
+        restauranteId,
+        pedidoId: pedido.id,
+        tipo: pedido.tipo,
+        sucursalId: pedido.sucursalId ?? null,
+        event: 'upsert',
+        reason: 'paid',
+        shouldPrint: true
+      });
       wsManager.notifyPublicClientPayment(pedido.tipo, pedido.id);
       console.log('[Talo Webhook] WebSockets enviados. Verificando WhatsApp...');
 
@@ -555,7 +572,15 @@ webhookRoute.post('/rapiboy', async (c) => {
             await db.update(PedidoUnificadoTable).set(updateData).where(eq(PedidoUnificadoTable.id, pedidoId));
 
             // Actualizar a los administradores
-            wsManager.broadcastAdminUpdate(pedido.restauranteId, 'delivery', { sucursalId: pedido.sucursalId ?? null });
+            await emitirEventoPedido(db, {
+                restauranteId: pedido.restauranteId,
+                pedidoId,
+                tipo: 'delivery',
+                sucursalId: pedido.sucursalId ?? null,
+                event: 'upsert',
+                reason: 'estado',
+                shouldPrint: false
+            });
             
             // Actualizar a los clientes públicos/tracking
             wsManager.notifyPublicClientEstado('delivery', pedidoId, updateData.estado || pedido.estado, updateData.rapiboyTrackingUrl || pedido.rapiboyTrackingUrl || undefined);

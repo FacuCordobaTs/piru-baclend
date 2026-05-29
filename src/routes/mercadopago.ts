@@ -7,6 +7,7 @@ import { authMiddleware } from '../middleware/auth'
 import { obtenerTokenValido, refrescarTokenRestaurante } from '../utils/mercadopago'
 import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp } from '../services/whatsapp'
+import { emitirEventoPedido } from '../lib/pedidos-activos'
 
 const MP_CLIENT_ID = process.env.MP_CLIENT_ID
 const MP_CLIENT_SECRET = process.env.MP_CLIENT_SECRET
@@ -154,7 +155,7 @@ mercadopagoRoute.get('/callback', async (c) => {
   const db = drizzle(pool)
   const code = c.req.query('code')
   const rawState = c.req.query('state') || ''
-  
+
   // Extraemos id y source (ejemplo: 123_onboarding)
   const stateParts = rawState.split('_')
   const restauranteId = stateParts[0]
@@ -394,7 +395,15 @@ mercadopagoRoute.post('/process-brick', async (c) => {
         pedidoId: pedidoId
       })
 
-      wsManager.broadcastAdminUpdate(pedido.restauranteId!, tipoPedido, { sucursalId: pedido.sucursalId ?? null })
+      await emitirEventoPedido(db, {
+        restauranteId: pedido.restauranteId!,
+        pedidoId,
+        tipo: tipoPedido,
+        sucursalId: pedido.sucursalId ?? null,
+        event: 'upsert',
+        reason: 'paid',
+        shouldPrint: true
+      })
       wsManager.notifyPublicClientPayment(tipoPedido, pedidoId)
 
       try {
@@ -657,7 +666,15 @@ mercadopagoRoute.post('/webhook', async (c) => {
         pedidoId: pedidoId
       })
 
-      wsManager.broadcastAdminUpdate(restauranteId, tipoPedido, { sucursalId: pedidoData.sucursalId ?? null })
+      await emitirEventoPedido(db, {
+        restauranteId,
+        pedidoId,
+        tipo: tipoPedido,
+        sucursalId: pedidoData.sucursalId ?? null,
+        event: 'upsert',
+        reason: 'paid',
+        shouldPrint: true
+      })
       wsManager.notifyPublicClientPayment(tipoPedido, pedidoId)
 
       try {

@@ -18,6 +18,7 @@ import {
   METODO_PAGO,
   rowToPagoRow,
 } from '../lib/metodos-pago'
+import { emitirEventoPedido } from '../lib/pedidos-activos'
 
 function isDiscountActive(descuento: number | null, inicio: Date | null, fin: Date | null): boolean {
   if (!descuento || descuento === 0) return false
@@ -878,7 +879,15 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 leida: false,
                 pedidoId: pedidoId
             })
-            wsManager.broadcastAdminUpdate(restauranteId, 'delivery', { sucursalId: pedidoSucursalId ?? null })
+            await emitirEventoPedido(db, {
+                restauranteId,
+                pedidoId,
+                tipo: 'delivery',
+                sucursalId: pedidoSucursalId ?? null,
+                event: 'upsert',
+                reason: 'created',
+                shouldPrint: !waitToPay
+            })
         }
 
         return c.json({
@@ -1284,7 +1293,15 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 leida: false,
                 pedidoId: pedidoId
             })
-            wsManager.broadcastAdminUpdate(restauranteId, 'takeaway', { sucursalId: pedidoSucursalIdTk ?? null })
+            await emitirEventoPedido(db, {
+                restauranteId,
+                pedidoId,
+                tipo: 'takeaway',
+                sucursalId: pedidoSucursalIdTk ?? null,
+                event: 'upsert',
+                reason: 'created',
+                shouldPrint: !waitToPayTk
+            })
         }
 
         return c.json({
@@ -1330,7 +1347,15 @@ publicRoute.put('/delivery/:id/metodo-pago', zValidator('json', setMetodoPagoSch
             sucursalId: PedidoUnificadoTable.sucursalId,
         }).from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.id, id)).limit(1)
         if (pedido.length > 0 && pedido[0].restauranteId) {
-            wsManager.broadcastAdminUpdate(pedido[0].restauranteId, 'delivery', { sucursalId: pedido[0].sucursalId ?? null })
+            await emitirEventoPedido(db, {
+                restauranteId: pedido[0].restauranteId,
+                pedidoId: id,
+                tipo: 'delivery',
+                sucursalId: pedido[0].sucursalId ?? null,
+                event: 'upsert',
+                reason: 'updated',
+                shouldPrint: false
+            })
         }
 
         return c.json({ message: 'Método de pago actualizado', success: true }, 200)
@@ -1358,7 +1383,15 @@ publicRoute.put('/takeaway/:id/metodo-pago', zValidator('json', setMetodoPagoSch
             sucursalId: PedidoUnificadoTable.sucursalId,
         }).from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.id, id)).limit(1)
         if (pedido.length > 0 && pedido[0].restauranteId) {
-            wsManager.broadcastAdminUpdate(pedido[0].restauranteId, 'takeaway', { sucursalId: pedido[0].sucursalId ?? null })
+            await emitirEventoPedido(db, {
+                restauranteId: pedido[0].restauranteId,
+                pedidoId: id,
+                tipo: 'takeaway',
+                sucursalId: pedido[0].sucursalId ?? null,
+                event: 'upsert',
+                reason: 'updated',
+                shouldPrint: false
+            })
         }
 
         return c.json({ message: 'Método de pago actualizado', success: true }, 200)
