@@ -212,6 +212,7 @@ const pedidoUnificadoRoute = new Hono()
         deliveryFee: PedidoUnificadoTable.deliveryFee,
         repartidorId: PedidoUnificadoTable.repartidorId,
         repartidorNombre: RepartidorTable.nombre,
+        grupal: PedidoUnificadoTable.grupal,
       })
       .from(PedidoUnificadoTable)
       .leftJoin(
@@ -245,6 +246,7 @@ const pedidoUnificadoRoute = new Hono()
             imagenUrl: ProductoTable.imagenUrl,
             ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos,
             agregados: ItemPedidoUnificadoTable.agregados,
+            clienteNombre: ItemPedidoUnificadoTable.clienteNombre,
           })
           .from(ItemPedidoUnificadoTable)
           .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
@@ -298,6 +300,7 @@ const pedidoUnificadoRoute = new Hono()
         imagenUrl: ProductoTable.imagenUrl,
         ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos,
         agregados: ItemPedidoUnificadoTable.agregados,
+        clienteNombre: ItemPedidoUnificadoTable.clienteNombre,
       })
       .from(ItemPedidoUnificadoTable)
       .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))

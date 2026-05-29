@@ -1348,6 +1348,7 @@ class WebSocketManager {
         sucursalId: checkoutData.sucursalId ?? undefined,
         horarioProgramado: checkoutData.horarioProgramado || undefined,
         pagado: false,
+        grupal: true,
       });
 
       const pedidoUnificadoId = Number(nuevoPedido[0].insertId);
@@ -1361,6 +1362,7 @@ class WebSocketManager {
           ingredientesExcluidos: item.ingredientesExcluidos,
           agregados: item.agregados,
           esCanjePuntos: false,
+          clienteNombre: item.clienteNombre || null,
         });
       }
 
@@ -1410,6 +1412,7 @@ class WebSocketManager {
         nombreCliente: checkoutData.nombre,
         telefono: checkoutData.telefono,
         montoDescuento: montoDescuento > 0 ? montoDescuento.toFixed(2) : undefined,
+        metodoPago: checkoutData.metodoPago || 'transferencia',
       };
 
       this.salaOrderCache.set(sala[0].token, payload);

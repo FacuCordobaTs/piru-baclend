@@ -184,6 +184,9 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   // Fee de delivery exacto cobrado al cliente (calculado por zona)
   deliveryFee: decimal("delivery_fee", { precision: 10, scale: 2 }),
 
+  // Pedido grupal: items con clienteNombre individual (flujo sala/grupo)
+  grupal: boolean("grupal").default(false).notNull(),
+
   // AFIP / ARCA - facturación electrónica
   afipFacturado: boolean("afip_facturado").default(false).notNull(),
   afipCae: varchar("afip_cae", { length: 14 }),
@@ -204,6 +207,8 @@ export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {
   esCanjePuntos: boolean("es_canje_puntos").default(false),
   ingredientesExcluidos: json("ingredientes_excluidos"),
   agregados: json("agregados"),
+  // Nombre del cliente que agregó este item (solo relevante en pedidos grupales)
+  clienteNombre: varchar("cliente_nombre", { length: 255 }),
 });
 
 export const producto = mysqlTable("producto", {

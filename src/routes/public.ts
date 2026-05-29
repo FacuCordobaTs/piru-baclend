@@ -277,6 +277,8 @@ publicRoute.get('/sala/join/:token', async (c) => {
             colorSecundario: RestauranteTable.colorSecundario,
             direccion: RestauranteTable.direccion,
             username: RestauranteTable.username,
+            transferenciaAlias: RestauranteTable.transferenciaAlias,
+            mpPublicKey: RestauranteTable.mpPublicKey,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, sala[0].restauranteId!)).limit(1)
 
         if (!restaurante[0]) {
@@ -465,6 +467,7 @@ const createDeliverySchema = z.object({
     codigoDescuentoId: z.number().int().positive().optional(),
     notificarWhatsapp: z.boolean().optional().default(false),
     horarioProgramado: z.string().max(20).optional(),
+    grupal: z.boolean().optional().default(false),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
         varianteId: z.number().int().positive().optional(),
@@ -475,13 +478,14 @@ const createDeliverySchema = z.object({
             nombre: z.string(),
             precio: z.string()
         })).optional(),
-        esCanjePuntos: z.boolean().optional().default(false)
+        esCanjePuntos: z.boolean().optional().default(false),
+        clienteNombre: z.string().optional(),
     })).min(1)
 })
 
 publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado } = c.req.valid('json')
+    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado, grupal } = c.req.valid('json')
 
     try {
         const [deliveryCheck] = await db.select({ deliveryEnabled: RestauranteTable.deliveryEnabled })
@@ -711,6 +715,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             notificarWhatsapp: notificarWhatsapp || false,
             horarioProgramado: horarioProgramado || null,
             deliveryFee: deliveryFeeAplicado.toFixed(2),
+            grupal: grupal || false,
         })
 
         const pedidoId = Number(nuevoPedido[0].insertId)
@@ -744,7 +749,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 precioUnitario,
                 ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
                 agregados: item.agregados?.length ? item.agregados : null,
-                esCanjePuntos: item.esCanjePuntos || false
+                esCanjePuntos: item.esCanjePuntos || false,
+                clienteNombre: item.clienteNombre || null,
             })
         }
 
@@ -908,6 +914,7 @@ const createTakeawaySchema = z.object({
     codigoDescuentoId: z.number().int().positive().optional(),
     notificarWhatsapp: z.boolean().optional().default(false),
     horarioProgramado: z.string().max(20).optional(),
+    grupal: z.boolean().optional().default(false),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
         varianteId: z.number().int().positive().optional(),
@@ -918,13 +925,14 @@ const createTakeawaySchema = z.object({
             nombre: z.string(),
             precio: z.string()
         })).optional(),
-        esCanjePuntos: z.boolean().optional().default(false)
+        esCanjePuntos: z.boolean().optional().default(false),
+        clienteNombre: z.string().optional(),
     })).min(1)
 })
 
 publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, sucursalId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado } = c.req.valid('json')
+    const { restauranteId, sucursalId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado, grupal } = c.req.valid('json')
 
     try {
         const [takeawayCheck] = await db.select({ takeawayEnabled: RestauranteTable.takeawayEnabled })
@@ -1118,6 +1126,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             montoDescuento: montoDescuentoTk.toFixed(2),
             notificarWhatsapp: notificarWhatsapp || false,
             horarioProgramado: horarioProgramado || null,
+            grupal: grupal || false,
         })
 
         const pedidoId = Number(nuevoPedido[0].insertId)
@@ -1151,7 +1160,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 precioUnitario,
                 ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
                 agregados: item.agregados?.length ? item.agregados : null,
-                esCanjePuntos: item.esCanjePuntos || false
+                esCanjePuntos: item.esCanjePuntos || false,
+                clienteNombre: item.clienteNombre || null,
             })
         }
 
