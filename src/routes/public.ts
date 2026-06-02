@@ -1725,6 +1725,8 @@ publicRoute.get('/pedido-info/:id', async (c) => {
                     notas: pedido.notas,
                     montoDescuento: pedido.montoDescuento,
                     rapiboyTrackingUrl: pedido.rapiboyTrackingUrl,
+                    latitud: pedido.latitud,
+                    longitud: pedido.longitud,
                     createdAt: pedido.createdAt,
                 },
                 items: items.map((i) => {
