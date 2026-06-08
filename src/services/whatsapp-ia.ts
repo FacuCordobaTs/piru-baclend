@@ -138,13 +138,9 @@ async function buildSystemPrompt(db: any, restauranteId: number): Promise<string
       proveedorPago: RestauranteTable.proveedorPago,
       cucuruConfigurado: RestauranteTable.cucuruConfigurado,
       mpConnected: RestauranteTable.mpConnected,
-      transferenciaAlias: RestauranteTable.transferenciaAlias,
       metodosPagoConfig: RestauranteTable.metodosPagoConfig,
       cardsPaymentsEnabled: RestauranteTable.cardsPaymentsEnabled,
       cucuruEnabled: RestauranteTable.cucuruEnabled,
-      taloClientId: RestauranteTable.taloClientId,
-      taloClientSecret: RestauranteTable.taloClientSecret,
-      taloUserId: RestauranteTable.taloUserId,
     })
     .from(RestauranteTable)
     .where(eq(RestauranteTable.id, restauranteId))
@@ -166,10 +162,17 @@ async function buildSystemPrompt(db: any, restauranteId: number): Promise<string
 
 REGLAS FUNDAMENTALES:
 - Hablá en español argentino, informal, como un humano. Sin formalismos ni frases robóticas.
-- Mensajes cortos. No explicás todo de golpe. Guiás al cliente paso a paso.
+- Mensajes CORTOS y directos. Sin asteriscos para negritas, sin guiones para listas, sin emojis, sin separadores. Texto plano solamente.
+- Nunca uses markdown: nada de **, *, -, --, ni emojis.
 - Nunca mencionás que sos una IA o un sistema. Sos el asistente del local.
 - Si el cliente pregunta algo que no está en el menú o no entendés, pedís que aclare brevemente.
 - No inventés precios ni productos que no están en el menú.
+
+CUANDO EL CLIENTE PIDE EL MENÚ:
+Mandá el listado directamente, sin "Dale, acá va el menú:" ni ninguna introducción. Sin "¿Qué te llama la atención?" ni ningún cierre. Solo el listado de productos con precio, en texto plano, agrupado por categoría.
+
+MÉTODO DE PAGO TRANSFERENCIA:
+Cuando el cliente elige transferencia, NO le preguntés nada más. NO le explicés qué es un alias único. Simplemente incluí METODO_ELEGIDO:"cucuru" en tu respuesta y el sistema le manda los datos automáticamente. Tu mensaje al cliente puede ser algo como "Perfecto, te mando los datos para transferir." y nada más.
 
 FLUJO DEL PEDIDO:
 1. Saludar y preguntar qué quiere pedir (o mostrar el menú si lo pide)
@@ -234,6 +237,17 @@ export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<
         .set({ mensajes: [], pedidoDraft: null, estado: 'conversando', pedidoUnificadoId: null, updatedAt: new Date() })
         .where(eq(WhatsappConversacionTable.id, conversacion.id))
     }
+
+    // Resetear si la conversación tiene más de 2 horas de inactividad
+    const dosHoras = 2 * 60 * 60 * 1000
+    const ultimaActividad = new Date(conversacion.updatedAt).getTime()
+    if (Date.now() - ultimaActividad > dosHoras) {
+      mensajes = []
+      pedidoDraft = { items: [] }
+      await db.update(WhatsappConversacionTable)
+        .set({ mensajes: [], pedidoDraft: null, estado: 'conversando', pedidoUnificadoId: null, updatedAt: new Date() })
+        .where(eq(WhatsappConversacionTable.id, conversacion.id))
+    }
   } else {
     // Nueva conversación
     const insert = await db.insert(WhatsappConversacionTable).values({
@@ -248,10 +262,23 @@ export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<
     conversacion = conv
   }
 
-  // 2. Agregar el mensaje del usuario al historial
+  // 2. Palabra clave de reset (solo para el operador)
+  const RESET_KEYWORD = process.env.WHATSAPP_RESET_KEYWORD ?? 'REINICIAR'
+  if (texto.trim().toUpperCase() === RESET_KEYWORD) {
+    await db.update(WhatsappConversacionTable)
+      .set({ mensajes: [], pedidoDraft: null, estado: 'conversando', pedidoUnificadoId: null, updatedAt: new Date() })
+      .where(eq(WhatsappConversacionTable.id, conversacion.id))
+    await sendWhatsAppText(token, phoneNumberId, {
+      phone: telefono,
+      text: 'Conversación reiniciada.',
+    })
+    return
+  }
+
+  // 3. Agregar el mensaje del usuario al historial
   mensajes.push({ role: 'user', content: texto })
 
-  // 3. Construir el system prompt con el menú actual
+  // 4. Construir el system prompt con el menú actual
   const systemPrompt = await buildSystemPrompt(db, restauranteId)
 
   // 4. Llamar a la API de Anthropic
@@ -378,7 +405,7 @@ export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<
         } else if (resultado.alias) {
           await sendWhatsAppText(token, phoneNumberId, {
             phone: telefono,
-            text: `🏦 *Datos para transferir:*\nAlias: *${resultado.alias}*\nMonto exacto: *$${resultado.total}*\n\nCuando transfieras te confirmamos el pedido automáticamente ✅`,
+            text: `Alias: ${resultado.alias}\nMonto: $${resultado.total}`,
           })
         }
         return // Ya enviamos los mensajes
