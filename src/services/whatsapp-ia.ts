@@ -495,6 +495,7 @@ async function crearPedidoYObtenerPago(
   // Delivery fee (flat, sin zonas por ahora — el agente no valida coordenadas)
   const [resData] = await db
     .select({
+      id: RestauranteTable.id,
       deliveryFee: RestauranteTable.deliveryFee,
       username: RestauranteTable.username,
       cucuruConfigurado: RestauranteTable.cucuruConfigurado,
