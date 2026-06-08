@@ -502,6 +502,7 @@ async function crearPedidoYObtenerPago(
       cucuruApiKey: RestauranteTable.cucuruApiKey,
       cucuruCollectorId: RestauranteTable.cucuruCollectorId,
       mpConnected: RestauranteTable.mpConnected,
+      mpPublicKey: RestauranteTable.mpPublicKey,
       mpAccessToken: RestauranteTable.mpAccessToken,
       proveedorPago: RestauranteTable.proveedorPago,
       transferenciaAlias: RestauranteTable.transferenciaAlias,
@@ -529,6 +530,7 @@ async function crearPedidoYObtenerPago(
     : metodoElegido
 
   const resolved = resolverMetodoPagoPedido(metodoMapeado, pagoRow)
+  console.log('🔍 [Cucuru debug] metodoMapeado:', metodoMapeado, '| resolved:', resolved, '| pagoRow.cucuruConfigurado:', pagoRow.cucuruConfigurado, '| proveedorPago:', pagoRow.proveedorPago)
   if (resolved.error || !resolved.metodo) {
     return { success: false, error: resolved.error || 'Método de pago no disponible' }
   }
