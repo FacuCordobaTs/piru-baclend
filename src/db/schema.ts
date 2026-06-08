@@ -42,6 +42,7 @@ export const restaurante = mysqlTable("restaurante", {
 
   whatsappEnabled: boolean("whatsapp_enabled").default(false).notNull(),
   whatsappNumber: varchar("whatsapp_number", { length: 50 }),
+  whatsappPhoneId: varchar("whatsapp_phone_id", { length: 50 }),
   /** WhatsApp al que los clientes envían comprobantes (transferencia manual); independiente de la API de notificaciones al local. */
   comprobantesWhatsapp: varchar("comprobantes_whatsapp", { length: 50 }),
 
@@ -444,6 +445,26 @@ export const productoPuntos = mysqlTable("producto_puntos", {
   puntosNecesarios: int("puntos_necesarios").notNull(),
   puntosGanados: int("puntos_ganados").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const whatsappConversacion = mysqlTable("whatsapp_conversacion", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id")
+    .references(() => restaurante.id)
+    .notNull(),
+  telefono: varchar("telefono", { length: 50 }).notNull(),
+  nombreCliente: varchar("nombre_cliente", { length: 255 }),
+  mensajes: json("mensajes").notNull(),
+  pedidoDraft: json("pedido_draft"),
+  estado: mysqlEnum("estado_conversacion", [
+    "conversando",
+    "esperando_pago",
+    "pagado",
+    "finalizado",
+  ]).default("conversando").notNull(),
+  pedidoUnificadoId: int("pedido_unificado_id").references(() => pedidoUnificado.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 // ----------- DEBAJO ESTA LA ARQUITECTURA VIEJA QUE YA NO QUIERO USAR -----------------

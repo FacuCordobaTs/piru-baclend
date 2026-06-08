@@ -10,10 +10,11 @@ import {
   notificacion as NotificacionTable,
   accountPool as AccountPoolTable,
   producto as ProductoTable,
-  restaurante as RestauranteTable
+  restaurante as RestauranteTable,
+  whatsappConversacion as WhatsappConversacionTable
 } from '../db/schema'
 import { wsManager } from '../websocket/manager'
-import { sendOrderWhatsApp } from '../services/whatsapp'
+import { sendOrderWhatsApp, sendWhatsAppText } from '../services/whatsapp'
 import { consultarPagoTalo } from '../services/talo'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 
@@ -601,5 +602,83 @@ webhookRoute.post('/rapiboy', async (c) => {
     return c.json({ status: 'ignored_error' }, 200);
   }
 });
+
+// ======================== WHATSAPP WEBHOOK ========================
+
+webhookRoute.get('/whatsapp', (c) => {
+  const mode      = c.req.query('hub.mode');
+  const token     = c.req.query('hub.verify_token');
+  const challenge = c.req.query('hub.challenge');
+
+  const expectedToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+
+  if (mode === 'subscribe' && token === expectedToken) {
+    console.log('✅ [WhatsApp Webhook] Verificación exitosa');
+    return new Response(challenge ?? '', { status: 200 });
+  }
+
+  console.warn('⚠️ [WhatsApp Webhook] Verificación fallida. Token recibido:', token);
+  return c.json({ error: 'Forbidden' }, 403);
+});
+
+webhookRoute.post('/whatsapp', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body) return c.json({ status: 'ok' }, 200);
+
+  processIncomingWhatsApp(c, body).catch((err) => {
+    console.error('❌ [WhatsApp Webhook] Error en background:', err);
+  });
+
+  return c.json({ status: 'ok' }, 200);
+});
+
+async function processIncomingWhatsApp(c: any, body: any) {
+  const entries = body?.entry ?? [];
+
+  for (const entry of entries) {
+    for (const change of entry?.changes ?? []) {
+      const value = change?.value;
+      if (!value) continue;
+
+      // Ignorar status updates
+      if ((value?.statuses ?? []).length > 0) continue;
+
+      const messages = value?.messages ?? [];
+      const metadata = value?.metadata;
+
+      for (const message of messages) {
+        if (message.type !== 'text') {
+          console.log(`[WhatsApp] Mensaje tipo ${message.type} ignorado`);
+          continue;
+        }
+
+        const fromPhone     = message.from;
+        const messageText   = message.text?.body ?? '';
+        const phoneNumberId = metadata?.phone_number_id;
+
+        if (!fromPhone || !messageText || !phoneNumberId) continue;
+
+        console.log(`📱 [WhatsApp] Mensaje de ${fromPhone}: "${messageText.substring(0, 80)}"`);
+
+        const db = drizzle(pool);
+        const restaurantes = await db
+          .select({ id: RestauranteTable.id, nombre: RestauranteTable.nombre })
+          .from(RestauranteTable)
+          .where(eq(RestauranteTable.whatsappPhoneId, phoneNumberId))
+          .limit(1);
+
+        if (restaurantes.length === 0) {
+          console.warn(`⚠️ [WhatsApp] No se encontró restaurante para phone_number_id: ${phoneNumberId}`);
+          continue;
+        }
+
+        const restaurante = restaurantes[0];
+        console.log(`✅ [WhatsApp] Enrutado a restaurante ${restaurante.id} (${restaurante.nombre})`);
+
+        // TODO paso 2: llamar a procesarMensajeIA(...)
+      }
+    }
+  }
+}
 
 export { webhookRoute }

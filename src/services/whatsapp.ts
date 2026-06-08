@@ -303,3 +303,52 @@ export const sendClientOrderDispatchedWhatsApp = async (c: any, data: ClientOrde
         return { success: false, error };
     }
 };
+
+export interface WhatsAppTextMessage {
+  phone: string;
+  text: string;
+  phoneNumberId?: string;
+}
+
+export const sendWhatsAppText = async (
+  token: string,
+  phoneNumberId: string,
+  data: WhatsAppTextMessage
+): Promise<{ success: boolean; messageId?: string; error?: unknown }> => {
+  const targetPhoneId = data.phoneNumberId ?? phoneNumberId;
+  const url = `https://graph.facebook.com/v22.0/${targetPhoneId}/messages`;
+
+  const body = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: data.phone,
+    type: "text",
+    text: {
+      preview_url: false,
+      body: data.text,
+    },
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const result = await response.json() as any;
+
+    if (!response.ok) {
+      console.error("❌ [sendWhatsAppText] Error:", JSON.stringify(result, null, 2));
+      return { success: false, error: result };
+    }
+
+    return { success: true, messageId: result.messages?.[0]?.id };
+  } catch (error) {
+    console.error("❌ [sendWhatsAppText] Error de red:", error);
+    return { success: false, error };
+  }
+};
