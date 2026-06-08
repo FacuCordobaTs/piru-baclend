@@ -137,10 +137,15 @@ async function buildSystemPrompt(db: any, restauranteId: number): Promise<string
       deliveryFee: RestauranteTable.deliveryFee,
       proveedorPago: RestauranteTable.proveedorPago,
       cucuruConfigurado: RestauranteTable.cucuruConfigurado,
+      cucuruEnabled: RestauranteTable.cucuruEnabled,
       mpConnected: RestauranteTable.mpConnected,
+      mpPublicKey: RestauranteTable.mpPublicKey,
       metodosPagoConfig: RestauranteTable.metodosPagoConfig,
       cardsPaymentsEnabled: RestauranteTable.cardsPaymentsEnabled,
-      cucuruEnabled: RestauranteTable.cucuruEnabled,
+      transferenciaAlias: RestauranteTable.transferenciaAlias,
+      taloClientId: RestauranteTable.taloClientId,
+      taloClientSecret: RestauranteTable.taloClientSecret,
+      taloUserId: RestauranteTable.taloUserId,
     })
     .from(RestauranteTable)
     .where(eq(RestauranteTable.id, restauranteId))
