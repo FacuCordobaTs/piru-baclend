@@ -655,3 +655,61 @@ async function crearPedidoYObtenerPago(
 
   return { success: true, pedidoId, total: total.toFixed(2) }
 }
+
+/**
+ * Notifica al cliente por WhatsApp que su pago fue confirmado.
+ * Busca la conversación activa por teléfono y restaurante, manda el mensaje,
+ * y marca la conversación como 'pagado'.
+ * Se llama desde los webhooks de Cucuru y MercadoPago.
+ */
+export async function notificarPagoConfirmadoWhatsApp({
+  restauranteId,
+  pedidoId,
+  telefono,
+}: {
+  restauranteId: number
+  pedidoId: number
+  telefono: string | null
+}): Promise<void> {
+  if (!telefono) return
+
+  const db = drizzle(pool)
+
+  const conversaciones = await db
+    .select()
+    .from(WhatsappConversacionTable)
+    .where(and(
+      eq(WhatsappConversacionTable.restauranteId, restauranteId),
+      eq(WhatsappConversacionTable.telefono, telefono),
+      eq(WhatsappConversacionTable.pedidoUnificadoId, pedidoId)
+    ))
+    .limit(1)
+
+  if (conversaciones.length === 0) return
+
+  const conversacion = conversaciones[0]
+
+  const restaurantes = await db
+    .select({
+      whatsappPhoneId: RestauranteTable.whatsappPhoneId,
+    })
+    .from(RestauranteTable)
+    .where(eq(RestauranteTable.id, restauranteId))
+    .limit(1)
+
+  if (!restaurantes[0]?.whatsappPhoneId) return
+
+  const token = process.env.WHATSAPP_API_TOKEN!
+  const phoneNumberId = restaurantes[0].whatsappPhoneId
+
+  await sendWhatsAppText(token, phoneNumberId, {
+    phone: telefono,
+    text: 'Pago recibido. Tu pedido está confirmado.',
+  })
+
+  await db.update(WhatsappConversacionTable)
+    .set({ estado: 'pagado', updatedAt: new Date() })
+    .where(eq(WhatsappConversacionTable.id, conversacion.id))
+
+  console.log(`✅ [WhatsApp IA] Pago confirmado notificado al cliente ${telefono} (pedido #${pedidoId})`)
+}

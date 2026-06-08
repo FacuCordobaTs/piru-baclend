@@ -8,6 +8,7 @@ import { obtenerTokenValido, refrescarTokenRestaurante } from '../utils/mercadop
 import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp } from '../services/whatsapp'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
+import { notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
 
 const MP_CLIENT_ID = process.env.MP_CLIENT_ID
 const MP_CLIENT_SECRET = process.env.MP_CLIENT_SECRET
@@ -406,6 +407,15 @@ mercadopagoRoute.post('/process-brick', async (c) => {
       })
       wsManager.notifyPublicClientPayment(tipoPedido, pedidoId)
 
+      // Notificar al cliente por WhatsApp si el pedido vino del agente IA
+      if (pedido.telefono) {
+        notificarPagoConfirmadoWhatsApp({
+          restauranteId: pedido.restauranteId!,
+          pedidoId,
+          telefono: pedido.telefono,
+        }).catch(err => console.error('❌ [WhatsApp IA] Error notificando pago MP Bricks:', err))
+      }
+
       try {
         const restaurante = await db.select({
           whatsappEnabled: RestauranteTable.whatsappEnabled,
@@ -676,6 +686,15 @@ mercadopagoRoute.post('/webhook', async (c) => {
         shouldPrint: true
       })
       wsManager.notifyPublicClientPayment(tipoPedido, pedidoId)
+
+      // Notificar al cliente por WhatsApp si el pedido vino del agente IA
+      if (pedidoData.telefono) {
+        notificarPagoConfirmadoWhatsApp({
+          restauranteId,
+          pedidoId,
+          telefono: pedidoData.telefono,
+        }).catch(err => console.error('❌ [WhatsApp IA] Error notificando pago MP Webhook:', err))
+      }
 
       try {
         const restaurante = await db.select({

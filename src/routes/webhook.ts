@@ -17,7 +17,7 @@ import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp, sendWhatsAppText } from '../services/whatsapp'
 import { consultarPagoTalo } from '../services/talo'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
-import { procesarMensajeIA } from '../services/whatsapp-ia'
+import { procesarMensajeIA, notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
 
 const webhookRoute = new Hono()
 
@@ -204,6 +204,15 @@ const cucuruWebhookHandler = async (c: any) => {
         shouldPrint: true
       });
       wsManager.notifyPublicClientPayment(tipoEncontrado, pedido.id);
+
+      // Notificar al cliente por WhatsApp si el pedido vino del agente IA
+      if (pedido.telefono) {
+        notificarPagoConfirmadoWhatsApp({
+          restauranteId: targetRestauranteId,
+          pedidoId: pedido.id,
+          telefono: pedido.telefono,
+        }).catch(err => console.error('❌ [WhatsApp IA] Error notificando pago Cucuru:', err))
+      }
 
       // WhatsApp Notification
       try {
