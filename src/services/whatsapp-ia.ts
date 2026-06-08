@@ -335,6 +335,9 @@ export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<
     mensajeParaCliente = mensajeParaCliente.replace(metodoMatch[0], '').trim()
   }
 
+  console.log('🤖 [IA raw]', JSON.stringify(respuestaCompleta))
+  console.log('🔍 [IA parse] pedidoJson:', pedidoJsonStr, '| metodoPago:', pedirMetodoPago, '| metodoElegido:', metodoElegido)
+
   // 6. Agregar respuesta al historial
   mensajes.push({ role: 'assistant', content: mensajeParaCliente })
 
