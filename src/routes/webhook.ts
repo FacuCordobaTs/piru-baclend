@@ -17,6 +17,7 @@ import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp, sendWhatsAppText } from '../services/whatsapp'
 import { consultarPagoTalo } from '../services/talo'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
+import { procesarMensajeIA } from '../services/whatsapp-ia'
 
 const webhookRoute = new Hono()
 
@@ -675,7 +676,13 @@ async function processIncomingWhatsApp(c: any, body: any) {
         const restaurante = restaurantes[0];
         console.log(`✅ [WhatsApp] Enrutado a restaurante ${restaurante.id} (${restaurante.nombre})`);
 
-        // TODO paso 2: llamar a procesarMensajeIA(...)
+        await procesarMensajeIA({
+          restauranteId: restaurante.id,
+          telefono: fromPhone,
+          texto: messageText,
+          phoneNumberId,
+          token: process.env.WHATSAPP_API_TOKEN!,
+        });
       }
     }
   }
