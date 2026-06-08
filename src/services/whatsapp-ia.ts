@@ -704,7 +704,7 @@ export async function notificarPagoConfirmadoWhatsApp({
 
   await sendWhatsAppText(token, phoneNumberId, {
     phone: telefono,
-    text: 'Pago recibido. Tu pedido está confirmado.',
+    text: 'Ahi recibimos tu pago, ya estamos preparando tu pedido',
   })
 
   await db.update(WhatsappConversacionTable)
