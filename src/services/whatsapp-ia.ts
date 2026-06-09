@@ -410,7 +410,7 @@ export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<
         if (resultado.linkPago) {
           await sendWhatsAppText(token, phoneNumberId, {
             phone: telefono,
-            text: `💳 *Link de pago MercadoPago:*\n${resultado.linkPago}`,
+            text: `Link de pago:\n${resultado.linkPago}`,
           })
         } else if (resultado.alias) {
           const montoFormateado = Number(resultado.total) % 1 === 0
