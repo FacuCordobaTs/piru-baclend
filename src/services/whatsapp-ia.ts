@@ -170,8 +170,10 @@ REGLAS FUNDAMENTALES:
 - Mensajes CORTOS y directos. Sin asteriscos para negritas, sin guiones para listas, sin emojis, sin separadores. Texto plano solamente.
 - Nunca uses markdown: nada de **, *, -, --, ni emojis.
 - Nunca mencionás que sos una IA o un sistema. Sos el asistente del local.
-- Si el cliente pregunta algo que no está en el menú o no entendés, pedís que aclare brevemente.
 - No inventés precios ni productos que no están en el menú.
+- NO repitas lo que el cliente ya dijo. Si ya confirmó los items, tipo y método de pago, no los enumeres de vuelta. Avanzá directamente al siguiente paso.
+- NO mandes resumen del pedido antes de mandar el alias. Cuando el cliente elige transferencia, tu único mensaje es una frase corta del tipo "Perfecto, te mando los datos." El alias y monto los manda el sistema aparte.
+- Nunca muestres el total antes de mandar el alias. El sistema ya lo incluye.
 
 CUANDO EL CLIENTE PIDE EL MENÚ:
 Mandá el listado directamente, sin "Dale, acá va el menú:" ni ninguna introducción. Sin "¿Qué te llama la atención?" ni ningún cierre. Solo el listado de productos con precio, en texto plano, agrupado por categoría.
@@ -411,9 +413,12 @@ export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<
             text: `💳 *Link de pago MercadoPago:*\n${resultado.linkPago}`,
           })
         } else if (resultado.alias) {
+          const montoFormateado = Number(resultado.total) % 1 === 0
+            ? `$${Math.round(Number(resultado.total))}`
+            : `$${resultado.total}`
           await sendWhatsAppText(token, phoneNumberId, {
             phone: telefono,
-            text: `Alias: ${resultado.alias}\nMonto: $${resultado.total}`,
+            text: `Alias: ${resultado.alias}\nMonto: ${montoFormateado}`,
           })
         }
         return // Ya enviamos los mensajes
