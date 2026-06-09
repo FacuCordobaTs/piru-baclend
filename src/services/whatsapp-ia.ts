@@ -624,35 +624,19 @@ async function crearPedidoYObtenerPago(
     return { success: true, pedidoId, alias: resData.transferenciaAlias ?? undefined, total: total.toFixed(2) }
   }
 
-  // MercadoPago — generar preferencia
-  if (resData.mpConnected && resData.mpAccessToken) {
+  // MercadoPago — delegar a crear-preferencia-externo que ya tiene token refresh, fees y back_urls correctas
+  if (resData.mpConnected) {
     try {
-      const mpBody = {
-        items: itemsConPrecio.map(i => ({
-          title: i.nombre,
-          quantity: i.cantidad,
-          unit_price: i.precio,
-          currency_id: 'ARS',
-        })),
-        back_urls: {
-          success: `https://piru.app/pedido/${pedidoId}`,
-          failure: `https://piru.app/pedido/${pedidoId}`,
-        },
-        auto_return: 'approved',
-        external_reference: String(pedidoId),
-      }
-      const mpRes = await fetch('https://api.mercadopago.com/checkout/preferences', {
+      const prefRes = await fetch('https://api.piru.app/api/mp/crear-preferencia-externo', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${resData.mpAccessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(mpBody),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pedidoId }),
       })
-      const mpData = await mpRes.json() as any
-      if (mpData.init_point) {
-        return { success: true, pedidoId, linkPago: mpData.init_point, total: total.toFixed(2) }
+      const prefData = await prefRes.json() as any
+      if (prefData.success && prefData.url_pago) {
+        return { success: true, pedidoId, linkPago: prefData.url_pago, total: total.toFixed(2) }
       }
+      console.error('❌ [WhatsApp IA] Error creando preferencia MP:', prefData)
     } catch (err) {
       console.error('❌ [WhatsApp IA] Error MP:', err)
     }
