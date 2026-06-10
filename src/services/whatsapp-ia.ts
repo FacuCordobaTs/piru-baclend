@@ -197,6 +197,8 @@ FLUJO DEL PEDIDO:
 5. Mostrar el resumen del pedido con el total y preguntar el método de pago
 6. Según el método elegido: enviar link de MP o alias de transferencia
 7. Cuando se confirme el pago, avisarle que el pedido fue registrado
+- Si el cliente menciona el método de pago en el mismo mensaje que el pedido (ej: "quiero X, lo pago con transferencia"), no lo preguntes de nuevo. Incluí directamente METODO_ELEGIDO con el método que dijo.
+- PEDIR_METODO_PAGO solo usalo cuando realmente necesitás preguntarle al cliente. Si ya lo dijo, no lo incluyas o ponelo en false — pero en cualquier caso nunca debe aparecer en el mensaje visible al cliente.
 
 TIPOS DE PEDIDO DISPONIBLES: ${tiposDisponibles.join(', ')}
 
@@ -434,30 +436,45 @@ export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<
   }
 
   // 5. Parsear instrucciones del sistema embebidas en la respuesta
+  // Eliminar TODOS los marcadores del sistema del mensaje visible, independientemente de su valor
   let mensajeParaCliente = respuestaCompleta
   let pedidoJsonStr: string | null = null
   let pedirMetodoPago = false
   let metodoElegido: string | null = null
 
   // Extraer PEDIDO_JSON si existe
-  const pedidoMatch = respuestaCompleta.match(/PEDIDO_JSON:(\{.+?\})(?:\n|$)/s)
+  const pedidoMatch = mensajeParaCliente.match(/PEDIDO_JSON:\{.+?\}(?:\n|$)/s)
   if (pedidoMatch) {
-    pedidoJsonStr = pedidoMatch[1]
+    const jsonStr = pedidoMatch[0].replace('PEDIDO_JSON:', '').trim()
+    pedidoJsonStr = jsonStr
     mensajeParaCliente = mensajeParaCliente.replace(pedidoMatch[0], '').trim()
   }
 
-  // Extraer PEDIR_METODO_PAGO si existe
-  if (respuestaCompleta.includes('PEDIR_METODO_PAGO:true')) {
-    pedirMetodoPago = true
-    mensajeParaCliente = mensajeParaCliente.replace('PEDIR_METODO_PAGO:true', '').trim()
+  // Extraer y eliminar PEDIR_METODO_PAGO (cualquier valor)
+  const pedirMetodoPagoMatch = mensajeParaCliente.match(/PEDIR_METODO_PAGO:[^\n]+/)
+  if (pedirMetodoPagoMatch) {
+    pedirMetodoPago = pedirMetodoPagoMatch[0].includes('true')
+    mensajeParaCliente = mensajeParaCliente.replace(pedirMetodoPagoMatch[0], '').trim()
   }
 
-  // Extraer METODO_ELEGIDO si existe
-  const metodoMatch = respuestaCompleta.match(/METODO_ELEGIDO:"([^"]+)"/)
+  // Extraer y eliminar METODO_ELEGIDO (cualquier valor)
+  const metodoMatch = mensajeParaCliente.match(/METODO_ELEGIDO:"([^"]+)"/)
   if (metodoMatch) {
     metodoElegido = metodoMatch[1]
     mensajeParaCliente = mensajeParaCliente.replace(metodoMatch[0], '').trim()
   }
+
+  // Limpieza final: eliminar cualquier línea que empiece con un marcador conocido que haya quedado
+  mensajeParaCliente = mensajeParaCliente
+    .split('\n')
+    .filter(line => {
+      const l = line.trim()
+      return !l.startsWith('PEDIDO_JSON:')
+        && !l.startsWith('PEDIR_METODO_PAGO:')
+        && !l.startsWith('METODO_ELEGIDO:')
+    })
+    .join('\n')
+    .trim()
 
   console.log('🤖 [IA raw]', JSON.stringify(respuestaCompleta))
   console.log('🔍 [IA parse] pedidoJson:', pedidoJsonStr, '| metodoPago:', pedirMetodoPago, '| metodoElegido:', metodoElegido)
