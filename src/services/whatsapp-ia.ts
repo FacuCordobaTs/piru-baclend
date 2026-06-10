@@ -20,6 +20,7 @@ import {
   cliente as ClienteTable,
 } from '../db/schema'
 import { sendWhatsAppText } from './whatsapp'
+import { geocodificarYValidarZona } from './geocoding'
 import { asignarAliasAPedido } from './cucuru'
 import { wsManager } from '../websocket/manager'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
@@ -47,6 +48,7 @@ interface PedidoDraft {
   items: ItemDraft[]
   tipo?: 'delivery' | 'takeaway'
   direccion?: string
+  precioDelivery?: string
   notas?: string
 }
 
@@ -181,6 +183,12 @@ Mandá el listado directamente, sin "Dale, acá va el menú:" ni ninguna introdu
 MÉTODO DE PAGO TRANSFERENCIA:
 Cuando el cliente elige transferencia, NO le preguntés nada más. NO le explicés qué es un alias único. Simplemente incluí METODO_ELEGIDO:"cucuru" en tu respuesta y el sistema le manda los datos automáticamente. Tu mensaje al cliente puede ser algo como "Perfecto, te mando los datos para transferir." y nada más.
 
+TOOL DE GEOLOCALIZACIÓN:
+Cuando el cliente dé una dirección para delivery, llamá al tool geolocalizar_direccion con la calle y el número separados.
+No intentes adivinar si está en zona — siempre usá el tool. El tool te va a decir si la dirección está dentro de una zona de cobertura y cuánto cuesta el delivery.
+Si el tool dice que está fuera de zona, informale al cliente amablemente que no llegamos a esa dirección.
+Si el tool encuentra la dirección, confirmale la dirección formateada y el costo de envío, y seguí con el pedido.
+
 FLUJO DEL PEDIDO:
 1. Saludar y preguntar qué quiere pedir (o mostrar el menú si lo pide)
 2. Confirmar los items con el cliente (cantidad, variantes, extras si hay)
@@ -288,7 +296,28 @@ export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<
   // 4. Construir el system prompt con el menú actual
   const systemPrompt = await buildSystemPrompt(db, restauranteId)
 
-  // 4. Llamar a la API de Anthropic
+  // 4. Llamar a la API de Anthropic con tool de geolocalización
+  const tools = [
+    {
+      name: 'geolocalizar_direccion',
+      description: 'Geocodifica una dirección del cliente y verifica si está dentro de una zona de delivery del restaurante. Llamar cuando el cliente proporcione una dirección para delivery.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          calle: {
+            type: 'string',
+            description: 'Nombre de la calle, limpio y sin el número. Ej: "San Martín", "Hipólito Yrigoyen"',
+          },
+          numero: {
+            type: 'string',
+            description: 'Número de la altura. Ej: "811", "2835"',
+          },
+        },
+        required: ['calle', 'numero'],
+      },
+    },
+  ]
+
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -301,6 +330,7 @@ export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<
       max_tokens: 1024,
       system: systemPrompt,
       messages: mensajes,
+      tools,
     }),
   })
 
@@ -308,13 +338,100 @@ export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<
     console.error('❌ [WhatsApp IA] Error Anthropic API:', await response.text())
     await sendWhatsAppText(token, phoneNumberId, {
       phone: telefono,
-      text: 'Disculpá, tuve un problema técnico. Intentá de nuevo en un momento 🙏',
+      text: 'Disculpá, tuve un problema técnico. Intentá de nuevo en un momento.',
     })
     return
   }
 
   const data = await response.json() as any
-  const respuestaCompleta: string = data.content?.[0]?.text ?? ''
+
+  let respuestaCompleta: string
+
+  // Manejar tool_use: si Claude quiere geocodificar, ejecutar y continuar
+  if (data.stop_reason === 'tool_use') {
+    const toolUseBlock = data.content.find((b: any) => b.type === 'tool_use')
+    if (toolUseBlock?.name === 'geolocalizar_direccion') {
+      const { calle, numero } = toolUseBlock.input as { calle: string; numero: string }
+      console.log(`📍 [WhatsApp IA] Geocodificando: "${calle} ${numero}" para restaurante ${restauranteId}`)
+
+      const geoResult = await geocodificarYValidarZona(calle, numero, restauranteId)
+
+      let toolResultContent: string
+      if (geoResult.success) {
+        toolResultContent = JSON.stringify({
+          encontrada: true,
+          direccionFormateada: geoResult.direccionFormateada,
+          zona: geoResult.zona.nombre,
+          precioDelivery: geoResult.zona.precio,
+        })
+        pedidoDraft.precioDelivery = geoResult.zona.precio
+        pedidoDraft.direccion = geoResult.direccionFormateada
+      } else if (geoResult.fueraDeZona) {
+        toolResultContent = JSON.stringify({
+          encontrada: false,
+          direccionFormateada: geoResult.direccionFormateada,
+          mensaje: 'La dirección está fuera de la zona de delivery del restaurante.',
+        })
+      } else {
+        toolResultContent = JSON.stringify({
+          encontrada: false,
+          mensaje: geoResult.error,
+        })
+      }
+
+      const mensajesConTool = [
+        ...mensajes,
+        { role: 'assistant', content: data.content },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: toolUseBlock.id,
+              content: toolResultContent,
+            },
+          ],
+        },
+      ]
+
+      const response2 = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY!,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 1024,
+          system: systemPrompt,
+          messages: mensajesConTool,
+          tools,
+        }),
+      })
+
+      const data2 = await response2.json() as any
+      const textBlock2 = data2.content?.find((b: any) => b.type === 'text')
+      respuestaCompleta = textBlock2?.text ?? ''
+
+      // Guardar en historial solo el texto visible
+      mensajes.push({ role: 'assistant', content: data.content } as any)
+      mensajes.push({
+        role: 'user', content: [
+          { type: 'tool_result', tool_use_id: toolUseBlock.id, content: toolResultContent }
+        ]
+      } as any)
+      mensajes.push({ role: 'assistant', content: respuestaCompleta })
+    } else {
+      respuestaCompleta = data.content?.find((b: any) => b.type === 'text')?.text ?? ''
+      mensajes.push({ role: 'assistant', content: respuestaCompleta })
+    }
+  } else {
+    // Respuesta normal sin tool
+    const textBlock = data.content?.find((b: any) => b.type === 'text')
+    respuestaCompleta = textBlock?.text ?? data.content?.[0]?.text ?? ''
+    mensajes.push({ role: 'assistant', content: respuestaCompleta })
+  }
 
   // 5. Parsear instrucciones del sistema embebidas en la respuesta
   let mensajeParaCliente = respuestaCompleta
@@ -345,9 +462,6 @@ export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<
   console.log('🤖 [IA raw]', JSON.stringify(respuestaCompleta))
   console.log('🔍 [IA parse] pedidoJson:', pedidoJsonStr, '| metodoPago:', pedirMetodoPago, '| metodoElegido:', metodoElegido)
 
-  // 6. Agregar respuesta al historial
-  mensajes.push({ role: 'assistant', content: mensajeParaCliente })
-
   // 7. Procesar acciones según lo que indicó la IA
 
   // 7a. Si la IA confirmó el pedido → crear en DB y pasar a esperando_pago
@@ -361,7 +475,8 @@ export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<
       }
       pedidoDraft = {
         tipo: pedidoData.tipo,
-        direccion: pedidoData.direccion,
+        direccion: pedidoData.direccion ?? pedidoDraft.direccion,
+        precioDelivery: pedidoDraft.precioDelivery,
         notas: undefined,
         items: pedidoData.items.map(i => ({
           productoId: i.productoId,
@@ -522,8 +637,9 @@ async function crearPedidoYObtenerPago(
     .where(eq(RestauranteTable.id, restauranteId))
     .limit(1)
 
-  if (draft.tipo === 'delivery' && resData.deliveryFee) {
-    total += parseFloat(resData.deliveryFee)
+  if (draft.tipo === 'delivery') {
+    const fee = draft.precioDelivery ?? resData.deliveryFee
+    if (fee) total += parseFloat(fee)
   }
 
   // Resolver método de pago
