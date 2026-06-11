@@ -222,9 +222,40 @@ Cuando el cliente elija el método de pago, incluir al final:
 METODO_ELEGIDO:"mercadopago"|"cucuru"|"transferencia_manual"`
 }
 
-// ─── Función principal ────────────────────────────────────────────────────────
+// ─── Debounce por conversación ────────────────────────────────────────────────
+
+interface DebounceEntry {
+  timer: ReturnType<typeof setTimeout>
+  textos: string[]
+}
+const debounceMap = new Map<string, DebounceEntry>()
+const getDebounceMs = () => Math.floor(Math.random() * (11_000 - 7_000 + 1)) + 7_000
 
 export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<void> {
+  const key = `${params.restauranteId}:${params.telefono}`
+  const entry = debounceMap.get(key)
+
+  if (entry) {
+    clearTimeout(entry.timer)
+    entry.textos.push(params.texto)
+  } else {
+    debounceMap.set(key, { timer: null as any, textos: [params.texto] })
+  }
+
+  const current = debounceMap.get(key)!
+
+  current.timer = setTimeout(async () => {
+    debounceMap.delete(key)
+    const textoFinal = current.textos.join('\n')
+    await procesarMensajeIAInterno({ ...params, texto: textoFinal }).catch(err =>
+      console.error('❌ [WhatsApp IA] Error en debounce handler:', err)
+    )
+  }, getDebounceMs())
+}
+
+// ─── Función principal ────────────────────────────────────────────────────────
+
+async function procesarMensajeIAInterno(params: ProcesarMensajeParams): Promise<void> {
   const { restauranteId, telefono, texto, phoneNumberId, token } = params
   const db = drizzle(pool)
 
