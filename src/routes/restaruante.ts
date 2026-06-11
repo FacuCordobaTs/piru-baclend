@@ -97,6 +97,9 @@ const completeProfileSchema = z.object({
 const updateProfileSchema = z.object({
   nombre: z.string().min(3).optional(),
   direccion: z.string().min(1).optional(),
+  direccionTexto: z.string().max(512).nullable().optional(),
+  direccionLat: z.number().nullable().optional(),
+  direccionLng: z.number().nullable().optional(),
   telefono: z.string().min(1).optional(),
   image: z.string().min(10).optional(), // Base64 de la imagen dark
   imageLight: z.string().min(10).optional(), // Base64 de la imagen light
@@ -229,7 +232,7 @@ restauranteRoute.post('/complete-profile', zValidator('json', completeProfileSch
 restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre, direccion, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, comprobantesWhatsapp, transferenciaAlias, colorPrimario, colorSecundario, disenoAlternativo } = c.req.valid('json')
+  const { nombre, direccion, direccionTexto, direccionLat, direccionLng, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, comprobantesWhatsapp, transferenciaAlias, colorPrimario, colorSecundario, disenoAlternativo } = c.req.valid('json')
 
   try {
     // Obtener datos actuales del restaurante
@@ -247,6 +250,9 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
 
     if (nombre !== undefined) updateData.nombre = nombre
     if (direccion !== undefined) updateData.direccion = direccion
+    if (direccionTexto !== undefined) updateData.direccionTexto = direccionTexto
+    if (direccionLat !== undefined) updateData.direccionLat = direccionLat !== null ? String(direccionLat) : null
+    if (direccionLng !== undefined) updateData.direccionLng = direccionLng !== null ? String(direccionLng) : null
     if (telefono !== undefined) updateData.telefono = telefono
     if (deliveryFee !== undefined) updateData.deliveryFee = deliveryFee
     if (whatsappEnabled !== undefined) updateData.whatsappEnabled = whatsappEnabled

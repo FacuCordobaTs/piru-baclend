@@ -26,6 +26,8 @@ import { wsManager } from '../websocket/manager'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { rowToPagoRow, resolverMetodoPagoPedido, proveedorTransferenciaDinamica } from '../lib/metodos-pago'
 
+const WHATSAPP_IA_ENABLED = false
+
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
 interface MensajeHistorial {
@@ -130,7 +132,7 @@ async function obtenerMenuParaPrompt(db: any, restauranteId: number): Promise<st
 /**
  * Construye el system prompt completo para el agente.
  */
-async function buildSystemPrompt(db: any, restauranteId: number): Promise<string> {
+async function buildSystemPrompt(db: any, restauranteId: number, inactivoPorTiempo = false): Promise<{ prompt: string; direccionTexto: string | null }> {
   const [restaurante] = await db
     .select({
       nombre: RestauranteTable.nombre,
@@ -148,6 +150,7 @@ async function buildSystemPrompt(db: any, restauranteId: number): Promise<string
       taloClientId: RestauranteTable.taloClientId,
       taloClientSecret: RestauranteTable.taloClientSecret,
       taloUserId: RestauranteTable.taloUserId,
+      direccionTexto: RestauranteTable.direccionTexto,
     })
     .from(RestauranteTable)
     .where(eq(RestauranteTable.id, restauranteId))
@@ -165,7 +168,15 @@ async function buildSystemPrompt(db: any, restauranteId: number): Promise<string
   if (restaurante.cucuruConfigurado && restaurante.cucuruEnabled) metodos.push('transferencia (alias único generado automáticamente)')
   if (restaurante.transferenciaAlias) metodos.push('transferencia manual (alias fijo del local)')
 
-  return `Sos el asistente de pedidos de ${restaurante.nombre} por WhatsApp. Tu trabajo es tomar pedidos de los clientes de forma simple y directa, como lo haría una persona.
+  const notaInactividad = inactivoPorTiempo
+    ? `\nNOTA DE CONTEXTO: Han pasado más de 2 horas desde la última interacción con este cliente. Al responder, preguntale amablemente si quiere hacer un nuevo pedido o si quiere continuar con lo que estaban hablando antes.\n`
+    : ''
+
+  const notaUbicacion = restaurante.direccionTexto
+    ? `UBICACIÓN DEL RESTAURANTE: ${restaurante.direccionTexto}\nCuando el cliente dé una dirección sin especificar ciudad, asumir que es en la misma ciudad que el restaurante. No preguntar la localidad.\n`
+    : ''
+
+  const prompt = `${notaInactividad}${notaUbicacion}Sos el asistente de pedidos de ${restaurante.nombre} por WhatsApp. Tu trabajo es tomar pedidos de los clientes de forma simple y directa, como lo haría una persona.
 
 REGLAS FUNDAMENTALES:
 - Hablá en español argentino, informal, como un humano. Sin formalismos ni frases robóticas.
@@ -173,6 +184,8 @@ REGLAS FUNDAMENTALES:
 - Nunca uses markdown: nada de **, *, -, --, ni emojis.
 - Nunca mencionás que sos una IA o un sistema. Sos el asistente del local.
 - No inventés precios ni productos que no están en el menú.
+- Nunca uses "—" ni ningún separador entre el nombre del producto y el precio. Si necesitás listar items, escribilos en texto corrido o en líneas simples sin separadores.
+- NO mandes resumen del pedido antes de mandar el alias o el link de pago. Cuando ya tenés todo confirmado, tu único mensaje es una frase corta como "Perfecto, te mando los datos." y nada más. El sistema manda el alias aparte.
 - NO repitas lo que el cliente ya dijo. Si ya confirmó los items, tipo y método de pago, no los enumeres de vuelta. Avanzá directamente al siguiente paso.
 - NO mandes resumen del pedido antes de mandar el alias. Cuando el cliente elige transferencia, tu único mensaje es una frase corta del tipo "Perfecto, te mando los datos." El alias y monto los manda el sistema aparte.
 - Nunca muestres el total antes de mandar el alias. El sistema ya lo incluye.
@@ -220,6 +233,17 @@ PEDIR_METODO_PAGO:true
 
 Cuando el cliente elija el método de pago, incluir al final:
 METODO_ELEGIDO:"mercadopago"|"cucuru"|"transferencia_manual"`
+
+  return { prompt, direccionTexto: restaurante.direccionTexto ?? null }
+}
+
+function extraerCiudad(direccionTexto: string | null): string {
+  if (!direccionTexto) return 'Argentina'
+  const partes = direccionTexto.split(',').map(p => p.trim())
+  if (partes.length >= 2) {
+    return partes.slice(-2).join(', ')
+  }
+  return direccionTexto
 }
 
 // ─── Debounce por conversación ────────────────────────────────────────────────
@@ -229,9 +253,11 @@ interface DebounceEntry {
   textos: string[]
 }
 const debounceMap = new Map<string, DebounceEntry>()
-const getDebounceMs = () => Math.floor(Math.random() * (11_000 - 7_000 + 1)) + 7_000
+const getDebounceMs = () => Math.floor(Math.random() * (9_000 - 5_000 + 1)) + 5_000
 
 export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<void> {
+  if (!WHATSAPP_IA_ENABLED) return
+
   const key = `${params.restauranteId}:${params.telefono}`
   const entry = debounceMap.get(key)
 
@@ -272,10 +298,17 @@ async function procesarMensajeIAInterno(params: ProcesarMensajeParams): Promise<
   let conversacion = conversaciones[0] ?? null
   let mensajes: MensajeHistorial[] = []
   let pedidoDraft: PedidoDraft = { items: [] }
+  let inactivoPorTiempo = false
 
   if (conversacion) {
     mensajes = (conversacion.mensajes as MensajeHistorial[]) ?? []
     pedidoDraft = (conversacion.pedidoDraft as PedidoDraft) ?? { items: [] }
+
+    const dosHoras = 2 * 60 * 60 * 1000
+    const ultimaActividad = new Date(conversacion.updatedAt).getTime()
+    if (Date.now() - ultimaActividad > dosHoras) {
+      inactivoPorTiempo = true
+    }
 
     // Si la conversación ya terminó, iniciar una nueva
     if (conversacion.estado === 'finalizado' || conversacion.estado === 'pagado') {
@@ -286,16 +319,6 @@ async function procesarMensajeIAInterno(params: ProcesarMensajeParams): Promise<
         .where(eq(WhatsappConversacionTable.id, conversacion.id))
     }
 
-    // Resetear si la conversación tiene más de 2 horas de inactividad
-    const dosHoras = 2 * 60 * 60 * 1000
-    const ultimaActividad = new Date(conversacion.updatedAt).getTime()
-    if (Date.now() - ultimaActividad > dosHoras) {
-      mensajes = []
-      pedidoDraft = { items: [] }
-      await db.update(WhatsappConversacionTable)
-        .set({ mensajes: [], pedidoDraft: null, estado: 'conversando', pedidoUnificadoId: null, updatedAt: new Date() })
-        .where(eq(WhatsappConversacionTable.id, conversacion.id))
-    }
   } else {
     // Nueva conversación
     const insert = await db.insert(WhatsappConversacionTable).values({
@@ -327,7 +350,7 @@ async function procesarMensajeIAInterno(params: ProcesarMensajeParams): Promise<
   mensajes.push({ role: 'user', content: texto })
 
   // 4. Construir el system prompt con el menú actual
-  const systemPrompt = await buildSystemPrompt(db, restauranteId)
+  const { prompt: systemPrompt, direccionTexto: restauranteDireccionTexto } = await buildSystemPrompt(db, restauranteId, inactivoPorTiempo)
 
   // 4. Llamar a la API de Anthropic con tool de geolocalización
   const tools = [
@@ -387,7 +410,8 @@ async function procesarMensajeIAInterno(params: ProcesarMensajeParams): Promise<
       const { calle, numero } = toolUseBlock.input as { calle: string; numero: string }
       console.log(`📍 [WhatsApp IA] Geocodificando: "${calle} ${numero}" para restaurante ${restauranteId}`)
 
-      const geoResult = await geocodificarYValidarZona(calle, numero, restauranteId)
+      const ciudadRestaurante = extraerCiudad(restauranteDireccionTexto)
+      const geoResult = await geocodificarYValidarZona(calle, numero, restauranteId, ciudadRestaurante)
 
       let toolResultContent: string
       if (geoResult.success) {
