@@ -33,7 +33,8 @@ import { metricasRoute } from './routes/metricas';
 import { onboardingRoute } from './routes/onboarding';
 import { sucursalesRoute } from './routes/sucursales'
 import { repartidoresRoute } from './routes/repartidores';
-import { facturacionRoute } from './routes/facturacion';
+import { facturacionRoute } from './routes/facturacion'
+import { whatsappOauthRoute } from './routes/whatsapp-oauth';
 import { serveStatic } from 'hono/bun';
 import { readFileSync } from 'node:fs';
 
@@ -189,6 +190,7 @@ app.basePath('/api')
   .route('/sucursales', sucursalesRoute)
   .route('/repartidores', repartidoresRoute)
   .route('/facturacion', facturacionRoute)
+  .route('/whatsapp-oauth', whatsappOauthRoute)
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
 // because :qrToken would match "admin" as a token
 app.get(

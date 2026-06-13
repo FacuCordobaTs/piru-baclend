@@ -332,6 +332,9 @@ Respondé ÚNICAMENTE con una frase corta de saludo, como "Hola! te paso la cart
 MÉTODO DE PAGO TRANSFERENCIA:
 Cuando el cliente elige transferencia, NO le preguntés nada más. NO le explicés qué es un alias único. Simplemente incluí METODO_ELEGIDO:"cucuru" en tu respuesta y el sistema le manda los datos automáticamente. Tu mensaje al cliente puede ser algo como "Perfecto, te mando los datos para transferir." y nada más.
 
+TOOL DE HISTORIAL DE PEDIDOS:
+Cuando el cliente pregunte por sus pedidos anteriores, quiera saber el estado de un pedido, o quiera repetir un pedido anterior, llamá al tool buscar_pedidos_cliente. No lo llames sin que el cliente lo pida explícitamente.
+
 TOOL DE GEOLOCALIZACIÓN:
 Cuando el cliente dé una dirección para delivery, llamá al tool geolocalizar_direccion con la calle y el número separados.
 No intentes adivinar si está en zona — siempre usá el tool. El tool te va a decir si la dirección está dentro de una zona de cobertura y cuánto cuesta el delivery.
@@ -420,6 +423,68 @@ function formatearContextoMensajesRecientes(mensajes: MensajeReciente[], textoMe
   return `\nCONTEXTO: En las últimas 8 horas se enviaron estas notificaciones automáticas a este cliente:\n${lineas.join('\n')}\nEl cliente acaba de responder: "${textoMensajeCliente}"\nSi el mensaje del cliente parece una respuesta a alguna de esas notificaciones (agradecimiento, consulta sobre su pedido, etc.), respondé en ese contexto. No preguntes si quiere hacer un pedido si claramente está respondiendo a una notificación previa.\n`
 }
 
+async function buscarUltimosPedidosCliente(db: any, restauranteId: number, telefono: string): Promise<string> {
+  const pedidos = await db
+    .select({
+      id: PedidoUnificadoTable.id,
+      tipo: PedidoUnificadoTable.tipo,
+      estado: PedidoUnificadoTable.estado,
+      total: PedidoUnificadoTable.total,
+      pagado: PedidoUnificadoTable.pagado,
+      createdAt: PedidoUnificadoTable.createdAt,
+      direccion: PedidoUnificadoTable.direccion,
+    })
+    .from(PedidoUnificadoTable)
+    .where(and(
+      eq(PedidoUnificadoTable.restauranteId, restauranteId),
+      eq(PedidoUnificadoTable.telefono, telefono)
+    ))
+    .orderBy(desc(PedidoUnificadoTable.createdAt))
+    .limit(3)
+
+  if (pedidos.length === 0) {
+    return JSON.stringify({ pedidos: [], mensaje: 'El cliente no tiene pedidos anteriores en este restaurante.' })
+  }
+
+  const pedidosConItems = await Promise.all(pedidos.map(async (pedido: any) => {
+    const items = await db
+      .select({
+        nombre: ProductoTable.nombre,
+        cantidad: ItemPedidoUnificadoTable.cantidad,
+        varianteNombre: ItemPedidoUnificadoTable.varianteNombre,
+        precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
+        agregados: ItemPedidoUnificadoTable.agregados,
+      })
+      .from(ItemPedidoUnificadoTable)
+      .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
+      .where(eq(ItemPedidoUnificadoTable.pedidoId, pedido.id))
+
+    const fecha = new Date(pedido.createdAt)
+    const fechaFormateada = fecha.toLocaleDateString('es-AR', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    })
+
+    return {
+      id: pedido.id,
+      tipo: pedido.tipo,
+      estado: pedido.estado,
+      total: `$${pedido.total}`,
+      pagado: pedido.pagado,
+      fecha: fechaFormateada,
+      ...(pedido.direccion ? { direccion: pedido.direccion } : {}),
+      items: items.map((item: any) => ({
+        nombre: item.nombre ?? 'Producto eliminado',
+        cantidad: item.cantidad,
+        ...(item.varianteNombre ? { variante: item.varianteNombre } : {}),
+        ...(item.agregados?.length ? { extras: item.agregados.map((a: any) => a.nombre) } : {}),
+      })),
+    }
+  }))
+
+  return JSON.stringify({ pedidos: pedidosConItems })
+}
+
 function extraerCiudad(direccionTexto: string | null): string {
   if (!direccionTexto) return 'Argentina'
   const partes = direccionTexto.split(',').map(p => p.trim())
@@ -465,8 +530,20 @@ export async function procesarMensajeIA(params: ProcesarMensajeParams): Promise<
 // ─── Función principal ────────────────────────────────────────────────────────
 
 async function procesarMensajeIAInterno(params: ProcesarMensajeParams): Promise<void> {
-  const { restauranteId, telefono, texto, phoneNumberId, token } = params
+  const { restauranteId, telefono, texto } = params
   const db = drizzle(pool)
+
+  const [resTokenData] = await db
+    .select({
+      whatsappAccessToken: RestauranteTable.whatsappAccessToken,
+      whatsappPhoneId: RestauranteTable.whatsappPhoneId,
+    })
+    .from(RestauranteTable)
+    .where(eq(RestauranteTable.id, restauranteId))
+    .limit(1)
+
+  const token = resTokenData?.whatsappAccessToken ?? process.env.WHATSAPP_API_TOKEN!
+  const phoneNumberId = resTokenData?.whatsappPhoneId ?? params.phoneNumberId
 
   // 1. Buscar o crear conversación
   const conversaciones = await db
@@ -544,6 +621,15 @@ async function procesarMensajeIAInterno(params: ProcesarMensajeParams): Promise<
 
   // 4. Llamar a la API de Anthropic con tool de geolocalización
   const tools = [
+    {
+      name: 'buscar_pedidos_cliente',
+      description: 'Devuelve los últimos 3 pedidos realizados por el cliente en este restaurante. Llamar cuando el cliente pregunte por sus pedidos anteriores, historial de compras, o quiera repetir un pedido.',
+      input_schema: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
     {
       name: 'geolocalizar_direccion',
       description: 'Geocodifica una dirección del cliente y verifica si está dentro de una zona de delivery del restaurante. Llamar cuando el cliente proporcione una dirección para delivery.',
@@ -666,6 +752,52 @@ async function procesarMensajeIAInterno(params: ProcesarMensajeParams): Promise<
       mensajes.push({
         role: 'user', content: [
           { type: 'tool_result', tool_use_id: toolUseBlock.id, content: toolResultContent }
+        ]
+      } as any)
+      mensajes.push({ role: 'assistant', content: respuestaCompleta })
+    } else if (toolUseBlock?.name === 'buscar_pedidos_cliente') {
+      console.log(`📋 [WhatsApp IA] Buscando historial de pedidos para ${telefono}`)
+      const historialResult = await buscarUltimosPedidosCliente(db, restauranteId, telefono)
+
+      const mensajesConTool = [
+        ...mensajes,
+        { role: 'assistant', content: data.content },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: toolUseBlock.id,
+              content: historialResult,
+            },
+          ],
+        },
+      ]
+
+      const response2 = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY!,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 1024,
+          system: systemPrompt,
+          messages: mensajesConTool,
+          tools,
+        }),
+      })
+
+      const data2 = await response2.json() as any
+      const textBlock2 = data2.content?.find((b: any) => b.type === 'text')
+      respuestaCompleta = textBlock2?.text ?? ''
+
+      mensajes.push({ role: 'assistant', content: data.content } as any)
+      mensajes.push({
+        role: 'user', content: [
+          { type: 'tool_result', tool_use_id: toolUseBlock.id, content: historialResult }
         ]
       } as any)
       mensajes.push({ role: 'assistant', content: respuestaCompleta })
@@ -1089,6 +1221,7 @@ export async function notificarPagoConfirmadoWhatsApp({
   const restaurantes = await db
     .select({
       whatsappPhoneId: RestauranteTable.whatsappPhoneId,
+      whatsappAccessToken: RestauranteTable.whatsappAccessToken,
     })
     .from(RestauranteTable)
     .where(eq(RestauranteTable.id, restauranteId))
@@ -1096,7 +1229,7 @@ export async function notificarPagoConfirmadoWhatsApp({
 
   if (!restaurantes[0]?.whatsappPhoneId) return
 
-  const token = process.env.WHATSAPP_API_TOKEN!
+  const token = restaurantes[0].whatsappAccessToken ?? process.env.WHATSAPP_API_TOKEN!
   const phoneNumberId = restaurantes[0].whatsappPhoneId
 
   await sendWhatsAppText(token, phoneNumberId, {

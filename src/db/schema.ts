@@ -46,6 +46,9 @@ export const restaurante = mysqlTable("restaurante", {
   whatsappEnabled: boolean("whatsapp_enabled").default(false).notNull(),
   whatsappNumber: varchar("whatsapp_number", { length: 50 }),
   whatsappPhoneId: varchar("whatsapp_phone_id", { length: 50 }),
+  whatsappWabaId: varchar("whatsapp_waba_id", { length: 100 }),
+  whatsappAccessToken: varchar("whatsapp_access_token", { length: 512 }),
+  whatsappTokenExpiry: timestamp("whatsapp_token_expiry"),
   /** WhatsApp al que los clientes envían comprobantes (transferencia manual); independiente de la API de notificaciones al local. */
   comprobantesWhatsapp: varchar("comprobantes_whatsapp", { length: 50 }),
 
