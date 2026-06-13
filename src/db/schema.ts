@@ -418,6 +418,7 @@ export const mensajeWhatsapp = mysqlTable("mensaje_whatsapp", {
   pedidoUnificadoId: int("pedido_unificado_id").references(() => pedidoUnificado.id),
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
   telefono: varchar("telefono", { length: 50 }).notNull(),
+  tipo: mysqlEnum("tipo_mensaje", ["pedido_confirmado", "pedido_despachado"]),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

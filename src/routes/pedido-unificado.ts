@@ -542,6 +542,7 @@ const pedidoUnificadoRoute = new Hono()
           pedidoUnificadoId: pedidoId,
           restauranteId,
           telefono: pedido.telefono,
+          tipo: 'pedido_despachado',
         })
 
         return c.json({ message: 'Notificación enviada al cliente', success: true }, 200)
@@ -636,6 +637,7 @@ const pedidoUnificadoRoute = new Hono()
           pedidoUnificadoId: pedidoId,
           restauranteId,
           telefono: pedido.telefono,
+          tipo: 'pedido_confirmado',
         })
         return c.json({ message: 'Confirmación con demora enviada al cliente', success: true, demoraMinutos }, 200)
       } else {

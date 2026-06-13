@@ -2,7 +2,7 @@
 // Agente IA que maneja conversaciones de pedidos por WhatsApp
 
 import { drizzle } from 'drizzle-orm/mysql2'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, gte, desc } from 'drizzle-orm'
 import { pool } from '../db'
 import {
   whatsappConversacion as WhatsappConversacionTable,
@@ -18,6 +18,8 @@ import {
   itemPedidoUnificado as ItemPedidoUnificadoTable,
   accountPool as AccountPoolTable,
   cliente as ClienteTable,
+  horarioRestaurante as HorarioRestauranteTable,
+  mensajeWhatsapp as MensajeWhatsappTable,
 } from '../db/schema'
 import { sendWhatsAppText } from './whatsapp'
 import { geocodificarYValidarZona } from './geocoding'
@@ -130,6 +132,132 @@ async function obtenerMenuParaPrompt(db: any, restauranteId: number): Promise<st
 }
 
 /**
+ * Construye el mensaje de carta estructurado para WhatsApp.
+ * Agrupa productos por categoría con variantes, ingredientes y extras.
+ */
+async function construirMensajeCarta(db: any, restauranteId: number): Promise<string> {
+  const productos = await db
+    .select({
+      id: ProductoTable.id,
+      nombre: ProductoTable.nombre,
+      descripcion: ProductoTable.descripcion,
+      precio: ProductoTable.precio,
+      categoriaNombre: CategoriaTable.nombre,
+    })
+    .from(ProductoTable)
+    .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
+    .where(and(
+      eq(ProductoTable.restauranteId, restauranteId),
+      eq(ProductoTable.activo, true)
+    ))
+
+  if (productos.length === 0) return 'No hay productos disponibles por el momento.'
+
+  const porCategoria = new Map<string, typeof productos>()
+  for (const p of productos) {
+    const cat = p.categoriaNombre ?? 'Otros'
+    if (!porCategoria.has(cat)) porCategoria.set(cat, [])
+    porCategoria.get(cat)!.push(p)
+  }
+
+  const lineas: string[] = []
+  for (const [cat, prods] of porCategoria) {
+    if (lineas.length > 0) lineas.push('')
+    lineas.push(`*${cat.toUpperCase()}*`)
+
+    for (const p of prods) {
+      const ingredientes = await db
+        .select({ nombre: IngredienteTable.nombre })
+        .from(ProductoIngredienteTable)
+        .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
+        .where(eq(ProductoIngredienteTable.productoId, p.id))
+
+      const variantes = await db
+        .select({ nombre: VarianteProductoTable.nombre, precio: VarianteProductoTable.precio })
+        .from(VarianteProductoTable)
+        .where(eq(VarianteProductoTable.productoId, p.id))
+
+      const agregados = await db
+        .select({ nombre: AgregadoTable.nombre, precio: AgregadoTable.precio })
+        .from(ProductoAgregadoTable)
+        .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
+        .where(eq(ProductoAgregadoTable.productoId, p.id))
+
+      const precioBase = variantes.length > 0
+        ? `desde $${Math.min(...variantes.map((v: any) => parseFloat(v.precio))).toFixed(0)}`
+        : `$${p.precio}`
+
+      lineas.push(`${p.nombre} — ${precioBase}`)
+      if (p.descripcion) lineas.push(p.descripcion)
+      if (ingredientes.length > 0) lineas.push(`Ingredientes: ${ingredientes.map((i: any) => i.nombre).join(', ')}`)
+      if (variantes.length > 0) lineas.push(`Variantes: ${variantes.map((v: any) => `${v.nombre} $${v.precio}`).join(' | ')}`)
+      if (agregados.length > 0) lineas.push(`Extras: ${agregados.map((a: any) => `${a.nombre} +$${a.precio}`).join(' | ')}`)
+    }
+  }
+
+  return lineas.join('\n')
+}
+
+const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
+
+interface HorarioInfo {
+  estaAbierto: boolean
+  textoHorarios: string
+}
+
+async function obtenerHorarioInfo(db: any, restauranteId: number): Promise<HorarioInfo> {
+  const horarios = await db
+    .select()
+    .from(HorarioRestauranteTable)
+    .where(eq(HorarioRestauranteTable.restauranteId, restauranteId))
+
+  if (horarios.length === 0) {
+    return { estaAbierto: true, textoHorarios: '' }
+  }
+
+  // Agrupar franjas por día
+  const porDia = new Map<number, { apertura: string; cierre: string }[]>()
+  for (const h of horarios) {
+    if (!porDia.has(h.diaSemana)) porDia.set(h.diaSemana, [])
+    porDia.get(h.diaSemana)!.push({ apertura: h.horaApertura, cierre: h.horaCierre })
+  }
+
+  // Construir texto legible de horarios
+  const lineas: string[] = []
+  for (let dia = 0; dia < 7; dia++) {
+    const franjas = porDia.get(dia)
+    if (!franjas || franjas.length === 0) {
+      lineas.push(`${DIAS_SEMANA[dia]}: cerrado`)
+    } else {
+      const franjasTexto = franjas.map(f => `${f.apertura} a ${f.cierre}`).join(' y ')
+      lineas.push(`${DIAS_SEMANA[dia]}: ${franjasTexto}`)
+    }
+  }
+  const textoHorarios = lineas.join('\n')
+
+  // Calcular si está abierto ahora (hora de Argentina, UTC-3)
+  const ahora = new Date()
+  const ahoraAr = new Date(ahora.getTime() - 3 * 60 * 60 * 1000)
+  const diaActual = ahoraAr.getUTCDay() // 0=Dom...6=Sáb
+  const horaActual = ahoraAr.getUTCHours()
+  const minActual = ahoraAr.getUTCMinutes()
+  const minutosActuales = horaActual * 60 + minActual
+
+  const franjasHoy = porDia.get(diaActual) ?? []
+  const estaAbierto = franjasHoy.some(f => {
+    const [ah, am] = f.apertura.split(':').map(Number)
+    const [ch, cm] = f.cierre.split(':').map(Number)
+    const minApertura = ah * 60 + am
+    let minCierre = ch * 60 + cm
+    // Si el cierre es antes de la apertura, cruza la medianoche
+    if (minCierre <= minApertura) minCierre += 24 * 60
+    return minutosActuales >= minApertura && minutosActuales < minCierre
+  })
+
+  return { estaAbierto, textoHorarios }
+}
+
+/**
  * Construye el system prompt completo para el agente.
  */
 async function buildSystemPrompt(db: any, restauranteId: number, inactivoPorTiempo = false): Promise<{ prompt: string; direccionTexto: string | null }> {
@@ -157,6 +285,7 @@ async function buildSystemPrompt(db: any, restauranteId: number, inactivoPorTiem
     .limit(1)
 
   const menu = await obtenerMenuParaPrompt(db, restauranteId)
+  const { estaAbierto, textoHorarios } = await obtenerHorarioInfo(db, restauranteId)
 
   const tiposDisponibles = []
   if (restaurante.deliveryEnabled) tiposDisponibles.push('delivery (el cliente da su dirección)')
@@ -176,7 +305,14 @@ async function buildSystemPrompt(db: any, restauranteId: number, inactivoPorTiem
     ? `UBICACIÓN DEL RESTAURANTE: ${restaurante.direccionTexto}\nCuando el cliente dé una dirección sin especificar ciudad, asumir que es en la misma ciudad que el restaurante. No preguntar la localidad.\n`
     : ''
 
-  const prompt = `${notaInactividad}${notaUbicacion}Sos el asistente de pedidos de ${restaurante.nombre} por WhatsApp. Tu trabajo es tomar pedidos de los clientes de forma simple y directa, como lo haría una persona.
+  const notaEstadoApertura = textoHorarios
+    ? `ESTADO ACTUAL DEL LOCAL: ${estaAbierto ? 'ABIERTO' : 'CERRADO'}
+HORARIOS DE ATENCIÓN:
+${textoHorarios}
+Si el local está CERRADO y el cliente intenta hacer un pedido, informale amablemente que en este momento están cerrados y mencioná cuándo vuelven a abrir según los horarios. Si el cliente solo pregunta los horarios, respondé con los días y horarios en texto plano, sin markdown.\n`
+    : ''
+
+  const prompt = `${notaInactividad}${notaUbicacion}${notaEstadoApertura}Sos el asistente de pedidos de ${restaurante.nombre} por WhatsApp. Tu trabajo es tomar pedidos de los clientes de forma simple y directa, como lo haría una persona.
 
 REGLAS FUNDAMENTALES:
 - Hablá en español argentino, informal, como un humano. Sin formalismos ni frases robóticas.
@@ -190,8 +326,8 @@ REGLAS FUNDAMENTALES:
 - NO mandes resumen del pedido antes de mandar el alias. Cuando el cliente elige transferencia, tu único mensaje es una frase corta del tipo "Perfecto, te mando los datos." El alias y monto los manda el sistema aparte.
 - Nunca muestres el total antes de mandar el alias. El sistema ya lo incluye.
 
-CUANDO EL CLIENTE PIDE EL MENÚ:
-Mandá el listado directamente, sin "Dale, acá va el menú:" ni ninguna introducción. Sin "¿Qué te llama la atención?" ni ningún cierre. Solo el listado de productos con precio, en texto plano, agrupado por categoría.
+CUANDO EL CLIENTE PIDE EL MENÚ O LA CARTA:
+Respondé ÚNICAMENTE con una frase corta de saludo, como "Hola! te paso la carta" o "Dale, acá va". NO listés los productos vos — el sistema los manda automáticamente. Incluí ENVIAR_CARTA:true en tu respuesta y nada más.
 
 MÉTODO DE PAGO TRANSFERENCIA:
 Cuando el cliente elige transferencia, NO le preguntés nada más. NO le explicés qué es un alias único. Simplemente incluí METODO_ELEGIDO:"cucuru" en tu respuesta y el sistema le manda los datos automáticamente. Tu mensaje al cliente puede ser algo como "Perfecto, te mando los datos para transferir." y nada más.
@@ -228,6 +364,9 @@ PEDIDO_JSON:{"tipo":"delivery"|"takeaway","direccion":"...solo si es delivery...
 
 Este bloque es solo para el sistema, el cliente no lo ve. Solo incluirlo cuando el cliente haya confirmado todo y esté listo para pagar.
 
+Cuando el cliente pida el menú o la carta, incluir al final:
+ENVIAR_CARTA:true
+
 Cuando debas preguntar el método de pago, incluir al final:
 PEDIR_METODO_PAGO:true
 
@@ -235,6 +374,50 @@ Cuando el cliente elija el método de pago, incluir al final:
 METODO_ELEGIDO:"mercadopago"|"cucuru"|"transferencia_manual"`
 
   return { prompt, direccionTexto: restaurante.direccionTexto ?? null }
+}
+
+interface MensajeReciente {
+  tipo: 'pedido_confirmado' | 'pedido_despachado'
+  enviadoAt: Date
+}
+
+async function obtenerMensajesRecientes(db: any, restauranteId: number, telefono: string): Promise<MensajeReciente[]> {
+  const ocho_horas_atras = new Date(Date.now() - 8 * 60 * 60 * 1000)
+  const registros = await db
+    .select({
+      tipo: MensajeWhatsappTable.tipo,
+      createdAt: MensajeWhatsappTable.createdAt,
+    })
+    .from(MensajeWhatsappTable)
+    .where(and(
+      eq(MensajeWhatsappTable.restauranteId, restauranteId),
+      eq(MensajeWhatsappTable.telefono, telefono),
+      gte(MensajeWhatsappTable.createdAt, ocho_horas_atras)
+    ))
+    .orderBy(desc(MensajeWhatsappTable.createdAt))
+    .limit(5)
+
+  return registros
+    .filter((r: any) => r.tipo !== null)
+    .map((r: any) => ({ tipo: r.tipo as MensajeReciente['tipo'], enviadoAt: new Date(r.createdAt) }))
+}
+
+function formatearContextoMensajesRecientes(mensajes: MensajeReciente[], textoMensajeCliente: string): string {
+  if (mensajes.length === 0) return ''
+
+  const ahora = new Date()
+  const lineas = mensajes.map(m => {
+    const minutosAtras = Math.round((ahora.getTime() - m.enviadoAt.getTime()) / 60_000)
+    const tiempoTexto = minutosAtras < 60
+      ? `hace ${minutosAtras} minutos`
+      : `hace ${Math.round(minutosAtras / 60)} horas`
+    const tipoTexto = m.tipo === 'pedido_confirmado'
+      ? 'confirmación de pago y pedido en cocina'
+      : 'aviso de pedido listo/en camino'
+    return `- Notificación "${tipoTexto}" enviada ${tiempoTexto} (${m.enviadoAt.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })})`
+  })
+
+  return `\nCONTEXTO: En las últimas 8 horas se enviaron estas notificaciones automáticas a este cliente:\n${lineas.join('\n')}\nEl cliente acaba de responder: "${textoMensajeCliente}"\nSi el mensaje del cliente parece una respuesta a alguna de esas notificaciones (agradecimiento, consulta sobre su pedido, etc.), respondé en ese contexto. No preguntes si quiere hacer un pedido si claramente está respondiendo a una notificación previa.\n`
 }
 
 function extraerCiudad(direccionTexto: string | null): string {
@@ -350,7 +533,14 @@ async function procesarMensajeIAInterno(params: ProcesarMensajeParams): Promise<
   mensajes.push({ role: 'user', content: texto })
 
   // 4. Construir el system prompt con el menú actual
-  const { prompt: systemPrompt, direccionTexto: restauranteDireccionTexto } = await buildSystemPrompt(db, restauranteId, inactivoPorTiempo)
+  const [{ prompt: systemPromptBase, direccionTexto: restauranteDireccionTexto }, mensajesRecientes] = await Promise.all([
+    buildSystemPrompt(db, restauranteId, inactivoPorTiempo),
+    obtenerMensajesRecientes(db, restauranteId, telefono),
+  ])
+  const contextoMensajesRecientes = formatearContextoMensajesRecientes(mensajesRecientes, texto)
+  const systemPrompt = contextoMensajesRecientes
+    ? contextoMensajesRecientes + systemPromptBase
+    : systemPromptBase
 
   // 4. Llamar a la API de Anthropic con tool de geolocalización
   const tools = [
@@ -496,6 +686,14 @@ async function procesarMensajeIAInterno(params: ProcesarMensajeParams): Promise<
   let pedidoJsonStr: string | null = null
   let pedirMetodoPago = false
   let metodoElegido: string | null = null
+  let enviarCarta = false
+
+  // Extraer ENVIAR_CARTA si existe
+  const cartaMatch = mensajeParaCliente.match(/ENVIAR_CARTA:[^\n]+/)
+  if (cartaMatch) {
+    enviarCarta = cartaMatch[0].includes('true')
+    mensajeParaCliente = mensajeParaCliente.replace(cartaMatch[0], '').trim()
+  }
 
   // Extraer PEDIDO_JSON si existe
   const pedidoMatch = mensajeParaCliente.match(/PEDIDO_JSON:\{.+?\}(?:\n|$)/s)
@@ -527,6 +725,7 @@ async function procesarMensajeIAInterno(params: ProcesarMensajeParams): Promise<
       return !l.startsWith('PEDIDO_JSON:')
         && !l.startsWith('PEDIR_METODO_PAGO:')
         && !l.startsWith('METODO_ELEGIDO:')
+        && !l.startsWith('ENVIAR_CARTA:')
     })
     .join('\n')
     .trim()
@@ -536,7 +735,28 @@ async function procesarMensajeIAInterno(params: ProcesarMensajeParams): Promise<
 
   // 7. Procesar acciones según lo que indicó la IA
 
-  // 7a. Si la IA confirmó el pedido → crear en DB y pasar a esperando_pago
+  // 7a. Flujo de carta: enviar saludo + menú estructurado + mensaje de cierre
+  if (enviarCarta) {
+    await db.update(WhatsappConversacionTable)
+      .set({ mensajes, updatedAt: new Date() })
+      .where(eq(WhatsappConversacionTable.id, conversacion.id))
+
+    if (mensajeParaCliente.trim()) {
+      await sendWhatsAppText(token, phoneNumberId, { phone: telefono, text: mensajeParaCliente.trim() })
+    }
+
+    const mensajeCarta = await construirMensajeCarta(db, restauranteId)
+    await sendWhatsAppText(token, phoneNumberId, { phone: telefono, text: mensajeCarta })
+
+    await sendWhatsAppText(token, phoneNumberId, {
+      phone: telefono,
+      text: 'Cada producto puede tener variantes y extras, también podés quitar ingredientes. Decime qué querés pedir.',
+    })
+
+    return
+  }
+
+  // 7c. Si la IA confirmó el pedido → crear en DB y pasar a esperando_pago
   if (pedidoJsonStr) {
     try {
       const pedidoData = JSON.parse(pedidoJsonStr) as {
