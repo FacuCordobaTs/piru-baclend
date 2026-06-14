@@ -30,7 +30,8 @@ whatsappOauthRoute.post('/connect', authMiddleware, async (c) => {
     // 1. Intercambiar code por user access token
     const tokenRes = await fetch(
       `https://graph.facebook.com/${META_API_VERSION}/oauth/access_token?` +
-      `client_id=${META_APP_ID}&client_secret=${META_APP_SECRET}&code=${code}`,
+      `client_id=${META_APP_ID}&client_secret=${META_APP_SECRET}&code=${code}` +
+      `&redirect_uri=https://admin.piru.app/dashboard/perfil`,
       { method: 'GET' }
     )
     const tokenData = await tokenRes.json() as any
