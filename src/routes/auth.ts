@@ -8,6 +8,7 @@ import { createAccessToken } from '../libs/jwt'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import * as bcrypt from 'bcrypt'
+import { authMiddleware } from '../middleware/auth'
 
 const signUpRestauranteSchema = z.object({
   email: z.string().email().min(3),
@@ -108,6 +109,41 @@ export const authRoute = new Hono()
       return c.json({ message: 'Inicio de sesión realizado con éxito', restaurante: restauranteResult[0], token }, 200);
   } catch (error) {
       return c.json({ error: 'Login failed' }, 500);
+  }
+})
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(6),
+})
+
+authRoute.put('/change-password', authMiddleware, zValidator('json', changePasswordSchema), async (c) => {
+  const { currentPassword, newPassword } = c.req.valid('json')
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [rest] = await db.select({ password: restaurante.password })
+      .from(restaurante)
+      .where(eq(restaurante.id, restauranteId))
+      .limit(1)
+
+    if (!rest?.password) {
+      return c.json({ message: 'Error al verificar la contraseña', success: false }, 400)
+    }
+
+    const isMatch = await bcrypt.compare(currentPassword, rest.password)
+    if (!isMatch) {
+      return c.json({ message: 'La contraseña actual es incorrecta', success: false }, 400)
+    }
+
+    const newHash = await bcrypt.hash(newPassword, 10)
+    await db.update(restaurante).set({ password: newHash }).where(eq(restaurante.id, restauranteId))
+
+    return c.json({ message: 'Contraseña actualizada correctamente', success: true }, 200)
+  } catch (error) {
+    console.error('Error changing password:', error)
+    return c.json({ message: 'Error al cambiar contraseña', success: false }, 500)
   }
 })
 

@@ -526,13 +526,17 @@ const pedidoUnificadoRoute = new Hono()
     }
 
     try {
+      const restCreds = restaurante?.whatsappPhoneId && restaurante?.whatsappAccessToken
+        ? { phoneId: restaurante.whatsappPhoneId, token: restaurante.whatsappAccessToken }
+        : undefined
+
       console.log(`📲 [Notificar Cliente] Enviando WhatsApp a ${pedido.telefono}...`)
       const waResult = await sendClientOrderDispatchedWhatsApp(c, {
         phone: pedido.telefono,
         customerName: pedido.nombreCliente || 'Cliente',
         restaurantName: restaurante?.nombre || 'El local',
         orderStatus: dispatchMessage
-      })
+      }, restCreds)
 
       if (waResult.success) {
         console.log(`📲 [Notificar Cliente] ✅ WhatsApp enviado exitosamente a ${pedido.telefono}`)
@@ -623,6 +627,10 @@ const pedidoUnificadoRoute = new Hono()
     }
 
     try {
+      const restCreds = restaurante?.whatsappPhoneId && restaurante?.whatsappAccessToken
+        ? { phoneId: restaurante.whatsappPhoneId, token: restaurante.whatsappAccessToken }
+        : undefined
+
       const waResult = await sendClientPaymentConfirmedWhatsApp(c, {
         phone: pedido.telefono,
         customerName: pedido.nombreCliente || 'Cliente',
@@ -630,7 +638,7 @@ const pedidoUnificadoRoute = new Hono()
         total: pedido.total,
         orderId: pedidoId.toString(),
         demoraMinutos,
-      })
+      }, restCreds)
 
       if (waResult.success) {
         await db.insert(MensajeWhatsappTable).values({

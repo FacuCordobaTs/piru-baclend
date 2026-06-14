@@ -42,6 +42,8 @@ export interface ClientOrderConfirmedWithDelayData {
     demoraMinutos: number;
 }
 
+type WaCredentials = { phoneId: string; token: string }
+
 // Helper: Convierte el array de items en un string multilinea formateado
 const formatOrderSummary = (items: OrderItem[], horarioProgramado?: string | null): string => {
     const totalArticulos = items.reduce((suma, item) => suma + item.quantity, 0);
@@ -52,11 +54,12 @@ const formatOrderSummary = (items: OrderItem[], horarioProgramado?: string | nul
     return resumen;
 };
 
-export const sendOrderWhatsApp = async (c: any, data: OrderNotification) => {
+export const sendOrderWhatsApp = async (c: any, data: OrderNotification, creds?: WaCredentials) => {
     const { WHATSAPP_API_TOKEN, WHATSAPP_PHONE_ID } = env<{ WHATSAPP_API_TOKEN: string; WHATSAPP_PHONE_ID: string }>(c);
+    const phoneId = creds?.phoneId ?? WHATSAPP_PHONE_ID;
+    const token = creds?.token ?? WHATSAPP_API_TOKEN;
 
-    // Ajustar versión de API si es necesario, v22.0 o superior
-    const url = `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_ID}/messages`;
+    const url = `https://graph.facebook.com/v22.0/${phoneId}/messages`;
 
     // Preparamos el string de la lista
     const itemsListString = formatOrderSummary(data.items, data.horarioProgramado);
@@ -102,7 +105,7 @@ export const sendOrderWhatsApp = async (c: any, data: OrderNotification) => {
         const response = await fetch(url, {
             method: "POST",
             headers: {
-                "Authorization": `Bearer ${WHATSAPP_API_TOKEN}`,
+                "Authorization": `Bearer ${token}`,
                 "Content-Type": "application/json",
             },
             body: JSON.stringify(body),
@@ -124,10 +127,12 @@ export const sendOrderWhatsApp = async (c: any, data: OrderNotification) => {
     }
 };
 
-export const sendClientPaymentConfirmedWhatsApp = async (c: any, data: ClientPaymentConfirmedData) => {
+export const sendClientPaymentConfirmedWhatsApp = async (c: any, data: ClientPaymentConfirmedData, creds?: WaCredentials) => {
     const { WHATSAPP_API_TOKEN, WHATSAPP_PHONE_ID } = env<{ WHATSAPP_API_TOKEN: string; WHATSAPP_PHONE_ID: string }>(c);
+    const phoneId = creds?.phoneId ?? WHATSAPP_PHONE_ID;
+    const token = creds?.token ?? WHATSAPP_API_TOKEN;
 
-    const url = `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_ID}/messages`;
+    const url = `https://graph.facebook.com/v22.0/${phoneId}/messages`;
 
     let totalConDemora = data.demoraMinutos != null
         ? `${data.total} · Demora aprox. ${data.demoraMinutos} min`
@@ -169,7 +174,7 @@ export const sendClientPaymentConfirmedWhatsApp = async (c: any, data: ClientPay
         const response = await fetch(url, {
             method: "POST",
             headers: {
-                "Authorization": `Bearer ${WHATSAPP_API_TOKEN}`,
+                "Authorization": `Bearer ${token}`,
                 "Content-Type": "application/json",
             },
             body: JSON.stringify(body),
@@ -191,10 +196,12 @@ export const sendClientPaymentConfirmedWhatsApp = async (c: any, data: ClientPay
     }
 };
 
-export const sendClientOrderConfirmedWithDelayWhatsApp = async (c: any, data: ClientOrderConfirmedWithDelayData) => {
+export const sendClientOrderConfirmedWithDelayWhatsApp = async (c: any, data: ClientOrderConfirmedWithDelayData, creds?: WaCredentials) => {
     const { WHATSAPP_API_TOKEN, WHATSAPP_PHONE_ID } = env<{ WHATSAPP_API_TOKEN: string; WHATSAPP_PHONE_ID: string }>(c);
+    const phoneId = creds?.phoneId ?? WHATSAPP_PHONE_ID;
+    const token = creds?.token ?? WHATSAPP_API_TOKEN;
 
-    const url = `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_ID}/messages`;
+    const url = `https://graph.facebook.com/v22.0/${phoneId}/messages`;
 
     const body = {
         messaging_product: "whatsapp",
@@ -230,7 +237,7 @@ export const sendClientOrderConfirmedWithDelayWhatsApp = async (c: any, data: Cl
         const response = await fetch(url, {
             method: "POST",
             headers: {
-                "Authorization": `Bearer ${WHATSAPP_API_TOKEN}`,
+                "Authorization": `Bearer ${token}`,
                 "Content-Type": "application/json",
             },
             body: JSON.stringify(body),
@@ -252,10 +259,12 @@ export const sendClientOrderConfirmedWithDelayWhatsApp = async (c: any, data: Cl
     }
 };
 
-export const sendClientOrderDispatchedWhatsApp = async (c: any, data: ClientOrderDispatchedData) => {
+export const sendClientOrderDispatchedWhatsApp = async (c: any, data: ClientOrderDispatchedData, creds?: WaCredentials) => {
     const { WHATSAPP_API_TOKEN, WHATSAPP_PHONE_ID } = env<{ WHATSAPP_API_TOKEN: string; WHATSAPP_PHONE_ID: string }>(c);
+    const phoneId = creds?.phoneId ?? WHATSAPP_PHONE_ID;
+    const token = creds?.token ?? WHATSAPP_API_TOKEN;
 
-    const url = `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_ID}/messages`;
+    const url = `https://graph.facebook.com/v22.0/${phoneId}/messages`;
 
     const body = {
         messaging_product: "whatsapp",
@@ -282,7 +291,7 @@ export const sendClientOrderDispatchedWhatsApp = async (c: any, data: ClientOrde
         const response = await fetch(url, {
             method: "POST",
             headers: {
-                "Authorization": `Bearer ${WHATSAPP_API_TOKEN}`,
+                "Authorization": `Bearer ${token}`,
                 "Content-Type": "application/json",
             },
             body: JSON.stringify(body),

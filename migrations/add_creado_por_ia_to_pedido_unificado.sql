@@ -1,0 +1,1 @@
+ALTER TABLE pedido_unificado ADD COLUMN creado_por_ia BOOLEAN NOT NULL DEFAULT FALSE;

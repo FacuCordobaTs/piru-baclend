@@ -219,6 +219,8 @@ const cucuruWebhookHandler = async (c: any) => {
         const restaurante = await db.select({
           whatsappEnabled: RestauranteTable.whatsappEnabled,
           whatsappNumber: RestauranteTable.whatsappNumber,
+          whatsappPhoneId: RestauranteTable.whatsappPhoneId,
+          whatsappAccessToken: RestauranteTable.whatsappAccessToken,
           deliveryFee: RestauranteTable.deliveryFee,
           nombre: RestauranteTable.nombre,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, targetRestauranteId)).limit(1);
@@ -242,6 +244,10 @@ const cucuruWebhookHandler = async (c: any) => {
             orderItemsForWa.push({ name: 'Delivery', quantity: 1 });
           }
 
+          const restCreds = restaurante[0].whatsappPhoneId && restaurante[0].whatsappAccessToken
+            ? { phoneId: restaurante[0].whatsappPhoneId, token: restaurante[0].whatsappAccessToken }
+            : undefined
+
           sendOrderWhatsApp(c, {
             phone: restaurante[0].whatsappNumber,
             customerName: pedido.nombreCliente || 'Cliente no especificado',
@@ -249,7 +255,7 @@ const cucuruWebhookHandler = async (c: any) => {
             total: `${pedido.total} (transferencia)`,
             items: orderItemsForWa,
             orderId: pedido.id.toString()
-          }).catch(console.error);
+          }, restCreds).catch(console.error);
 
 
         }
@@ -477,6 +483,8 @@ webhookRoute.post('/talo', async (c) => {
         .select({
           whatsappEnabled: RestauranteTable.whatsappEnabled,
           whatsappNumber: RestauranteTable.whatsappNumber,
+          whatsappPhoneId: RestauranteTable.whatsappPhoneId,
+          whatsappAccessToken: RestauranteTable.whatsappAccessToken,
           deliveryFee: RestauranteTable.deliveryFee,
           nombre: RestauranteTable.nombre,
         })
@@ -504,6 +512,10 @@ webhookRoute.post('/talo', async (c) => {
           orderItemsForWa.push({ name: 'Delivery', quantity: 1 });
         }
 
+        const restCreds = restaurante[0].whatsappPhoneId && restaurante[0].whatsappAccessToken
+          ? { phoneId: restaurante[0].whatsappPhoneId, token: restaurante[0].whatsappAccessToken }
+          : undefined
+
         sendOrderWhatsApp(
           { env: envForBackground } as any,
           {
@@ -514,7 +526,8 @@ webhookRoute.post('/talo', async (c) => {
             total: `${pedido.total} (transferencia)`,
             items: orderItemsForWa,
             orderId: pedido.id.toString(),
-          }
+          },
+          restCreds
         ).catch((e) => console.error('[Talo Webhook] Error enviando WhatsApp:', e));
 
 

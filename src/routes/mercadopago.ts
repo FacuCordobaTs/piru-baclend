@@ -420,6 +420,8 @@ mercadopagoRoute.post('/process-brick', async (c) => {
         const restaurante = await db.select({
           whatsappEnabled: RestauranteTable.whatsappEnabled,
           whatsappNumber: RestauranteTable.whatsappNumber,
+          whatsappPhoneId: RestauranteTable.whatsappPhoneId,
+          whatsappAccessToken: RestauranteTable.whatsappAccessToken,
           deliveryFee: RestauranteTable.deliveryFee,
           nombre: RestauranteTable.nombre,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, pedido.restauranteId!)).limit(1)
@@ -443,6 +445,10 @@ mercadopagoRoute.post('/process-brick', async (c) => {
             orderItemsForWa.push({ name: 'Delivery', quantity: 1 })
           }
 
+          const restCreds = restaurante[0].whatsappPhoneId && restaurante[0].whatsappAccessToken
+            ? { phoneId: restaurante[0].whatsappPhoneId, token: restaurante[0].whatsappAccessToken }
+            : undefined
+
           sendOrderWhatsApp(c, {
             phone: restaurante[0].whatsappNumber,
             customerName: pedido.nombreCliente || 'Cliente no especificado',
@@ -450,7 +456,7 @@ mercadopagoRoute.post('/process-brick', async (c) => {
             total: `${pedido.total} (mercadopago)`,
             items: orderItemsForWa,
             orderId: pedido.id.toString()
-          }).catch(console.error)
+          }, restCreds).catch(console.error)
 
 
         }
@@ -700,6 +706,8 @@ mercadopagoRoute.post('/webhook', async (c) => {
         const restaurante = await db.select({
           whatsappEnabled: RestauranteTable.whatsappEnabled,
           whatsappNumber: RestauranteTable.whatsappNumber,
+          whatsappPhoneId: RestauranteTable.whatsappPhoneId,
+          whatsappAccessToken: RestauranteTable.whatsappAccessToken,
           deliveryFee: RestauranteTable.deliveryFee,
           nombre: RestauranteTable.nombre,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
@@ -723,6 +731,10 @@ mercadopagoRoute.post('/webhook', async (c) => {
             orderItemsForWa.push({ name: 'Delivery', quantity: 1 })
           }
 
+          const restCreds = restaurante[0].whatsappPhoneId && restaurante[0].whatsappAccessToken
+            ? { phoneId: restaurante[0].whatsappPhoneId, token: restaurante[0].whatsappAccessToken }
+            : undefined
+
           sendOrderWhatsApp(c, {
             phone: restaurante[0].whatsappNumber,
             customerName: pedidoData.nombreCliente || 'Cliente no especificado',
@@ -730,7 +742,7 @@ mercadopagoRoute.post('/webhook', async (c) => {
             total: `${pedidoData.total} (mercadopago webhook)`,
             items: orderItemsForWa,
             orderId: pedidoData.id.toString()
-          }).catch(console.error)
+          }, restCreds).catch(console.error)
 
 
         }

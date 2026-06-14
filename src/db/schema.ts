@@ -194,6 +194,9 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   // Pedido grupal: items con clienteNombre individual (flujo sala/grupo)
   grupal: boolean("grupal").default(false).notNull(),
 
+  // Pedido creado por el agente IA de WhatsApp
+  creadoPorIa: boolean("creado_por_ia").default(false).notNull(),
+
   // AFIP / ARCA - facturación electrónica
   afipFacturado: boolean("afip_facturado").default(false).notNull(),
   afipCae: varchar("afip_cae", { length: 14 }),

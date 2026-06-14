@@ -1094,6 +1094,7 @@ async function crearPedidoYObtenerPago(
     total: total.toFixed(2),
     pagado: false,
     grupal: false,
+    creadoPorIa: true,
   })
 
   const pedidoId = Number(nuevoPedido[0].insertId)
