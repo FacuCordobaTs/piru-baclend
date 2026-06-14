@@ -27,12 +27,18 @@ whatsappOauthRoute.post('/connect', authMiddleware, async (c) => {
   const db = drizzle(pool)
 
   try {
-    // 1. Intercambiar code por user access token
+    // 1. Intercambiar code por user access token — Embedded Signup usa este endpoint específico
     const tokenRes = await fetch(
-      `https://graph.facebook.com/${META_API_VERSION}/oauth/access_token?` +
-      `client_id=${META_APP_ID}&client_secret=${META_APP_SECRET}&code=${code}` +
-      `&redirect_uri=https://admin.piru.app/dashboard/perfil`,
-      { method: 'GET' }
+      `https://graph.facebook.com/${META_API_VERSION}/oauth/access_token`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: META_APP_ID,
+          client_secret: META_APP_SECRET,
+          code: code,
+        }).toString(),
+      }
     )
     const tokenData = await tokenRes.json() as any
     if (!tokenData.access_token) {
