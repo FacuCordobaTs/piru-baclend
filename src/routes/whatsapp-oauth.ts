@@ -27,7 +27,12 @@ whatsappOauthRoute.post('/connect', authMiddleware, async (c) => {
   const db = drizzle(pool)
 
   try {
-    // 1. Intercambiar code por user access token — Embedded Signup usa este endpoint específico
+    // 1. Intercambiar code por user access token.
+    // El code viene del FB.login del SDK de JS, que corre en
+    // https://admin.piru.app/dashboard/perfil. Con "modo estricto de redirect_uri"
+    // activado en la app de Meta, el exchange debe mandar EXACTAMENTE el mismo
+    // redirect_uri que está en "URI de redireccionamiento de OAuth válidos",
+    // sino Meta devuelve OAuthException subcode 36008.
     const tokenRes = await fetch(
       `https://graph.facebook.com/${META_API_VERSION}/oauth/access_token`,
       {
@@ -36,6 +41,7 @@ whatsappOauthRoute.post('/connect', authMiddleware, async (c) => {
         body: new URLSearchParams({
           client_id: META_APP_ID,
           client_secret: META_APP_SECRET,
+          redirect_uri: 'https://admin.piru.app/dashboard/perfil',
           code: code,
         }).toString(),
       }
