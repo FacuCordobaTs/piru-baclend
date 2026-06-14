@@ -43,6 +43,9 @@ metricasRoute.get('/', async (c) => {
     .select({
       totalMensual: sql`SUM(CASE WHEN ${periodFilter} THEN ${PedidoUnificadoTable.total} ELSE 0 END)`,
       totalHistorico: sql`SUM(${PedidoUnificadoTable.total})`,
+      // Desglose por origen: pedidos anotados manualmente en el local (sin comisión) vs tomados por la web
+      totalMensualManual: sql`SUM(CASE WHEN ${periodFilter} AND ${PedidoUnificadoTable.anotadoManualmente} = true THEN ${PedidoUnificadoTable.total} ELSE 0 END)`,
+      totalMensualWeb: sql`SUM(CASE WHEN ${periodFilter} AND ${PedidoUnificadoTable.anotadoManualmente} = false THEN ${PedidoUnificadoTable.total} ELSE 0 END)`,
     })
     .from(PedidoUnificadoTable)
     .where(and(
@@ -50,15 +53,19 @@ metricasRoute.get('/', async (c) => {
       eq(PedidoUnificadoTable.pagado, true),
       // Nos aseguramos de contar solo cancelados/archivados/etc si fueron pagados, pero mejor solo excluir cancelados que no se cobraron. eq(pagado, true) asume ingresos reales.
     ))
-  
+
   const totalMensual = parseFloat(ingresosRes[0]?.totalMensual as string || '0')
   const totalHistorico = parseFloat(ingresosRes[0]?.totalHistorico as string || '0')
+  const totalMensualManual = parseFloat(ingresosRes[0]?.totalMensualManual as string || '0')
+  const totalMensualWeb = parseFloat(ingresosRes[0]?.totalMensualWeb as string || '0')
 
   // 3 & 4. Cantidad de Pedidos del Mes Actual e Históricos
   const pedidosRes = await db
     .select({
       pedidosMensuales: sql`SUM(CASE WHEN ${periodFilter} THEN 1 ELSE 0 END)`,
       pedidosMensualesPagados: sql`SUM(CASE WHEN ${periodFilter} AND ${PedidoUnificadoTable.pagado} = true THEN 1 ELSE 0 END)`,
+      pedidosMensualesManual: sql`SUM(CASE WHEN ${periodFilter} AND ${PedidoUnificadoTable.anotadoManualmente} = true THEN 1 ELSE 0 END)`,
+      pedidosMensualesWeb: sql`SUM(CASE WHEN ${periodFilter} AND ${PedidoUnificadoTable.anotadoManualmente} = false THEN 1 ELSE 0 END)`,
       pedidosHistoricos: sql`COUNT(${PedidoUnificadoTable.id})`,
     })
     .from(PedidoUnificadoTable)
@@ -66,6 +73,8 @@ metricasRoute.get('/', async (c) => {
 
   const pedidosMensuales = parseInt(pedidosRes[0]?.pedidosMensuales as string || '0', 10)
   const pedidosMensualesPagados = parseInt(pedidosRes[0]?.pedidosMensualesPagados as string || '0', 10)
+  const pedidosMensualesManual = parseInt(pedidosRes[0]?.pedidosMensualesManual as string || '0', 10)
+  const pedidosMensualesWeb = parseInt(pedidosRes[0]?.pedidosMensualesWeb as string || '0', 10)
   const pedidosHistoricos = parseInt(pedidosRes[0]?.pedidosHistoricos as string || '0', 10)
 
   // 5. Desglose de ingresos del Mes Actual por Medio de Pago
@@ -119,11 +128,15 @@ metricasRoute.get('/', async (c) => {
     data: {
       ingresos: {
         mensual: totalMensual,
-        historico: totalHistorico
+        historico: totalHistorico,
+        mensualManual: totalMensualManual,
+        mensualWeb: totalMensualWeb
       },
       pedidos: {
         mensuales: pedidosMensuales,
         mensualesPagados: pedidosMensualesPagados,
+        mensualesManual: pedidosMensualesManual,
+        mensualesWeb: pedidosMensualesWeb,
         historicos: pedidosHistoricos
       },
       desgloseMetodoPago: desglosePagoFormat,

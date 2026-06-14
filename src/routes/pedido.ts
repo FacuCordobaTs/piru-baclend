@@ -176,6 +176,7 @@ const pedidoRoute = new Hono()
           afipFacturado: PedidoUnificadoTable.afipFacturado,
           afipCae: PedidoUnificadoTable.afipCae,
           afipNumeroComprobante: PedidoUnificadoTable.afipNumeroComprobante,
+          anotadoManualmente: PedidoUnificadoTable.anotadoManualmente,
         })
         .from(PedidoUnificadoTable)
         .leftJoin(RepartidorTable, eq(PedidoUnificadoTable.repartidorId, RepartidorTable.id))
@@ -273,6 +274,18 @@ const pedidoRoute = new Hono()
         .filter(p => p.estado !== 'cancelled')
         .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
 
+      // Diferenciar pedidos anotados manualmente (POS local, sin comisión) de los tomados por la web
+      const dtNoCancelados = dtPedidosConItems.filter(p => p.estado !== 'cancelled')
+      const esManual = (p: { anotadoManualmente?: boolean | null }) => p.anotadoManualmente === true
+      const totalManual = dtNoCancelados
+        .filter(esManual)
+        .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
+      const totalWeb = dtNoCancelados
+        .filter(p => !esManual(p))
+        .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
+      const cantidadManual = dtNoCancelados.filter(esManual).length
+      const cantidadWeb = dtNoCancelados.filter(p => !esManual(p)).length
+
       // 6. Product summary: aggregate quantity sold per product
       const productSummary = new Map<string, { nombre: string; cantidad: number; totalVendido: number }>()
 
@@ -343,12 +356,17 @@ const pedidoRoute = new Hono()
             delivery: totalDelivery.toFixed(2),
             takeaway: totalTakeaway.toFixed(2),
             general: (totalMesa + totalDelivery + totalTakeaway).toFixed(2),
+            // Desglose por origen (POS local vs web del cliente)
+            manual: totalManual.toFixed(2),
+            web: totalWeb.toFixed(2),
           },
           cantidades: {
             mesa: mesaPedidosFinal.filter(p => p.totalItems > 0).length,
             delivery: deliveryPedidosConItems.length,
             takeaway: takeawayPedidosConItems.length,
             total: mesaPedidosFinal.filter(p => p.totalItems > 0).length + deliveryPedidosConItems.length + takeawayPedidosConItems.length,
+            manual: cantidadManual,
+            web: cantidadWeb,
           },
           productosVendidos,
           fechasDisponibles,

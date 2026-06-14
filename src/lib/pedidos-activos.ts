@@ -82,6 +82,7 @@ export const PEDIDO_LIST_PROJECTION = {
   repartidorNombre: RepartidorTable.nombre,
   grupal: PedidoUnificadoTable.grupal,
   creadoPorIa: PedidoUnificadoTable.creadoPorIa,
+  anotadoManualmente: PedidoUnificadoTable.anotadoManualmente,
 } as const
 
 /** WHERE compartido por /list y /activos (incluye la lógica de ocultar impagos). */

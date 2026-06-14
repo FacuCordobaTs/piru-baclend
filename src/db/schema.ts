@@ -197,6 +197,9 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   // Pedido creado por el agente IA de WhatsApp
   creadoPorIa: boolean("creado_por_ia").default(false).notNull(),
 
+  // Pedido anotado manualmente desde el POS del local (no se cobra comisión, a diferencia de los tomados por la web)
+  anotadoManualmente: boolean("anotado_manualmente").default(false).notNull(),
+
   // AFIP / ARCA - facturación electrónica
   afipFacturado: boolean("afip_facturado").default(false).notNull(),
   afipCae: varchar("afip_cae", { length: 14 }),

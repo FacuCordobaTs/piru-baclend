@@ -35,18 +35,38 @@ import {
   enrichItemsWithProductInfo,
 } from '../lib/pedidos-activos'
 
+const itemSchema = z.object({
+  productoId: z.number().int().positive(),
+  varianteId: z.number().int().positive().optional(),
+  cantidad: z.number().int().positive().default(1),
+  ingredientesExcluidos: z.array(z.number().int().positive()).optional(),
+  agregados: z.array(z.object({
+    id: z.number().int(),
+    nombre: z.string(),
+    precio: z.union([z.string(), z.number()]),
+  })).optional(),
+})
+
+// Campos comunes para pedidos anotados manualmente desde el POS del local
+const manualFields = {
+  // Si viene true, el pedido se marca como anotado manualmente (POS) y por defecto pagado en el local
+  anotadoManualmente: z.boolean().optional(),
+  pagado: z.boolean().optional(),
+  metodoPago: z.string().optional(),
+  sucursalId: z.number().int().positive().optional(),
+}
+
 const createDeliverySchema = z.object({
   tipo: z.literal('delivery'),
   direccion: z.string().min(5, 'La dirección es requerida'),
   nombreCliente: z.string().optional(),
   telefono: z.string().optional(),
   notas: z.string().optional(),
-  items: z.array(z.object({
-    productoId: z.number().int().positive(),
-    varianteId: z.number().int().positive().optional(),
-    cantidad: z.number().int().positive().default(1),
-    ingredientesExcluidos: z.array(z.number().int().positive()).optional(),
-  })).min(1, 'Debe agregar al menos un producto'),
+  latitud: z.union([z.string(), z.number()]).optional(),
+  longitud: z.union([z.string(), z.number()]).optional(),
+  deliveryFee: z.union([z.string(), z.number()]).optional(),
+  ...manualFields,
+  items: z.array(itemSchema).min(1, 'Debe agregar al menos un producto'),
 })
 
 const createTakeawaySchema = z.object({
@@ -54,12 +74,8 @@ const createTakeawaySchema = z.object({
   nombreCliente: z.string().optional(),
   telefono: z.string().optional(),
   notas: z.string().optional(),
-  items: z.array(z.object({
-    productoId: z.number().int().positive(),
-    varianteId: z.number().int().positive().optional(),
-    cantidad: z.number().int().positive().default(1),
-    ingredientesExcluidos: z.array(z.number().int().positive()).optional(),
-  })).min(1, 'Debe agregar al menos un producto'),
+  ...manualFields,
+  items: z.array(itemSchema).min(1, 'Debe agregar al menos un producto'),
 })
 
 const createSchema = z.discriminatedUnion('tipo', [createDeliverySchema, createTakeawaySchema])
@@ -203,14 +219,35 @@ const pedidoUnificadoRoute = new Hono()
       variantesMap = new Map(variantesRaw.map(v => [v.id, v]));
     }
 
+    // precioUnitario incluye los agregados (consistente con el flujo público)
+    const computeItemPrecio = (item: typeof items[number]) => {
+      const producto = productosMap.get(item.productoId)!
+      let precio = parseFloat(producto.precio)
+      if (item.varianteId && variantesMap.has(item.varianteId)) {
+        precio = parseFloat(variantesMap.get(item.varianteId).precio)
+      }
+      if (item.agregados?.length) {
+        for (const ag of item.agregados) {
+          precio += parseFloat(String(ag.precio ?? 0)) || 0
+        }
+      }
+      return precio
+    }
+
     let total = 0
     for (const item of items) {
-      const producto = productosMap.get(item.productoId)!
-      let precioUnitario = parseFloat(producto.precio)
-      if (item.varianteId && variantesMap.has(item.varianteId)) {
-         precioUnitario = parseFloat(variantesMap.get(item.varianteId).precio)
-      }
-      total += precioUnitario * item.cantidad
+      total += computeItemPrecio(item) * item.cantidad
+    }
+
+    const anotadoManualmente = body.anotadoManualmente === true
+    // En el POS del local el pedido se crea ya pagado por defecto
+    const pagado = body.pagado != null ? body.pagado === true : anotadoManualmente
+    const metodoPago = body.metodoPago && String(body.metodoPago).trim() !== '' ? String(body.metodoPago) : null
+
+    let deliveryFee = 0
+    if (body.tipo === 'delivery' && body.deliveryFee != null) {
+      deliveryFee = parseFloat(String(body.deliveryFee)) || 0
+      total += deliveryFee
     }
 
     const baseValues: any = {
@@ -221,32 +258,45 @@ const pedidoUnificadoRoute = new Hono()
       nombreCliente: body.nombreCliente || null,
       telefono: body.telefono || null,
       notas: body.notas || null,
+      anotadoManualmente,
+      pagado,
+      metodoPago,
+      sucursalId: body.sucursalId ?? null,
     }
 
     if (body.tipo === 'delivery') {
       baseValues.direccion = body.direccion
+      baseValues.latitud = body.latitud != null ? String(body.latitud) : null
+      baseValues.longitud = body.longitud != null ? String(body.longitud) : null
+      baseValues.deliveryFee = deliveryFee.toFixed(2)
     }
 
     const nuevoPedido = await db.insert(PedidoUnificadoTable).values(baseValues)
     const pedidoId = Number(nuevoPedido[0].insertId)
 
     for (const item of items) {
-      const producto = productosMap.get(item.productoId)!
-      let precioUnitario = parseFloat(producto.precio)
-      if (item.varianteId && variantesMap.has(item.varianteId)) {
-        precioUnitario = parseFloat(variantesMap.get(item.varianteId).precio)
-      }
-      
       await db.insert(ItemPedidoUnificadoTable).values({
         pedidoId,
         productoId: item.productoId,
         varianteId: item.varianteId || null,
         varianteNombre: item.varianteId && variantesMap.has(item.varianteId) ? variantesMap.get(item.varianteId).nombre : null,
         cantidad: item.cantidad,
-        precioUnitario: precioUnitario.toFixed(2),
+        precioUnitario: computeItemPrecio(item).toFixed(2),
         ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
+        agregados: item.agregados?.length ? item.agregados : null,
       })
     }
+
+    // Realtime + impresión para otros dispositivos del local
+    await emitirEventoPedido(db, {
+      restauranteId,
+      pedidoId,
+      tipo: body.tipo,
+      sucursalId: body.sucursalId ?? null,
+      event: 'upsert',
+      reason: 'created',
+      shouldPrint: pagado,
+    })
 
     return c.json({
       message: `Pedido de ${body.tipo} creado correctamente`,
@@ -259,6 +309,8 @@ const pedidoUnificadoRoute = new Hono()
         telefono: body.telefono,
         total: total.toFixed(2),
         estado: 'pending',
+        anotadoManualmente,
+        pagado,
       },
     }, 201)
   })
