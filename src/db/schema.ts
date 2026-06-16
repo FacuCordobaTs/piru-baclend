@@ -72,6 +72,8 @@ export const restaurante = mysqlTable("restaurante", {
   // Pedidos programados para después del horario
   permitirPedidosProgramados: boolean("permitir_pedidos_programados").default(false).notNull(),
   usarFranjasHorario: boolean("usar_franjas_horario").default(false).notNull(),
+  // Si está activo, el cliente está obligado a elegir una franja de horario (no puede pedir "para ahora")
+  soloPedidosProgramados: boolean("solo_pedidos_programados").default(false).notNull(),
 
   createdAt: timestamp("created_at").defaultNow().notNull(),
 

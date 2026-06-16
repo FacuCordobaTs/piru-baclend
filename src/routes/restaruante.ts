@@ -1146,12 +1146,47 @@ restauranteRoute.put('/toggle-usar-franjas-horario', async (c) => {
 
     const nuevoEstado = !row.usarFranjasHorario
     await db.update(RestauranteTable)
-      .set({ usarFranjasHorario: nuevoEstado })
+      .set({
+        usarFranjasHorario: nuevoEstado,
+        // Si se desactivan las franjas, no tiene sentido seguir obligando a elegir una
+        ...(nuevoEstado ? {} : { soloPedidosProgramados: false }),
+      })
       .where(eq(RestauranteTable.id, restauranteId))
 
     return c.json({ success: true, usarFranjasHorario: nuevoEstado }, 200)
   } catch (error) {
     console.error('Error toggling usarFranjasHorario:', error)
+    return c.json({ message: 'Error al cambiar configuración', success: false }, 500)
+  }
+})
+
+// Toggle obligar a los clientes a elegir una franja de horario (no pueden pedir "para ahora")
+restauranteRoute.put('/toggle-solo-pedidos-programados', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [row] = await db.select({
+      soloPedidosProgramados: RestauranteTable.soloPedidosProgramados,
+      usarFranjasHorario: RestauranteTable.usarFranjasHorario,
+    })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!row) return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+
+    const nuevoEstado = !row.soloPedidosProgramados
+    if (nuevoEstado && !row.usarFranjasHorario) {
+      return c.json({ message: 'Primero tenés que activar las franjas de horario', success: false }, 400)
+    }
+
+    await db.update(RestauranteTable)
+      .set({ soloPedidosProgramados: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({ success: true, soloPedidosProgramados: nuevoEstado }, 200)
+  } catch (error) {
+    console.error('Error toggling soloPedidosProgramados:', error)
     return c.json({ message: 'Error al cambiar configuración', success: false }, 500)
   }
 })

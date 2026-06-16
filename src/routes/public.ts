@@ -28,6 +28,49 @@ function isDiscountActive(descuento: number | null, inicio: Date | null, fin: Da
   return true
 }
 
+// Una franja deja de poder elegirse una vez que ya pasó su horario de inicio (son pedidos "para más adelante")
+function isFranjaVigente(horaInicio: string): boolean {
+  const [h, m] = horaInicio.split(':').map(Number)
+  if (Number.isNaN(h) || Number.isNaN(m)) return true
+  const now = new Date()
+  const nowMinutos = now.getHours() * 60 + now.getMinutes()
+  return nowMinutos < (h * 60 + m)
+}
+
+// Si el restaurante obliga a programar el pedido (soloPedidosProgramados), valida que se haya
+// enviado un horarioProgramado válido y, de usar franjas, que corresponda a una franja activa y vigente.
+async function validarHorarioProgramadoObligatorio(
+  db: ReturnType<typeof drizzle>,
+  restauranteId: number,
+  horarioProgramado: string | undefined,
+): Promise<string | null> {
+  const [cfg] = await db.select({
+    usarFranjasHorario: RestauranteTable.usarFranjasHorario,
+    soloPedidosProgramados: RestauranteTable.soloPedidosProgramados,
+  }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+
+  if (!cfg?.soloPedidosProgramados) return null
+  if (!horarioProgramado) return 'Debés seleccionar un horario de entrega para tu pedido'
+
+  if (cfg.usarFranjasHorario) {
+    const franjasRestaurante = await db.select({
+      horaInicio: FranjaHorarioPedidoTable.horaInicio,
+      horaFin: FranjaHorarioPedidoTable.horaFin,
+    })
+      .from(FranjaHorarioPedidoTable)
+      .where(and(
+        eq(FranjaHorarioPedidoTable.restauranteId, restauranteId),
+        eq(FranjaHorarioPedidoTable.activo, true),
+      ))
+    const valido = franjasRestaurante.some(
+      (f) => `${f.horaInicio}-${f.horaFin}` === horarioProgramado && isFranjaVigente(f.horaInicio)
+    )
+    if (!valido) return 'El horario seleccionado no es válido o ya no está disponible'
+  }
+
+  return null
+}
+
 const publicRoute = new Hono()
 
 publicRoute.get('/restaurante/:username', async (c) => {
@@ -66,6 +109,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
             permitirPedidosProgramados: RestauranteTable.permitirPedidosProgramados,
             usarFranjasHorario: RestauranteTable.usarFranjasHorario,
+            soloPedidosProgramados: RestauranteTable.soloPedidosProgramados,
         })
             .from(RestauranteTable)
             .where(eq(RestauranteTable.username, username))
@@ -112,9 +156,10 @@ publicRoute.get('/restaurante/:username', async (c) => {
             .from(HorarioRestauranteTable)
             .where(eq(HorarioRestauranteTable.restauranteId, restauranteId))
 
-        // Obtener franjas de horario activas para pedidos programados
+        // Obtener franjas de horario activas para pedidos programados (son pedidos "para más adelante",
+        // por lo que se excluyen las franjas cuyo horario de inicio ya pasó hoy)
         const franjasActivas = restauranteSeguro.usarFranjasHorario
-            ? await db.select({
+            ? (await db.select({
                 id: FranjaHorarioPedidoTable.id,
                 nombre: FranjaHorarioPedidoTable.nombre,
                 horaInicio: FranjaHorarioPedidoTable.horaInicio,
@@ -124,7 +169,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
                 .where(and(
                     eq(FranjaHorarioPedidoTable.restauranteId, restauranteId),
                     eq(FranjaHorarioPedidoTable.activo, true),
-                ))
+                ))).filter((f) => isFranjaVigente(f.horaInicio))
             : []
 
         const sucursales = await db
@@ -496,6 +541,11 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             .from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
         if (deliveryCheck && deliveryCheck.deliveryEnabled === false) {
             return c.json({ message: 'El delivery no está disponible en este momento', success: false }, 400)
+        }
+
+        const errorHorarioProgramado = await validarHorarioProgramadoObligatorio(db, restauranteId, horarioProgramado)
+        if (errorHorarioProgramado) {
+            return c.json({ message: errorHorarioProgramado, success: false }, 400)
         }
 
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
@@ -951,6 +1001,11 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             .from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
         if (takeawayCheck && takeawayCheck.takeawayEnabled === false) {
             return c.json({ message: 'El take away no está disponible en este momento', success: false }, 400)
+        }
+
+        const errorHorarioProgramado = await validarHorarioProgramadoObligatorio(db, restauranteId, horarioProgramado)
+        if (errorHorarioProgramado) {
+            return c.json({ message: errorHorarioProgramado, success: false }, 400)
         }
 
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
