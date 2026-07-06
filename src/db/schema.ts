@@ -239,6 +239,8 @@ export const producto = mysqlTable("producto", {
   descuentoFechaInicio: timestamp("descuento_fecha_inicio"),
   descuentoFechaFin: timestamp("descuento_fecha_fin"),
   tieneVariantes: boolean("tiene_variantes").default(false).notNull(),
+  // Orden manual de aparición dentro de su categoría (menor = primero). Configurable por el restaurante (drag & drop).
+  orden: int("orden").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

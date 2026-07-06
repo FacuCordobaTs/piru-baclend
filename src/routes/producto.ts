@@ -227,6 +227,7 @@ const productoRoute = new Hono()
         descuento: ProductoTable.descuento,
         descuentoFechaInicio: ProductoTable.descuentoFechaInicio,
         descuentoFechaFin: ProductoTable.descuentoFechaFin,
+        orden: ProductoTable.orden,
         createdAt: ProductoTable.createdAt,
         categoria: {
           id: CategoriaTable.id,
@@ -239,6 +240,7 @@ const productoRoute = new Hono()
       .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
       .leftJoin(ProductoPuntosTable, eq(ProductoTable.id, ProductoPuntosTable.productoId))
       .where(eq(ProductoTable.restauranteId, restauranteId))
+      .orderBy(ProductoTable.orden, ProductoTable.id)
 
     // Obtener ingredientes y etiquetas para cada producto
     const productosConDetalles = await Promise.all(
@@ -938,6 +940,40 @@ const productoRoute = new Hono()
       ))
 
     return c.json({ success: true, updated: productoIds.length }, 200)
+  })
+
+  // Reordenar productos (drag & drop): recibe los IDs en el orden deseado y les asigna
+  // un `orden` incremental. Pensado para reordenar los productos de una categoría.
+  .put('/reorder', zValidator('json', z.object({
+    productoIds: z.array(z.number().int().positive()).min(1),
+  })), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const { productoIds } = c.req.valid('json')
+
+    // Validar que todos los productos pertenecen al restaurante
+    const propios = await db
+      .select({ id: ProductoTable.id })
+      .from(ProductoTable)
+      .where(and(
+        inArray(ProductoTable.id, productoIds),
+        eq(ProductoTable.restauranteId, restauranteId),
+      ))
+    const idsPropios = new Set(propios.map(p => p.id))
+    if (idsPropios.size !== productoIds.length) {
+      return c.json({ message: 'Algunos productos no pertenecen al restaurante', success: false }, 400)
+    }
+
+    // Asignar orden = posición en el array
+    await Promise.all(
+      productoIds.map((id, index) =>
+        db.update(ProductoTable)
+          .set({ orden: index })
+          .where(and(eq(ProductoTable.id, id), eq(ProductoTable.restauranteId, restauranteId)))
+      )
+    )
+
+    return c.json({ message: 'Orden actualizado correctamente', success: true, updated: productoIds.length }, 200)
   })
 
   .delete('/delete/:id', async (c) => {

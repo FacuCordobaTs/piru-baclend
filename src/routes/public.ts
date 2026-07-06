@@ -189,6 +189,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             .select()
             .from(ProductoTable)
             .where(and(eq(ProductoTable.restauranteId, restauranteId), eq(ProductoTable.activo, true)))
+            .orderBy(ProductoTable.orden, ProductoTable.id)
 
         // Categorías y puntos en consultas separadas
         const categoriasMap = new Map<number, string>()
@@ -349,6 +350,7 @@ publicRoute.get('/sala/join/:token', async (c) => {
                 eq(ProductoTable.restauranteId, sala[0].restauranteId!),
                 eq(ProductoTable.activo, true)
             ))
+            .orderBy(ProductoTable.orden, ProductoTable.id)
 
         const productos = await Promise.all(
             productosRaw.map(async (p) => {
