@@ -9,6 +9,7 @@ import {
   restaurante as RestauranteTable,
   codigoDescuento as CodigoDescuentoTable,
   mensajeWhatsapp as MensajeWhatsappTable,
+  whatsappConversacion as WhatsappConversacionTable,
   varianteProducto as VarianteProductoTable,
   sucursal as SucursalTable,
   repartidor as RepartidorTable,
@@ -429,6 +430,17 @@ const pedidoUnificadoRoute = new Hono()
     await db
       .delete(ItemPedidoUnificadoTable)
       .where(eq(ItemPedidoUnificadoTable.pedidoId, pedidoId))
+
+    // Borrar mensajes de WhatsApp asociados (FK mensaje_whatsapp_ibfk_1)
+    await db
+      .delete(MensajeWhatsappTable)
+      .where(eq(MensajeWhatsappTable.pedidoUnificadoId, pedidoId))
+
+    // Desvincular la conversación de WhatsApp (FK whatsapp_conversacion) sin borrarla
+    await db
+      .update(WhatsappConversacionTable)
+      .set({ pedidoUnificadoId: null })
+      .where(eq(WhatsappConversacionTable.pedidoUnificadoId, pedidoId))
 
     await db
       .delete(PedidoUnificadoTable)
