@@ -13,9 +13,10 @@ import {
 
 export const restaurante = mysqlTable("restaurante", {
   id: int("id").primaryKey().autoincrement(),
-  // Nullable: las cuentas registradas por WhatsApp (self-serve) no tienen email/password al crearse.
+  // Nullable: las cuentas registradas por WhatsApp (self-serve) sólo tienen el teléfono al crearse;
+  // el nombre, email y password se completan después en el onboarding.
   email: varchar("email", { length: 255 }).unique(),
-  nombre: varchar("nombre", { length: 255 }).notNull(),
+  nombre: varchar("nombre", { length: 255 }),
   password: varchar("password", { length: 255 }),
   // true si el número fue verificado por código de WhatsApp (registro self-serve)
   telefonoVerificado: boolean("telefono_verificado").default(false).notNull(),
@@ -373,8 +374,6 @@ export const registroTelefono = mysqlTable("registro_telefono", {
   // UUID que identifica esta sesión de verificación; es lo que ve el frontend en la URL de espera.
   id: varchar("id", { length: 36 }).primaryKey(),
   telefono: varchar("telefono", { length: 50 }).notNull(),
-  // Nombre del local que el usuario ingresó al iniciar el registro (se usa al crear la cuenta).
-  nombre: varchar("nombre", { length: 255 }),
   // Hash bcrypt del código de 6 dígitos. Nunca se guarda el código en texto plano.
   codigoHash: varchar("codigo_hash", { length: 255 }).notNull(),
   // Intentos fallidos de ingreso del código (para bloquear fuerza bruta).

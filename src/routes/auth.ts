@@ -30,7 +30,6 @@ const generarCodigo = (): string => String(randomInt(0, 1_000_000)).padStart(6, 
 
 const startTelefonoSchema = z.object({
   telefono: z.string().min(8).max(20),
-  nombre: z.string().min(2).max(255),
 })
 
 const verifyTelefonoSchema = z.object({
@@ -141,7 +140,6 @@ export const authRoute = new Hono()
 // 1) Iniciar registro por WhatsApp: genera un código, lo envía y devuelve un verificationId único.
 authRoute.post('/register-telefono/start', zValidator('json', startTelefonoSchema), async (c) => {
   const db = drizzle(pool)
-  const { nombre } = c.req.valid('json')
   const telefono = normalizarTelefono(c.req.valid('json').telefono)
 
   if (telefono.length < 8) {
@@ -182,7 +180,6 @@ authRoute.post('/register-telefono/start', zValidator('json', startTelefonoSchem
     await db.insert(registroTelefono).values({
       id: verificationId,
       telefono,
-      nombre,
       codigoHash,
       expiraEn,
     })
@@ -301,8 +298,9 @@ authRoute.post('/register-telefono/verify', zValidator('json', verifyTelefonoSch
       return c.json({ message: 'Ya existe una cuenta registrada con este número de WhatsApp', success: false }, 409)
     }
 
+    // La cuenta se crea sólo con el teléfono verificado; el nombre y demás datos
+    // se completan luego en el onboarding.
     await db.insert(restaurante).values({
-      nombre: reg.nombre || 'Mi negocio',
       telefono: reg.telefono,
       telefonoVerificado: true,
       createdAt: new Date(),
