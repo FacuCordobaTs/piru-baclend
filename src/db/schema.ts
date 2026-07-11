@@ -13,9 +13,12 @@ import {
 
 export const restaurante = mysqlTable("restaurante", {
   id: int("id").primaryKey().autoincrement(),
-  email: varchar("email", { length: 255 }).unique().notNull(),
+  // Nullable: las cuentas registradas por WhatsApp (self-serve) no tienen email/password al crearse.
+  email: varchar("email", { length: 255 }).unique(),
   nombre: varchar("nombre", { length: 255 }).notNull(),
-  password: varchar("password", { length: 255 }).notNull(),
+  password: varchar("password", { length: 255 }),
+  // true si el número fue verificado por código de WhatsApp (registro self-serve)
+  telefonoVerificado: boolean("telefono_verificado").default(false).notNull(),
   direccion: varchar("direccion", { length: 255 }),
   direccionTexto: varchar("direccion_texto", { length: 512 }),
   direccionLat: decimal("direccion_lat", { precision: 10, scale: 7 }),
@@ -361,6 +364,25 @@ export const cliente = mysqlTable("cliente", {
   telefono: varchar("telefono", { length: 50 }).notNull(),
   direccion: varchar("direccion", { length: 255 }),
   puntos: int("puntos").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Verificación de registro por WhatsApp (onboarding self-serve por código OTP).
+// Cada fila es una "sesión de espera de código" única, identificada por un UUID.
+export const registroTelefono = mysqlTable("registro_telefono", {
+  // UUID que identifica esta sesión de verificación; es lo que ve el frontend en la URL de espera.
+  id: varchar("id", { length: 36 }).primaryKey(),
+  telefono: varchar("telefono", { length: 50 }).notNull(),
+  // Nombre del local que el usuario ingresó al iniciar el registro (se usa al crear la cuenta).
+  nombre: varchar("nombre", { length: 255 }),
+  // Hash bcrypt del código de 6 dígitos. Nunca se guarda el código en texto plano.
+  codigoHash: varchar("codigo_hash", { length: 255 }).notNull(),
+  // Intentos fallidos de ingreso del código (para bloquear fuerza bruta).
+  intentos: int("intentos").default(0).notNull(),
+  verificado: boolean("verificado").default(false).notNull(),
+  // Se completa una vez que la verificación crea la cuenta.
+  restauranteId: int("restaurante_id").references(() => restaurante.id),
+  expiraEn: timestamp("expira_en").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

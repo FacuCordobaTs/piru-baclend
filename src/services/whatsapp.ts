@@ -313,6 +313,78 @@ export const sendClientOrderDispatchedWhatsApp = async (c: any, data: ClientOrde
     }
 };
 
+export interface VerificationCodeData {
+    phone: string; // Número del usuario que se está registrando (formato internacional, solo dígitos)
+    code: string;  // Código de 6 dígitos
+}
+
+/**
+ * Envía el código de verificación de registro por WhatsApp usando la plantilla de
+ * autenticación `codigo_verificacion_v1` (categoría AUTHENTICATION, con botón de copiar código).
+ * Usa el número de la plataforma Piru (WHATSAPP_PHONE_ID) porque la cuenta aún no existe.
+ */
+export const sendVerificationCodeWhatsApp = async (c: any, data: VerificationCodeData, creds?: WaCredentials) => {
+    const { WHATSAPP_API_TOKEN, WHATSAPP_PHONE_ID } = env<{ WHATSAPP_API_TOKEN: string; WHATSAPP_PHONE_ID: string }>(c);
+    const phoneId = creds?.phoneId ?? WHATSAPP_PHONE_ID;
+    const token = creds?.token ?? WHATSAPP_API_TOKEN;
+
+    const url = `https://graph.facebook.com/v22.0/${phoneId}/messages`;
+
+    const body = {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: data.phone,
+        type: "template",
+        template: {
+            name: "codigo_verificacion_v1",
+            language: { code: "es_AR" },
+            components: [
+                {
+                    // En plantillas de autenticación el código es posicional {{1}} en el body
+                    type: "body",
+                    parameters: [
+                        { type: "text", text: data.code }
+                    ]
+                },
+                {
+                    // Botón "copiar código" de la plantilla de autenticación
+                    type: "button",
+                    sub_type: "url",
+                    index: 0,
+                    parameters: [
+                        { type: "text", text: data.code }
+                    ]
+                }
+            ]
+        }
+    };
+
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            console.error("❌ Error WhatsApp API (código verificación):", JSON.stringify(result, null, 2));
+            return { success: false, error: result };
+        }
+
+        console.log("✅ Código de verificación WhatsApp enviado correctamente");
+        return { success: true, id: result.messages?.[0]?.id };
+
+    } catch (error) {
+        console.error("❌ Error de red enviando código de verificación:", error);
+        return { success: false, error };
+    }
+};
+
 export interface WhatsAppTextMessage {
   phone: string;
   text: string;

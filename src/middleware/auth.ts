@@ -8,7 +8,7 @@ import { eq } from 'drizzle-orm'
 export interface AuthenticatedContext extends Context {
   user: {
     id: number
-    email: string
+    email?: string | null
     nombre?: string
     splitPayment?: boolean
     itemTracking?: boolean
