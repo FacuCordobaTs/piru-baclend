@@ -335,6 +335,147 @@ authRoute.post('/register-telefono/verify', zValidator('json', verifyTelefonoSch
   }
 })
 
+// ─────────────────────────────────────────────────────────────
+// Login por WhatsApp (para cuentas registradas con celular, que no tienen contraseña).
+// Mismo mecanismo de OTP que el registro, pero exige que la cuenta YA exista y no crea nada.
+// El reenvío usa el endpoint genérico /register-telefono/resend (opera sólo por verificationId).
+// ─────────────────────────────────────────────────────────────
+
+// 1) Iniciar login por WhatsApp: valida que exista la cuenta, envía el código y devuelve el verificationId.
+authRoute.post('/login-telefono/start', zValidator('json', startTelefonoSchema), async (c) => {
+  const db = drizzle(pool)
+  const telefono = normalizarTelefono(c.req.valid('json').telefono)
+
+  if (telefono.length < 8) {
+    return c.json({ message: 'El número de celular no es válido', success: false }, 400)
+  }
+
+  try {
+    // Debe existir una cuenta verificada con ese número; si no, no hay nada a lo que entrar.
+    const [cuenta] = await db.select({ id: restaurante.id })
+      .from(restaurante)
+      .where(and(eq(restaurante.telefono, telefono), eq(restaurante.telefonoVerificado, true)))
+      .limit(1)
+
+    if (!cuenta) {
+      return c.json({ message: 'No encontramos ninguna cuenta con este número de WhatsApp', success: false }, 404)
+    }
+
+    // Anti-spam: no permitir generar otro código para el mismo número dentro del cooldown.
+    const desde = new Date(Date.now() - OTP_REENVIO_COOLDOWN_MS)
+    const reciente = await db.select({ id: registroTelefono.id })
+      .from(registroTelefono)
+      .where(and(
+        eq(registroTelefono.telefono, telefono),
+        eq(registroTelefono.verificado, false),
+        gt(registroTelefono.createdAt, desde),
+      ))
+      .limit(1)
+
+    if (reciente.length) {
+      return c.json({ message: 'Ya te enviamos un código hace unos segundos. Esperá un momento antes de pedir otro.', success: false }, 429)
+    }
+
+    const codigo = generarCodigo()
+    const codigoHash = await bcrypt.hash(codigo, 10)
+    const verificationId = randomUUID()
+    const expiraEn = new Date(Date.now() + OTP_EXPIRACION_MS)
+
+    await db.insert(registroTelefono).values({
+      id: verificationId,
+      telefono,
+      codigoHash,
+      expiraEn,
+      restauranteId: cuenta.id,
+    })
+
+    const envio = await sendVerificationCodeWhatsApp(c, { phone: telefono, code: codigo })
+    if (!envio.success) {
+      await db.delete(registroTelefono).where(eq(registroTelefono.id, verificationId))
+      return c.json({ message: 'No pudimos enviar el código por WhatsApp. Intentá de nuevo.', success: false }, 502)
+    }
+
+    return c.json({
+      message: 'Código enviado por WhatsApp',
+      success: true,
+      verificationId,
+      telefono,
+      expiraEnSegundos: Math.floor(OTP_EXPIRACION_MS / 1000),
+    }, 200)
+  } catch (error) {
+    console.error('Error iniciando login por teléfono:', error)
+    return c.json({ message: 'Error al iniciar sesión', success: false }, 500)
+  }
+})
+
+// 2) Verificar el código y devolver el token de la cuenta existente (no crea cuentas).
+authRoute.post('/login-telefono/verify', zValidator('json', verifyTelefonoSchema), async (c) => {
+  const db = drizzle(pool)
+  const { verificationId, codigo } = c.req.valid('json')
+
+  try {
+    const [reg] = await db.select().from(registroTelefono)
+      .where(eq(registroTelefono.id, verificationId))
+      .limit(1)
+
+    if (!reg) {
+      return c.json({ message: 'Sesión de verificación no encontrada', success: false }, 404)
+    }
+    if (reg.verificado) {
+      return c.json({ message: 'Esta verificación ya fue completada', success: false }, 400)
+    }
+    if (new Date(reg.expiraEn).getTime() < Date.now()) {
+      return c.json({ message: 'El código expiró. Pedí uno nuevo.', success: false }, 400)
+    }
+    if (reg.intentos >= OTP_MAX_INTENTOS) {
+      return c.json({ message: 'Demasiados intentos fallidos. Pedí un código nuevo.', success: false }, 429)
+    }
+
+    const codigoOk = await bcrypt.compare(codigo, reg.codigoHash)
+    if (!codigoOk) {
+      await db.update(registroTelefono)
+        .set({ intentos: reg.intentos + 1 })
+        .where(eq(registroTelefono.id, verificationId))
+      const restantes = OTP_MAX_INTENTOS - (reg.intentos + 1)
+      return c.json({
+        message: restantes > 0 ? `Código incorrecto. Te quedan ${restantes} intentos.` : 'Código incorrecto. Pedí un código nuevo.',
+        success: false,
+      }, 400)
+    }
+
+    // Buscar la cuenta verificada asociada al número.
+    const [cuenta] = await db.select().from(restaurante)
+      .where(and(eq(restaurante.telefono, reg.telefono), eq(restaurante.telefonoVerificado, true)))
+      .limit(1)
+
+    if (!cuenta) {
+      return c.json({ message: 'No encontramos ninguna cuenta con este número de WhatsApp', success: false }, 404)
+    }
+
+    await db.update(registroTelefono)
+      .set({ verificado: true, restauranteId: cuenta.id })
+      .where(eq(registroTelefono.id, verificationId))
+
+    const token = await createAccessToken({ id: cuenta.id })
+    setCookie(c, 'token', token as string, {
+      path: '/',
+      sameSite: 'None',
+      secure: true,
+      maxAge: 365 * 24 * 60 * 60,
+    })
+
+    return c.json({
+      message: 'Sesión iniciada correctamente',
+      success: true,
+      restaurante: cuenta,
+      token,
+    }, 200)
+  } catch (error) {
+    console.error('Error verificando login por teléfono:', error)
+    return c.json({ message: 'Error al verificar el código', success: false }, 500)
+  }
+})
+
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
   newPassword: z.string().min(6),

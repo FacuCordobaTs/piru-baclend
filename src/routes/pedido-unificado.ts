@@ -20,7 +20,7 @@ import { eq, desc, and, or, not, inArray, notInArray, sql } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { wsManager } from '../websocket/manager'
-import { sendClientOrderDispatchedWhatsApp, sendClientPaymentConfirmedWhatsApp } from '../services/whatsapp'
+import { sendClientOrderDispatchedWhatsApp, sendClientPaymentConfirmedWhatsApp, sendOrderWhatsApp } from '../services/whatsapp'
 import {
   rowToPagoRow,
   restauranteOcultaPedidosNoPagados,
@@ -55,6 +55,9 @@ const manualFields = {
   pagado: z.boolean().optional(),
   metodoPago: z.string().optional(),
   sucursalId: z.number().int().positive().optional(),
+  // Onboarding: si viene true, además de crear el pedido se envía al WhatsApp del dueño
+  // para que vea cómo le llega un pedido real (pedido de prueba). Aditivo/retrocompatible.
+  notificarWhatsappPrueba: z.boolean().optional(),
 }
 
 const createDeliverySchema = z.object({
@@ -298,6 +301,48 @@ const pedidoUnificadoRoute = new Hono()
       reason: 'created',
       shouldPrint: pagado,
     })
+
+    // ── Onboarding: enviar el pedido de prueba al WhatsApp del dueño ──
+    // Solo se dispara con el flag explícito (no afecta al POS ni a otros clientes del backend).
+    // Se hace await para que el frontend sepa que el envío ya se intentó antes de festejar.
+    if ((body as any).notificarWhatsappPrueba === true) {
+      try {
+        const [rest] = await db
+          .select({
+            nombre: RestauranteTable.nombre,
+            direccion: RestauranteTable.direccion,
+            whatsappNumber: RestauranteTable.whatsappNumber,
+            whatsappPhoneId: RestauranteTable.whatsappPhoneId,
+            whatsappAccessToken: RestauranteTable.whatsappAccessToken,
+          })
+          .from(RestauranteTable)
+          .where(eq(RestauranteTable.id, restauranteId))
+          .limit(1)
+
+        if (rest?.whatsappNumber) {
+          const creds = rest.whatsappPhoneId && rest.whatsappAccessToken
+            ? { phoneId: rest.whatsappPhoneId, token: rest.whatsappAccessToken }
+            : undefined
+          const itemsForWa = items.map((it) => ({
+            name: productosMap.get(it.productoId)!.nombre,
+            quantity: it.cantidad,
+          }))
+          console.log('⏳ [Onboarding] Enviando pedido de prueba al WhatsApp del dueño:', rest.whatsappNumber)
+          await sendOrderWhatsApp(c, {
+            phone: rest.whatsappNumber,
+            customerName: body.nombreCliente || 'Pedido de prueba',
+            address: body.tipo === 'delivery' ? (body.direccion || 'Sin dirección') : 'Retiro en el local',
+            total: total.toFixed(2),
+            items: itemsForWa,
+            orderId: pedidoId.toString(),
+          }, creds)
+        } else {
+          console.log('ℹ️ [Onboarding] Pedido de prueba sin WhatsApp: el restaurante no tiene número configurado')
+        }
+      } catch (err) {
+        console.error('❌ [Onboarding] Error enviando WhatsApp de prueba:', err)
+      }
+    }
 
     return c.json({
       message: `Pedido de ${body.tipo} creado correctamente`,
