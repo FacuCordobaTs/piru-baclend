@@ -311,7 +311,9 @@ const pedidoUnificadoRoute = new Hono()
           .select({
             nombre: RestauranteTable.nombre,
             direccion: RestauranteTable.direccion,
+            telefono: RestauranteTable.telefono,
             whatsappNumber: RestauranteTable.whatsappNumber,
+            comprobantesWhatsapp: RestauranteTable.comprobantesWhatsapp,
             whatsappPhoneId: RestauranteTable.whatsappPhoneId,
             whatsappAccessToken: RestauranteTable.whatsappAccessToken,
           })
@@ -319,17 +321,22 @@ const pedidoUnificadoRoute = new Hono()
           .where(eq(RestauranteTable.id, restauranteId))
           .limit(1)
 
-        if (rest?.whatsappNumber) {
-          const creds = rest.whatsappPhoneId && rest.whatsappAccessToken
+        // El restaurante puede tener hasta 3 números (notificaciones / comprobantes / contacto).
+        // Para el pedido de prueba usamos el primero disponible, sanitizado a dígitos.
+        const rawPhone = rest?.whatsappNumber || rest?.comprobantesWhatsapp || rest?.telefono || null
+        const phone = rawPhone ? String(rawPhone).replace(/\D/g, '') : null
+
+        if (phone) {
+          const creds = rest?.whatsappPhoneId && rest?.whatsappAccessToken
             ? { phoneId: rest.whatsappPhoneId, token: rest.whatsappAccessToken }
             : undefined
           const itemsForWa = items.map((it) => ({
             name: productosMap.get(it.productoId)!.nombre,
             quantity: it.cantidad,
           }))
-          console.log('⏳ [Onboarding] Enviando pedido de prueba al WhatsApp del dueño:', rest.whatsappNumber)
+          console.log('⏳ [Onboarding] Enviando pedido de prueba al WhatsApp del dueño:', phone)
           await sendOrderWhatsApp(c, {
-            phone: rest.whatsappNumber,
+            phone,
             customerName: body.nombreCliente || 'Pedido de prueba',
             address: body.tipo === 'delivery' ? (body.direccion || 'Sin dirección') : 'Retiro en el local',
             total: total.toFixed(2),
