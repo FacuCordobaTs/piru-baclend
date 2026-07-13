@@ -104,7 +104,10 @@ onboardingRoute.put('/complete', zValidator('json', completeOnboardingSchema), a
 
     const updateData: any = {
       username: data.username,
-      telefono: data.phone || null,
+      // Solo actualizamos el teléfono si el onboarding lo envía explícitamente.
+      // Si no viene (p. ej. cuentas registradas por WhatsApp que ya tienen número),
+      // preservamos el existente en vez de pisarlo con null.
+      telefono: data.phone !== undefined ? (data.phone || null) : currentRestaurante[0].telefono,
       direccion: data.address || null,
       notificarClientesWhatsapp: data.notifyWhatsapp,
       whatsappNumber: data.notifyWhatsapp && data.whatsappNumber ? data.whatsappNumber : null,
