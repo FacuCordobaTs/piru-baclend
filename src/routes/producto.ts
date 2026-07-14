@@ -103,7 +103,7 @@ async function deleteImage(imageUrl: string): Promise<void> {
  * Si hay colisión, expande con más letras de la última palabra: PM → PMU → PMUZ
  * Si sigue habiendo colisión, agrega números: PM2, PM3, PM4...
  */
-function generarEtiquetaAutomatica(
+export function generarEtiquetaAutomatica(
   productoNombre: string,
   categoriaNombre: string | null,
   etiquetasExistentes: Set<string>
