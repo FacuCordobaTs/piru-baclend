@@ -34,6 +34,7 @@ import {
   buildPedidosWhere,
   selectPedidosEnriquecidos,
   enrichItemsWithProductInfo,
+  buildClienteContexto,
 } from '../lib/pedidos-activos'
 
 const itemSchema = z.object({
@@ -192,6 +193,34 @@ const pedidoUnificadoRoute = new Hono()
         totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0),
       },
     }, 200)
+  })
+
+  // Contexto histórico del cliente detrás del pedido (quién es, cuánto pidió, última vez)
+  .get('/:id/cliente-contexto', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const pedidoId = Number(c.req.param('id'))
+
+    const [pedido] = await db
+      .select({
+        id: PedidoUnificadoTable.id,
+        telefono: PedidoUnificadoTable.telefono,
+        nombreCliente: PedidoUnificadoTable.nombreCliente,
+        createdAt: PedidoUnificadoTable.createdAt,
+      })
+      .from(PedidoUnificadoTable)
+      .where(and(
+        eq(PedidoUnificadoTable.id, pedidoId),
+        eq(PedidoUnificadoTable.restauranteId, restauranteId),
+      ))
+      .limit(1)
+
+    if (!pedido) {
+      return c.json({ message: 'Pedido no encontrado', success: false }, 404)
+    }
+
+    const contexto = await buildClienteContexto(db, restauranteId, pedido)
+    return c.json({ message: 'Contexto del cliente', success: true, data: contexto }, 200)
   })
 
   // Crear pedido (delivery o takeaway)

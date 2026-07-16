@@ -79,7 +79,8 @@ const completeOnboardingSchema = z.object({
   metodosPago: z.object({
     transferenciaManual: z.boolean().optional(),
     efectivo: z.boolean().optional(),
-  }).optional()
+  }).optional(),
+  transferenciaAlias: z.string().optional()
 })
 
 onboardingRoute.put('/complete', zValidator('json', completeOnboardingSchema), async (c) => {
@@ -123,6 +124,12 @@ onboardingRoute.put('/complete', zValidator('json', completeOnboardingSchema), a
 
     if (data.proveedorPago) {
       updateData.proveedorPago = data.proveedorPago
+    }
+
+    // Alias/CBU para transferencias manuales. Solo lo tocamos si el onboarding lo envía
+    // (aditivo y retrocompatible): así no pisamos con null lo que ya tuviera la cuenta.
+    if (data.transferenciaAlias !== undefined) {
+      updateData.transferenciaAlias = data.transferenciaAlias.trim() || null
     }
     
     // We update the metodos de pago from manual config

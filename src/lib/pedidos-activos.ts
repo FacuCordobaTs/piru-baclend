@@ -216,6 +216,88 @@ export async function buildPedidoListRow(db: Db, pedidoId: number) {
   return rows[0] ?? null
 }
 
+/**
+ * Contexto histórico del cliente detrás de un pedido: cuántas veces pidió, cuánto gastó
+ * en total y cuándo fue la última vez. Es el dato que ninguna app de terceros le da al local.
+ * Identifica al cliente por teléfono (últimos 8 dígitos, tolerante a formatos) y, si no hay
+ * teléfono, cae al nombre exacto (útil para takeaways anotados a mano). Best-effort: null si
+ * no hay con qué identificarlo. No cuenta pedidos cancelados.
+ */
+export async function buildClienteContexto(
+  db: Db,
+  restauranteId: number,
+  pedido: { id: number; telefono: string | null; nombreCliente: string | null; createdAt: Date | string | null },
+) {
+  const digits = (s: string | null | undefined) => (s ? String(s).replace(/\D/g, '') : '')
+  const tel = digits(pedido.telefono)
+  const nombre = (pedido.nombreCliente || '').trim()
+
+  let matchCond: any
+  let matchedBy: 'telefono' | 'nombre'
+  if (tel.length >= 6) {
+    const tail = tel.slice(-8)
+    matchCond = sql`RIGHT(REGEXP_REPLACE(COALESCE(${PedidoUnificadoTable.telefono}, ''), '[^0-9]', ''), 8) = ${tail}`
+    matchedBy = 'telefono'
+  } else if (nombre.length >= 2) {
+    matchCond = sql`LOWER(TRIM(COALESCE(${PedidoUnificadoTable.nombreCliente}, ''))) = ${nombre.toLowerCase()}`
+    matchedBy = 'nombre'
+  } else {
+    return null
+  }
+
+  const rows = await db
+    .select({
+      id: PedidoUnificadoTable.id,
+      total: PedidoUnificadoTable.total,
+      createdAt: PedidoUnificadoTable.createdAt,
+    })
+    .from(PedidoUnificadoTable)
+    .where(and(
+      eq(PedidoUnificadoTable.restauranteId, restauranteId),
+      notInArray(PedidoUnificadoTable.estado, ['cancelled']),
+      matchCond,
+    ))
+
+  if (rows.length === 0) return null
+
+  const toTime = (d: any) => new Date(d).getTime()
+  const sorted = [...rows].sort((a, b) => {
+    const ta = toTime(a.createdAt)
+    const tb = toTime(b.createdAt)
+    return ta !== tb ? ta - tb : a.id - b.id
+  })
+
+  const idx = sorted.findIndex((r) => r.id === pedido.id)
+  const pedidoNumero = idx >= 0 ? idx + 1 : sorted.length
+  const totalPedidos = rows.length
+  const totalHistorico = Math.round(rows.reduce((s, r) => s + (parseFloat(String(r.total)) || 0), 0))
+
+  // Última vez = el pedido inmediatamente anterior a este del mismo cliente.
+  let ultimaVezAt: string | null = null
+  if (idx > 0) {
+    ultimaVezAt = new Date(sorted[idx - 1].createdAt as any).toISOString()
+  } else if (idx < 0) {
+    const prev = sorted.filter((r) => r.id !== pedido.id).pop()
+    ultimaVezAt = prev ? new Date(prev.createdAt as any).toISOString() : null
+  }
+
+  // El nivel refleja el "standing" del cliente en el momento de ESTE pedido.
+  const nivel: 'nuevo' | 'recurrente' | 'frecuente' =
+    pedidoNumero <= 1 ? 'nuevo' : pedidoNumero === 2 ? 'recurrente' : 'frecuente'
+
+  return {
+    identificado: true,
+    matchedBy,
+    nombre: nombre || null,
+    totalPedidos,
+    pedidoNumero,
+    totalHistorico,
+    ultimaVezAt,
+    primeraVez: pedidoNumero <= 1,
+    nivel,
+  }
+}
+
 export type ReasonEventoPedido = 'created' | 'paid' | 'estado' | 'updated' | 'deleted'
 
 /**
