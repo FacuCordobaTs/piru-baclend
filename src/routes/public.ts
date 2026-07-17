@@ -225,7 +225,10 @@ publicRoute.get('/restaurante/:username', async (c) => {
                         })
                         .from(ProductoAgregadoTable)
                         .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
-                        .where(eq(ProductoAgregadoTable.productoId, p.id)),
+                        .where(and(
+                            eq(ProductoAgregadoTable.productoId, p.id),
+                            eq(AgregadoTable.activo, true),
+                        )),
                     db
                         .select({
                             id: VarianteProductoTable.id,
@@ -362,7 +365,10 @@ publicRoute.get('/sala/join/:token', async (c) => {
                     db.select({ id: AgregadoTable.id, nombre: AgregadoTable.nombre, precio: AgregadoTable.precio })
                         .from(ProductoAgregadoTable)
                         .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
-                        .where(eq(ProductoAgregadoTable.productoId, p.id)),
+                        .where(and(
+                            eq(ProductoAgregadoTable.productoId, p.id),
+                            eq(AgregadoTable.activo, true),
+                        )),
                     db.select({ id: VarianteProductoTable.id, nombre: VarianteProductoTable.nombre, precio: VarianteProductoTable.precio })
                         .from(VarianteProductoTable)
                         .where(eq(VarianteProductoTable.productoId, p.id)),

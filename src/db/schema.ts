@@ -313,6 +313,8 @@ export const agregado = mysqlTable("agregado", {
   precio: decimal("precio", { precision: 10, scale: 2 })
     .default("0.00")
     .notNull(),
+  // Si está desactivado, no se ofrece en ningún producto de la app cliente
+  activo: boolean("activo").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

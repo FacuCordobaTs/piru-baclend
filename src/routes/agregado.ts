@@ -15,6 +15,7 @@ const createAgregadoSchema = z.object({
 const updateAgregadoSchema = z.object({
     nombre: z.string().min(1).max(255).optional(),
     precio: z.number().min(0).optional(),
+    activo: z.boolean().optional(),
 })
 
 const agregadoRoute = new Hono()
@@ -63,7 +64,7 @@ const agregadoRoute = new Hono()
         const db = drizzle(pool)
         const restauranteId = (c as any).user.id
         const id = Number(c.req.param('id'))
-        const { nombre, precio } = c.req.valid('json')
+        const { nombre, precio, activo } = c.req.valid('json')
 
         const existing = await db
             .select()
@@ -78,9 +79,10 @@ const agregadoRoute = new Hono()
             return c.json({ message: 'Agregado no encontrado', success: false }, 404)
         }
 
-        const updates: Partial<{ nombre: string; precio: string }> = {}
+        const updates: Partial<{ nombre: string; precio: string; activo: boolean }> = {}
         if (nombre !== undefined) updates.nombre = nombre.trim()
         if (precio !== undefined) updates.precio = precio.toString()
+        if (activo !== undefined) updates.activo = activo
 
         if (Object.keys(updates).length > 0) {
             await db
