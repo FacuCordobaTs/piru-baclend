@@ -253,12 +253,22 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
     if (direccionTexto !== undefined) updateData.direccionTexto = direccionTexto
     if (direccionLat !== undefined) updateData.direccionLat = direccionLat !== null ? String(direccionLat) : null
     if (direccionLng !== undefined) updateData.direccionLng = direccionLng !== null ? String(direccionLng) : null
-    if (telefono !== undefined) updateData.telefono = telefono
     if (deliveryFee !== undefined) updateData.deliveryFee = deliveryFee
     if (whatsappEnabled !== undefined) updateData.whatsappEnabled = whatsappEnabled
-    if (whatsappNumber !== undefined) updateData.whatsappNumber = whatsappNumber
-    if (comprobantesWhatsapp !== undefined) {
-      const v = comprobantesWhatsapp === null || comprobantesWhatsapp === '' ? null : comprobantesWhatsapp
+
+    // Número unificado del restaurante: de cara al usuario es UN solo número, pero en la DB
+    // se guardan 3 columnas legacy (telefono / whatsappNumber / comprobantesWhatsapp).
+    // Si el update toca cualquiera de ellas, seteamos las tres con el mismo valor para que
+    // nunca queden desincronizadas. El frontend solo edita `telefono`.
+    const numeroUnificado =
+      whatsappNumber !== undefined ? whatsappNumber
+        : telefono !== undefined ? telefono
+          : comprobantesWhatsapp !== undefined ? comprobantesWhatsapp
+            : undefined
+    if (numeroUnificado !== undefined) {
+      const v = numeroUnificado === null || numeroUnificado === '' ? null : numeroUnificado
+      updateData.telefono = v
+      updateData.whatsappNumber = v
       updateData.comprobantesWhatsapp = v
     }
     if (transferenciaAlias !== undefined) updateData.transferenciaAlias = transferenciaAlias
@@ -682,6 +692,37 @@ restauranteRoute.put('/toggle-modo-confirmacion-manual', async (c) => {
     }, 200)
   } catch (error) {
     console.error('Error updating modo confirmacion manual:', error)
+    return c.json({ message: 'Error al cambiar configuración', error: (error as Error).message, success: false }, 500)
+  }
+})
+
+// Toggle habilitar/deshabilitar notificaciones de pedidos nuevos al restaurante por WhatsApp
+restauranteRoute.put('/toggle-whatsapp-enabled', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [restaurante] = await db.select({ whatsappEnabled: RestauranteTable.whatsappEnabled })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    if (!restaurante) {
+      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    const nuevoEstado = !restaurante.whatsappEnabled
+
+    await db.update(RestauranteTable)
+      .set({ whatsappEnabled: nuevoEstado })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    return c.json({
+      message: nuevoEstado ? 'Notificaciones al local por WhatsApp activadas' : 'Notificaciones al local por WhatsApp desactivadas',
+      success: true,
+      whatsappEnabled: nuevoEstado
+    }, 200)
+  } catch (error) {
+    console.error('Error updating whatsapp enabled:', error)
     return c.json({ message: 'Error al cambiar configuración', error: (error as Error).message, success: false }, 500)
   }
 })

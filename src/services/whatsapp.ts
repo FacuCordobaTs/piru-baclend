@@ -1,4 +1,12 @@
 import { env } from 'hono/adapter'
+import { drizzle } from 'drizzle-orm/mysql2'
+import { eq } from 'drizzle-orm'
+import { pool } from '../db'
+import {
+    restaurante as RestauranteTable,
+    pedidoUnificado as PedidoUnificadoTable,
+    mensajeWhatsapp as MensajeWhatsappTable,
+} from '../db/schema'
 
 // Interfaces para tipado estricto
 interface OrderItem {
@@ -382,6 +390,75 @@ export const sendVerificationCodeWhatsApp = async (c: any, data: VerificationCod
     } catch (error) {
         console.error("❌ Error de red enviando código de verificación:", error);
         return { success: false, error };
+    }
+};
+
+/**
+ * Notifica al cliente por WhatsApp que su pago fue confirmado (template `pedido_confirmado_v1`).
+ * Pensado para llamarse desde los webhooks de pago online (MercadoPago, Cucuru, Talo) una vez
+ * acreditado el pago, ya que en esos flujos la creación del pedido no notifica al cliente
+ * (espera la confirmación del webhook — ver `debeEsperarWebhookParaNotificar`).
+ *
+ * Respeta la config: solo envía si el restaurante tiene `notificarClientesWhatsapp`, el pedido
+ * pidió `notificarWhatsapp`, hay teléfono, y NO está en modo confirmación manual (en ese modo el
+ * aviso lo dispara el admin desde el panel con la demora). Se auto-abastece de la DB para que el
+ * call site solo tenga que pasar los IDs. Idempotente ante fallos: no rompe el flujo del webhook.
+ */
+export const notificarClientePagoConfirmado = async (
+    c: any,
+    { restauranteId, pedidoId }: { restauranteId: number; pedidoId: number }
+): Promise<void> => {
+    const db = drizzle(pool);
+
+    const [row] = await db
+        .select({
+            telefono: PedidoUnificadoTable.telefono,
+            notificarWhatsapp: PedidoUnificadoTable.notificarWhatsapp,
+            nombreCliente: PedidoUnificadoTable.nombreCliente,
+            total: PedidoUnificadoTable.total,
+            demoraMinutos: PedidoUnificadoTable.demoraMinutos,
+            horarioProgramado: PedidoUnificadoTable.horarioProgramado,
+            nombreRestaurante: RestauranteTable.nombre,
+            notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
+            modoConfirmacionManual: RestauranteTable.modoConfirmacionManual,
+            whatsappPhoneId: RestauranteTable.whatsappPhoneId,
+            whatsappAccessToken: RestauranteTable.whatsappAccessToken,
+        })
+        .from(PedidoUnificadoTable)
+        .leftJoin(RestauranteTable, eq(PedidoUnificadoTable.restauranteId, RestauranteTable.id))
+        .where(eq(PedidoUnificadoTable.id, pedidoId))
+        .limit(1);
+
+    if (!row) return;
+    if (!row.notificarClientesWhatsapp || !row.notificarWhatsapp || !row.telefono || row.modoConfirmacionManual) {
+        console.log(`📲 [Notificar Cliente Pago] Pedido #${pedidoId} omitido (notificarClientesWhatsapp=${row.notificarClientesWhatsapp}, notificarWhatsapp=${row.notificarWhatsapp}, telefono=${!!row.telefono}, modoManual=${row.modoConfirmacionManual})`);
+        return;
+    }
+
+    const creds = row.whatsappPhoneId && row.whatsappAccessToken
+        ? { phoneId: row.whatsappPhoneId, token: row.whatsappAccessToken }
+        : undefined;
+
+    const result = await sendClientPaymentConfirmedWhatsApp(c, {
+        phone: row.telefono,
+        customerName: row.nombreCliente || 'Cliente',
+        restaurantName: row.nombreRestaurante || 'El local',
+        total: row.total,
+        orderId: pedidoId.toString(),
+        demoraMinutos: row.demoraMinutos ?? undefined,
+        horarioProgramado: row.horarioProgramado ?? undefined,
+    }, creds);
+
+    if (result.success) {
+        await db.insert(MensajeWhatsappTable).values({
+            pedidoUnificadoId: pedidoId,
+            restauranteId,
+            telefono: row.telefono,
+            tipo: 'pedido_confirmado',
+        }).catch((err) => console.error('❌ [Notificar Cliente Pago] Error registrando mensaje:', err));
+        console.log(`📲 [Notificar Cliente Pago] ✅ Cliente ${row.telefono} notificado (pedido #${pedidoId})`);
+    } else {
+        console.error(`📲 [Notificar Cliente Pago] ❌ Error enviando a ${row.telefono} (pedido #${pedidoId}):`, result.error);
     }
 };
 

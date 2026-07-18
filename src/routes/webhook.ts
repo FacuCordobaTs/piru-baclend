@@ -14,7 +14,7 @@ import {
   whatsappConversacion as WhatsappConversacionTable
 } from '../db/schema'
 import { wsManager } from '../websocket/manager'
-import { sendOrderWhatsApp, sendWhatsAppText } from '../services/whatsapp'
+import { sendOrderWhatsApp, sendWhatsAppText, notificarClientePagoConfirmado } from '../services/whatsapp'
 import { consultarPagoTalo } from '../services/talo'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { procesarMensajeIA, notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
@@ -213,6 +213,10 @@ const cucuruWebhookHandler = async (c: any) => {
           telefono: pedido.telefono,
         }).catch(err => console.error('❌ [WhatsApp IA] Error notificando pago Cucuru:', err))
       }
+
+      // Avisar al cliente que su pago fue confirmado (config del restaurante/pedido)
+      notificarClientePagoConfirmado(c, { restauranteId: targetRestauranteId, pedidoId: pedido.id })
+        .catch(err => console.error('❌ [WhatsApp] Error notificando pago confirmado al cliente (Cucuru):', err))
 
       // WhatsApp Notification
       try {
@@ -478,6 +482,10 @@ webhookRoute.post('/talo', async (c) => {
       });
       wsManager.notifyPublicClientPayment(pedido.tipo, pedido.id);
       console.log('[Talo Webhook] WebSockets enviados. Verificando WhatsApp...');
+
+      // Avisar al cliente que su pago fue confirmado (config del restaurante/pedido)
+      notificarClientePagoConfirmado({ env: envForBackground } as any, { restauranteId, pedidoId: pedido.id })
+        .catch(err => console.error('❌ [WhatsApp] Error notificando pago confirmado al cliente (Talo):', err))
 
       const restaurante = await db
         .select({

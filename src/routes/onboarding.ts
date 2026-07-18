@@ -104,19 +104,27 @@ onboardingRoute.put('/complete', zValidator('json', completeOnboardingSchema), a
       return c.json({ success: false, message: 'El alias ya está en uso' }, 400)
     }
 
+    // Número de notificaciones: de cara al usuario es UN solo número, pero en la DB se guardan
+    // 3 columnas legacy (telefono / whatsappNumber / comprobantesWhatsapp). Las unificamos con el
+    // mismo valor. Si el usuario activó notificaciones y dio un número, ese es el número unificado.
+    const numeroNotif = data.notifyWhatsapp && data.whatsappNumber ? data.whatsappNumber : null
+
     const updateData: any = {
       username: data.username,
       // El nombre lo elige el usuario en el onboarding. Si no viene (clientes viejos),
       // preservamos el existente en vez de borrarlo.
       nombre: data.nombre !== undefined ? (data.nombre || currentRestaurante[0].nombre) : currentRestaurante[0].nombre,
-      // Solo actualizamos el teléfono si el onboarding lo envía explícitamente.
-      // Si no viene (p. ej. cuentas registradas por WhatsApp que ya tienen número),
-      // preservamos el existente en vez de pisarlo con null.
-      telefono: data.phone !== undefined ? (data.phone || null) : currentRestaurante[0].telefono,
+      // El teléfono queda unificado con el número de notificaciones. Si no hay número de
+      // notificaciones, caemos al phone enviado o al existente (no lo pisamos con null).
+      telefono: numeroNotif ?? (data.phone !== undefined ? (data.phone || null) : currentRestaurante[0].telefono),
       // Igual criterio para la dirección: no la pisamos con null si el onboarding no la envía.
       direccion: data.address ? data.address : currentRestaurante[0].direccion,
       notificarClientesWhatsapp: data.notifyWhatsapp,
-      whatsappNumber: data.notifyWhatsapp && data.whatsappNumber ? data.whatsappNumber : null,
+      // whatsappEnabled = notificaciones de pedidos nuevos al local. Sin esto el gate de envío
+      // (whatsappEnabled && whatsappNumber) nunca se cumple y el local no recibe los avisos.
+      whatsappEnabled: data.notifyWhatsapp,
+      whatsappNumber: numeroNotif,
+      comprobantesWhatsapp: numeroNotif ?? currentRestaurante[0].comprobantesWhatsapp,
       deliveryFee: data.deliveryPrice || "0",
       orderGroupEnabled: data.friendsOrdering ?? true,
       completedOnboarding: true

@@ -6,7 +6,7 @@ import { eq, and, inArray } from 'drizzle-orm'
 import { authMiddleware } from '../middleware/auth'
 import { obtenerTokenValido, refrescarTokenRestaurante } from '../utils/mercadopago'
 import { wsManager } from '../websocket/manager'
-import { sendOrderWhatsApp } from '../services/whatsapp'
+import { sendOrderWhatsApp, notificarClientePagoConfirmado } from '../services/whatsapp'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
 
@@ -416,6 +416,10 @@ mercadopagoRoute.post('/process-brick', async (c) => {
         }).catch(err => console.error('❌ [WhatsApp IA] Error notificando pago MP Bricks:', err))
       }
 
+      // Avisar al cliente que su pago fue confirmado (config del restaurante/pedido)
+      notificarClientePagoConfirmado(c, { restauranteId: pedido.restauranteId!, pedidoId })
+        .catch(err => console.error('❌ [WhatsApp] Error notificando pago confirmado al cliente (MP Bricks):', err))
+
       try {
         const restaurante = await db.select({
           whatsappEnabled: RestauranteTable.whatsappEnabled,
@@ -701,6 +705,10 @@ mercadopagoRoute.post('/webhook', async (c) => {
           telefono: pedidoData.telefono,
         }).catch(err => console.error('❌ [WhatsApp IA] Error notificando pago MP Webhook:', err))
       }
+
+      // Avisar al cliente que su pago fue confirmado (config del restaurante/pedido)
+      notificarClientePagoConfirmado(c, { restauranteId, pedidoId })
+        .catch(err => console.error('❌ [WhatsApp] Error notificando pago confirmado al cliente (MP Webhook):', err))
 
       try {
         const restaurante = await db.select({
