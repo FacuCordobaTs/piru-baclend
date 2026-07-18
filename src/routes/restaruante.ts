@@ -1214,14 +1214,16 @@ restauranteRoute.post('/franjas-horario', zValidator('json', z.object({
   horaInicio: z.string().regex(/^\d{2}:\d{2}$/),
   horaFin: z.string().regex(/^\d{2}:\d{2}$/),
   activo: z.boolean().optional().default(true),
+  // Cupo de pedidos pagados por día para esta franja. null/omitido = sin límite.
+  cupo: z.number().int().positive().nullable().optional(),
 })), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre, horaInicio, horaFin, activo } = c.req.valid('json')
+  const { nombre, horaInicio, horaFin, activo, cupo } = c.req.valid('json')
 
   try {
     const [result] = await db.insert(FranjaHorarioPedidoTable)
-      .values({ restauranteId, nombre, horaInicio, horaFin, activo })
+      .values({ restauranteId, nombre, horaInicio, horaFin, activo, cupo: cupo ?? null })
 
     const [franja] = await db.select()
       .from(FranjaHorarioPedidoTable)
@@ -1240,6 +1242,8 @@ restauranteRoute.put('/franjas-horario/:id', zValidator('json', z.object({
   horaInicio: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   horaFin: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   activo: z.boolean().optional(),
+  // Cupo de pedidos pagados por día. null = sin límite.
+  cupo: z.number().int().positive().nullable().optional(),
 })), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id

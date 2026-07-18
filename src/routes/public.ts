@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { pool } from '../db'
 import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable, codigoDescuento as CodigoDescuentoTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
-import { eq, and, desc, or, lt, isNull, sql, inArray } from 'drizzle-orm'
+import { eq, and, desc, or, lt, ne, isNull, sql, inArray } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp, sendClientPaymentConfirmedWhatsApp } from '../services/whatsapp'
 import { productoPuntos as ProductoPuntosTable, zonaDelivery as ZonaDeliveryTable } from '../db/schema'
@@ -157,20 +157,53 @@ publicRoute.get('/restaurante/:username', async (c) => {
             .where(eq(HorarioRestauranteTable.restauranteId, restauranteId))
 
         // Obtener franjas de horario activas para pedidos programados (son pedidos "para más adelante",
-        // por lo que se excluyen las franjas cuyo horario de inicio ya pasó hoy)
-        const franjasActivas = restauranteSeguro.usarFranjasHorario
-            ? (await db.select({
+        // por lo que se excluyen las franjas cuyo horario de inicio ya pasó hoy).
+        // Además, si la franja tiene un cupo, se excluye cuando ya se alcanzó la cantidad de
+        // pedidos pagados de hoy para esa franja (no se ofrece más, pero NO bloquea crear pedidos ni pagos).
+        let franjasActivas: { id: number; nombre: string; horaInicio: string; horaFin: string }[] = []
+        if (restauranteSeguro.usarFranjasHorario) {
+            const franjasRaw = (await db.select({
                 id: FranjaHorarioPedidoTable.id,
                 nombre: FranjaHorarioPedidoTable.nombre,
                 horaInicio: FranjaHorarioPedidoTable.horaInicio,
                 horaFin: FranjaHorarioPedidoTable.horaFin,
+                cupo: FranjaHorarioPedidoTable.cupo,
             })
                 .from(FranjaHorarioPedidoTable)
                 .where(and(
                     eq(FranjaHorarioPedidoTable.restauranteId, restauranteId),
                     eq(FranjaHorarioPedidoTable.activo, true),
                 ))).filter((f) => isFranjaVigente(f.horaInicio))
-            : []
+
+            // Solo hace falta contar pedidos si hay al menos una franja con cupo
+            const hayCupos = franjasRaw.some((f) => f.cupo != null)
+            const conteoPorFranja = new Map<string, number>()
+            if (hayCupos) {
+                const conteos = await db.select({
+                    horario: PedidoUnificadoTable.horarioProgramado,
+                    total: sql<number>`count(*)`,
+                })
+                    .from(PedidoUnificadoTable)
+                    .where(and(
+                        eq(PedidoUnificadoTable.restauranteId, restauranteId),
+                        eq(PedidoUnificadoTable.pagado, true),
+                        ne(PedidoUnificadoTable.estado, 'cancelled'),
+                        sql`DATE(${PedidoUnificadoTable.createdAt}) = CURDATE()`,
+                    ))
+                    .groupBy(PedidoUnificadoTable.horarioProgramado)
+                for (const row of conteos) {
+                    if (row.horario) conteoPorFranja.set(row.horario, Number(row.total))
+                }
+            }
+
+            franjasActivas = franjasRaw
+                .filter((f) => {
+                    if (f.cupo == null) return true
+                    const usados = conteoPorFranja.get(`${f.horaInicio}-${f.horaFin}`) ?? 0
+                    return usados < f.cupo
+                })
+                .map(({ id, nombre, horaInicio, horaFin }) => ({ id, nombre, horaInicio, horaFin }))
+        }
 
         const sucursales = await db
             .select({

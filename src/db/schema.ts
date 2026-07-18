@@ -431,6 +431,10 @@ export const franjaHorarioPedido = mysqlTable("franja_horario_pedido", {
   horaInicio: varchar("hora_inicio", { length: 5 }).notNull(), // "HH:mm"
   horaFin: varchar("hora_fin", { length: 5 }).notNull(), // "HH:mm"
   activo: boolean("activo").default(true).notNull(),
+  // Cupo de pedidos pagados que admite la franja por día. null = sin límite.
+  // Cuando la cantidad de pedidos pagados de hoy en esta franja alcanza el cupo,
+  // la franja deja de ofrecerse en la app cliente (no bloquea creación de pedidos ni pagos).
+  cupo: int("cupo"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
