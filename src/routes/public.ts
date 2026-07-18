@@ -945,7 +945,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
         if (!waitToPay) {
             try {
-                if (resRestaurante[0]?.notificarClientesWhatsapp && notificarWhatsapp && telefono && !resRestaurante[0]?.modoConfirmacionManual) {
+                if (resRestaurante[0]?.notificarClientesWhatsapp && telefono && !resRestaurante[0]?.modoConfirmacionManual) {
                     console.log("⏳ Iniciando envío de WhatsApp al cliente:", telefono);
                     sendClientPaymentConfirmedWhatsApp(c, {
                         phone: telefono,
@@ -1364,7 +1364,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
 
         if (!waitToPay) {
             try {
-                if (resRestaurante[0]?.notificarClientesWhatsapp && notificarWhatsapp && telefono && !resRestaurante[0]?.modoConfirmacionManual) {
+                if (resRestaurante[0]?.notificarClientesWhatsapp && telefono && !resRestaurante[0]?.modoConfirmacionManual) {
                     console.log("⏳ Iniciando envío de WhatsApp al cliente:", telefono);
                     sendClientPaymentConfirmedWhatsApp(c, {
                         phone: telefono,

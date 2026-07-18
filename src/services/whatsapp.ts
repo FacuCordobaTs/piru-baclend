@@ -399,10 +399,12 @@ export const sendVerificationCodeWhatsApp = async (c: any, data: VerificationCod
  * acreditado el pago, ya que en esos flujos la creación del pedido no notifica al cliente
  * (espera la confirmación del webhook — ver `debeEsperarWebhookParaNotificar`).
  *
- * Respeta la config: solo envía si el restaurante tiene `notificarClientesWhatsapp`, el pedido
- * pidió `notificarWhatsapp`, hay teléfono, y NO está en modo confirmación manual (en ese modo el
- * aviso lo dispara el admin desde el panel con la demora). Se auto-abastece de la DB para que el
- * call site solo tenga que pasar los IDs. Idempotente ante fallos: no rompe el flujo del webhook.
+ * Respeta la config: solo envía si el restaurante tiene `notificarClientesWhatsapp`, hay teléfono,
+ * y NO está en modo confirmación manual (en ese modo el aviso lo dispara el admin desde el panel
+ * con la demora). NO se exige el flag por-pedido `notificarWhatsapp`: es redundante con el setting
+ * del restaurante (los clientes lo mandan siempre en true) y depende de la versión del build del
+ * cliente, así que exigirlo generaba falsos negativos. La fuente de verdad es el restaurante.
+ * Se auto-abastece de la DB para que el call site solo pase los IDs. Idempotente ante fallos.
  */
 export const notificarClientePagoConfirmado = async (
     c: any,
@@ -413,7 +415,6 @@ export const notificarClientePagoConfirmado = async (
     const [row] = await db
         .select({
             telefono: PedidoUnificadoTable.telefono,
-            notificarWhatsapp: PedidoUnificadoTable.notificarWhatsapp,
             nombreCliente: PedidoUnificadoTable.nombreCliente,
             total: PedidoUnificadoTable.total,
             demoraMinutos: PedidoUnificadoTable.demoraMinutos,
@@ -430,8 +431,8 @@ export const notificarClientePagoConfirmado = async (
         .limit(1);
 
     if (!row) return;
-    if (!row.notificarClientesWhatsapp || !row.notificarWhatsapp || !row.telefono || row.modoConfirmacionManual) {
-        console.log(`📲 [Notificar Cliente Pago] Pedido #${pedidoId} omitido (notificarClientesWhatsapp=${row.notificarClientesWhatsapp}, notificarWhatsapp=${row.notificarWhatsapp}, telefono=${!!row.telefono}, modoManual=${row.modoConfirmacionManual})`);
+    if (!row.notificarClientesWhatsapp || !row.telefono || row.modoConfirmacionManual) {
+        console.log(`📲 [Notificar Cliente Pago] Pedido #${pedidoId} omitido (notificarClientesWhatsapp=${row.notificarClientesWhatsapp}, telefono=${!!row.telefono}, modoManual=${row.modoConfirmacionManual})`);
         return;
     }
 
