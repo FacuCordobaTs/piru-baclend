@@ -10,6 +10,7 @@ import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client
 import UUID = require("uuid-js")
 import { configurarWebhookCliente } from '../services/cucuru'
 import { resolveMetodosPagoConfig, type MetodosPagoConfig } from '../lib/metodos-pago'
+import { contarPedidosPagadosFranja } from '../lib/franjas'
 
 // Configuración de R2
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID
@@ -1209,7 +1210,6 @@ restauranteRoute.put('/toggle-solo-pedidos-programados', async (c) => {
   try {
     const [row] = await db.select({
       soloPedidosProgramados: RestauranteTable.soloPedidosProgramados,
-      usarFranjasHorario: RestauranteTable.usarFranjasHorario,
     })
       .from(RestauranteTable)
       .where(eq(RestauranteTable.id, restauranteId))
@@ -1217,12 +1217,29 @@ restauranteRoute.put('/toggle-solo-pedidos-programados', async (c) => {
     if (!row) return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
 
     const nuevoEstado = !row.soloPedidosProgramados
-    if (nuevoEstado && !row.usarFranjasHorario) {
-      return c.json({ message: 'Primero tenés que activar las franjas de horario', success: false }, 400)
+
+    // "Obligar a elegir franja" solo tiene sentido si existe al menos una franja activa.
+    // Se valida contra las franjas reales (tabla franjaHorarioPedido), no contra el flag
+    // legacy `usarFranjasHorario`, que el editor nuevo no setea manualmente.
+    if (nuevoEstado) {
+      const franjasActivas = await db.select({ id: FranjaHorarioPedidoTable.id })
+        .from(FranjaHorarioPedidoTable)
+        .where(and(
+          eq(FranjaHorarioPedidoTable.restauranteId, restauranteId),
+          eq(FranjaHorarioPedidoTable.activo, true),
+        ))
+      if (franjasActivas.length === 0) {
+        return c.json({ message: 'Primero tenés que activar al menos una franja de horario', success: false }, 400)
+      }
     }
 
     await db.update(RestauranteTable)
-      .set({ soloPedidosProgramados: nuevoEstado })
+      .set({
+        soloPedidosProgramados: nuevoEstado,
+        // El checkout público muestra franjas según `usarFranjasHorario`; al obligar a
+        // programar con franjas activas, garantizamos que ese flag quede sincronizado.
+        ...(nuevoEstado ? { usarFranjasHorario: true } : {}),
+      })
       .where(eq(RestauranteTable.id, restauranteId))
 
     return c.json({ success: true, soloPedidosProgramados: nuevoEstado }, 200)
@@ -1238,9 +1255,17 @@ restauranteRoute.get('/franjas-horario', async (c) => {
   const restauranteId = (c as any).user.id
 
   try {
-    const franjas = await db.select()
+    const franjasRaw = await db.select()
       .from(FranjaHorarioPedidoTable)
       .where(eq(FranjaHorarioPedidoTable.restauranteId, restauranteId))
+
+    // Adjuntar el uso actual del cupo (pedidos pagados de hoy) a cada franja con cupo.
+    const franjas = await Promise.all(
+      franjasRaw.map(async (f) => ({
+        ...f,
+        cupoUsado: f.cupo == null ? null : await contarPedidosPagadosFranja(db, restauranteId, f),
+      }))
+    )
 
     return c.json({ franjas, success: true }, 200)
   } catch (error) {
@@ -1265,6 +1290,12 @@ restauranteRoute.post('/franjas-horario', zValidator('json', z.object({
   try {
     const [result] = await db.insert(FranjaHorarioPedidoTable)
       .values({ restauranteId, nombre, horaInicio, horaFin, activo, cupo: cupo ?? null })
+
+    // El editor nuevo trabaja siempre en modo franjas: al existir franjas, el checkout
+    // público debe ofrecerlas. Sincronizamos el flag legacy `usarFranjasHorario`.
+    await db.update(RestauranteTable)
+      .set({ usarFranjasHorario: true })
+      .where(eq(RestauranteTable.id, restauranteId))
 
     const [franja] = await db.select()
       .from(FranjaHorarioPedidoTable)
@@ -1302,6 +1333,13 @@ restauranteRoute.put('/franjas-horario/:id', zValidator('json', z.object({
       .set(data)
       .where(eq(FranjaHorarioPedidoTable.id, franjaId))
 
+    // Al activar una franja garantizamos que el checkout público la ofrezca (flag legacy).
+    if (data.activo === true) {
+      await db.update(RestauranteTable)
+        .set({ usarFranjasHorario: true })
+        .where(eq(RestauranteTable.id, restauranteId))
+    }
+
     const [franja] = await db.select()
       .from(FranjaHorarioPedidoTable)
       .where(eq(FranjaHorarioPedidoTable.id, franjaId))
@@ -1333,6 +1371,37 @@ restauranteRoute.delete('/franjas-horario/:id', async (c) => {
   } catch (error) {
     console.error('Error deleting franja:', error)
     return c.json({ message: 'Error al eliminar franja', success: false }, 500)
+  }
+})
+
+// POST resetear el cupo de una franja: a partir de ahora deja de contar los pedidos
+// pagados anteriores, liberando la franja para nuevos pedidos.
+restauranteRoute.post('/franjas-horario/:id/reset-cupo', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const franjaId = parseInt(c.req.param('id'))
+
+  try {
+    const [existing] = await db.select()
+      .from(FranjaHorarioPedidoTable)
+      .where(and(eq(FranjaHorarioPedidoTable.id, franjaId), eq(FranjaHorarioPedidoTable.restauranteId, restauranteId)))
+
+    if (!existing) return c.json({ message: 'Franja no encontrada', success: false }, 404)
+
+    await db.update(FranjaHorarioPedidoTable)
+      .set({ cupoReseteadoAt: new Date() })
+      .where(eq(FranjaHorarioPedidoTable.id, franjaId))
+
+    const [franja] = await db.select()
+      .from(FranjaHorarioPedidoTable)
+      .where(eq(FranjaHorarioPedidoTable.id, franjaId))
+
+    const cupoUsado = franja.cupo == null ? null : await contarPedidosPagadosFranja(db, restauranteId, franja)
+
+    return c.json({ franja: { ...franja, cupoUsado }, success: true }, 200)
+  } catch (error) {
+    console.error('Error resetting franja cupo:', error)
+    return c.json({ message: 'Error al resetear el cupo', success: false }, 500)
   }
 })
 

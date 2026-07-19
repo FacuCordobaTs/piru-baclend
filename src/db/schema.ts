@@ -435,6 +435,9 @@ export const franjaHorarioPedido = mysqlTable("franja_horario_pedido", {
   // Cuando la cantidad de pedidos pagados de hoy en esta franja alcanza el cupo,
   // la franja deja de ofrecerse en la app cliente (no bloquea creación de pedidos ni pagos).
   cupo: int("cupo"),
+  // Momento del último reseteo manual del cupo. Al contar los pedidos pagados de la franja,
+  // solo se cuentan los creados a partir de este instante (permite "liberar" la franja a mano).
+  cupoReseteadoAt: timestamp("cupo_reseteado_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

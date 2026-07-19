@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { pool } from '../db'
 import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable, codigoDescuento as CodigoDescuentoTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
-import { eq, and, desc, or, lt, ne, isNull, sql, inArray } from 'drizzle-orm'
+import { eq, and, desc, or, lt, isNull, sql, inArray } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp, sendClientPaymentConfirmedWhatsApp } from '../services/whatsapp'
 import { productoPuntos as ProductoPuntosTable, zonaDelivery as ZonaDeliveryTable } from '../db/schema'
@@ -19,6 +19,7 @@ import {
   rowToPagoRow,
 } from '../lib/metodos-pago'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
+import { contarPedidosPagadosFranja } from '../lib/franjas'
 
 function isDiscountActive(descuento: number | null, inicio: Date | null, fin: Date | null): boolean {
   if (!descuento || descuento === 0) return false
@@ -168,6 +169,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
                 horaInicio: FranjaHorarioPedidoTable.horaInicio,
                 horaFin: FranjaHorarioPedidoTable.horaFin,
                 cupo: FranjaHorarioPedidoTable.cupo,
+                cupoReseteadoAt: FranjaHorarioPedidoTable.cupoReseteadoAt,
             })
                 .from(FranjaHorarioPedidoTable)
                 .where(and(
@@ -175,33 +177,16 @@ publicRoute.get('/restaurante/:username', async (c) => {
                     eq(FranjaHorarioPedidoTable.activo, true),
                 ))).filter((f) => isFranjaVigente(f.horaInicio))
 
-            // Solo hace falta contar pedidos si hay al menos una franja con cupo
-            const hayCupos = franjasRaw.some((f) => f.cupo != null)
-            const conteoPorFranja = new Map<string, number>()
-            if (hayCupos) {
-                const conteos = await db.select({
-                    horario: PedidoUnificadoTable.horarioProgramado,
-                    total: sql<number>`count(*)`,
+            const disponibles = await Promise.all(
+                franjasRaw.map(async (f) => {
+                    if (f.cupo == null) return f
+                    const usados = await contarPedidosPagadosFranja(db, restauranteId, f)
+                    return usados < f.cupo ? f : null
                 })
-                    .from(PedidoUnificadoTable)
-                    .where(and(
-                        eq(PedidoUnificadoTable.restauranteId, restauranteId),
-                        eq(PedidoUnificadoTable.pagado, true),
-                        ne(PedidoUnificadoTable.estado, 'cancelled'),
-                        sql`DATE(${PedidoUnificadoTable.createdAt}) = CURDATE()`,
-                    ))
-                    .groupBy(PedidoUnificadoTable.horarioProgramado)
-                for (const row of conteos) {
-                    if (row.horario) conteoPorFranja.set(row.horario, Number(row.total))
-                }
-            }
+            )
 
-            franjasActivas = franjasRaw
-                .filter((f) => {
-                    if (f.cupo == null) return true
-                    const usados = conteoPorFranja.get(`${f.horaInicio}-${f.horaFin}`) ?? 0
-                    return usados < f.cupo
-                })
+            franjasActivas = disponibles
+                .filter((f): f is NonNullable<typeof f> => f !== null)
                 .map(({ id, nombre, horaInicio, horaFin }) => ({ id, nombre, horaInicio, horaFin }))
         }
 
