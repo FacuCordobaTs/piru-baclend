@@ -12,6 +12,7 @@ import {
   getPack,
   crearRecargaPendiente,
   setRecargaPreferencia,
+  resolverPackAutoRecarga,
 } from '../lib/mensajes-wallet'
 
 // Pago de recargas: van a la cuenta de la PLATAFORMA (Piru), no a la del restaurante,
@@ -23,6 +24,79 @@ const MP_WEBHOOK_URL = 'https://api.piru.app/api/mp/webhook'
 const mensajesRoute = new Hono()
 
 mensajesRoute.use('*', authMiddleware)
+
+type PackRow = { id: number; categoria: string; nombre: string; cantidad: number; precio: string | number }
+
+/**
+ * Crea la recarga pendiente + la preferencia de Checkout Pro (a la cuenta de Piru, sin
+ * marketplace_fee) para comprar un pack. Compartido por la recarga manual y la auto-recarga.
+ * El crédito se aplica recién en el webhook al aprobarse el pago.
+ */
+async function iniciarCheckoutRecarga(
+  db: ReturnType<typeof drizzle>,
+  restauranteId: number,
+  pack: PackRow,
+  origen: 'manual' | 'auto',
+): Promise<
+  | { ok: true; data: { recargaId: number; url_pago: string; preference_id: string; cantidad: number; monto: string } }
+  | { ok: false; status: 502; message: string }
+> {
+  const categoria = pack.categoria as 'utility' | 'marketing'
+  const precio = parseFloat(String(pack.precio))
+
+  const recargaId = await crearRecargaPendiente(db, restauranteId, {
+    categoria,
+    cantidad: pack.cantidad,
+    monto: pack.precio,
+    packRecargaId: pack.id,
+    origen,
+  })
+
+  const externalReference = `piru-recarga-${recargaId}`
+  const backUrl = `${ADMIN_URL}/dashboard/ajustes/plan?recarga=success`
+
+  const mpResponse = await fetch('https://api.mercadopago.com/checkout/preferences', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${MP_PLATFORM_ACCESS_TOKEN}`,
+    },
+    body: JSON.stringify({
+      items: [{
+        title: `${pack.nombre} · ${pack.cantidad} mensajes`,
+        quantity: 1,
+        currency_id: 'ARS',
+        unit_price: precio,
+      }],
+      back_urls: { success: backUrl, failure: backUrl, pending: backUrl },
+      auto_return: 'approved',
+      external_reference: externalReference,
+      notification_url: MP_WEBHOOK_URL,
+      statement_descriptor: 'PIRU',
+      expires: true,
+      expiration_date_to: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    }),
+  })
+
+  const preference = await mpResponse.json() as any
+  if (!mpResponse.ok) {
+    console.error('❌ [Recarga] Error creando preferencia MP:', preference)
+    return { ok: false, status: 502, message: 'Error al iniciar el pago' }
+  }
+
+  await setRecargaPreferencia(db, recargaId, String(preference.id))
+
+  return {
+    ok: true,
+    data: {
+      recargaId,
+      url_pago: preference.init_point,
+      preference_id: preference.id,
+      cantidad: pack.cantidad,
+      monto: precio.toFixed(2),
+    },
+  }
+}
 
 /** Saldo / wallet de mensajes del restaurante autenticado (para el widget de saldo + recarga). */
 mensajesRoute.get('/saldo', async (c) => {
@@ -114,66 +188,47 @@ mensajesRoute.post('/recarga/checkout', zValidator('json', checkoutSchema), asyn
       return c.json({ message: 'Pack no encontrado', success: false }, 404)
     }
 
-    const categoria = pack.categoria as 'utility' | 'marketing'
-    const precio = parseFloat(String(pack.precio))
-
-    // 1. Recarga pendiente (aún no acredita saldo; se acredita en el webhook).
-    const recargaId = await crearRecargaPendiente(db, restauranteId, {
-      categoria,
-      cantidad: pack.cantidad,
-      monto: pack.precio,
-      packRecargaId: pack.id,
-      origen: 'manual',
-    })
-
-    const externalReference = `piru-recarga-${recargaId}`
-    const backUrl = `${ADMIN_URL}/dashboard/ajustes/plan?recarga=success`
-
-    // 2. Preferencia de MercadoPago con el token de la plataforma (sin marketplace_fee).
-    const mpResponse = await fetch('https://api.mercadopago.com/checkout/preferences', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${MP_PLATFORM_ACCESS_TOKEN}`,
-      },
-      body: JSON.stringify({
-        items: [{
-          title: `${pack.nombre} · ${pack.cantidad} mensajes`,
-          quantity: 1,
-          currency_id: 'ARS',
-          unit_price: precio,
-        }],
-        back_urls: { success: backUrl, failure: backUrl, pending: backUrl },
-        auto_return: 'approved',
-        external_reference: externalReference,
-        notification_url: MP_WEBHOOK_URL,
-        statement_descriptor: 'PIRU',
-        expires: true,
-        expiration_date_to: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-      }),
-    })
-
-    const preference = await mpResponse.json() as any
-    if (!mpResponse.ok) {
-      console.error('❌ [Recarga] Error creando preferencia MP:', preference)
-      return c.json({ message: 'Error al iniciar el pago', success: false }, 502)
-    }
-
-    await setRecargaPreferencia(db, recargaId, String(preference.id))
-
-    return c.json({
-      success: true,
-      data: {
-        recargaId,
-        url_pago: preference.init_point,
-        preference_id: preference.id,
-        cantidad: pack.cantidad,
-        monto: precio.toFixed(2),
-      },
-    }, 200)
+    const res = await iniciarCheckoutRecarga(db, restauranteId, pack, 'manual')
+    if (!res.ok) return c.json({ message: res.message, success: false }, res.status)
+    return c.json({ success: true, data: res.data }, 200)
   } catch (error) {
     console.error('Error en checkout de recarga:', error)
     return c.json({ message: 'Error al iniciar la recarga', success: false }, 500)
+  }
+})
+
+/**
+ * Auto-recarga asistida: sin card-on-file no se cobra en silencio. Cuando el saldo cae
+ * bajo el umbral configurado, el local activa la auto-recarga y con un tap dispara este
+ * endpoint, que elige el pack por su config y arma el Checkout Pro listo para pagar
+ * (origen 'auto'). No requiere que elija pack ni recuerde el precio.
+ */
+mensajesRoute.post('/auto-recarga/checkout', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  if (!MP_PLATFORM_ACCESS_TOKEN) {
+    console.error('❌ [Auto-recarga] Falta MP_ACCESS_TOKEN para cobrar recargas')
+    return c.json({ message: 'Pagos no disponibles temporalmente', success: false }, 503)
+  }
+
+  try {
+    const resumen = await resumenWallet(db, restauranteId)
+    if (!resumen.autoRecarga.habilitada) {
+      return c.json({ message: 'La auto-recarga no está activada', success: false }, 400)
+    }
+
+    const pack = await resolverPackAutoRecarga(db, restauranteId)
+    if (!pack) {
+      return c.json({ message: 'No hay packs de recarga disponibles', success: false }, 404)
+    }
+
+    const res = await iniciarCheckoutRecarga(db, restauranteId, pack, 'auto')
+    if (!res.ok) return c.json({ message: res.message, success: false }, res.status)
+    return c.json({ success: true, data: res.data }, 200)
+  } catch (error) {
+    console.error('Error en checkout de auto-recarga:', error)
+    return c.json({ message: 'Error al iniciar la auto-recarga', success: false }, 500)
   }
 })
 

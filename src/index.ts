@@ -38,6 +38,7 @@ import { whatsappOauthRoute } from './routes/whatsapp-oauth';
 import { cartaIaRoute } from './routes/carta-ia';
 import { planesRoute } from './routes/planes';
 import { mensajesRoute } from './routes/mensajes';
+import { internoRoute } from './routes/interno';
 import { serveStatic } from 'hono/bun';
 import { readFileSync } from 'node:fs';
 
@@ -79,8 +80,11 @@ app.use('*', cors({
     'http://localhost:4321',
     'http://localhost:3000',
     'http://localhost:5173',
+    'http://localhost:5174', // panel interno (Vite dev, puerto siguiente al del admin)
     'https://piru.app',
     'https://admin.piru.app',
+    'https://interno.piru.app',      // panel interno del fundador (Cloudflare Pages)
+    'https://piru-interno.pages.dev', // preview/deploy por defecto de Cloudflare Pages
     'https://my.piru.app',
     'https://www.piru.app',
     // 👇 AGREGA ESTOS PARA TAURI DESKTOP 👇
@@ -197,6 +201,7 @@ app.basePath('/api')
   .route('/carta-ia', cartaIaRoute)
   .route('/planes', planesRoute)
   .route('/mensajes', mensajesRoute)
+  .route('/interno', internoRoute)
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
 // because :qrToken would match "admin" as a token
 app.get(

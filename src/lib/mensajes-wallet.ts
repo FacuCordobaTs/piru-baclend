@@ -532,6 +532,13 @@ export async function resumenWallet(db: Db, restauranteId: number) {
     else if (pctConsumido >= UMBRAL_AVISO_80) alerta = '80'
   }
 
+  // Auto-recarga "asistida": sin card-on-file no se cobra en silencio, pero cuando el
+  // saldo cruza el umbral configurado señalamos que hay que preparar la recarga para
+  // que la UI ofrezca el pago de 1 tap (POST /mensajes/auto-recarga/checkout).
+  const umbralAutoRecarga = saldo.autoRecargaUmbral ?? AUTO_RECARGA_UMBRAL_DEFAULT
+  const autoRecargaSugerida =
+    saldo.autoRecargaHabilitada && !suscripcion.mensajesIlimitados && utilDisp <= umbralAutoRecarga
+
   return {
     ilimitado: suscripcion.mensajesIlimitados,
     cicloRenuevaEn: saldo.cicloRenuevaEn,
@@ -552,10 +559,32 @@ export async function resumenWallet(db: Db, restauranteId: number) {
     alerta,
     autoRecarga: {
       habilitada: saldo.autoRecargaHabilitada,
-      umbral: saldo.autoRecargaUmbral ?? AUTO_RECARGA_UMBRAL_DEFAULT,
+      umbral: umbralAutoRecarga,
       cantidad: saldo.autoRecargaCantidad ?? RECARGA_PACK_DEFAULT,
+      // true cuando conviene ofrecer ya el pago de la recarga automática.
+      sugerida: autoRecargaSugerida,
     },
   }
+}
+
+/**
+ * Elige el pack a usar para la auto-recarga de un local: el pack utility activo cuya
+ * cantidad coincide con la configurada (`autoRecargaCantidad`); si no hay match exacto,
+ * el pack más chico que llegue a esa cantidad; y si ninguno llega, el pack más grande.
+ * Devuelve null si no hay packs utility activos.
+ */
+export async function resolverPackAutoRecarga(db: Db, restauranteId: number) {
+  const saldo = await getOrCreateSaldo(db, restauranteId)
+  const objetivo = saldo.autoRecargaCantidad ?? RECARGA_PACK_DEFAULT
+  const packs = await listarPacks(db, 'utility')
+  if (packs.length === 0) return null
+  const exacto = packs.find((p) => p.cantidad === objetivo)
+  if (exacto) return exacto
+  const alcanza = packs
+    .filter((p) => p.cantidad >= objetivo)
+    .sort((a, b) => a.cantidad - b.cantidad)
+  if (alcanza[0]) return alcanza[0]
+  return [...packs].sort((a, b) => b.cantidad - a.cantidad)[0]
 }
 
 /** Historial de movimientos (ledger) para auditoría / resolución de reclamos. */

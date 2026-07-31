@@ -195,6 +195,86 @@ export async function confirmarPagoSuscripcion(
 }
 
 /**
+ * Alta/cambio de plan A MANO, sin pasar por MercadoPago (outreach: el fundador cierra
+ * al cliente y lo da de alta desde el panel interno). Reusa la lógica de
+ * confirmarPagoSuscripcion pero sin comprobante de pago (no hay `pago_suscripcion`):
+ *  - upsert de la suscripción → activa, plan del arg, extiende fechaProximoCobro un ciclo
+ *  - acredita el cupo utility del plan de inmediato (si es alta o cambió de plan)
+ * Devuelve la suscripción resultante o null si el plan no existe / no está activo.
+ */
+export async function asignarPlanManual(
+  db: Db,
+  restauranteId: number,
+  planId: number,
+  ciclo: CicloPago = 'mensual',
+): Promise<{ planId: number; periodoHasta: Date } | null> {
+  const [planRow] = await db
+    .select()
+    .from(PlanTable)
+    .where(eq(PlanTable.id, planId))
+    .limit(1)
+  if (!planRow) return null
+
+  const meses = largoCicloMeses(ciclo)
+  const ahora = new Date()
+
+  const [subActual] = await db
+    .select()
+    .from(SuscripcionTable)
+    .where(eq(SuscripcionTable.restauranteId, restauranteId))
+    .limit(1)
+
+  // Si sigue vigente el MISMO plan con próximo cobro futuro, se acumula (renovación
+  // anticipada); si no, arranca desde ahora (alta o cambio de plan).
+  const proximoCobroActual = subActual?.fechaProximoCobro ? new Date(subActual.fechaProximoCobro) : null
+  const mismoPlan = subActual?.planId === planId
+  const base =
+    mismoPlan && proximoCobroActual && proximoCobroActual > ahora ? proximoCobroActual : ahora
+  const periodoHasta = addMonths(base, meses)
+  const precioMensual = String(planRow.precioMensual)
+
+  if (subActual) {
+    await db
+      .update(SuscripcionTable)
+      .set({
+        planId,
+        estado: SUSCRIPCION_ESTADOS.ACTIVA,
+        ciclo,
+        fechaProximoCobro: periodoHasta,
+        graciaHasta: null,
+        fechaCancelacion: null,
+        precioMensual,
+        updatedAt: ahora,
+      })
+      .where(eq(SuscripcionTable.restauranteId, restauranteId))
+  } else {
+    await db.insert(SuscripcionTable).values({
+      restauranteId,
+      planId,
+      estado: SUSCRIPCION_ESTADOS.ACTIVA,
+      ciclo,
+      fechaInicio: ahora,
+      fechaProximoCobro: periodoHasta,
+      precioMensual,
+    })
+  }
+
+  // Acreditar el cupo utility del plan de inmediato (solo alta o cambio de plan).
+  if (!subActual || !mismoPlan) {
+    try {
+      await acreditarCupoPlan(db, restauranteId, {
+        mensajesIncluidos: planRow.mensajesIncluidos ?? 0,
+        ilimitado: !!planRow.mensajesIlimitados,
+      })
+    } catch (err) {
+      console.error('acreditarCupoPlan falló tras asignación manual de plan:', err)
+    }
+  }
+
+  return { planId, periodoHasta }
+}
+
+/**
  * Estado "vigente" de la suscripción teniendo en cuenta el paso del tiempo, sin cron:
  * si venció el cobro entra en gracia (pago_pendiente) y, agotada la gracia, se suspende.
  * Persiste la transición si cambió (para que quede reflejada en la próxima lectura).
