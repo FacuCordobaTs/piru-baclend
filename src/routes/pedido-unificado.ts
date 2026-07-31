@@ -36,6 +36,9 @@ import {
   enrichItemsWithProductInfo,
   buildClienteContexto,
 } from '../lib/pedidos-activos'
+import { requireFeature } from '../middleware/plan'
+import { FEATURE_KEYS } from '../lib/planes'
+import { consumirMensaje } from '../lib/mensajes-wallet'
 
 const itemSchema = z.object({
   productoId: z.number().int().positive(),
@@ -530,8 +533,8 @@ const pedidoUnificadoRoute = new Hono()
     return c.json({ message: 'Pedido eliminado correctamente', success: true }, 200)
   })
 
-  // Asignar Rapiboy (solo delivery)
-  .post('/rapiboy/asignar', zValidator('json', z.object({ pedidoId: z.number() })), async (c) => {
+  // Asignar Rapiboy (solo delivery) — feature de plan Intermedio+
+  .post('/rapiboy/asignar', requireFeature(FEATURE_KEYS.RAPIBOY), zValidator('json', z.object({ pedidoId: z.number() })), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const { pedidoId } = c.req.valid('json')
@@ -622,8 +625,8 @@ const pedidoUnificadoRoute = new Hono()
     }
   })
 
-  // Notificar al cliente por WhatsApp (pedido listo)
-  .post('/:id/notificar-cliente', async (c) => {
+  // Notificar al cliente por WhatsApp (pedido listo) — feature de plan Intermedio+
+  .post('/:id/notificar-cliente', requireFeature(FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))
@@ -694,6 +697,19 @@ const pedidoUnificadoRoute = new Hono()
           tipo: 'pedido_despachado',
         })
 
+        // Descontar del wallet (utility). Best-effort: un fallo de contabilidad
+        // jamás debe impedir que el aviso al comensal ya enviado se dé por bueno.
+        try {
+          await consumirMensaje(db, restauranteId, {
+            categoria: 'utility',
+            tipoMensaje: 'pedido_despachado',
+            motivo: 'aviso_pedido_despachado',
+            pedidoUnificadoId: pedidoId,
+          })
+        } catch (e) {
+          console.error('⚠️ [Wallet] Error descontando mensaje (despachado):', e)
+        }
+
         return c.json({ message: 'Notificación enviada al cliente', success: true }, 200)
       } else {
         console.error(`📲 [Notificar Cliente] ❌ Error API WhatsApp:`, waResult.error)
@@ -739,8 +755,8 @@ const pedidoUnificadoRoute = new Hono()
     return c.json({ message: 'Repartidor asignado correctamente', success: true }, 200)
   })
 
-  // Confirmar pedido con demora (modo confirmación manual)
-  .post('/:id/confirmar-con-demora', zValidator('json', z.object({ demoraMinutos: z.number().int().min(0).max(999) })), async (c) => {
+  // Confirmar pedido con demora (modo confirmación manual) — envía aviso al cliente por WhatsApp (Intermedio+)
+  .post('/:id/confirmar-con-demora', requireFeature(FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE), zValidator('json', z.object({ demoraMinutos: z.number().int().min(0).max(999) })), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))
@@ -792,6 +808,19 @@ const pedidoUnificadoRoute = new Hono()
           telefono: pedido.telefono,
           tipo: 'pedido_confirmado',
         })
+
+        // Descontar del wallet (utility). Best-effort (ver nota en notificar-cliente).
+        try {
+          await consumirMensaje(db, restauranteId, {
+            categoria: 'utility',
+            tipoMensaje: 'pedido_confirmado',
+            motivo: 'aviso_pedido_confirmado',
+            pedidoUnificadoId: pedidoId,
+          })
+        } catch (e) {
+          console.error('⚠️ [Wallet] Error descontando mensaje (confirmado):', e)
+        }
+
         return c.json({ message: 'Confirmación con demora enviada al cliente', success: true, demoraMinutos }, 200)
       } else {
         console.error('❌ Error API WhatsApp al confirmar con demora:', waResult.error)

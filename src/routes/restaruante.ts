@@ -11,6 +11,8 @@ import UUID = require("uuid-js")
 import { configurarWebhookCliente } from '../services/cucuru'
 import { resolveMetodosPagoConfig, type MetodosPagoConfig } from '../lib/metodos-pago'
 import { contarPedidosPagadosFranja } from '../lib/franjas'
+import { requireFeature } from '../middleware/plan'
+import { FEATURE_KEYS, resolverSuscripcion } from '../lib/planes'
 
 // Configuración de R2
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID
@@ -206,7 +208,18 @@ restauranteRoute.get('/profile', async (c) => {
       variantes: variantesPorProducto.get(p.id) || [],
     }))
 
-    return c.json({ message: 'Profile retrieved successfully', success: true, data: { restaurante, mesas, productos } }, 200)
+    // Suscripción + features de pago habilitadas: la UI candadea lo que no está incluido.
+    const suscripcionResuelta = await resolverSuscripcion(db, restauranteId)
+    const suscripcion = {
+      estado: suscripcionResuelta.estado,
+      planCodigo: suscripcionResuelta.planCodigo,
+      planNombre: suscripcionResuelta.planNombre,
+      conAccesoAPago: suscripcionResuelta.conAccesoAPago,
+      sinSuscripcion: suscripcionResuelta.sinSuscripcion,
+      features: Array.from(suscripcionResuelta.features),
+    }
+
+    return c.json({ message: 'Profile retrieved successfully', success: true, data: { restaurante, mesas, productos, suscripcion } }, 200)
   } catch (error) {
     console.error('Error getting profile:', error)
     return c.json({ message: 'Error getting profile', error: (error as Error).message }, 500)
@@ -635,8 +648,8 @@ restauranteRoute.put('/toggle-order-group-enabled', async (c) => {
   }
 })
 
-// Toggle habilitar/deshabilitar envio de whatsapp a clientes
-restauranteRoute.put('/toggle-notificar-clientes-whatsapp', async (c) => {
+// Toggle habilitar/deshabilitar envio de whatsapp a clientes — feature de plan Intermedio+
+restauranteRoute.put('/toggle-notificar-clientes-whatsapp', requireFeature(FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
 
@@ -1052,7 +1065,7 @@ const configRapiboySchema = z.object({
   token: z.string().min(1)
 })
 
-restauranteRoute.post('/configurar-rapiboy', zValidator('json', configRapiboySchema), async (c) => {
+restauranteRoute.post('/configurar-rapiboy', requireFeature(FEATURE_KEYS.RAPIBOY), zValidator('json', configRapiboySchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
   const { token } = c.req.valid('json')

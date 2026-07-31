@@ -9,6 +9,8 @@ import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp, notificarClientePagoConfirmado } from '../services/whatsapp'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
+import { confirmarRecarga } from '../lib/mensajes-wallet'
+import { confirmarPagoSuscripcion } from '../lib/suscripciones'
 
 const MP_CLIENT_ID = process.env.MP_CLIENT_ID
 const MP_CLIENT_SECRET = process.env.MP_CLIENT_SECRET
@@ -60,6 +62,18 @@ function parseMercadoPagoPiruPedidoUnificadoId(externalReference: string): numbe
   const legacy = externalReference.match(/^piru-(?:delivery|takeaway)-(\d+)$/)
   if (legacy) return parseInt(legacy[1], 10)
   return null
+}
+
+/** `piru-recarga-{id}` = compra de un pack de recarga de mensajes (pago a Piru). */
+function parseRecargaMensajesId(externalReference: string): number | null {
+  const m = externalReference.match(/^piru-recarga-(\d+)$/)
+  return m ? parseInt(m[1], 10) : null
+}
+
+/** `piru-plansub-{id}` = pago de la cuota mensual de un plan (suscripción, pago a Piru). */
+function parsePagoSuscripcionId(externalReference: string): number | null {
+  const m = externalReference.match(/^piru-plansub-(\d+)$/)
+  return m ? parseInt(m[1], 10) : null
 }
 
 /**
@@ -612,6 +626,46 @@ mercadopagoRoute.post('/webhook', async (c) => {
     if (!externalReference || typeof externalReference !== 'string') {
       console.log(`⏭️ [Webhook] Sin external_reference`)
       return c.json({ status: 'ignored' })
+    }
+
+    // ── Compra de un pack de recarga de mensajes (pago a la cuenta de Piru) ──
+    const recargaId = parseRecargaMensajesId(externalReference)
+    if (recargaId != null) {
+      if (status !== 'approved') {
+        console.log(`⏭️ [Webhook] Recarga ${recargaId}: pago no aprobado (status=${status})`)
+        return c.json({ status: 'ignored' })
+      }
+      const res = await confirmarRecarga(db, recargaId, { mpPaymentId: String(paymentId) })
+      if (!res) {
+        console.error(`❌ [Webhook] Recarga ${recargaId} no encontrada`)
+        return c.json({ status: 'error', message: 'Recarga not found' })
+      }
+      if (res.yaProcesada) {
+        console.log(`⏭️ [Webhook] Recarga ${recargaId} ya estaba acreditada`)
+        return c.json({ status: 'already_processed' })
+      }
+      console.log(`✅ [Webhook] Recarga ${recargaId} acreditada: +${res.cantidad} ${res.categoria} (rest=${res.restauranteId})`)
+      return c.json({ status: 'recarga_acreditada' })
+    }
+
+    // ── Pago de la cuota mensual del plan (suscripción, pago a la cuenta de Piru) ──
+    const pagoSuscripcionId = parsePagoSuscripcionId(externalReference)
+    if (pagoSuscripcionId != null) {
+      if (status !== 'approved') {
+        console.log(`⏭️ [Webhook] Pago suscripción ${pagoSuscripcionId}: no aprobado (status=${status})`)
+        return c.json({ status: 'ignored' })
+      }
+      const res = await confirmarPagoSuscripcion(db, pagoSuscripcionId, { mpPaymentId: String(paymentId) })
+      if (!res) {
+        console.error(`❌ [Webhook] Pago suscripción ${pagoSuscripcionId} no encontrado`)
+        return c.json({ status: 'error', message: 'Pago suscripción not found' })
+      }
+      if (res.yaProcesado) {
+        console.log(`⏭️ [Webhook] Pago suscripción ${pagoSuscripcionId} ya estaba acreditado`)
+        return c.json({ status: 'already_processed' })
+      }
+      console.log(`✅ [Webhook] Suscripción activada: rest=${res.restauranteId} plan=${res.planId} hasta=${res.periodoHasta?.toISOString()}`)
+      return c.json({ status: 'suscripcion_activada' })
     }
 
     const pedidoId = parseMercadoPagoPiruPedidoUnificadoId(externalReference)
