@@ -15,15 +15,8 @@ import { confirmarPagoSuscripcion } from '../lib/suscripciones'
 const MP_CLIENT_ID = process.env.MP_CLIENT_ID
 const MP_CLIENT_SECRET = process.env.MP_CLIENT_SECRET
 const MP_REDIRECT_URI = process.env.MP_REDIRECT_URI || 'https://api.piru.app/api/mp/callback'
-/** Comisión marketplace Piru (1% del monto cobrado). */
-const MP_MARKETPLACE_FEE_RATE = 0.01
-
-/** Monto fijo en moneda del pago (MP: `marketplace_fee` en preferencias, `application_fee` en Payments API). */
-function marketplaceFeeFromAmount(amount: number): number {
-  const n = Number(amount)
-  if (!Number.isFinite(n) || n <= 0) return 0
-  return Math.round(n * MP_MARKETPLACE_FEE_RATE * 100) / 100
-}
+// Nota: Piru NO cobra comisión por venta. El modelo es cuota mensual fija por plan.
+// El histórico `marketplace_fee`/`application_fee` del 1% fue eliminado (modelo legacy).
 
 const ADMIN_URL = process.env.ADMIN_URL || 'https://admin.piru.app'
 // Token de acceso de la plataforma (Piru) para consultar webhooks
@@ -281,7 +274,6 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
       },
       body: JSON.stringify({
         items: mpItems,
-        marketplace_fee: marketplaceFeeFromAmount(total),
         back_urls: {
           success: successUrl,
           failure: successUrl,
@@ -343,7 +335,6 @@ mercadopagoRoute.post('/process-brick', async (c) => {
     if (!tokenValido) return c.json({ success: false, error: 'Error de conexión con Mercado Pago' }, 401)
 
     const transactionAmount = parseFloat(String(pedido.total))
-    const applicationFee = marketplaceFeeFromAmount(transactionAmount)
 
     const mpPayload: Record<string, unknown> = {
       transaction_amount: transactionAmount,
@@ -357,9 +348,6 @@ mercadopagoRoute.post('/process-brick', async (c) => {
       },
       external_reference: `piru-${pedidoId}`,
       notification_url: `https://api.piru.app/api/mp/webhook`
-    }
-    if (applicationFee > 0) {
-      mpPayload.application_fee = applicationFee
     }
     if (issuer_id != null && issuer_id !== '') {
       mpPayload.issuer_id = Number(issuer_id)

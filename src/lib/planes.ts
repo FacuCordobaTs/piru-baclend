@@ -206,6 +206,24 @@ export async function resolverSuscripcion(
 }
 
 /**
+ * Hard paywall: ¿el local puede USAR el panel? Distinto del gating por feature (tieneAcceso):
+ * acá decidimos acceso a TODO el admin, no a una función puntual.
+ *  - Cuentas grandfathered (`requiereSuscripcion = false`, p. ej. pre-planes): siempre pueden.
+ *  - Cuentas nuevas (bajo el modelo de planes): sólo con suscripción en estado con acceso
+ *    (activa / pago_pendiente en gracia). Sin fila de suscripción (nunca pagaron) → bloqueadas.
+ * El `SIN_SUSCRIPCION_ACCESO_TOTAL` (fail-open de features) NO aplica acá: una cuenta paywalled
+ * sin suscripción queda fuera aunque el fail-open de features siga en true.
+ */
+export function tieneAccesoAlPanel(
+  requiereSuscripcion: boolean,
+  sub: SuscripcionResuelta,
+): boolean {
+  if (!requiereSuscripcion) return true
+  if (sub.sinSuscripcion) return false
+  return sub.conAccesoAPago
+}
+
+/**
  * ÚNICA función de verdad para el gating. Todo el backend pregunta acá:
  *   if (await tieneAcceso(db, restauranteId, FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE)) { ... }
  * Ocultar un botón en la UI no es seguridad: el chequeo real va SIEMPRE en el backend.

@@ -83,6 +83,8 @@ export const authRoute = new Hono()
           email,
           nombre,
           password: passwordHash,
+          // Alta bajo el modelo de planes → hard paywall: no entra al panel sin suscripción activa.
+          requiereSuscripcion: true,
           createdAt: new Date()
       });
 
@@ -303,6 +305,8 @@ authRoute.post('/register-telefono/verify', zValidator('json', verifyTelefonoSch
     await db.insert(restaurante).values({
       telefono: reg.telefono,
       telefonoVerificado: true,
+      // Alta bajo el modelo de planes → hard paywall: no entra al panel sin suscripción activa.
+      requiereSuscripcion: true,
       createdAt: new Date(),
     })
 

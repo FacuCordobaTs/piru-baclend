@@ -8,6 +8,8 @@ import {
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
+import { requireFeature } from '../middleware/plan'
+import { FEATURE_KEYS } from '../lib/planes'
 import { eq, and, inArray, or } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
@@ -25,6 +27,10 @@ const AUTH_WS_AUTOMATION = AFIP_PRODUCTION ? 'auth-web-service-prod' : 'auth-web
 
 const facturacionRoute = new Hono()
   .use('*', authMiddleware)
+  // Toda la facturación electrónica ARCA es feature de pago (Intermedio+). El
+  // router entero es ARCA, así que se gatea completo: un plan sin la feature no
+  // tiene por qué llamar ningún endpoint de acá. (Cuentas pre-planes: fail-open.)
+  .use('*', requireFeature(FEATURE_KEYS.FACTURACION_ARCA))
 
   // Estado de la configuración AFIP del restaurante
   .get('/estado', async (c) => {

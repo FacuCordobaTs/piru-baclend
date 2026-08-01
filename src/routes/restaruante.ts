@@ -12,7 +12,8 @@ import { configurarWebhookCliente } from '../services/cucuru'
 import { resolveMetodosPagoConfig, type MetodosPagoConfig } from '../lib/metodos-pago'
 import { contarPedidosPagadosFranja } from '../lib/franjas'
 import { requireFeature } from '../middleware/plan'
-import { FEATURE_KEYS, resolverSuscripcion } from '../lib/planes'
+import { FEATURE_KEYS, resolverSuscripcion, tieneAccesoAlPanel } from '../lib/planes'
+import { resolverEstadoVigente } from '../lib/suscripciones'
 
 // Configuración de R2
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID
@@ -209,7 +210,11 @@ restauranteRoute.get('/profile', async (c) => {
     }))
 
     // Suscripción + features de pago habilitadas: la UI candadea lo que no está incluido.
+    // Transición lazy de estado (venció el cobro → gracia → suspendida) antes de leer, así el
+    // gate del panel usa el estado real y una cuenta recién suspendida pierde acceso.
+    await resolverEstadoVigente(db, restauranteId)
     const suscripcionResuelta = await resolverSuscripcion(db, restauranteId)
+    const requiereSuscripcion = !!restaurante[0]?.requiereSuscripcion
     const suscripcion = {
       estado: suscripcionResuelta.estado,
       planCodigo: suscripcionResuelta.planCodigo,
@@ -217,6 +222,9 @@ restauranteRoute.get('/profile', async (c) => {
       conAccesoAPago: suscripcionResuelta.conAccesoAPago,
       sinSuscripcion: suscripcionResuelta.sinSuscripcion,
       features: Array.from(suscripcionResuelta.features),
+      // Hard paywall: ¿puede entrar al panel? El admin lo usa para el gate (→ /suscribir).
+      requiereSuscripcion,
+      accesoPanel: tieneAccesoAlPanel(requiereSuscripcion, suscripcionResuelta),
     }
 
     return c.json({ message: 'Profile retrieved successfully', success: true, data: { restaurante, mesas, productos, suscripcion } }, 200)

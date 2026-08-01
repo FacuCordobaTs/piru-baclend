@@ -3,9 +3,10 @@ import { pool } from '../db'
 import { sucursal as SucursalTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
+import { tieneAcceso, FEATURE_KEYS } from '../lib/planes'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, count } from 'drizzle-orm'
 
 const createSucursalSchema = z.object({
   nombre: z.string().min(1, 'El nombre es requerido'),
@@ -52,6 +53,26 @@ sucursalesRoute.post('/create', zValidator('json', createSucursalSchema), async 
   const body = c.req.valid('json')
 
   try {
+    // "Múltiples sucursales" es feature de pago (Intermedio+): todos los planes
+    // pueden tener SU sucursal, pero crear una segunda o más requiere el plan.
+    // El gate va acá (no como middleware) porque depende de cuántas ya existen.
+    const [{ total }] = await db
+      .select({ total: count() })
+      .from(SucursalTable)
+      .where(eq(SucursalTable.restauranteId, restauranteId))
+
+    if (total >= 1 && !(await tieneAcceso(db, restauranteId, FEATURE_KEYS.MULTISUCURSAL))) {
+      return c.json(
+        {
+          success: false,
+          upgradeRequired: true,
+          feature: FEATURE_KEYS.MULTISUCURSAL,
+          message: 'Tener más de una sucursal no está incluido en tu plan actual',
+        },
+        403,
+      )
+    }
+
     const result = await db.insert(SucursalTable).values({
       restauranteId,
       nombre: body.nombre,

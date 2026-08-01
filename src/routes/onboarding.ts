@@ -177,6 +177,9 @@ onboardingRoute.put('/complete', zValidator('json', completeOnboardingSchema), a
       }
     }
 
+    // Sin trial: el local termina el onboarding pero NO entra al panel hasta elegir y pagar un
+    // plan (hard paywall). Al marcar completedOnboarding=true y no tener suscripción activa, el
+    // gate del admin lo manda a /suscribir. La suscripción se activa recién con el pago (webhook).
     return c.json({ success: true, message: 'Onboarding completado exitosamente' })
   } catch (error) {
     console.error('Error completing onboarding:', error)

@@ -96,6 +96,11 @@ export const restaurante = mysqlTable("restaurante", {
   notificarClientesWhatsapp: boolean("notificar_clientes_whatsapp").default(false),
   modoConfirmacionManual: boolean("modo_confirmacion_manual").default(false),
   completedOnboarding: boolean("completed_onboarding").default(false).notNull(),
+  // Hard paywall: los locales dados de alta bajo el modelo de planes requieren una suscripción
+  // activa para usar el panel. default=false → las cuentas viejas (pre-planes) quedan
+  // grandfathered (nunca bloqueadas); el registro nuevo lo pone en true. Ver lib/planes.ts
+  // (tieneAccesoAlPanel) y el gate del admin (ProtectedLayout → /suscribir).
+  requiereSuscripcion: boolean("requiere_suscripcion").default(false).notNull(),
 
   // AFIP / ARCA - facturación electrónica
   afipHabilitado: boolean("afip_habilitado").default(false).notNull(),

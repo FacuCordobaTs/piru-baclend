@@ -8,8 +8,9 @@ import { authMiddleware } from '../middleware/auth'
 import {
   plan as PlanTable,
   planFeature as PlanFeatureTable,
+  restaurante as RestauranteTable,
 } from '../db/schema'
-import { resolverSuscripcion } from '../lib/planes'
+import { resolverSuscripcion, tieneAccesoAlPanel } from '../lib/planes'
 import { resumenWallet } from '../lib/mensajes-wallet'
 import {
   crearPagoSuscripcionPendiente,
@@ -86,6 +87,12 @@ planesRoute.get('/mi-suscripcion', async (c) => {
     const vigente = await resolverEstadoVigente(db, restauranteId)
     const suscripcion = await resolverSuscripcion(db, restauranteId)
     const wallet = await resumenWallet(db, restauranteId)
+    const [restauranteRow] = await db
+      .select({ requiereSuscripcion: RestauranteTable.requiereSuscripcion })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
+    const requiereSuscripcion = !!restauranteRow?.requiereSuscripcion
 
     return c.json(
       {
@@ -97,6 +104,9 @@ planesRoute.get('/mi-suscripcion', async (c) => {
           planNombre: suscripcion.planNombre,
           conAccesoAPago: suscripcion.conAccesoAPago,
           sinSuscripcion: suscripcion.sinSuscripcion,
+          // Hard paywall: ¿puede entrar al panel? El gate y la página /suscribir lo usan.
+          requiereSuscripcion,
+          accesoPanel: tieneAccesoAlPanel(requiereSuscripcion, suscripcion),
           // Fechas de facturación (para mostrar próximo cobro / gracia en la UI).
           fechaProximoCobro: vigente?.fechaProximoCobro ?? null,
           graciaHasta: vigente?.graciaHasta ?? null,
