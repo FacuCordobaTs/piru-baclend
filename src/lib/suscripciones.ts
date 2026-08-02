@@ -38,9 +38,29 @@ function largoCicloMeses(ciclo: CicloPago): number {
   return ciclo === 'anual' ? 12 : 1
 }
 
-/** Precio a cobrar por un plan/ciclo (autoritativo del servidor). Anual = 12 × mensual. */
-export function montoPorCiclo(precioMensual: number, ciclo: CicloPago): number {
-  return ciclo === 'anual' ? precioMensual * 12 : precioMensual
+/** Tope de descuento anual permitido por el negocio (20%). */
+export const MAX_DESCUENTO_ANUAL = 20
+
+/** Descuento anual efectivo de un plan, clampeado a [0, MAX_DESCUENTO_ANUAL]. */
+export function descuentoAnualEfectivo(descuentoAnual: number | null | undefined): number {
+  const pct = Number(descuentoAnual ?? 0)
+  if (!Number.isFinite(pct)) return 0
+  return Math.max(0, Math.min(MAX_DESCUENTO_ANUAL, Math.round(pct)))
+}
+
+/**
+ * Precio a cobrar por un plan/ciclo (autoritativo del servidor). Anual = 12 × mensual
+ * con el descuento anual del plan aplicado (topeado a MAX_DESCUENTO_ANUAL). Redondea al
+ * peso. El descuento SIEMPRE sale del plan en la DB, nunca del cliente.
+ */
+export function montoPorCiclo(
+  precioMensual: number,
+  ciclo: CicloPago,
+  descuentoAnual: number | null | undefined = 0,
+): number {
+  if (ciclo !== 'anual') return precioMensual
+  const pct = descuentoAnualEfectivo(descuentoAnual)
+  return Math.round(precioMensual * 12 * (1 - pct / 100))
 }
 
 /**

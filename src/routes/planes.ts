@@ -159,7 +159,7 @@ planesRoute.post('/suscribir', zValidator('json', suscribirSchema), async (c) =>
     }
 
     const precioMensual = parseFloat(String(planRow.precioMensual))
-    const monto = montoPorCiclo(precioMensual, ciclo)
+    const monto = montoPorCiclo(precioMensual, ciclo, planRow.descuentoAnual)
 
     if (monto <= 0) {
       // Plan gratis: no tiene sentido cobrarlo por MP. Debería activarse por otra vía.

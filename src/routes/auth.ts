@@ -265,7 +265,32 @@ authRoute.post('/register-telefono/verify', zValidator('json', verifyTelefonoSch
     if (!reg) {
       return c.json({ message: 'Sesión de verificación no encontrada', success: false }, 404)
     }
+
+    // Idempotencia: si esta verificación ya creó (o asoció) una cuenta, devolvemos ESA cuenta en
+    // vez de crear otra. Cubre reintentos y doble-submit del código: sin esto, un segundo POST con
+    // el mismo verificationId caía por otro camino y podía dejar dos `restaurante` con el mismo
+    // teléfono (una con nombre, otra vacía). Ver bug 2.8 del ROADMAP.
     if (reg.verificado) {
+      if (reg.restauranteId) {
+        const [cuentaPrevia] = await db.select().from(restaurante)
+          .where(eq(restaurante.id, reg.restauranteId))
+          .limit(1)
+        if (cuentaPrevia) {
+          const token = await createAccessToken({ id: cuentaPrevia.id })
+          setCookie(c, 'token', token as string, {
+            path: '/',
+            sameSite: 'None',
+            secure: true,
+            maxAge: 365 * 24 * 60 * 60,
+          })
+          return c.json({
+            message: '¡Número verificado! Bienvenido a Piru',
+            success: true,
+            newRestaurante: [cuentaPrevia],
+            token,
+          }, 200)
+        }
+      }
       return c.json({ message: 'Esta verificación ya fue completada', success: false }, 400)
     }
     if (new Date(reg.expiraEn).getTime() < Date.now()) {
@@ -300,6 +325,42 @@ authRoute.post('/register-telefono/verify', zValidator('json', verifyTelefonoSch
       return c.json({ message: 'Ya existe una cuenta registrada con este número de WhatsApp', success: false }, 409)
     }
 
+    // Reclamo atómico de la verificación ANTES de insertar: marcamos verificado=true sólo si seguía
+    // en false. Dos requests simultáneos con el mismo verificationId (código correcto) compiten acá;
+    // uno solo gana el UPDATE y crea la cuenta. Así se elimina la carrera que duplicaba `restaurante`.
+    const claim = await db.update(registroTelefono)
+      .set({ verificado: true })
+      .where(and(eq(registroTelefono.id, verificationId), eq(registroTelefono.verificado, false)))
+
+    if (claim[0].affectedRows === 0) {
+      // Perdimos la carrera: el request ganador ya está creando la cuenta. Devolvemos esa cuenta si
+      // ya quedó asociada; si todavía no, pedimos reintentar (sin crear una segunda fila).
+      const [regGanador] = await db.select().from(registroTelefono)
+        .where(eq(registroTelefono.id, verificationId))
+        .limit(1)
+      if (regGanador?.restauranteId) {
+        const [cuentaGanadora] = await db.select().from(restaurante)
+          .where(eq(restaurante.id, regGanador.restauranteId))
+          .limit(1)
+        if (cuentaGanadora) {
+          const token = await createAccessToken({ id: cuentaGanadora.id })
+          setCookie(c, 'token', token as string, {
+            path: '/',
+            sameSite: 'None',
+            secure: true,
+            maxAge: 365 * 24 * 60 * 60,
+          })
+          return c.json({
+            message: '¡Número verificado! Bienvenido a Piru',
+            success: true,
+            newRestaurante: [cuentaGanadora],
+            token,
+          }, 200)
+        }
+      }
+      return c.json({ message: 'Estamos terminando de crear tu cuenta, probá de nuevo en un momento.', success: false }, 409)
+    }
+
     // La cuenta se crea sólo con el teléfono verificado; el nombre y demás datos
     // se completan luego en el onboarding.
     await db.insert(restaurante).values({
@@ -315,7 +376,7 @@ authRoute.post('/register-telefono/verify', zValidator('json', verifyTelefonoSch
       .limit(1)
 
     await db.update(registroTelefono)
-      .set({ verificado: true, restauranteId: newRestauranteRow.id })
+      .set({ restauranteId: newRestauranteRow.id })
       .where(eq(registroTelefono.id, verificationId))
 
     const token = await createAccessToken({ id: newRestauranteRow.id })

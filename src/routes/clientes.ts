@@ -8,7 +8,8 @@ import {
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
-import { eq, desc, inArray } from 'drizzle-orm'
+import { eq, desc, inArray, notInArray, and } from 'drizzle-orm'
+import { computarPerfilesRFM } from '../lib/clientes-rfm'
 
 const clientesRoute = new Hono()
 
@@ -32,7 +33,11 @@ clientesRoute.get('/list', async (c) => {
             createdAt: PedidoUnificadoTable.createdAt,
             tipo: PedidoUnificadoTable.tipo,
         }).from(PedidoUnificadoTable)
-            .where(eq(PedidoUnificadoTable.restauranteId, restauranteId))
+            .where(and(
+                eq(PedidoUnificadoTable.restauranteId, restauranteId),
+                // Los pedidos cancelados no cuentan para RFM ni para el historial de recompra.
+                notInArray(PedidoUnificadoTable.estado, ['cancelled']),
+            ))
 
         // 3. Traer todos los items de esos pedidos
         const pedidoIds = pedidos.map(p => p.id)
@@ -80,24 +85,67 @@ clientesRoute.get('/list', async (c) => {
             items: itemsMap[p.id] || []
         }))
 
-        // 7. Calcular métricas para cada cliente
-        const clientesConMetricas = clientes.map(cliente => {
+        // 7. Calcular métricas base + agrupar pedidos por cliente
+        const base = clientes.map(cliente => {
             const clientPedidos = allPedidos.filter(p => p.clienteId === cliente.id)
             const cantidadPedidos = clientPedidos.length
             const totalGastado = clientPedidos.reduce((acc, current) => acc + parseFloat(current.total || '0'), 0)
 
-            let ultimoPedidoAt: Date | null = null;
-            if (clientPedidos.length > 0) {
-                const dates = clientPedidos.map(p => new Date(p.createdAt).getTime());
-                ultimoPedidoAt = new Date(Math.max(...dates));
+            const fechasMs = clientPedidos.map(p => new Date(p.createdAt).getTime())
+            const ultimoPedidoAt = fechasMs.length > 0 ? new Date(Math.max(...fechasMs)) : null
+            const primerPedidoAt = fechasMs.length > 0 ? new Date(Math.min(...fechasMs)) : null
+
+            // Productos más pedidos (por cantidad total) — top 3.
+            const productosCount: Record<string, number> = {}
+            for (const ped of clientPedidos) {
+                for (const it of ped.items) {
+                    productosCount[it.nombreProducto] = (productosCount[it.nombreProducto] || 0) + it.cantidad
+                }
             }
+            const productosTop = Object.entries(productosCount)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 3)
+                .map(([nombre, cantidad]) => ({ nombre, cantidad }))
 
             return {
-                ...cliente,
+                cliente,
                 cantidadPedidos,
                 totalGastado,
-                ultimoPedidoAt: ultimoPedidoAt ? ultimoPedidoAt.toISOString() : null,
-                pedidos: clientPedidos.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                fechasMs,
+                ultimoPedidoAt,
+                primerPedidoAt,
+                productosTop,
+                pedidos: clientPedidos.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+            }
+        })
+
+        // 8. Cerebro RFM: cadencia individual + estado de ciclo de vida (nuevo/activo/vip/en_riesgo/dormido/perdido).
+        //    Se calcula en batch porque la cadencia global y el umbral VIP dependen de todo el local.
+        const perfiles = computarPerfilesRFM(
+            base.map(b => ({
+                cantidadPedidos: b.cantidadPedidos,
+                totalGastado: b.totalGastado,
+                fechasPedidos: b.fechasMs,
+            })),
+        )
+
+        const clientesConMetricas = base.map((b, i) => {
+            const perfil = perfiles[i]
+            return {
+                ...b.cliente,
+                cantidadPedidos: b.cantidadPedidos,
+                totalGastado: b.totalGastado,
+                ultimoPedidoAt: b.ultimoPedidoAt ? b.ultimoPedidoAt.toISOString() : null,
+                // ── Campos nuevos (Motor de Recompra · 4.1). Aditivos: los admin viejos los ignoran.
+                primerPedidoAt: b.primerPedidoAt ? b.primerPedidoAt.toISOString() : null,
+                ticketPromedio: perfil.ticketPromedio,
+                cadenciaDias: perfil.cadenciaDias,
+                diasDesdeUltimo: perfil.diasDesdeUltimo,
+                segmento: perfil.segmento,
+                esVip: perfil.esVip,
+                resumenCadencia: perfil.resumenCadencia,
+                productosTop: b.productosTop,
+                pedidos: b.pedidos,
             }
         })
 

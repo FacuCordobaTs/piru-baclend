@@ -24,11 +24,12 @@ ALTER TABLE `recarga_mensajes`
   ADD COLUMN `mp_payment_id` VARCHAR(255) DEFAULT NULL;
 
 -- ---------------------------------------------------------------------------
--- Seed: 3 packs utility. Precio = variable a calibrar (por encima del costo real
--- por mensaje y ~un orden de magnitud por debajo del salto de plan de $60.000).
+-- Seed: 3 packs utility. Precio = configuración editable sin deploy (por encima del
+-- costo real por mensaje de Meta + margen). Si el pack ya está seedeado en prod,
+-- para recalibrar usar migrations/update_precios_packs_recarga.sql (UPDATE), no re-INSERT.
 -- ---------------------------------------------------------------------------
 INSERT INTO `pack_recarga` (`categoria_pack`, `nombre`, `cantidad`, `precio`, `orden`, `activo`)
 VALUES
-  ('utility', 'Recarga 500',   500,   6000.00,  1, true),
-  ('utility', 'Recarga 1.000', 1000, 11000.00,  2, true),
-  ('utility', 'Recarga 2.500', 2500, 25000.00,  3, true);
+  ('utility', 'Recarga 250',   250, 20000.00,  1, true),
+  ('utility', 'Recarga 500',   500, 35000.00,  2, true),
+  ('utility', 'Recarga 1.000', 1000, 60000.00, 3, true);

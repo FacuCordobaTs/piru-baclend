@@ -20,6 +20,7 @@ import {
 } from '../lib/metodos-pago'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { contarPedidosPagadosFranja } from '../lib/franjas'
+import { tieneAcceso, FEATURE_KEYS } from '../lib/planes'
 
 function isDiscountActive(descuento: number | null, inicio: Date | null, fin: Date | null): boolean {
   if (!descuento || descuento === 0) return false
@@ -282,6 +283,11 @@ publicRoute.get('/restaurante/:username', async (c) => {
             })
         )
 
+        // ¿El local tiene los avisos automáticos al cliente (feature Intermedio+)? El cliente usa
+        // esto para decidir si muestra el botón "Enviar pedido al WhatsApp": ese botón manual es
+        // el canal del plan Básico (sin avisos automáticos), por lo que solo aparece cuando esto es false.
+        const avisosWhatsappClienteEnabled = await tieneAcceso(db, restauranteId, FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE)
+
         return c.json({
             message: 'Datos obtenidos correctamente',
             success: true,
@@ -290,6 +296,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
                     ...restauranteSeguro,
                     transferenciaAlias: transferenciaAliasCliente,
                     metodosPago: metodosPagoPublicos,
+                    avisosWhatsappClienteEnabled,
                 },
                 productos: productosConIngredientes,
                 horarios,

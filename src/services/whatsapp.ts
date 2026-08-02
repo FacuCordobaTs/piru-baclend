@@ -7,6 +7,7 @@ import {
     pedidoUnificado as PedidoUnificadoTable,
     mensajeWhatsapp as MensajeWhatsappTable,
 } from '../db/schema'
+import { tieneAcceso, FEATURE_KEYS } from '../lib/planes'
 
 // Interfaces para tipado estricto
 interface OrderItem {
@@ -411,6 +412,14 @@ export const notificarClientePagoConfirmado = async (
     { restauranteId, pedidoId }: { restauranteId: number; pedidoId: number }
 ): Promise<void> => {
     const db = drizzle(pool);
+
+    // Los avisos automáticos al cliente por WhatsApp son feature de plan Intermedio+.
+    // En el plan Básico el cliente NUNCA recibe estos mensajes (los manda él mismo con
+    // el botón "Enviar pedido al WhatsApp"). Cuentas pre-planes: fail-open (tieneAcceso true).
+    if (!(await tieneAcceso(db, restauranteId, FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE))) {
+        console.log(`📲 [Notificar Cliente Pago] Pedido #${pedidoId} omitido (plan sin avisos automáticos al cliente)`);
+        return;
+    }
 
     const [row] = await db
         .select({

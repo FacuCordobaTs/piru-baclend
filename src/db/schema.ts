@@ -541,6 +541,10 @@ export const plan = mysqlTable("plan", {
   mensajesIncluidos: int("mensajes_incluidos").default(0).notNull(),
   // true = mensajes sin tope (plan Avanzado). Cuando es true se ignora mensajesIncluidos.
   mensajesIlimitados: boolean("mensajes_ilimitados").default(false).notNull(),
+  // Descuento porcentual al pagar el plan por año (0-20). Editable sin deploy.
+  // El negocio topea el ahorro anual a 20%; el cálculo del monto (montoPorCiclo)
+  // lo clampea de nuevo por las dudas. 0 = anual sin descuento (12 × mensual).
+  descuentoAnual: int("descuento_anual").default(20).notNull(),
   // Orden de aparición en la UI de pricing (menor = primero).
   orden: int("orden").default(0).notNull(),
   // Permite discontinuar un plan sin borrarlo: las suscripciones existentes lo conservan.
