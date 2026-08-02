@@ -166,6 +166,19 @@ function tiempoSinPedirTexto(dias: number | null): string {
   return `${Math.round(dias / 30)} meses`
 }
 
+/**
+ * Deep link con carrito precargado (tarea 4.3 · Capa 3, fricción cero). Codifica los items
+ * (productoId + cantidad) en un sufijo compacto y URL-safe `rep` que la tienda (`web/MenuDelivery`)
+ * lee para armar el carrito solo. Formato: `12x2-15x1` (idProductoXcantidad, pares con `-`).
+ * Del antojo al pedido pagado sin volver a elegir nada.
+ */
+export function encodeCarritoRep(items: { productoId: number; cantidad: number }[]): string {
+  return items
+    .filter((i) => i.productoId > 0 && i.cantidad > 0)
+    .map((i) => `${i.productoId}x${i.cantidad}`)
+    .join('-')
+}
+
 /** Frase del incentivo según el escalón (la escalera hecha copy). */
 function incentivoTexto(escalon: EscalonRecupero, codigo: string | null): string {
   if (escalon.nivel === 1) {
@@ -308,6 +321,7 @@ export async function enviarRecuperoDormido(
   // Producto favorito (más pedido por cantidad) + su foto para el header.
   let productoFavorito = 'tu pedido de siempre'
   let imagenProducto: string | null = null
+  let topProductoId: number | null = null
   const pedidoIds = pedidosValidos.map((p) => p.id)
   if (pedidoIds.length > 0) {
     const items = await db
@@ -318,15 +332,43 @@ export async function enviarRecuperoDormido(
     for (const it of items) conteo[it.productoId] = (conteo[it.productoId] || 0) + (it.cantidad ?? 1)
     const topId = Object.entries(conteo).sort((a, b) => b[1] - a[1])[0]?.[0]
     if (topId) {
+      topProductoId = Number(topId)
       const [prod] = await db
         .select({ nombre: ProductoTable.nombre, imagenUrl: ProductoTable.imagenUrl })
         .from(ProductoTable)
-        .where(eq(ProductoTable.id, Number(topId)))
+        .where(eq(ProductoTable.id, topProductoId))
         .limit(1)
       if (prod?.nombre) productoFavorito = prod.nombre
       if (prod?.imagenUrl) imagenProducto = prod.imagenUrl
     }
   }
+
+  // Deep link con carrito precargado (4.3): reconstruimos el ÚLTIMO pedido del cliente para que el
+  // botón del mensaje abra la tienda con ese carrito ya armado ("repetí tu pedido"). Fallback: el
+  // producto favorito solo. El sufijo se cuelga del username en el botón URL de la plantilla.
+  let repParam = ''
+  if (ultimoPedidoMs != null && pedidoIds.length > 0) {
+    const ultimoPedidoId = pedidosValidos
+      .slice()
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0]?.id
+    if (ultimoPedidoId) {
+      const itemsUltimo = await db
+        .select({ productoId: ItemPedidoUnificadoTable.productoId, cantidad: ItemPedidoUnificadoTable.cantidad })
+        .from(ItemPedidoUnificadoTable)
+        .where(eq(ItemPedidoUnificadoTable.pedidoId, ultimoPedidoId))
+      const agrup: Record<number, number> = {}
+      for (const it of itemsUltimo) agrup[it.productoId] = (agrup[it.productoId] || 0) + (it.cantidad ?? 1)
+      repParam = encodeCarritoRep(
+        Object.entries(agrup).map(([pid, qty]) => ({ productoId: Number(pid), cantidad: qty })),
+      )
+    }
+  }
+  if (!repParam && topProductoId) repParam = `${topProductoId}x1`
+
+  // Sufijo dinámico del botón URL: username (+ carrito precargado si lo pudimos reconstruir).
+  const usernameSuffix = rest.username
+    ? (repParam ? `${rest.username}?rep=${repParam}` : rest.username)
+    : ''
 
   // 3. Estado de la escalera → escalón a enviar.
   const toquesMap = await cargarToquesPorCliente(db, restauranteId, [clienteId])
@@ -356,7 +398,7 @@ export async function enviarRecuperoDormido(
       tiempoSinPedir: tiempoSinPedirTexto(diasDesdeUltimo),
       productoFavorito,
       incentivo: incentivoTexto(escalon, codigo),
-      usernameTienda: rest.username || '',
+      usernameTienda: usernameSuffix,
       imageUrl: imagenProducto || rest.imagenUrl || null,
     },
     { phoneId: rest.whatsappPhoneId, token: rest.whatsappAccessToken },

@@ -479,7 +479,8 @@ export interface ClientRecuperoData {
     tiempoSinPedir: string;   // {{tiempo_sin_pedir}} — ej: "3 semanas"
     productoFavorito: string; // {{producto_favorito}} — ej: "tus Alfajores de maicena"
     incentivo: string;        // {{incentivo}} — la línea del escalón (sin descuento / 10% / 20% con vencimiento)
-    usernameTienda: string;   // sufijo dinámico del botón URL (base https://my.piru.app/)
+    usernameTienda: string;   // sufijo dinámico del botón URL (base https://my.piru.app/). Puede
+                              // incluir el carrito precargado (4.3): `username?rep=12x2-15x1`.
     imageUrl?: string | null; // header IMAGE (foto del producto favorito → logo del local → default)
 }
 
