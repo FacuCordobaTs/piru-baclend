@@ -470,6 +470,27 @@ export const mensajeWhatsapp = mysqlTable("mensaje_whatsapp", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Motor de Recompra · playbook de recupero de dormidos (tarea 4.2).
+// Un registro por cada "toque" de recupero enviado a un cliente. Sostiene la
+// escalera de incentivos (nivel 1 sin descuento → 2 con 10% → 3 con 20% + vencimiento):
+// el próximo nivel se deriva de cuántos toques se enviaron DESPUÉS de su último pedido
+// (si el cliente volvió a pedir, la escalera se reinicia sola). Es, además, la base de
+// la futura atribución honesta (4.4): quién fue contactado, cuándo y con qué incentivo.
+export const recuperoCliente = mysqlTable("recupero_cliente", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  clienteId: int("cliente_id").references(() => cliente.id).notNull(),
+  telefono: varchar("telefono", { length: 50 }).notNull(),
+  // Escalón de la escalera de incentivos (1, 2 o 3).
+  nivel: int("nivel").notNull(),
+  descuentoPorcentaje: int("descuento_porcentaje").default(0).notNull(),
+  // Código de descuento generado para este toque (null en el nivel 1, que no lleva descuento).
+  codigoDescuento: varchar("codigo_descuento", { length: 50 }),
+  // Segmento del cliente al momento del envío (para atribución posterior).
+  segmento: varchar("segmento", { length: 20 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 
 
 // ------- Quitar esto una vez que ya esta resuelto lo de TALO -------

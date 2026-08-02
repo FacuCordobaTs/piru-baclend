@@ -472,6 +472,128 @@ export const notificarClientePagoConfirmado = async (
     }
 };
 
+export interface ClientRecuperoData {
+    phone: string;            // teléfono del cliente
+    customerName: string;     // {{nombre_cliente}}
+    restaurantName: string;   // {{nombre_del_local}}
+    tiempoSinPedir: string;   // {{tiempo_sin_pedir}} — ej: "3 semanas"
+    productoFavorito: string; // {{producto_favorito}} — ej: "tus Alfajores de maicena"
+    incentivo: string;        // {{incentivo}} — la línea del escalón (sin descuento / 10% / 20% con vencimiento)
+    usernameTienda: string;   // sufijo dinámico del botón URL (base https://my.piru.app/)
+    imageUrl?: string | null; // header IMAGE (foto del producto favorito → logo del local → default)
+}
+
+// Imagen por defecto del header cuando el producto favorito y el local no tienen foto propia.
+const RECUPERO_IMAGE_FALLBACK = 'https://my.piru.app/og-image.png';
+
+/**
+ * Playbook de recupero de dormidos (Motor de Recompra · tarea 4.2). Envía un mensaje de
+ * MARKETING al cliente con la marca del local (requiere sus credenciales de Meta vía OAuth),
+ * usando la plantilla `recupero_dormido_v1`.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * PLANTILLA A CREAR EN META (WhatsApp Manager → Plantillas de mensajes):
+ *   • Nombre:        recupero_dormido_v1
+ *   • Categoría:     MARKETING
+ *   • Idioma:        Español (Argentina) — es_AR
+ *   • Encabezado:    IMAGEN (media dinámico; se envía por `link` en cada mensaje).
+ *                    Subí una imagen de muestra al crearla (una foto de producto sirve).
+ *   • Cuerpo (con variables POSICIONALES {{1}}..{{5}} — así está creada en prod):
+ *
+ *        ¡Hola {{1}}! 👋
+ *
+ *        En {{2}} hace {{3}} que no te vemos y se nos antojó tentarte con {{4}}. 😋
+ *
+ *        {{5}}
+ *
+ *        Tocá el botón y pedí en segundos 👇
+ *
+ *     El ORDEN es el contrato (lo respeta el `body.parameters` de abajo):
+ *       {{1}} nombre_cliente · {{2}} nombre_del_local · {{3}} tiempo_sin_pedir ·
+ *       {{4}} producto_favorito · {{5}} incentivo
+ *     Muestras sugeridas: {{1}}=Facundo · {{2}}=Alfajor con Papas · {{3}}=1 semana ·
+ *     {{4}}=Alfajor Especial · {{5}}=Y esta vez va con un 10% OFF: usá el código VOLVE10-45 al pedir.
+ *   • Botón:         Uno solo, tipo "Visitar sitio web" → URL DINÁMICA.
+ *                    Base: https://my.piru.app/    Variable {{1}}: alfajor (el username del local).
+ *   • Pie (footer):  Opcional, ej: "Respondé BAJA para no recibir más mensajes."
+ *
+ * NOTA sobre categoría: es MARKETING (no utility) porque es un mensaje proactivo de
+ * reactivación. Por eso consume el bucket `marketing` del wallet, no el `utility`.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+export const sendClientRecuperoWhatsApp = async (c: any, data: ClientRecuperoData, creds?: WaCredentials) => {
+    const { WHATSAPP_API_TOKEN, WHATSAPP_PHONE_ID } = env<{ WHATSAPP_API_TOKEN: string; WHATSAPP_PHONE_ID: string }>(c);
+    const phoneId = creds?.phoneId ?? WHATSAPP_PHONE_ID;
+    const token = creds?.token ?? WHATSAPP_API_TOKEN;
+
+    const url = `https://graph.facebook.com/v22.0/${phoneId}/messages`;
+
+    const body = {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: data.phone,
+        type: "template",
+        template: {
+            name: "recupero_dormido_v1",
+            language: { code: "es_AR" },
+            components: [
+                {
+                    type: "header",
+                    parameters: [
+                        { type: "image", image: { link: data.imageUrl || RECUPERO_IMAGE_FALLBACK } }
+                    ]
+                },
+                {
+                    type: "body",
+                    // La plantilla usa variables POSICIONALES {{1}}..{{5}} (así se creó en Meta).
+                    // El orden ES el contrato: {{1}} nombre · {{2}} local · {{3}} tiempo · {{4}} producto · {{5}} incentivo.
+                    parameters: [
+                        { type: "text", text: data.customerName },   // {{1}}
+                        { type: "text", text: data.restaurantName },  // {{2}}
+                        { type: "text", text: data.tiempoSinPedir },  // {{3}}
+                        { type: "text", text: data.productoFavorito },// {{4}}
+                        { type: "text", text: data.incentivo }        // {{5}}
+                    ]
+                },
+                {
+                    type: "button",
+                    sub_type: "url",
+                    index: 0,
+                    parameters: [
+                        // Sufijo dinámico del botón URL: base https://my.piru.app/ + {{1}} = username del local.
+                        { type: "text", text: data.usernameTienda }
+                    ]
+                }
+            ]
+        }
+    };
+
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            console.error("❌ Error WhatsApp API (recupero):", JSON.stringify(result, null, 2));
+            return { success: false, error: result };
+        }
+
+        console.log("✅ WhatsApp de recupero enviado correctamente");
+        return { success: true, id: result.messages?.[0]?.id };
+
+    } catch (error) {
+        console.error("❌ Error de red enviando recupero:", error);
+        return { success: false, error };
+    }
+};
+
 export interface WhatsAppTextMessage {
   phone: string;
   text: string;

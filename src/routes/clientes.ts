@@ -8,8 +8,11 @@ import {
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
+import { requireFeature } from '../middleware/plan'
+import { FEATURE_KEYS } from '../lib/planes'
 import { eq, desc, inArray, notInArray, and } from 'drizzle-orm'
 import { computarPerfilesRFM } from '../lib/clientes-rfm'
+import { cargarToquesPorCliente, estadoRecupero, enviarRecuperoDormido } from '../lib/recupero'
 
 const clientesRoute = new Hono()
 
@@ -129,8 +132,13 @@ clientesRoute.get('/list', async (c) => {
             })),
         )
 
+        // Estado de la escalera de recupero por cliente (Motor de Recompra · 4.2). Un fetch para todos.
+        const toquesPorCliente = await cargarToquesPorCliente(db, restauranteId, clientes.map(cl => cl.id))
+
         const clientesConMetricas = base.map((b, i) => {
             const perfil = perfiles[i]
+            const ultimoPedidoMs = b.fechasMs.length > 0 ? Math.max(...b.fechasMs) : null
+            const recupero = estadoRecupero(toquesPorCliente[b.cliente.id] ?? [], ultimoPedidoMs)
             return {
                 ...b.cliente,
                 cantidadPedidos: b.cantidadPedidos,
@@ -145,6 +153,8 @@ clientesRoute.get('/list', async (c) => {
                 esVip: perfil.esVip,
                 resumenCadencia: perfil.resumenCadencia,
                 productosTop: b.productosTop,
+                // ── Estado de la escalera de recupero (Motor de Recompra · 4.2). También aditivo.
+                recupero,
                 pedidos: b.pedidos,
             }
         })
@@ -158,6 +168,49 @@ clientesRoute.get('/list', async (c) => {
     } catch (error) {
         console.error('Error fetching clientes:', error)
         return c.json({ message: 'Error interno del servidor', success: false }, 500)
+    }
+})
+
+/**
+ * POST /clientes/:id/recupero — Playbook de recupero de dormidos (Motor de Recompra · 4.2).
+ * Acción VOLUNTARIA del local: manda el próximo toque de la escalera de incentivos al cliente.
+ * Gateado por plan (motor_recompra = Avanzado). Consume el bucket `marketing` del wallet.
+ */
+clientesRoute.post('/:id/recupero', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const clienteId = parseInt(c.req.param('id'), 10)
+
+    if (isNaN(clienteId)) {
+        return c.json({ success: false, message: 'ID inválido' }, 400)
+    }
+
+    try {
+        const resultado = await enviarRecuperoDormido(c, db, restauranteId, clienteId)
+
+        if (!resultado.ok) {
+            // 404 si el cliente no existe; 409 por cooldown; 400 para el resto (config/envío).
+            const status = resultado.motivo === 'cliente_no_encontrado'
+                ? 404
+                : resultado.motivo === 'cooldown'
+                    ? 409
+                    : 400
+            return c.json({ success: false, message: resultado.mensaje, motivo: resultado.motivo, estado: resultado.estado }, status)
+        }
+
+        return c.json({
+            success: true,
+            message: `Mensaje de recupero enviado (nivel ${resultado.nivel})`,
+            data: {
+                nivel: resultado.nivel,
+                codigoDescuento: resultado.codigoDescuento,
+                saldoMarketing: resultado.saldoMarketing,
+                recupero: resultado.estado,
+            },
+        }, 200)
+    } catch (error) {
+        console.error('Error enviando recupero:', error)
+        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
     }
 })
 
