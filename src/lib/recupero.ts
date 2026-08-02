@@ -292,14 +292,18 @@ export async function enviarRecuperoDormido(
     .where(eq(RestauranteTable.id, restauranteId))
     .limit(1)
 
-  // Marketing con la marca del local: se necesitan sus credenciales de Meta (OAuth).
-  if (!rest?.whatsappPhoneId || !rest?.whatsappAccessToken) {
-    return {
-      ok: false,
-      motivo: 'sin_whatsapp',
-      mensaje: 'Conectá tu WhatsApp (Meta) para enviar mensajes de recupero con tu marca',
-    }
+  if (!rest) {
+    return { ok: false, motivo: 'cliente_no_encontrado', mensaje: 'Local no encontrado' }
   }
+
+  // Marca del local vs número de Piru: lo ideal es enviar con las credenciales de Meta del propio
+  // local (OAuth) para que el mensaje salga con su marca. Mientras el OAuth de Meta NO esté
+  // disponible (se implementa más adelante), permitimos enviar igual usando el número del bot de
+  // Piru (fallback en `sendClientRecuperoWhatsApp`: si `creds` es undefined usa WHATSAPP_PHONE_ID/
+  // WHATSAPP_API_TOKEN). Cuando el local ya tenga OAuth, se usan sus credenciales.
+  const credsLocal = rest.whatsappPhoneId && rest.whatsappAccessToken
+    ? { phoneId: rest.whatsappPhoneId, token: rest.whatsappAccessToken }
+    : undefined
 
   // 2. Pedidos del cliente (no cancelados) → último pedido + producto favorito.
   const pedidos = await db
@@ -401,7 +405,7 @@ export async function enviarRecuperoDormido(
       usernameTienda: usernameSuffix,
       imageUrl: imagenProducto || rest.imagenUrl || null,
     },
-    { phoneId: rest.whatsappPhoneId, token: rest.whatsappAccessToken },
+    credsLocal, // undefined ⇒ fallback al número del bot de Piru (mientras no haya OAuth de Meta)
   )
 
   if (!send.success) {
