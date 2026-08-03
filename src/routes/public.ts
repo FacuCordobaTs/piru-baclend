@@ -21,6 +21,7 @@ import {
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { contarPedidosPagadosFranja } from '../lib/franjas'
 import { tieneAcceso, FEATURE_KEYS } from '../lib/planes'
+import { salirDeColaPorPedido } from '../lib/motor-recompra'
 
 function isDiscountActive(descuento: number | null, inicio: Date | null, fin: Date | null): boolean {
   if (!descuento || descuento === 0) return false
@@ -811,6 +812,10 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
         const pedidoId = Number(nuevoPedido[0].insertId)
 
+        // Motor de Recompra · regla sagrada: si el cliente pidió, sale YA de la cola de recupero
+        // (nada peor que un "te extrañamos" a quien acaba de pedir). Best-effort, no frena el pedido.
+        if (clienteId) { salirDeColaPorPedido(db, restauranteId, clienteId).catch(() => {}) }
+
         for (const item of items) {
             const row = productosMap.get(item.productoId)!
             let precioUnitario = item.esCanjePuntos ? '0.00' : row.producto.precio
@@ -1234,6 +1239,10 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         })
 
         const pedidoId = Number(nuevoPedido[0].insertId)
+
+        // Motor de Recompra · regla sagrada: si el cliente pidió, sale YA de la cola de recupero
+        // (nada peor que un "te extrañamos" a quien acaba de pedir). Best-effort, no frena el pedido.
+        if (clienteId) { salirDeColaPorPedido(db, restauranteId, clienteId).catch(() => {}) }
 
         for (const item of items) {
             const row = productosMap.get(item.productoId)!

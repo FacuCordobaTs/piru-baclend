@@ -39,6 +39,7 @@ import { cartaIaRoute } from './routes/carta-ia';
 import { planesRoute } from './routes/planes';
 import { mensajesRoute } from './routes/mensajes';
 import { internoRoute } from './routes/interno';
+import { tickMotorRecompra } from './lib/motor-recompra';
 import { serveStatic } from 'hono/bun';
 import { readFileSync } from 'node:fs';
 
@@ -715,6 +716,18 @@ app.get(
     }
   })
 )
+
+// ── Motor de Recompra · scheduler del goteo diario ──────────────────────────
+// El motor NO le pide acciones diarias al dueño: un job gotea la cola de cada local a su ritmo.
+// Tick cada 15 min; `tickMotorRecompra` decide qué locales drenar hoy (una vez/día, a la hora
+// objetivo del local, respetando el horario de silencio y el cupo). Best-effort: si falla, se
+// reintenta en el próximo tick sin tirar el server.
+const MOTOR_TICK_MS = 15 * 60 * 1000
+setInterval(() => {
+  tickMotorRecompra(drizzle(pool)).catch((err) => {
+    console.error('❌ [Motor Recompra] tick del scheduler falló:', err)
+  })
+}, MOTOR_TICK_MS)
 
 export default {
   port: process.env.PORT || 3000,

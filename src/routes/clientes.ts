@@ -14,8 +14,11 @@ import { eq, desc, inArray, notInArray, and } from 'drizzle-orm'
 import { computarPerfilesRFM } from '../lib/clientes-rfm'
 import {
     cargarToquesPorCliente, estadoRecupero, enviarRecuperoDormido,
-    previewCampanaRecompra, ejecutarCampanaRecompra, listarCampanasRecompra,
 } from '../lib/recupero'
+import {
+    estadoMotor, activarMotor, pausarMotorManual, reanudarMotor, setCupoDiario,
+    registrarContactoManual, CUPO_DIARIO_MIN, CUPO_DIARIO_MAX,
+} from '../lib/motor-recompra'
 
 const clientesRoute = new Hono()
 
@@ -203,6 +206,14 @@ clientesRoute.post('/:id/recupero', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA),
             return c.json({ success: false, message: resultado.mensaje, motivo: resultado.motivo, estado: resultado.estado }, status)
         }
 
+        // Atribución honesta: si el cliente estaba en el grupo de control de la campaña activa, este
+        // contacto MANUAL lo saca del control y lo marca como contactado (mismo momento). Sin esto, si
+        // vuelve, se contaría como "volvió solo" e inflaría la tasa del control → subestima el uplift.
+        await registrarContactoManual(db, restauranteId, clienteId, {
+            nivel: resultado.nivel,
+            codigoDescuento: resultado.codigoDescuento,
+        })
+
         return c.json({
             success: true,
             message: `Mensaje de recupero enviado (nivel ${resultado.nivel})`,
@@ -219,59 +230,102 @@ clientesRoute.post('/:id/recupero', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA),
     }
 })
 
+// ═══════════════════════════════════════════════════════════════════════════
+// MOTOR DE RECOMPRA · GOTEO (piloto automático) — campaña persistente que gotea
+// al ritmo del cupo diario. Todo gateado por plan (motor_recompra = Avanzado).
+// ═══════════════════════════════════════════════════════════════════════════
+
 /**
- * GET /clientes/recompra/preview — Motor de Recompra · 4.4 (grupo de control).
- * Detecta la cohorte recuperable (en_riesgo/dormido/perdido contactables) y muestra cuántos se
- * contactarían y cuántos quedarían en el grupo de control (10% por segmento). No envía nada.
- * Gateado por plan (motor_recompra = Avanzado).
+ * GET /clientes/recompra/estado — la pantalla del motor:
+ *  - apagado → un PLAN de activación (cohorte detectada + propuesta de cupo + días que cubre el saldo).
+ *  - encendido → el DASHBOARD (consumo junto a retorno: contactados, volvieron, plata recuperada).
  */
-clientesRoute.get('/recompra/preview', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
+clientesRoute.get('/recompra/estado', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
-        const preview = await previewCampanaRecompra(db, restauranteId)
-        const campanas = await listarCampanasRecompra(db, restauranteId, 5)
-        return c.json({ success: true, data: { ...preview, campanas } }, 200)
+        const estado = await estadoMotor(db, restauranteId)
+        return c.json({ success: true, data: estado }, 200)
     } catch (error) {
-        console.error('Error en preview de campaña de recompra:', error)
+        console.error('Error obteniendo estado del motor de recompra:', error)
         return c.json({ success: false, message: 'Error interno del servidor' }, 500)
     }
 })
 
 /**
- * POST /clientes/recompra/ejecutar — Motor de Recompra · 4.4.
- * Enciende el motor: aparta el 10% de control (guardándolo), y le manda el toque de recupero al resto
- * en batch. Todo se registra en `campana_recompra` para la atribución posterior.
- * Gateado por plan (motor_recompra = Avanzado). Consume el bucket `marketing` del wallet (best-effort).
+ * POST /clientes/recompra/activar — la DECISIÓN humana (una vez). Enciende el motor: detecta el stock,
+ * aparta el 10% de control, carga la cola y dispara el primer goteo (respetando cupo/silencio).
+ * Body opcional: { cupoDiario }.
  */
-clientesRoute.post('/recompra/ejecutar', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
+clientesRoute.post('/recompra/activar', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
-        const resultado = await ejecutarCampanaRecompra(c, db, restauranteId)
-        if (resultado.bloqueadoPorHorario) {
-            // Protección de la base (4.5): no se manda marketing en horario de silencio.
-            return c.json({
-                success: false,
-                bloqueadoPorHorario: true,
-                message: 'Fuera del horario permitido para enviar marketing (silencio nocturno). Probá durante el día.',
-                data: resultado,
-            }, 409)
-        }
-        if (resultado.vacio) {
-            return c.json({
-                success: true,
-                message: 'No hay clientes para recuperar en este momento',
-                data: resultado,
-            }, 200)
-        }
+        const body = await c.req.json().catch(() => ({}))
+        const cupoDiario = body?.cupoDiario != null ? Number(body.cupoDiario) : undefined
+        const resultado = await activarMotor(db, restauranteId, cupoDiario)
         return c.json({
             success: true,
-            message: `Campaña enviada: ${resultado.enviados} contactados, ${resultado.totalControl} en control`,
+            message: resultado.yaActiva
+                ? 'El motor ya estaba encendido'
+                : resultado.vacio
+                    ? 'No hay clientes para recuperar en este momento'
+                    : 'Motor de recompra encendido',
             data: resultado,
         }, 200)
     } catch (error) {
-        console.error('Error ejecutando campaña de recompra:', error)
+        console.error('Error activando motor de recompra:', error)
+        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
+    }
+})
+
+/** POST /clientes/recompra/pausar — Pausar (siempre disponible). No se pierde nada: la cola queda. */
+clientesRoute.post('/recompra/pausar', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    try {
+        const ok = await pausarMotorManual(db, restauranteId)
+        if (!ok) return c.json({ success: false, message: 'No hay una campaña activa' }, 404)
+        return c.json({ success: true, message: 'Motor pausado' }, 200)
+    } catch (error) {
+        console.error('Error pausando motor de recompra:', error)
+        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
+    }
+})
+
+/** POST /clientes/recompra/reanudar — vuelve a gotear desde donde quedó. */
+clientesRoute.post('/recompra/reanudar', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    try {
+        const ok = await reanudarMotor(db, restauranteId)
+        if (!ok) return c.json({ success: false, message: 'No hay una campaña para reanudar' }, 404)
+        return c.json({ success: true, message: 'Motor reanudado' }, 200)
+    } catch (error) {
+        console.error('Error reanudando motor de recompra:', error)
+        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
+    }
+})
+
+/** PUT /clientes/recompra/config — ajusta el cupo diario (acotado al tope duro de sistema). */
+clientesRoute.put('/recompra/config', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    try {
+        const body = await c.req.json().catch(() => ({}))
+        const cupoDiario = Number(body?.cupoDiario)
+        if (!Number.isFinite(cupoDiario)) {
+            return c.json({ success: false, message: 'cupoDiario inválido' }, 400)
+        }
+        const aplicado = await setCupoDiario(db, restauranteId, cupoDiario)
+        if (aplicado == null) return c.json({ success: false, message: 'No hay una campaña activa' }, 404)
+        return c.json({
+            success: true,
+            message: 'Cupo actualizado',
+            data: { cupoDiario: aplicado, min: CUPO_DIARIO_MIN, max: CUPO_DIARIO_MAX },
+        }, 200)
+    } catch (error) {
+        console.error('Error configurando motor de recompra:', error)
         return c.json({ success: false, message: 'Error interno del servidor' }, 500)
     }
 })

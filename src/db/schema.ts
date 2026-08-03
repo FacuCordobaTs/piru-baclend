@@ -512,6 +512,23 @@ export const campanaRecompra = mysqlTable("campana_recompra", {
   totalContactados: int("total_contactados").default(0).notNull(),
   totalControl: int("total_control").default(0).notNull(),
   totalFallidos: int("total_fallidos").default(0).notNull(),
+  // ── Motor de Recompra · goteo (piloto automático) — campos aditivos ──────────
+  // El modelo dejó de ser "batch masivo por click" para ser una CAMPAÑA PERSISTENTE
+  // que gotea a ritmo diario. Una fila con `estado` no-null es la campaña viva del
+  // local (una a la vez). Las filas viejas (estado null) son los encendidos batch legacy.
+  // 'activa' | 'pausada_sin_saldo' | 'pausada_manual' | 'completada'
+  estado: varchar("estado", { length: 20 }),
+  // Cupo diario de envíos (warm-up del número + cocina sin picos). Configurable por local, con tope duro de sistema.
+  cupoDiario: int("cupo_diario").default(30).notNull(),
+  // Contador del día en curso (día de Argentina "YYYY-MM-DD") y cuántos se enviaron ese día.
+  diaContador: varchar("dia_contador", { length: 10 }),
+  enviadosHoy: int("enviados_hoy").default(0).notNull(),
+  // Total acumulado de mensajes enviados por esta campaña (para el marcador diario).
+  totalEnviados: int("total_enviados").default(0).notNull(),
+  // Protección contra la súplica: se avisa una sola vez al pausar por saldo, luego 1 recordatorio/semana.
+  avisoSinSaldoAt: timestamp("aviso_sin_saldo_at"),
+  activadaAt: timestamp("activada_at"),
+  pausadaAt: timestamp("pausada_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -528,6 +545,40 @@ export const campanaRecompraCliente = mysqlTable("campana_recompra_cliente", {
   codigoDescuento: varchar("codigo_descuento", { length: 50 }),
   envioOk: boolean("envio_ok").default(false).notNull(),
   // Snapshots al momento de la campaña, para medir la atribución después (¿volvió a pedir?).
+  totalGastadoSnapshot: decimal("total_gastado_snapshot", { precision: 12, scale: 2 }).default("0.00"),
+  ultimoPedidoAtSnapshot: timestamp("ultimo_pedido_at_snapshot"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+
+// Motor de Recompra · goteo — COLA DE ENVÍOS (piloto automático).
+// El corazón del rediseño: en vez de mandar todo de una, la campaña deja pendientes en esta cola y
+// un job diario los gotea al ritmo del cupo. Dos poblaciones:
+//   - 'flujo'  → clientes que cruzan HOY su umbral personal (máxima prioridad, nunca se posponen).
+//   - 'stock'  → el backlog de ya-fríos al encender (se drena por prioridad: segmento × ticket).
+// Regla sagrada: si el cliente hace un pedido, su fila pendiente pasa a 'salido' (no se lo contacta).
+export const colaRecompra = mysqlTable("cola_recompra", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  campanaId: int("campana_id").references(() => campanaRecompra.id).notNull(),
+  clienteId: int("cliente_id").references(() => cliente.id).notNull(),
+  telefono: varchar("telefono", { length: 50 }),
+  segmento: varchar("segmento", { length: 20 }),
+  // Prioridad para drenar el stock: peso del segmento × ticket histórico (más alto = antes).
+  prioridad: decimal("prioridad", { precision: 14, scale: 2 }).default("0.00"),
+  // 'flujo' | 'stock'
+  poblacion: varchar("poblacion", { length: 10 }).notNull(),
+  // 'contactado' | 'control' (el 10% apartado para la atribución honesta).
+  rol: varchar("rol", { length: 20 }).default("contactado").notNull(),
+  // Cuándo debería salir: flujo → hoy; stock → lo antes posible ajustado a su mejor día/franja.
+  dueDate: timestamp("due_date"),
+  // 'pendiente' | 'enviado' | 'salido' | 'fallido' | 'control'
+  estado: varchar("estado", { length: 20 }).default("pendiente").notNull(),
+  // Escalón de la escalera que se le mandó (se resuelve al enviar).
+  nivel: int("nivel"),
+  codigoDescuento: varchar("codigo_descuento", { length: 50 }),
+  enviadoAt: timestamp("enviado_at"),
+  // Snapshots al encolar, para medir la atribución después (¿volvió a pedir tras el toque?).
   totalGastadoSnapshot: decimal("total_gastado_snapshot", { precision: 12, scale: 2 }).default("0.00"),
   ultimoPedidoAtSnapshot: timestamp("ultimo_pedido_at_snapshot"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
