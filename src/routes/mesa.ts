@@ -272,7 +272,8 @@ const mesaRoute = new Hono()
           nombrePedido: ultimoPedido[0]?.nombrePedido || null
         },
         productos: productosConIngredientes,
-        restaurante: restaurante[0] || null
+        // Glassmorphism discontinuado: la carta siempre usa el diseño sólido (no-glass).
+        restaurante: restaurante[0] ? { ...restaurante[0], disenoAlternativo: true } : null
       }
     }, 200)
   })

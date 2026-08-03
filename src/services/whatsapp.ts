@@ -516,7 +516,10 @@ const RECUPERO_IMAGE_FALLBACK = 'https://my.piru.app/og-image.png';
  *     {{4}}=Alfajor Especial · {{5}}=Y esta vez va con un 10% OFF: usá el código VOLVE10-45 al pedir.
  *   • Botón:         Uno solo, tipo "Visitar sitio web" → URL DINÁMICA.
  *                    Base: https://my.piru.app/    Variable {{1}}: alfajor (el username del local).
- *   • Pie (footer):  Opcional, ej: "Respondé BAJA para no recibir más mensajes."
+ *   • Pie (footer):  NO agregar un pie que instruya "respondé BAJA para no recibir más". El opt-out
+ *                    funciona igual sin anunciarlo: si el cliente escribe "BAJA"/"STOP" por su cuenta,
+ *                    el webhook lo respeta (ver `procesarComandoOptOut` en `lib/proteccion-base.ts`).
+ *                    Dejar el mensaje limpio, sin texto de baja visible para el comensal.
  *
  * NOTA sobre categoría: es MARKETING (no utility) porque es un mensaje proactivo de
  * reactivación. Por eso consume el bucket `marketing` del wallet, no el `utility`.

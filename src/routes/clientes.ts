@@ -12,7 +12,10 @@ import { requireFeature } from '../middleware/plan'
 import { FEATURE_KEYS } from '../lib/planes'
 import { eq, desc, inArray, notInArray, and } from 'drizzle-orm'
 import { computarPerfilesRFM } from '../lib/clientes-rfm'
-import { cargarToquesPorCliente, estadoRecupero, enviarRecuperoDormido } from '../lib/recupero'
+import {
+    cargarToquesPorCliente, estadoRecupero, enviarRecuperoDormido,
+    previewCampanaRecompra, ejecutarCampanaRecompra, listarCampanasRecompra,
+} from '../lib/recupero'
 
 const clientesRoute = new Hono()
 
@@ -189,10 +192,12 @@ clientesRoute.post('/:id/recupero', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA),
         const resultado = await enviarRecuperoDormido(c, db, restauranteId, clienteId)
 
         if (!resultado.ok) {
-            // 404 si el cliente no existe; 409 por cooldown; 400 para el resto (config/envío).
+            // 404 si el cliente no existe; 409 por barreras "no ahora" (cooldown + protección de la
+            // base: opt-out / tope mensual / horario de silencio); 400 para el resto (config/envío).
+            const bloqueos = ['cooldown', 'opt_out', 'tope_mensual', 'horario_silencio']
             const status = resultado.motivo === 'cliente_no_encontrado'
                 ? 404
-                : resultado.motivo === 'cooldown'
+                : bloqueos.includes(resultado.motivo ?? '')
                     ? 409
                     : 400
             return c.json({ success: false, message: resultado.mensaje, motivo: resultado.motivo, estado: resultado.estado }, status)
@@ -210,6 +215,63 @@ clientesRoute.post('/:id/recupero', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA),
         }, 200)
     } catch (error) {
         console.error('Error enviando recupero:', error)
+        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
+    }
+})
+
+/**
+ * GET /clientes/recompra/preview — Motor de Recompra · 4.4 (grupo de control).
+ * Detecta la cohorte recuperable (en_riesgo/dormido/perdido contactables) y muestra cuántos se
+ * contactarían y cuántos quedarían en el grupo de control (10% por segmento). No envía nada.
+ * Gateado por plan (motor_recompra = Avanzado).
+ */
+clientesRoute.get('/recompra/preview', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    try {
+        const preview = await previewCampanaRecompra(db, restauranteId)
+        const campanas = await listarCampanasRecompra(db, restauranteId, 5)
+        return c.json({ success: true, data: { ...preview, campanas } }, 200)
+    } catch (error) {
+        console.error('Error en preview de campaña de recompra:', error)
+        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
+    }
+})
+
+/**
+ * POST /clientes/recompra/ejecutar — Motor de Recompra · 4.4.
+ * Enciende el motor: aparta el 10% de control (guardándolo), y le manda el toque de recupero al resto
+ * en batch. Todo se registra en `campana_recompra` para la atribución posterior.
+ * Gateado por plan (motor_recompra = Avanzado). Consume el bucket `marketing` del wallet (best-effort).
+ */
+clientesRoute.post('/recompra/ejecutar', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    try {
+        const resultado = await ejecutarCampanaRecompra(c, db, restauranteId)
+        if (resultado.bloqueadoPorHorario) {
+            // Protección de la base (4.5): no se manda marketing en horario de silencio.
+            return c.json({
+                success: false,
+                bloqueadoPorHorario: true,
+                message: 'Fuera del horario permitido para enviar marketing (silencio nocturno). Probá durante el día.',
+                data: resultado,
+            }, 409)
+        }
+        if (resultado.vacio) {
+            return c.json({
+                success: true,
+                message: 'No hay clientes para recuperar en este momento',
+                data: resultado,
+            }, 200)
+        }
+        return c.json({
+            success: true,
+            message: `Campaña enviada: ${resultado.enviados} contactados, ${resultado.totalControl} en control`,
+            data: resultado,
+        }, 200)
+    } catch (error) {
+        console.error('Error ejecutando campaña de recompra:', error)
         return c.json({ success: false, message: 'Error interno del servidor' }, 500)
     }
 })

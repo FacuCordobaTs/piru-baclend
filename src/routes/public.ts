@@ -294,6 +294,10 @@ publicRoute.get('/restaurante/:username', async (c) => {
             data: {
                 restaurante: {
                     ...restauranteSeguro,
+                    // El glassmorphism quedó discontinuado: la tienda usa siempre el diseño
+                    // sólido. Forzamos `true` para que hasta los bundles cliente viejos
+                    // (que aún ramifican por este flag) rendericen la carta no-glass.
+                    disenoAlternativo: true,
                     transferenciaAlias: transferenciaAliasCliente,
                     metodosPago: metodosPagoPublicos,
                     avisosWhatsappClienteEnabled,

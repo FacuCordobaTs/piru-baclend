@@ -63,7 +63,10 @@ export const restaurante = mysqlTable("restaurante", {
 
   colorPrimario: varchar("color_primario", { length: 50 }),
   colorSecundario: varchar("color_secundario", { length: 50 }),
-  disenoAlternativo: boolean("diseno_alternativo").default(false).notNull(),
+  // Diseño de las cartas de producto. El glassmorphism quedó discontinuado: las cartas
+  // usan siempre el diseño sólido (no-glass). La columna se mantiene por retrocompat con
+  // clientes viejos, pero el frontend la ignora y el backend siempre responde `true`.
+  disenoAlternativo: boolean("diseno_alternativo").default(true).notNull(),
   codigoDescuentoEnabled: boolean("codigo_descuento_enabled").default(true).notNull(),
 
   orderGroupEnabled: boolean("order_group_enabled").default(true).notNull(),
@@ -372,6 +375,11 @@ export const cliente = mysqlTable("cliente", {
   telefono: varchar("telefono", { length: 50 }).notNull(),
   direccion: varchar("direccion", { length: 255 }),
   puntos: int("puntos").default(0).notNull(),
+  // Motor de Recompra · 4.5 (protección de la base) — opt-out de mensajes de MARKETING.
+  // Si el cliente pide la baja (respondió "BAJA"/"STOP" por WhatsApp), no se lo contacta más
+  // con recupero/campañas. NO afecta los mensajes transaccionales (pedido/pago), que siempre salen.
+  marketingOptOut: boolean("marketing_opt_out").default(false).notNull(),
+  marketingOptOutAt: timestamp("marketing_opt_out_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -488,6 +496,40 @@ export const recuperoCliente = mysqlTable("recupero_cliente", {
   codigoDescuento: varchar("codigo_descuento", { length: 50 }),
   // Segmento del cliente al momento del envío (para atribución posterior).
   segmento: varchar("segmento", { length: 20 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+
+// Motor de Recompra · 4.4 — Campaña de recompra (envío batch) + grupo de control.
+// Cada "encendido del motor" es una campaña: se detecta la cohorte recuperable, se aparta al azar
+// un 10% de cada segmento como GRUPO DE CONTROL (no se contacta) y al resto se le envía el toque.
+// Guardar quién quedó en control es lo que hace posible la atribución honesta ("los contactados
+// volvieron al X% vs Y% los de control"). Imposible de reconstruir después: por eso va desde el día 1.
+export const campanaRecompra = mysqlTable("campana_recompra", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  totalDetectados: int("total_detectados").default(0).notNull(),
+  totalContactados: int("total_contactados").default(0).notNull(),
+  totalControl: int("total_control").default(0).notNull(),
+  totalFallidos: int("total_fallidos").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const campanaRecompraCliente = mysqlTable("campana_recompra_cliente", {
+  id: int("id").primaryKey().autoincrement(),
+  campanaId: int("campana_id").references(() => campanaRecompra.id).notNull(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  clienteId: int("cliente_id").references(() => cliente.id).notNull(),
+  // 'contactado' | 'control' — el control es el 10% apartado al azar (atribución honesta).
+  rol: varchar("rol", { length: 20 }).notNull(),
+  segmento: varchar("segmento", { length: 20 }),
+  // Escalón de la escalera enviado (null en control).
+  nivel: int("nivel"),
+  codigoDescuento: varchar("codigo_descuento", { length: 50 }),
+  envioOk: boolean("envio_ok").default(false).notNull(),
+  // Snapshots al momento de la campaña, para medir la atribución después (¿volvió a pedir?).
+  totalGastadoSnapshot: decimal("total_gastado_snapshot", { precision: 12, scale: 2 }).default("0.00"),
+  ultimoPedidoAtSnapshot: timestamp("ultimo_pedido_at_snapshot"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

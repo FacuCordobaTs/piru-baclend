@@ -18,7 +18,7 @@
 // que salga el mensaje). El envío usa las credenciales de Meta del propio local (marca del local).
 
 import { type MySql2Database } from 'drizzle-orm/mysql2'
-import { and, eq, inArray, desc } from 'drizzle-orm'
+import { and, eq, inArray, notInArray, desc } from 'drizzle-orm'
 import {
   cliente as ClienteTable,
   restaurante as RestauranteTable,
@@ -27,9 +27,19 @@ import {
   producto as ProductoTable,
   codigoDescuento as CodigoDescuentoTable,
   recuperoCliente as RecuperoClienteTable,
+  campanaRecompra as CampanaRecompraTable,
+  campanaRecompraCliente as CampanaRecompraClienteTable,
 } from '../db/schema'
 import { consumirMensaje } from './mensajes-wallet'
+import { computarPerfilesRFM, type SegmentoCliente } from './clientes-rfm'
 import { sendClientRecuperoWhatsApp } from '../services/whatsapp'
+import {
+  chequearProteccionMarketing,
+  enHorarioSilencio,
+  contarToquesEnVentana,
+  TOPE_MARKETING_POR_CLIENTE,
+  type MotivoBloqueoMarketing,
+} from './proteccion-base'
 
 type Db = MySql2Database<Record<string, never>>
 
@@ -250,7 +260,7 @@ async function upsertCuponRecupero(
 export interface ResultadoEnvioRecupero {
   ok: boolean
   /** Código de error legible para la UI cuando ok=false. */
-  motivo?: 'sin_whatsapp' | 'sin_telefono' | 'cooldown' | 'cliente_no_encontrado' | 'envio_fallido'
+  motivo?: 'sin_whatsapp' | 'sin_telefono' | 'cooldown' | 'cliente_no_encontrado' | 'envio_fallido' | MotivoBloqueoMarketing
   mensaje?: string
   nivel?: number
   codigoDescuento?: string | null
@@ -377,6 +387,17 @@ export async function enviarRecuperoDormido(
   // 3. Estado de la escalera → escalón a enviar.
   const toquesMap = await cargarToquesPorCliente(db, restauranteId, [clienteId])
   const estado = estadoRecupero(toquesMap[clienteId] ?? [], ultimoPedidoMs)
+
+  // 3.a Protección de la base (4.5): opt-out respetado + tope por cliente/mes + horario de silencio.
+  //     Es un cimiento no negociable: el motor no debe poder quemar la base ni la reputación del número.
+  const proteccion = chequearProteccionMarketing({
+    optOut: !!cli.marketingOptOut,
+    toques: toquesMap[clienteId] ?? [],
+  })
+  if (!proteccion.permitido) {
+    return { ok: false, motivo: proteccion.motivo, mensaje: proteccion.mensaje, estado }
+  }
+
   if (!estado.puedeEnviar) {
     return {
       ok: false,
@@ -449,4 +470,341 @@ export async function enviarRecuperoDormido(
     saldoMarketing,
     estado: nuevoEstado,
   }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CAMPAÑA DE RECOMPRA + GRUPO DE CONTROL (tarea 4.4)
+//
+// El "encendido del motor": en vez de ir cliente por cliente apretando un botón, el local dispara
+// UNA campaña. El sistema detecta la cohorte recuperable, aparta al azar un 10% de cada segmento
+// como GRUPO DE CONTROL (no se contacta) y le manda el toque de recupero al resto, todo en batch.
+// El control se guarda para poder medir la atribución honesta después (contactados vs control).
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** Segmentos donde tiene sentido el recupero (el cliente se enfrió respecto de SU propio ritmo). */
+export const SEGMENTOS_RECUPERABLES: SegmentoCliente[] = ['en_riesgo', 'dormido', 'perdido']
+
+/** Fracción de cada segmento que se aparta al azar como grupo de control (no negociable, día 1). */
+export const PORCENTAJE_CONTROL = 0.1
+
+export interface ClienteCohorte {
+  clienteId: number
+  nombre: string
+  telefono: string
+  segmento: SegmentoCliente
+  diasDesdeUltimo: number | null
+  totalGastado: number
+  ultimoPedidoMs: number | null
+  cantidadPedidos: number
+  proximoNivel: number
+}
+
+/**
+ * Detecta la cohorte recuperable de un local: clientes en un segmento recuperable
+ * (en_riesgo/dormido/perdido), con teléfono cargado y fuera del cooldown de recupero.
+ * Reusa el mismo cerebro RFM que la "Base de clientes" (misma verdad, calculada on-the-fly).
+ */
+export async function cargarCohorteRecompra(
+  db: Db,
+  restauranteId: number,
+): Promise<ClienteCohorte[]> {
+  const clientes = await db
+    .select({
+      id: ClienteTable.id,
+      nombre: ClienteTable.nombre,
+      telefono: ClienteTable.telefono,
+      marketingOptOut: ClienteTable.marketingOptOut,
+    })
+    .from(ClienteTable)
+    .where(eq(ClienteTable.restauranteId, restauranteId))
+  if (clientes.length === 0) return []
+
+  const pedidos = await db
+    .select({
+      clienteId: PedidoUnificadoTable.clienteId,
+      total: PedidoUnificadoTable.total,
+      createdAt: PedidoUnificadoTable.createdAt,
+    })
+    .from(PedidoUnificadoTable)
+    .where(
+      and(
+        eq(PedidoUnificadoTable.restauranteId, restauranteId),
+        notInArray(PedidoUnificadoTable.estado, ['cancelled']),
+      ),
+    )
+
+  const porCliente: Record<number, { fechasMs: number[]; total: number }> = {}
+  for (const cl of clientes) porCliente[cl.id] = { fechasMs: [], total: 0 }
+  for (const p of pedidos) {
+    const g = porCliente[p.clienteId as number]
+    if (!g) continue
+    g.fechasMs.push(new Date(p.createdAt).getTime())
+    g.total += parseFloat(p.total || '0')
+  }
+
+  const perfiles = computarPerfilesRFM(
+    clientes.map((cl) => ({
+      cantidadPedidos: porCliente[cl.id].fechasMs.length,
+      totalGastado: porCliente[cl.id].total,
+      fechasPedidos: porCliente[cl.id].fechasMs,
+    })),
+  )
+
+  const toques = await cargarToquesPorCliente(db, restauranteId, clientes.map((cl) => cl.id))
+
+  const cohorte: ClienteCohorte[] = []
+  clientes.forEach((cl, i) => {
+    const perfil = perfiles[i]
+    if (!SEGMENTOS_RECUPERABLES.includes(perfil.segmento)) return
+    if (!cl.telefono) return
+    // Protección de la base (4.5): fuera de la cohorte los que pidieron la baja (opt-out) y los que
+    // ya tocaron el tope de marketing del mes. Así el batch no los alcanza ni figuran en la preview.
+    if (cl.marketingOptOut) return
+    if (contarToquesEnVentana(toques[cl.id] ?? []) >= TOPE_MARKETING_POR_CLIENTE) return
+    const g = porCliente[cl.id]
+    const ultimoPedidoMs = g.fechasMs.length > 0 ? Math.max(...g.fechasMs) : null
+    const estado = estadoRecupero(toques[cl.id] ?? [], ultimoPedidoMs)
+    if (!estado.puedeEnviar) return
+    cohorte.push({
+      clienteId: cl.id,
+      nombre: cl.nombre || 'Cliente',
+      telefono: cl.telefono,
+      segmento: perfil.segmento,
+      diasDesdeUltimo: perfil.diasDesdeUltimo,
+      totalGastado: g.total,
+      ultimoPedidoMs,
+      cantidadPedidos: g.fechasMs.length,
+      proximoNivel: estado.proximoNivel,
+    })
+  })
+  return cohorte
+}
+
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
+/**
+ * Aparta al azar un 10% de CADA segmento como grupo de control. Se hace por segmento (no sobre el
+ * total) para que la medición sea comparable dentro de cada estado de ciclo de vida. Con muy pocos
+ * clientes en un segmento el control redondea a 0 (no se puede medir honestamente con 2 casos).
+ */
+export function separarControl(cohorte: ClienteCohorte[]): {
+  contactar: ClienteCohorte[]
+  control: ClienteCohorte[]
+} {
+  const contactar: ClienteCohorte[] = []
+  const control: ClienteCohorte[] = []
+  const porSeg: Record<string, ClienteCohorte[]> = {}
+  for (const cl of cohorte) (porSeg[cl.segmento] ??= []).push(cl)
+  for (const seg of Object.keys(porSeg)) {
+    const arr = shuffle(porSeg[seg])
+    const nControl = Math.round(arr.length * PORCENTAJE_CONTROL)
+    control.push(...arr.slice(0, nControl))
+    contactar.push(...arr.slice(nControl))
+  }
+  return { contactar, control }
+}
+
+/** Resumen por segmento para la preview de la campaña (qué se detectó / qué se contactaría). */
+export interface ResumenSegmentoCohorte {
+  segmento: SegmentoCliente
+  detectados: number
+  aContactar: number
+  control: number
+  facturacionEnJuego: number
+}
+
+export interface PreviewCampana {
+  totalDetectados: number
+  totalAContactar: number
+  totalControl: number
+  facturacionEnJuego: number
+  /** Protección de la base (4.5): true si ahora mismo es horario de silencio (no se puede enviar). */
+  horarioSilencio: boolean
+  porSegmento: ResumenSegmentoCohorte[]
+  clientes: {
+    clienteId: number
+    nombre: string
+    segmento: SegmentoCliente
+    diasDesdeUltimo: number | null
+    totalGastado: number
+    proximoNivel: number
+  }[]
+}
+
+/** Arma la preview (sin enviar nada): la cohorte detectada + el 10% que quedaría en control. */
+export async function previewCampanaRecompra(
+  db: Db,
+  restauranteId: number,
+): Promise<PreviewCampana> {
+  const cohorte = await cargarCohorteRecompra(db, restauranteId)
+  const nControlEstimado: Record<string, number> = {}
+  const porSegMap: Record<string, ClienteCohorte[]> = {}
+  for (const cl of cohorte) (porSegMap[cl.segmento] ??= []).push(cl)
+  for (const seg of Object.keys(porSegMap)) {
+    nControlEstimado[seg] = Math.round(porSegMap[seg].length * PORCENTAJE_CONTROL)
+  }
+
+  const porSegmento: ResumenSegmentoCohorte[] = SEGMENTOS_RECUPERABLES
+    .filter((seg) => (porSegMap[seg]?.length ?? 0) > 0)
+    .map((seg) => {
+      const arr = porSegMap[seg] ?? []
+      const control = nControlEstimado[seg] ?? 0
+      return {
+        segmento: seg,
+        detectados: arr.length,
+        aContactar: arr.length - control,
+        control,
+        facturacionEnJuego: arr.reduce((acc, c) => acc + c.totalGastado, 0),
+      }
+    })
+
+  const totalControl = Object.values(nControlEstimado).reduce((a, b) => a + b, 0)
+  return {
+    totalDetectados: cohorte.length,
+    totalAContactar: cohorte.length - totalControl,
+    totalControl,
+    facturacionEnJuego: cohorte.reduce((acc, c) => acc + c.totalGastado, 0),
+    horarioSilencio: enHorarioSilencio(),
+    porSegmento,
+    clientes: cohorte.map((c) => ({
+      clienteId: c.clienteId,
+      nombre: c.nombre,
+      segmento: c.segmento,
+      diasDesdeUltimo: c.diasDesdeUltimo,
+      totalGastado: c.totalGastado,
+      proximoNivel: c.proximoNivel,
+    })),
+  }
+}
+
+export interface ResultadoCampana {
+  ok: boolean
+  vacio?: boolean
+  /** Protección de la base (4.5): true si se rechazó por estar en horario de silencio. */
+  bloqueadoPorHorario?: boolean
+  campanaId?: number
+  totalDetectados: number
+  totalControl: number
+  enviados: number
+  fallidos: number
+}
+
+/**
+ * Ejecuta la campaña batch: detecta la cohorte, aparta el 10% de control (guardándolo), y le manda
+ * el toque de recupero al resto reusando `enviarRecuperoDormido` (misma escalera, cupón, deep link,
+ * ledger y consumo del wallet que el envío individual). Persiste toda la cohorte en
+ * `campana_recompra_cliente` (rol contactado/control + snapshots) para la atribución posterior.
+ *
+ * El gating por plan (motor_recompra = Avanzado) lo aplica el middleware de la ruta.
+ */
+export async function ejecutarCampanaRecompra(
+  c: any,
+  db: Db,
+  restauranteId: number,
+): Promise<ResultadoCampana> {
+  // Protección de la base (4.5): un batch de madrugada puede tocar a muchos de una → si estamos en
+  // horario de silencio, no se manda nada (el opt-out y el tope por cliente ya filtran la cohorte).
+  if (enHorarioSilencio()) {
+    return {
+      ok: false,
+      bloqueadoPorHorario: true,
+      totalDetectados: 0,
+      totalControl: 0,
+      enviados: 0,
+      fallidos: 0,
+    }
+  }
+
+  const cohorte = await cargarCohorteRecompra(db, restauranteId)
+  if (cohorte.length === 0) {
+    return { ok: true, vacio: true, totalDetectados: 0, totalControl: 0, enviados: 0, fallidos: 0 }
+  }
+
+  const { contactar, control } = separarControl(cohorte)
+
+  const [ins] = await db.insert(CampanaRecompraTable).values({
+    restauranteId,
+    totalDetectados: cohorte.length,
+    totalContactados: 0,
+    totalControl: control.length,
+    totalFallidos: 0,
+  })
+  const campanaId = Number((ins as any).insertId)
+
+  const snapshot = (cl: ClienteCohorte) => ({
+    totalGastadoSnapshot: cl.totalGastado.toFixed(2),
+    ultimoPedidoAtSnapshot: cl.ultimoPedidoMs != null ? new Date(cl.ultimoPedidoMs) : null,
+  })
+
+  // Grupo de control: se registra pero NO se contacta (es el punto de la atribución honesta).
+  for (const cl of control) {
+    await db.insert(CampanaRecompraClienteTable).values({
+      campanaId,
+      restauranteId,
+      clienteId: cl.clienteId,
+      rol: 'control',
+      segmento: cl.segmento,
+      nivel: null,
+      codigoDescuento: null,
+      envioOk: false,
+      ...snapshot(cl),
+    })
+  }
+
+  // Grupo contactado: envío batch (reusa el mismo camino que el envío individual).
+  let enviados = 0
+  let fallidos = 0
+  for (const cl of contactar) {
+    let res: ResultadoEnvioRecupero
+    try {
+      res = await enviarRecuperoDormido(c, db, restauranteId, cl.clienteId)
+    } catch (err) {
+      console.error(`❌ [Campaña ${campanaId}] Error enviando a cliente ${cl.clienteId}:`, err)
+      res = { ok: false, motivo: 'envio_fallido' }
+    }
+    if (res.ok) enviados++
+    else fallidos++
+    await db.insert(CampanaRecompraClienteTable).values({
+      campanaId,
+      restauranteId,
+      clienteId: cl.clienteId,
+      rol: 'contactado',
+      segmento: cl.segmento,
+      nivel: res.nivel ?? cl.proximoNivel,
+      codigoDescuento: res.codigoDescuento ?? null,
+      envioOk: !!res.ok,
+      ...snapshot(cl),
+    })
+  }
+
+  await db
+    .update(CampanaRecompraTable)
+    .set({ totalContactados: enviados, totalFallidos: fallidos })
+    .where(eq(CampanaRecompraTable.id, campanaId))
+
+  return {
+    ok: true,
+    campanaId,
+    totalDetectados: cohorte.length,
+    totalControl: control.length,
+    enviados,
+    fallidos,
+  }
+}
+
+/** Historial de campañas del local (para mostrar el resultado del último encendido). */
+export async function listarCampanasRecompra(db: Db, restauranteId: number, limite = 10) {
+  return db
+    .select()
+    .from(CampanaRecompraTable)
+    .where(eq(CampanaRecompraTable.restauranteId, restauranteId))
+    .orderBy(desc(CampanaRecompraTable.createdAt))
+    .limit(limite)
 }

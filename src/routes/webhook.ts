@@ -18,6 +18,7 @@ import { sendOrderWhatsApp, sendWhatsAppText, notificarClientePagoConfirmado } f
 import { consultarPagoTalo } from '../services/talo'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { procesarMensajeIA, notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
+import { procesarComandoOptOut } from '../lib/proteccion-base'
 
 const webhookRoute = new Hono()
 
@@ -705,6 +706,22 @@ async function processIncomingWhatsApp(c: any, body: any) {
 
         const restaurante = restaurantes[0];
         console.log(`✅ [WhatsApp] Enrutado a restaurante ${restaurante.id} (${restaurante.nombre})`);
+
+        // Protección de la base (Motor de Recompra · 4.5): opt-out automático y respetado. Si el
+        // cliente responde "BAJA"/"STOP" (o "ALTA" para volver), se marca el flag y NO se lo pasa a la
+        // IA de atención (el comando no es una consulta). El opt-out sólo frena el MARKETING; los
+        // mensajes transaccionales (pedido/pago) siguen saliendo.
+        const accionOptOut = await procesarComandoOptOut(db, restaurante.id, fromPhone, messageText);
+        if (accionOptOut) {
+          const confirmacion = accionOptOut === 'opt_out'
+            ? 'Listo ✅ No vas a recibir más mensajes promocionales. Escribí ALTA cuando quieras volver a recibirlos.'
+            : 'Listo ✅ Vas a volver a recibir nuestras novedades. ¡Gracias!';
+          await sendWhatsAppText(process.env.WHATSAPP_API_TOKEN!, phoneNumberId, {
+            phone: fromPhone,
+            text: confirmacion,
+          }).catch((err) => console.error('❌ [WhatsApp] Error confirmando opt-out:', err));
+          continue;
+        }
 
         await procesarMensajeIA({
           restauranteId: restaurante.id,
