@@ -32,7 +32,7 @@ import {
 } from '../db/schema'
 import { consumirMensaje } from './mensajes-wallet'
 import { computarPerfilesRFM, type SegmentoCliente } from './clientes-rfm'
-import { sendClientRecuperoWhatsApp } from '../services/whatsapp'
+import { sendClientRecuperoWhatsApp, resolverCredsRestaurante } from '../services/whatsapp'
 import {
   chequearProteccionMarketing,
   enHorarioSilencio,
@@ -311,9 +311,7 @@ export async function enviarRecuperoDormido(
   // disponible (se implementa más adelante), permitimos enviar igual usando el número del bot de
   // Piru (fallback en `sendClientRecuperoWhatsApp`: si `creds` es undefined usa WHATSAPP_PHONE_ID/
   // WHATSAPP_API_TOKEN). Cuando el local ya tenga OAuth, se usan sus credenciales.
-  const credsLocal = rest.whatsappPhoneId && rest.whatsappAccessToken
-    ? { phoneId: rest.whatsappPhoneId, token: rest.whatsappAccessToken }
-    : undefined
+  const credsLocal = resolverCredsRestaurante(rest)
 
   // 2. Pedidos del cliente (no cancelados) → último pedido + producto favorito.
   const pedidos = await db

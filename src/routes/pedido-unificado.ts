@@ -20,7 +20,7 @@ import { eq, desc, and, or, not, inArray, notInArray, sql } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { wsManager } from '../websocket/manager'
-import { sendClientOrderDispatchedWhatsApp, sendClientPaymentConfirmedWhatsApp, sendOrderWhatsApp } from '../services/whatsapp'
+import { sendClientOrderDispatchedWhatsApp, sendClientPaymentConfirmedWhatsApp, sendOrderWhatsApp, resolverCredsRestaurante } from '../services/whatsapp'
 import {
   rowToPagoRow,
   restauranteOcultaPedidosNoPagados,
@@ -359,9 +359,7 @@ const pedidoUnificadoRoute = new Hono()
         const phone = rawPhone ? String(rawPhone).replace(/\D/g, '') : null
 
         if (phone) {
-          const creds = rest?.whatsappPhoneId && rest?.whatsappAccessToken
-            ? { phoneId: rest.whatsappPhoneId, token: rest.whatsappAccessToken }
-            : undefined
+          const creds = resolverCredsRestaurante(rest)
           const itemsForWa = items.map((it) => ({
             name: productosMap.get(it.productoId)!.nombre,
             quantity: it.cantidad,
@@ -692,9 +690,7 @@ const pedidoUnificadoRoute = new Hono()
     }
 
     try {
-      const restCreds = restaurante?.whatsappPhoneId && restaurante?.whatsappAccessToken
-        ? { phoneId: restaurante.whatsappPhoneId, token: restaurante.whatsappAccessToken }
-        : undefined
+      const restCreds = resolverCredsRestaurante(restaurante)
 
       console.log(`📲 [Notificar Cliente] Enviando WhatsApp a ${pedido.telefono}...`)
       const waResult = await sendClientOrderDispatchedWhatsApp(c, {
@@ -824,9 +820,7 @@ const pedidoUnificadoRoute = new Hono()
     }
 
     try {
-      const restCreds = restaurante?.whatsappPhoneId && restaurante?.whatsappAccessToken
-        ? { phoneId: restaurante.whatsappPhoneId, token: restaurante.whatsappAccessToken }
-        : undefined
+      const restCreds = resolverCredsRestaurante(restaurante)
 
       const waResult = await sendClientPaymentConfirmedWhatsApp(c, {
         phone: pedido.telefono,

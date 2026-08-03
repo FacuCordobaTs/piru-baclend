@@ -61,6 +61,11 @@ internoRoute.get('/locales', async (c) => {
         nombre: RestauranteTable.nombre,
         email: RestauranteTable.email,
         telefono: RestauranteTable.telefono,
+        whatsappEnabled: RestauranteTable.whatsappEnabled,
+        whatsappNumber: RestauranteTable.whatsappNumber,
+        whatsappPhoneId: RestauranteTable.whatsappPhoneId,
+        whatsappWabaId: RestauranteTable.whatsappWabaId,
+        whatsappAccessToken: RestauranteTable.whatsappAccessToken,
       })
       .from(RestauranteTable)
       .orderBy(asc(RestauranteTable.id))
@@ -86,6 +91,16 @@ internoRoute.get('/locales', async (c) => {
             disponible: wallet.utility.disponible,
             cupoPlan: wallet.utility.cupoPlan,
             pctConsumido: wallet.utility.pctConsumido,
+          },
+          // WhatsApp: número propio del local (OAuth oficial o cargado a mano desde este panel
+          // mientras el OAuth de Meta está en verificación). Nunca devolvemos el token (secreto);
+          // solo si hay uno cargado (`tieneToken`). Sin token propio → se usa el System User de Piru.
+          whatsapp: {
+            enabled: r.whatsappEnabled,
+            numero: r.whatsappNumber,
+            phoneId: r.whatsappPhoneId,
+            wabaId: r.whatsappWabaId,
+            tieneToken: !!r.whatsappAccessToken,
           },
         }
       }),
@@ -159,6 +174,93 @@ internoRoute.put(
     } catch (error) {
       console.error('Error cambiando plan (interno):', error)
       return c.json({ success: false, message: 'Error al cambiar el plan' }, 500)
+    }
+  },
+)
+
+/**
+ * Alta/edición a mano del número de WhatsApp de un local (Meta Cloud API), SIN pasar por el
+ * OAuth oficial de Meta. Es el puente mientras el OAuth está en verificación: Piru compra un
+ * chip, lo da de alta como número en su propia Meta Business, y acá carga el `phoneId` para que
+ * los avisos de ese local salgan DESDE su número (con su marca) en vez del número de Piru.
+ *
+ * Campos:
+ *  - phoneId  (requerido para conectar): el "Phone number ID" de Meta (NO el número de teléfono).
+ *  - numero   (opcional): el número legible para mostrar (ej: +54 9 351 ...).
+ *  - wabaId   (opcional): WhatsApp Business Account ID.
+ *  - accessToken (opcional): SOLO si el número vive bajo otra app/token que el System User de
+ *    plataforma. Si el número está bajo la Meta Business de Piru, dejarlo vacío → se reusa
+ *    `WHATSAPP_API_TOKEN` (el mismo token cubre todos los números del negocio).
+ *
+ * Semántica del token (para no pisar un token existente sin querer): si `accessToken` viene
+ * `undefined` (no se manda la key) se deja como está; si viene string vacío o null se BORRA
+ * (pasa a usar el token de plataforma); si viene con valor se guarda.
+ *
+ * Para DESCONECTAR: mandar `phoneId: null` → limpia todos los campos y deja `whatsappEnabled=false`
+ * (los avisos vuelven a salir por el número de Piru).
+ */
+const whatsappSchema = z.object({
+  phoneId: z.string().trim().min(1).nullable(),
+  numero: z.string().trim().nullable().optional(),
+  wabaId: z.string().trim().nullable().optional(),
+  accessToken: z.string().trim().nullable().optional(),
+})
+
+internoRoute.put(
+  '/locales/:id/whatsapp',
+  zValidator('json', whatsappSchema),
+  async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = Number(c.req.param('id'))
+    if (!Number.isInteger(restauranteId) || restauranteId <= 0) {
+      return c.json({ success: false, message: 'Local inválido' }, 400)
+    }
+
+    const { phoneId, numero, wabaId, accessToken } = c.req.valid('json')
+
+    try {
+      const [rest] = await db
+        .select({ id: RestauranteTable.id })
+        .from(RestauranteTable)
+        .where(eq(RestauranteTable.id, restauranteId))
+        .limit(1)
+      if (!rest) {
+        return c.json({ success: false, message: 'Local no encontrado' }, 404)
+      }
+
+      // Desconexión: phoneId null → limpiar todo.
+      if (phoneId === null) {
+        await db.update(RestauranteTable)
+          .set({
+            whatsappPhoneId: null,
+            whatsappNumber: null,
+            whatsappWabaId: null,
+            whatsappAccessToken: null,
+            whatsappTokenExpiry: null,
+            whatsappEnabled: false,
+          })
+          .where(eq(RestauranteTable.id, restauranteId))
+        return c.json({ success: true, data: { conectado: false } }, 200)
+      }
+
+      // Conexión/edición.
+      const set: Record<string, unknown> = {
+        whatsappPhoneId: phoneId,
+        whatsappEnabled: true,
+      }
+      if (numero !== undefined) set.whatsappNumber = numero || null
+      if (wabaId !== undefined) set.whatsappWabaId = wabaId || null
+      // Token: solo tocar si la key vino en el body. Vacío/null → borrar (usa token de plataforma).
+      if (accessToken !== undefined) set.whatsappAccessToken = accessToken || null
+
+      await db.update(RestauranteTable)
+        .set(set)
+        .where(eq(RestauranteTable.id, restauranteId))
+
+      return c.json({ success: true, data: { conectado: true } }, 200)
+    } catch (error) {
+      console.error('Error configurando WhatsApp (interno):', error)
+      return c.json({ success: false, message: 'Error al configurar WhatsApp' }, 500)
     }
   },
 )

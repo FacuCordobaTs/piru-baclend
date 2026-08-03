@@ -14,7 +14,7 @@ import {
   whatsappConversacion as WhatsappConversacionTable
 } from '../db/schema'
 import { wsManager } from '../websocket/manager'
-import { sendOrderWhatsApp, sendWhatsAppText, notificarClientePagoConfirmado } from '../services/whatsapp'
+import { sendOrderWhatsApp, sendWhatsAppText, notificarClientePagoConfirmado, resolverCredsRestaurante } from '../services/whatsapp'
 import { consultarPagoTalo } from '../services/talo'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { procesarMensajeIA, notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
@@ -249,9 +249,7 @@ const cucuruWebhookHandler = async (c: any) => {
             orderItemsForWa.push({ name: 'Delivery', quantity: 1 });
           }
 
-          const restCreds = restaurante[0].whatsappPhoneId && restaurante[0].whatsappAccessToken
-            ? { phoneId: restaurante[0].whatsappPhoneId, token: restaurante[0].whatsappAccessToken }
-            : undefined
+          const restCreds = resolverCredsRestaurante(restaurante[0])
 
           sendOrderWhatsApp(c, {
             phone: restaurante[0].whatsappNumber,
@@ -521,9 +519,7 @@ webhookRoute.post('/talo', async (c) => {
           orderItemsForWa.push({ name: 'Delivery', quantity: 1 });
         }
 
-        const restCreds = restaurante[0].whatsappPhoneId && restaurante[0].whatsappAccessToken
-          ? { phoneId: restaurante[0].whatsappPhoneId, token: restaurante[0].whatsappAccessToken }
-          : undefined
+        const restCreds = resolverCredsRestaurante(restaurante[0])
 
         sendOrderWhatsApp(
           { env: envForBackground } as any,

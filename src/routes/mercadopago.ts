@@ -6,7 +6,7 @@ import { eq, and, inArray } from 'drizzle-orm'
 import { authMiddleware } from '../middleware/auth'
 import { obtenerTokenValido, refrescarTokenRestaurante } from '../utils/mercadopago'
 import { wsManager } from '../websocket/manager'
-import { sendOrderWhatsApp, notificarClientePagoConfirmado } from '../services/whatsapp'
+import { sendOrderWhatsApp, notificarClientePagoConfirmado, resolverCredsRestaurante } from '../services/whatsapp'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
 import { confirmarRecarga } from '../lib/mensajes-wallet'
@@ -451,9 +451,7 @@ mercadopagoRoute.post('/process-brick', async (c) => {
             orderItemsForWa.push({ name: 'Delivery', quantity: 1 })
           }
 
-          const restCreds = restaurante[0].whatsappPhoneId && restaurante[0].whatsappAccessToken
-            ? { phoneId: restaurante[0].whatsappPhoneId, token: restaurante[0].whatsappAccessToken }
-            : undefined
+          const restCreds = resolverCredsRestaurante(restaurante[0])
 
           sendOrderWhatsApp(c, {
             phone: restaurante[0].whatsappNumber,
@@ -781,9 +779,7 @@ mercadopagoRoute.post('/webhook', async (c) => {
             orderItemsForWa.push({ name: 'Delivery', quantity: 1 })
           }
 
-          const restCreds = restaurante[0].whatsappPhoneId && restaurante[0].whatsappAccessToken
-            ? { phoneId: restaurante[0].whatsappPhoneId, token: restaurante[0].whatsappAccessToken }
-            : undefined
+          const restCreds = resolverCredsRestaurante(restaurante[0])
 
           sendOrderWhatsApp(c, {
             phone: restaurante[0].whatsappNumber,

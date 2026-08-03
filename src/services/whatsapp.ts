@@ -51,7 +51,29 @@ export interface ClientOrderConfirmedWithDelayData {
     demoraMinutos: number;
 }
 
-type WaCredentials = { phoneId: string; token: string }
+export type WaCredentials = { phoneId: string; token: string }
+
+/**
+ * Resuelve las credenciales de Meta a usar para enviar en nombre de un restaurante.
+ *
+ * Reglas:
+ *  - Si el local NO tiene `whatsappPhoneId` → devuelve `undefined`: los envíos salen con el
+ *    número de plataforma Piru (los `send*WhatsApp` caen a `WHATSAPP_PHONE_ID`/`WHATSAPP_API_TOKEN`).
+ *  - Si el local tiene `whatsappPhoneId` → se envía DESDE ese número. El token es su
+ *    `whatsappAccessToken` si lo tiene (número bajo otra app/WABA, p. ej. OAuth oficial de Meta);
+ *    si está vacío, se reusa el System User token de plataforma (`WHATSAPP_API_TOKEN`). Esto es
+ *    lo que permite dar de alta a mano chips que Piru compra bajo su PROPIA Meta Business: alcanza
+ *    con cargar el phoneId, el token es el mismo para todos los números del negocio.
+ *
+ * Por eso el gate es solo sobre `phoneId` (antes se exigían ambos): un número cargado a mano sin
+ * token propio debe seguir enviando DESDE ese número, no caer al de plataforma.
+ */
+export const resolverCredsRestaurante = (
+    rest: { whatsappPhoneId?: string | null; whatsappAccessToken?: string | null } | null | undefined,
+): WaCredentials | undefined => {
+    if (!rest?.whatsappPhoneId) return undefined;
+    return { phoneId: rest.whatsappPhoneId, token: rest.whatsappAccessToken ?? process.env.WHATSAPP_API_TOKEN! };
+};
 
 // Helper: Convierte el array de items en un string multilinea formateado
 const formatOrderSummary = (items: OrderItem[], horarioProgramado?: string | null): string => {
@@ -445,9 +467,7 @@ export const notificarClientePagoConfirmado = async (
         return;
     }
 
-    const creds = row.whatsappPhoneId && row.whatsappAccessToken
-        ? { phoneId: row.whatsappPhoneId, token: row.whatsappAccessToken }
-        : undefined;
+    const creds = resolverCredsRestaurante(row);
 
     const result = await sendClientPaymentConfirmedWhatsApp(c, {
         phone: row.telefono,
