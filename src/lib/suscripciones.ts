@@ -198,6 +198,7 @@ export async function confirmarPagoSuscripcion(
     try {
       await acreditarCupoPlan(db, pago.restauranteId, {
         mensajesIncluidos: planRow.mensajesIncluidos ?? 0,
+        mensajesMarketingIncluidos: planRow.mensajesMarketingIncluidos ?? 0,
         ilimitado: !!planRow.mensajesIlimitados,
       })
     } catch (err) {
@@ -284,6 +285,7 @@ export async function asignarPlanManual(
     try {
       await acreditarCupoPlan(db, restauranteId, {
         mensajesIncluidos: planRow.mensajesIncluidos ?? 0,
+        mensajesMarketingIncluidos: planRow.mensajesMarketingIncluidos ?? 0,
         ilimitado: !!planRow.mensajesIlimitados,
       })
     } catch (err) {

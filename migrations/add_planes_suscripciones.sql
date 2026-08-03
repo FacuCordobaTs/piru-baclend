@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS `plan` (
   `descripcion` VARCHAR(500) DEFAULT NULL,
   `precio_mensual` DECIMAL(10,2) NOT NULL,
   `mensajes_incluidos` INT NOT NULL DEFAULT 0,
+  `mensajes_marketing_incluidos` INT NOT NULL DEFAULT 0,
   `mensajes_ilimitados` BOOLEAN NOT NULL DEFAULT false,
   `orden` INT NOT NULL DEFAULT 0,
   `activo` BOOLEAN NOT NULL DEFAULT true,
@@ -58,6 +59,7 @@ CREATE TABLE IF NOT EXISTS `saldo_mensajes` (
   `ciclo_renueva_en` TIMESTAMP NULL DEFAULT NULL,
   `utility_incluidos_restantes` INT NOT NULL DEFAULT 0,
   `utility_recarga_saldo` INT NOT NULL DEFAULT 0,
+  `marketing_incluidos_restantes` INT NOT NULL DEFAULT 0,
   `marketing_recarga_saldo` INT NOT NULL DEFAULT 0,
   `aviso_80_enviado` BOOLEAN NOT NULL DEFAULT false,
   `aviso_95_enviado` BOOLEAN NOT NULL DEFAULT false,
@@ -106,11 +108,11 @@ CREATE TABLE IF NOT EXISTS `recarga_mensajes` (
 -- Precios y mensajes son editables después sin deploy (UPDATE sobre plan).
 -- ---------------------------------------------------------------------------
 
-INSERT INTO `plan` (`codigo`, `nombre`, `descripcion`, `precio_mensual`, `mensajes_incluidos`, `mensajes_ilimitados`, `orden`, `activo`)
+INSERT INTO `plan` (`codigo`, `nombre`, `descripcion`, `precio_mensual`, `mensajes_incluidos`, `mensajes_marketing_incluidos`, `mensajes_ilimitados`, `orden`, `activo`)
 VALUES
-  ('basico',     'Básico',    'Recepción de pedidos, impresión de comandas, menú ilimitado, todos los métodos de pago, cupones, estadísticas y reportes.', 20000.00, 0,   false, 1, true),
-  ('intermedio', 'Intermedio','Todo lo del Básico más avisos automáticos al cliente por WhatsApp (500/mes), facturación ARCA, Rapiboy, múltiples sucursales y estadísticas avanzadas.', 80000.00, 500, false, 2, true),
-  ('avanzado',   'Avanzado',  'Todo lo del Intermedio más mensajes sin tope, dominio propio y Motor de Recompra.', 200000.00, 0, true, 3, true)
+  ('basico',     'Básico',    'Recepción de pedidos, impresión de comandas, menú ilimitado, todos los métodos de pago, cupones, estadísticas y reportes.', 20000.00, 0, 0, false, 1, true),
+  ('intermedio', 'Intermedio','Todo lo del Básico más avisos automáticos al cliente por WhatsApp (200/mes), facturación ARCA, Rapiboy, múltiples sucursales y estadísticas avanzadas.', 50000.00, 200, 0, false, 2, true),
+  ('avanzado',   'Avanzado',  'Todo lo del Intermedio más 100 mensajes de marketing/mes, dominio propio y Motor de Recompra.', 120000.00, 200, 100, false, 3, true)
 ON DUPLICATE KEY UPDATE `nombre` = VALUES(`nombre`);
 
 -- Features del plan Intermedio (Intermedio+).

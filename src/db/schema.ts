@@ -600,9 +600,14 @@ export const plan = mysqlTable("plan", {
   descripcion: varchar("descripcion", { length: 500 }),
   // Precio mensual en ARS. Editable sin deploy.
   precioMensual: decimal("precio_mensual", { precision: 10, scale: 2 }).notNull(),
-  // Mensajes de WhatsApp al cliente incluidos por ciclo. 0 = ninguno (plan Básico).
+  // Mensajes utility (avisos de pedido) incluidos por ciclo. 0 = ninguno (plan Básico).
   mensajesIncluidos: int("mensajes_incluidos").default(0).notNull(),
-  // true = mensajes sin tope (plan Avanzado). Cuando es true se ignora mensajesIncluidos.
+  // Mensajes MARKETING (campañas del Motor de Recompra) incluidos por ciclo. 0 = ninguno
+  // (Básico/Intermedio). El Avanzado incluye 100/mes como "degustación" del Motor.
+  mensajesMarketingIncluidos: int("mensajes_marketing_incluidos").default(0).notNull(),
+  // LEGACY (Modelo 2): antes el Avanzado daba mensajes sin tope. En el Modelo 3 NINGÚN plan
+  // es ilimitado (el "ilimitado" era insostenible: cada mensaje tiene costo real en Meta).
+  // La columna se conserva por retrocompat; debe quedar en false en todos los planes.
   mensajesIlimitados: boolean("mensajes_ilimitados").default(false).notNull(),
   // Descuento porcentual al pagar el plan por año (0-20). Editable sin deploy.
   // El negocio topea el ahorro anual a 20%; el cálculo del monto (montoPorCiclo)
@@ -711,7 +716,10 @@ export const saldoMensajes = mysqlTable("saldo_mensajes", {
   // UTILITY — saldo de packs de recarga prepagos. SE ACUMULA entre ciclos. Puede ser NEGATIVO.
   utilityRecargaSaldo: int("utility_recarga_saldo").default(0).notNull(),
 
-  // MARKETING — saldo de recarga (no lo incluye el plan). Se acumula. Puede ser NEGATIVO.
+  // MARKETING — cupo del plan para ESTE ciclo (Avanzado: 100). Se acredita al inicio del
+  // ciclo y el SOBRANTE SE PIERDE en la renovación (mismo criterio que utility).
+  marketingIncluidosRestantes: int("marketing_incluidos_restantes").default(0).notNull(),
+  // MARKETING — saldo de packs de recarga prepagos. SE ACUMULA. Puede ser NEGATIVO.
   marketingRecargaSaldo: int("marketing_recarga_saldo").default(0).notNull(),
 
   // Avisos de consumo del cupo utility (una sola vez por ciclo; se resetean al renovar).

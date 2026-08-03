@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS `pack_recarga` (
   `activo` BOOLEAN NOT NULL DEFAULT true,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_pack_categoria_orden` (`categoria_pack`, `orden`)
 );
 
 -- Estado de pago + referencias MP + pack de origen sobre las compras de recarga.
@@ -33,3 +34,10 @@ VALUES
   ('utility', 'Recarga 250',   250, 20000.00,  1, true),
   ('utility', 'Recarga 500',   500, 35000.00,  2, true),
   ('utility', 'Recarga 1.000', 1000, 60000.00, 3, true);
+
+-- Packs de campaña (marketing) para el Motor de Recompra. Costo Meta por mensaje ~$93,32.
+INSERT INTO `pack_recarga` (`categoria_pack`, `nombre`, `cantidad`, `precio`, `orden`, `activo`)
+VALUES
+  ('marketing', 'Campaña 100',   100,  18000.00,  1, true),
+  ('marketing', 'Campaña 500',   500,  80000.00,  2, true),
+  ('marketing', 'Campaña 1.000', 1000, 140000.00, 3, true);

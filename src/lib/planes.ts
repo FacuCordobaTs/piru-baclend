@@ -124,9 +124,11 @@ export interface SuscripcionResuelta {
   conAccesoAPago: boolean
   /** Features de pago efectivamente habilitadas ahora mismo. */
   features: Set<string>
-  /** Mensajes utility incluidos por ciclo por el plan (0 si no aplica). */
+  /** Mensajes utility (avisos de pedido) incluidos por ciclo por el plan (0 si no aplica). */
   mensajesIncluidos: number
-  /** true si el plan da mensajes utility sin tope (Avanzado). */
+  /** Mensajes marketing (Motor de Recompra) incluidos por ciclo por el plan (0 si no aplica). */
+  mensajesMarketingIncluidos: number
+  /** LEGACY (Modelo 2): ya ningún plan es ilimitado. Se conserva por retrocompat; siempre false. */
   mensajesIlimitados: boolean
   /** true si es el fallback por no tener fila de suscripción (cuenta pre-planes). */
   sinSuscripcion: boolean
@@ -148,6 +150,7 @@ export async function resolverSuscripcion(
       planCodigo: PlanTable.codigo,
       planNombre: PlanTable.nombre,
       mensajesIncluidos: PlanTable.mensajesIncluidos,
+      mensajesMarketingIncluidos: PlanTable.mensajesMarketingIncluidos,
       mensajesIlimitados: PlanTable.mensajesIlimitados,
     })
     .from(SuscripcionTable)
@@ -167,6 +170,7 @@ export async function resolverSuscripcion(
       features: new Set(SIN_SUSCRIPCION_ACCESO_TOTAL ? TODAS_LAS_FEATURES : []),
       // Cuenta pre-planes: tratada como ilimitada para que el wallet no le restrinja avisos.
       mensajesIncluidos: 0,
+      mensajesMarketingIncluidos: 0,
       mensajesIlimitados: SIN_SUSCRIPCION_ACCESO_TOTAL,
       sinSuscripcion: true,
     }
@@ -200,6 +204,7 @@ export async function resolverSuscripcion(
     conAccesoAPago,
     features,
     mensajesIncluidos: sub.mensajesIncluidos ?? 0,
+    mensajesMarketingIncluidos: sub.mensajesMarketingIncluidos ?? 0,
     mensajesIlimitados: !!sub.mensajesIlimitados,
     sinSuscripcion: false,
   }

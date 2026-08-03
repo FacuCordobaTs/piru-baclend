@@ -37,7 +37,7 @@ type SaldoRow = typeof SaldoMensajesTable.$inferSelect
 export async function getOrCreateSaldo(
   db: Db,
   restauranteId: number,
-  seed?: { mensajesIncluidos: number },
+  seed?: { mensajesIncluidos: number; mensajesMarketingIncluidos?: number },
 ): Promise<SaldoRow> {
   const [existente] = await db
     .select()
@@ -51,6 +51,7 @@ export async function getOrCreateSaldo(
     cicloInicio: new Date(),
     cicloRenuevaEn: proximaRenovacion(),
     utilityIncluidosRestantes: seed?.mensajesIncluidos ?? 0,
+    marketingIncluidosRestantes: seed?.mensajesMarketingIncluidos ?? 0,
   })
 
   const [creado] = await db
@@ -64,6 +65,11 @@ export async function getOrCreateSaldo(
 /** Saldo utility disponible = cupo del plan restante + saldo de recargas (puede ser negativo). */
 export function utilityDisponible(saldo: Pick<SaldoRow, 'utilityIncluidosRestantes' | 'utilityRecargaSaldo'>): number {
   return saldo.utilityIncluidosRestantes + saldo.utilityRecargaSaldo
+}
+
+/** Saldo marketing disponible = cupo del plan restante + saldo de recargas (puede ser negativo). */
+export function marketingDisponible(saldo: Pick<SaldoRow, 'marketingIncluidosRestantes' | 'marketingRecargaSaldo'>): number {
+  return saldo.marketingIncluidosRestantes + saldo.marketingRecargaSaldo
 }
 
 /**
@@ -82,8 +88,9 @@ export async function renovarCicloSiCorresponde(
   if (renuevaEn && ahora < renuevaEn) return saldo
 
   const incluidos = suscripcion.mensajesIlimitados ? 0 : suscripcion.mensajesIncluidos
+  const marketingIncluidos = suscripcion.mensajesMarketingIncluidos
 
-  // Sobrante del cupo que se pierde.
+  // Sobrante del cupo utility que se pierde.
   if (saldo.utilityIncluidosRestantes > 0) {
     await registrarTransaccion(db, {
       restauranteId,
@@ -95,7 +102,7 @@ export async function renovarCicloSiCorresponde(
     })
   }
 
-  // Acreditación del cupo del nuevo ciclo.
+  // Acreditación del cupo utility del nuevo ciclo.
   if (incluidos > 0) {
     await registrarTransaccion(db, {
       restauranteId,
@@ -107,12 +114,37 @@ export async function renovarCicloSiCorresponde(
     })
   }
 
+  // Sobrante del cupo marketing que se pierde (mismo criterio que utility).
+  if (saldo.marketingIncluidosRestantes > 0) {
+    await registrarTransaccion(db, {
+      restauranteId,
+      tipo: 'expiracion',
+      categoria: 'marketing',
+      cantidad: -saldo.marketingIncluidosRestantes,
+      saldoResultante: saldo.marketingRecargaSaldo,
+      motivo: 'expiracion_sobrante_ciclo',
+    })
+  }
+
+  // Acreditación del cupo marketing del nuevo ciclo (Avanzado).
+  if (marketingIncluidos > 0) {
+    await registrarTransaccion(db, {
+      restauranteId,
+      tipo: 'renovacion_plan',
+      categoria: 'marketing',
+      cantidad: marketingIncluidos,
+      saldoResultante: marketingIncluidos + saldo.marketingRecargaSaldo,
+      motivo: 'renovacion_mensual',
+    })
+  }
+
   await db
     .update(SaldoMensajesTable)
     .set({
       cicloInicio: ahora,
       cicloRenuevaEn: proximaRenovacion(ahora),
       utilityIncluidosRestantes: incluidos,
+      marketingIncluidosRestantes: marketingIncluidos,
       aviso80Enviado: false,
       aviso95Enviado: false,
       updatedAt: ahora,
@@ -179,7 +211,7 @@ export async function consumirMensaje(
       ilimitado: true,
       categoria,
       saldoUtilityDisponible: utilityDisponible(saldo),
-      saldoMarketingDisponible: saldo.marketingRecargaSaldo,
+      saldoMarketingDisponible: marketingDisponible(saldo),
       alerta: null,
       autoRecargaSugerida: false,
     }
@@ -212,9 +244,14 @@ export async function consumirMensaje(
       }
     }
   } else {
-    const nuevoMarketing = saldo.marketingRecargaSaldo - cantidad
-    update.marketingRecargaSaldo = nuevoMarketing
-    saldoResultante = nuevoMarketing
+    // Marketing: consumir el cupo del plan primero, luego la recarga (que puede quedar negativa).
+    const desdeIncluidos = Math.min(cantidad, Math.max(0, saldo.marketingIncluidosRestantes))
+    const resto = cantidad - desdeIncluidos
+    const nuevoIncluidos = saldo.marketingIncluidosRestantes - desdeIncluidos
+    const nuevoRecarga = saldo.marketingRecargaSaldo - resto
+    update.marketingIncluidosRestantes = nuevoIncluidos
+    update.marketingRecargaSaldo = nuevoRecarga
+    saldoResultante = nuevoIncluidos + nuevoRecarga
   }
 
   await db
@@ -234,7 +271,7 @@ export async function consumirMensaje(
   })
 
   const utilDisp = categoria === 'utility' ? saldoResultante : utilityDisponible(saldo)
-  const mktDisp = categoria === 'marketing' ? saldoResultante : saldo.marketingRecargaSaldo
+  const mktDisp = categoria === 'marketing' ? saldoResultante : marketingDisponible(saldo)
 
   // Auto-recarga: la evalúa el caller sobre el saldo utility (que es el driver del plan).
   const umbral = saldo.autoRecargaUmbral ?? AUTO_RECARGA_UMBRAL_DEFAULT
@@ -336,13 +373,14 @@ export async function acreditarRecarga(
 export async function acreditarCupoPlan(
   db: Db,
   restauranteId: number,
-  opts: { mensajesIncluidos: number; ilimitado: boolean },
+  opts: { mensajesIncluidos: number; mensajesMarketingIncluidos?: number; ilimitado: boolean },
 ): Promise<void> {
   const ahora = new Date()
   const saldo = await getOrCreateSaldo(db, restauranteId, { mensajesIncluidos: 0 })
   const incluidos = opts.ilimitado ? 0 : opts.mensajesIncluidos
+  const marketingIncluidos = opts.mensajesMarketingIncluidos ?? 0
 
-  // El sobrante del cupo anterior se pierde.
+  // El sobrante del cupo utility anterior se pierde.
   if (saldo.utilityIncluidosRestantes > 0) {
     await registrarTransaccion(db, {
       restauranteId,
@@ -365,12 +403,36 @@ export async function acreditarCupoPlan(
     })
   }
 
+  // El sobrante del cupo marketing anterior se pierde.
+  if (saldo.marketingIncluidosRestantes > 0) {
+    await registrarTransaccion(db, {
+      restauranteId,
+      tipo: 'expiracion',
+      categoria: 'marketing',
+      cantidad: -saldo.marketingIncluidosRestantes,
+      saldoResultante: saldo.marketingRecargaSaldo,
+      motivo: 'expiracion_por_cambio_plan',
+    })
+  }
+
+  if (marketingIncluidos > 0) {
+    await registrarTransaccion(db, {
+      restauranteId,
+      tipo: 'renovacion_plan',
+      categoria: 'marketing',
+      cantidad: marketingIncluidos,
+      saldoResultante: marketingIncluidos + saldo.marketingRecargaSaldo,
+      motivo: 'acreditacion_cupo_plan',
+    })
+  }
+
   await db
     .update(SaldoMensajesTable)
     .set({
       cicloInicio: ahora,
       cicloRenuevaEn: proximaRenovacion(ahora),
       utilityIncluidosRestantes: incluidos,
+      marketingIncluidosRestantes: marketingIncluidos,
       aviso80Enviado: false,
       aviso95Enviado: false,
       updatedAt: ahora,
@@ -518,7 +580,10 @@ async function registrarTransaccion(
 /** Resumen del wallet para la UI (saldos, % consumido del cupo, alerta y config). */
 export async function resumenWallet(db: Db, restauranteId: number) {
   const suscripcion = await resolverSuscripcion(db, restauranteId)
-  let saldo = await getOrCreateSaldo(db, restauranteId, { mensajesIncluidos: suscripcion.mensajesIncluidos })
+  let saldo = await getOrCreateSaldo(db, restauranteId, {
+    mensajesIncluidos: suscripcion.mensajesIncluidos,
+    mensajesMarketingIncluidos: suscripcion.mensajesMarketingIncluidos,
+  })
   saldo = await renovarCicloSiCorresponde(db, restauranteId, suscripcion, saldo)
 
   const utilDisp = utilityDisponible(saldo)
@@ -552,9 +617,15 @@ export async function resumenWallet(db: Db, restauranteId: number) {
       negativo: utilDisp < 0,
     },
     marketing: {
+      incluidosRestantes: saldo.marketingIncluidosRestantes,
       recargaSaldo: saldo.marketingRecargaSaldo,
-      disponible: saldo.marketingRecargaSaldo,
-      negativo: saldo.marketingRecargaSaldo < 0,
+      disponible: marketingDisponible(saldo),
+      cupoPlan: suscripcion.mensajesMarketingIncluidos,
+      consumidoCupo:
+        suscripcion.mensajesMarketingIncluidos > 0
+          ? suscripcion.mensajesMarketingIncluidos - saldo.marketingIncluidosRestantes
+          : 0,
+      negativo: marketingDisponible(saldo) < 0,
     },
     alerta,
     autoRecarga: {
