@@ -38,7 +38,7 @@ import {
 } from '../lib/pedidos-activos'
 import { requireFeature } from '../middleware/plan'
 import { FEATURE_KEYS } from '../lib/planes'
-import { consumirMensaje } from '../lib/mensajes-wallet'
+import { consumirMensaje, estadoEnvioUtility } from '../lib/mensajes-wallet'
 
 const itemSchema = z.object({
   productoId: z.number().int().positive(),
@@ -673,6 +673,24 @@ const pedidoUnificadoRoute = new Hono()
       return c.json({ message: 'No se pudo determinar el mensaje', success: false }, 400)
     }
 
+    // Modo gracia: si el saldo utility superó el techo de deuda, el aviso NO sale por
+    // WhatsApp (degradación). El estado del pedido en la web del comensal sigue vivo, así
+    // que nadie queda ciego; el local sólo pierde el "toque de marca" que dejó de pagar.
+    // Fail-open: si la evaluación falla, se envía igual (la contabilidad nunca corta un aviso).
+    try {
+      const gate = await estadoEnvioUtility(db, restauranteId)
+      if (!gate.permitido) {
+        console.log(`📲 [Notificar Cliente] ⛔ Gracia agotada (deuda ${Math.abs(gate.disponible)}/${gate.deudaMaxima}). No se envía WhatsApp; el estado del pedido sigue activo.`)
+        return c.json({
+          message: 'Te quedaste sin saldo de avisos. Recargá para reactivar los avisos por WhatsApp; tus clientes siguen viendo el estado del pedido.',
+          success: false,
+          saldoAgotado: true,
+        }, 402)
+      }
+    } catch (e) {
+      console.error('⚠️ [Wallet] Error evaluando gracia (despachado), se envía igual:', e)
+    }
+
     try {
       const restCreds = restaurante?.whatsappPhoneId && restaurante?.whatsappAccessToken
         ? { phoneId: restaurante.whatsappPhoneId, token: restaurante.whatsappAccessToken }
@@ -785,6 +803,24 @@ const pedidoUnificadoRoute = new Hono()
 
     if (!pedido.telefono) {
       return c.json({ message: 'Demora guardada (sin teléfono para notificar)', success: true, demoraMinutos }, 200)
+    }
+
+    // Modo gracia: superado el techo de deuda utility, el aviso NO sale por WhatsApp. La
+    // demora ya quedó guardada arriba, así que devolvemos éxito (el estado del pedido en la
+    // web del comensal la refleja igual). Fail-open ante error de evaluación.
+    try {
+      const gate = await estadoEnvioUtility(db, restauranteId)
+      if (!gate.permitido) {
+        console.log(`⛔ [Confirmar demora] Gracia agotada (deuda ${Math.abs(gate.disponible)}/${gate.deudaMaxima}). Demora guardada sin aviso por WhatsApp.`)
+        return c.json({
+          message: 'Demora guardada. El aviso por WhatsApp está pausado por falta de saldo — recargá para reactivarlo.',
+          success: true,
+          demoraMinutos,
+          saldoAgotado: true,
+        }, 200)
+      }
+    } catch (e) {
+      console.error('⚠️ [Wallet] Error evaluando gracia (confirmado), se envía igual:', e)
     }
 
     try {

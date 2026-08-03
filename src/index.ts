@@ -38,6 +38,7 @@ import { whatsappOauthRoute } from './routes/whatsapp-oauth';
 import { cartaIaRoute } from './routes/carta-ia';
 import { planesRoute } from './routes/planes';
 import { mensajesRoute } from './routes/mensajes';
+import { pagoRoute } from './routes/pago';
 import { internoRoute } from './routes/interno';
 import { tickMotorRecompra } from './lib/motor-recompra';
 import { serveStatic } from 'hono/bun';
@@ -202,6 +203,7 @@ app.basePath('/api')
   .route('/carta-ia', cartaIaRoute)
   .route('/planes', planesRoute)
   .route('/mensajes', mensajesRoute)
+  .route('/pago', pagoRoute)
   .route('/interno', internoRoute)
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
 // because :qrToken would match "admin" as a token

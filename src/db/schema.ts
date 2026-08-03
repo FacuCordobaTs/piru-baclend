@@ -858,6 +858,10 @@ export const recargaMensajes = mysqlTable("recarga_mensajes", {
   // Referencias de MercadoPago (pago a la cuenta de la plataforma Piru).
   mpPreferenceId: varchar("mp_preference_id", { length: 255 }),
   mpPaymentId: varchar("mp_payment_id", { length: 255 }),
+  // Link de pago por QR (`/pago/:token`): token de un solo uso para pagar la recarga
+  // desde otro dispositivo (el celular) SIN login. `tokenExpiraEn` acota su validez.
+  token: varchar("token", { length: 64 }).unique(),
+  tokenExpiraEn: timestamp("token_expira_en"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

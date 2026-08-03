@@ -21,6 +21,17 @@ export type CategoriaMensaje = 'utility' | 'marketing'
 export const AUTO_RECARGA_UMBRAL_DEFAULT = 50
 export const RECARGA_PACK_DEFAULT = 500
 
+/**
+ * Techo de deuda del "modo gracia" utility. Cuando el saldo utility disponible llega a 0
+ * arranca la gracia: los avisos SIGUEN saliendo en negativo hasta acumular esta deuda.
+ * El valor es MENOR que el pack más chico (250) a propósito: una sola recarga mínima
+ * siempre devuelve el saldo a positivo (nunca "recargué y sigo en rojo"). Superado el
+ * techo, los avisos utility dejan de salir por WhatsApp (degradación, NO apagón: la
+ * página de estado del pedido sigue viva) hasta que el local recargue. Costo máximo
+ * acotado por local (~100 mensajes utility).
+ */
+export const DEUDA_MAXIMA_UTILITY = 100
+
 /** Umbrales de aviso de consumo del cupo utility del plan. */
 export const UMBRAL_AVISO_80 = 0.8
 export const UMBRAL_AVISO_95 = 0.95
@@ -288,6 +299,58 @@ export async function consumirMensaje(
   }
 }
 
+export interface EstadoEnvioUtility {
+  /** ¿Puede salir el aviso utility por WhatsApp? (dentro del techo de deuda o ilimitado). */
+  permitido: boolean
+  /** Saldo utility disponible ahora (puede ser negativo). */
+  disponible: number
+  /** Saldo agotado pero todavía dentro del techo de deuda (los avisos siguen saliendo). */
+  enGracia: boolean
+  /** Superado el techo: el aviso NO sale por WhatsApp (degradación). */
+  graciaAgotada: boolean
+  deudaMaxima: number
+  ilimitado: boolean
+}
+
+/**
+ * Decide si un aviso utility puede salir por WhatsApp. NO descuenta nada (de eso se
+ * encarga consumirMensaje): sólo evalúa el techo de deuda del modo gracia. El caller lo
+ * consulta ANTES de enviar; si `permitido` es false, no manda el WhatsApp (el estado del
+ * pedido en la web del comensal sigue funcionando igual).
+ *
+ * Cuentas ilimitadas / pre-planes nunca se cortan ni entran en gracia (fail-open).
+ */
+export async function estadoEnvioUtility(db: Db, restauranteId: number): Promise<EstadoEnvioUtility> {
+  const suscripcion = await resolverSuscripcion(db, restauranteId)
+  let saldo = await getOrCreateSaldo(db, restauranteId, { mensajesIncluidos: suscripcion.mensajesIncluidos })
+  saldo = await renovarCicloSiCorresponde(db, restauranteId, suscripcion, saldo)
+
+  const disponible = utilityDisponible(saldo)
+
+  if (suscripcion.mensajesIlimitados) {
+    return {
+      permitido: true,
+      disponible,
+      enGracia: false,
+      graciaAgotada: false,
+      deudaMaxima: DEUDA_MAXIMA_UTILITY,
+      ilimitado: true,
+    }
+  }
+
+  // Se permite mientras la deuda no alcance el techo: el aviso Nº100 de deuda es el último
+  // (disponible pasa de -99 a -100); en -100 ya no sale.
+  const permitido = disponible > -DEUDA_MAXIMA_UTILITY
+  return {
+    permitido,
+    disponible,
+    enGracia: disponible <= 0 && permitido,
+    graciaAgotada: !permitido,
+    deudaMaxima: DEUDA_MAXIMA_UTILITY,
+    ilimitado: false,
+  }
+}
+
 /**
  * Suma crédito al bucket (absorbiendo saldo negativo) y deja el asiento en el ledger.
  * Uso interno: lo llaman acreditarRecarga (crédito directo) y confirmarRecarga (post-pago MP).
@@ -463,6 +526,9 @@ export async function getPack(db: Db, packId: number) {
 /**
  * Crea una compra de recarga en estado 'pending' (aún NO acredita saldo). Se usa al
  * iniciar el checkout de MercadoPago; el crédito se aplica recién en confirmarRecarga.
+ *
+ * `token`/`tokenExpiraEn` son opcionales: los usa el link de pago por QR (`/pago/:token`),
+ * donde la recarga se crea al generar el QR y se paga desde otro dispositivo sin login.
  */
 export async function crearRecargaPendiente(
   db: Db,
@@ -473,6 +539,8 @@ export async function crearRecargaPendiente(
     monto: number | string
     packRecargaId?: number | null
     origen?: 'manual' | 'auto'
+    token?: string | null
+    tokenExpiraEn?: Date | null
   },
 ): Promise<number> {
   const insert = await db.insert(RecargaMensajesTable).values({
@@ -483,8 +551,21 @@ export async function crearRecargaPendiente(
     monto: typeof opts.monto === 'string' ? opts.monto : opts.monto.toFixed(2),
     origen: opts.origen ?? 'manual',
     estado: 'pending',
+    // Sólo se referencian las columnas de token cuando el flujo QR las usa: así el
+    // checkout normal no toca columnas nuevas si la migración todavía no corrió.
+    ...(opts.token ? { token: opts.token, tokenExpiraEn: opts.tokenExpiraEn ?? null } : {}),
   })
   return Number((insert as any)[0].insertId)
+}
+
+/** Busca una recarga por su token de pago QR (para la página pública `/pago/:token`). */
+export async function getRecargaPorToken(db: Db, token: string) {
+  const [recarga] = await db
+    .select()
+    .from(RecargaMensajesTable)
+    .where(eq(RecargaMensajesTable.token, token))
+    .limit(1)
+  return recarga ?? null
 }
 
 /** Guarda el preference_id de MercadoPago sobre una recarga pendiente. */
@@ -615,6 +696,11 @@ export async function resumenWallet(db: Db, restauranteId: number) {
       consumidoCupo,
       pctConsumido,
       negativo: utilDisp < 0,
+      // Modo gracia: saldo agotado pero los avisos siguen saliendo (deuda acotada).
+      enGracia: !suscripcion.mensajesIlimitados && utilDisp <= 0 && utilDisp > -DEUDA_MAXIMA_UTILITY,
+      // Gracia agotada: superado el techo, los avisos por WhatsApp se pausan (degradación).
+      graciaAgotada: !suscripcion.mensajesIlimitados && utilDisp <= -DEUDA_MAXIMA_UTILITY,
+      deudaMaxima: DEUDA_MAXIMA_UTILITY,
     },
     marketing: {
       incluidosRestantes: saldo.marketingIncluidosRestantes,

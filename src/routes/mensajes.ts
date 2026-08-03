@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { randomUUID } from 'crypto'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
 import { authMiddleware } from '../middleware/auth'
@@ -14,12 +15,15 @@ import {
   setRecargaPreferencia,
   resolverPackAutoRecarga,
 } from '../lib/mensajes-wallet'
+import { crearPreferenciaRecargaMP } from '../lib/mp-recarga'
 
 // Pago de recargas: van a la cuenta de la PLATAFORMA (Piru), no a la del restaurante,
 // por eso se usa el access token de plataforma y sin marketplace_fee.
 const MP_PLATFORM_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN
 const ADMIN_URL = (process.env.ADMIN_URL || 'https://admin.piru.app').replace(/\/$/, '')
-const MP_WEBHOOK_URL = 'https://api.piru.app/api/mp/webhook'
+
+/** Minutos de validez del link/QR de pago antes de vencer. */
+const PAGO_QR_TTL_MIN = 30
 
 const mensajesRoute = new Hono()
 
@@ -52,46 +56,25 @@ async function iniciarCheckoutRecarga(
     origen,
   })
 
-  const externalReference = `piru-recarga-${recargaId}`
   const backUrl = `${ADMIN_URL}/dashboard/ajustes/plan?recarga=success`
-
-  const mpResponse = await fetch('https://api.mercadopago.com/checkout/preferences', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${MP_PLATFORM_ACCESS_TOKEN}`,
-    },
-    body: JSON.stringify({
-      items: [{
-        title: `${pack.nombre} · ${pack.cantidad} mensajes`,
-        quantity: 1,
-        currency_id: 'ARS',
-        unit_price: precio,
-      }],
-      back_urls: { success: backUrl, failure: backUrl, pending: backUrl },
-      auto_return: 'approved',
-      external_reference: externalReference,
-      notification_url: MP_WEBHOOK_URL,
-      statement_descriptor: 'PIRU',
-      expires: true,
-      expiration_date_to: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-    }),
+  const pref = await crearPreferenciaRecargaMP({
+    recargaId,
+    titulo: `${pack.nombre} · ${pack.cantidad} mensajes`,
+    precio,
+    backUrl,
   })
-
-  const preference = await mpResponse.json() as any
-  if (!mpResponse.ok) {
-    console.error('❌ [Recarga] Error creando preferencia MP:', preference)
+  if (!pref.ok) {
     return { ok: false, status: 502, message: 'Error al iniciar el pago' }
   }
 
-  await setRecargaPreferencia(db, recargaId, String(preference.id))
+  await setRecargaPreferencia(db, recargaId, pref.preferenceId)
 
   return {
     ok: true,
     data: {
       recargaId,
-      url_pago: preference.init_point,
-      preference_id: preference.id,
+      url_pago: pref.initPoint,
+      preference_id: pref.preferenceId,
       cantidad: pack.cantidad,
       monto: precio.toFixed(2),
     },
@@ -194,6 +177,56 @@ mensajesRoute.post('/recarga/checkout', zValidator('json', checkoutSchema), asyn
   } catch (error) {
     console.error('Error en checkout de recarga:', error)
     return c.json({ message: 'Error al iniciar la recarga', success: false }, 500)
+  }
+})
+
+/**
+ * Genera un link/QR de pago para un pack (patrón "la compu muestra, el celu paga"): crea
+ * la recarga pendiente con un token de un solo uso y devuelve la URL pública `/pago/:token`
+ * para codificar en un QR. El pago en sí (elegir MP → Checkout Pro) ocurre en la página
+ * pública, sin login. El precio SIEMPRE sale del pack en la DB.
+ */
+mensajesRoute.post('/pago-qr', zValidator('json', checkoutSchema), async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const { packId } = c.req.valid('json')
+
+  if (!MP_PLATFORM_ACCESS_TOKEN) {
+    console.error('❌ [Pago QR] Falta MP_ACCESS_TOKEN para cobrar recargas')
+    return c.json({ message: 'Pagos no disponibles temporalmente', success: false }, 503)
+  }
+
+  try {
+    const pack = await getPack(db, packId)
+    if (!pack) {
+      return c.json({ message: 'Pack no encontrado', success: false }, 404)
+    }
+
+    const token = randomUUID()
+    const expiraEn = new Date(Date.now() + PAGO_QR_TTL_MIN * 60 * 1000)
+
+    const recargaId = await crearRecargaPendiente(db, restauranteId, {
+      categoria: pack.categoria as 'utility' | 'marketing',
+      cantidad: pack.cantidad,
+      monto: pack.precio,
+      packRecargaId: pack.id,
+      origen: 'manual',
+      token,
+      tokenExpiraEn: expiraEn,
+    })
+
+    return c.json({
+      success: true,
+      data: {
+        recargaId,
+        token,
+        url: `${ADMIN_URL}/pago/${token}`,
+        expiraEn: expiraEn.toISOString(),
+      },
+    }, 200)
+  } catch (error) {
+    console.error('Error generando link de pago QR:', error)
+    return c.json({ message: 'Error al generar el link de pago', success: false }, 500)
   }
 })
 
