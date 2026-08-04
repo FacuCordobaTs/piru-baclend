@@ -4,7 +4,7 @@ import { restaurante as RestauranteTable, producto as ProductoTable, categoria a
 import { drizzle } from 'drizzle-orm/mysql2'
 import { eq, and, desc, or, lt, isNull, sql, inArray } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
-import { sendOrderWhatsApp, sendClientPaymentConfirmedWhatsApp } from '../services/whatsapp'
+import { sendOrderWhatsApp, notificarClientePagoConfirmado } from '../services/whatsapp'
 import { productoPuntos as ProductoPuntosTable, zonaDelivery as ZonaDeliveryTable } from '../db/schema'
 import { asignarAliasAPedido } from '../services/cucuru'
 import { crearPagoTalo } from '../services/talo'
@@ -21,6 +21,7 @@ import {
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { contarPedidosPagadosFranja } from '../lib/franjas'
 import { tieneAcceso, FEATURE_KEYS } from '../lib/planes'
+import { estaPausadoPorSuscripcion } from '../lib/suscripciones'
 import { salirDeColaPorPedido } from '../lib/motor-recompra'
 
 function isDiscountActive(descuento: number | null, inicio: Date | null, fin: Date | null): boolean {
@@ -289,6 +290,11 @@ publicRoute.get('/restaurante/:username', async (c) => {
         // el canal del plan Básico (sin avisos automáticos), por lo que solo aparece cuando esto es false.
         const avisosWhatsappClienteEnabled = await tieneAcceso(db, restauranteId, FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE)
 
+        // ¿El local está "pausado" por su suscripción (suspendida/cancelada)? La tienda se muestra
+        // "cerrada temporalmente" y no toma pedidos nuevos (Claim Flow · Tarea 8: degradación, no
+        // apagón — el menú sigue visible, nada se borra). Aditivo: bundles viejos lo ignoran.
+        const pausadoPorSuscripcion = await estaPausadoPorSuscripcion(db, restauranteId)
+
         return c.json({
             message: 'Datos obtenidos correctamente',
             success: true,
@@ -302,6 +308,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
                     transferenciaAlias: transferenciaAliasCliente,
                     metodosPago: metodosPagoPublicos,
                     avisosWhatsappClienteEnabled,
+                    pausadoPorSuscripcion,
                 },
                 productos: productosConIngredientes,
                 horarios,
@@ -579,6 +586,13 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             .from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
         if (deliveryCheck && deliveryCheck.deliveryEnabled === false) {
             return c.json({ message: 'El delivery no está disponible en este momento', success: false }, 400)
+        }
+
+        // Local pausado por suscripción (Claim Flow · Tarea 8): la tienda está "cerrada
+        // temporalmente" y no toma pedidos nuevos. Defensa server-side (bundles cliente viejos
+        // no conocen el flag `pausadoPorSuscripcion` y podrían intentar crear el pedido igual).
+        if (await estaPausadoPorSuscripcion(db, restauranteId)) {
+            return c.json({ message: 'El local no está recibiendo pedidos en este momento', success: false }, 400)
         }
 
         const errorHorarioProgramado = await validarHorarioProgramadoObligatorio(db, restauranteId, horarioProgramado)
@@ -945,22 +959,14 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         }
 
         if (!waitToPay) {
-            try {
-                if (resRestaurante[0]?.notificarClientesWhatsapp && telefono && !resRestaurante[0]?.modoConfirmacionManual) {
-                    console.log("⏳ Iniciando envío de WhatsApp al cliente:", telefono);
-                    sendClientPaymentConfirmedWhatsApp(c, {
-                        phone: telefono,
-                        customerName: nombreCliente || 'Cliente',
-                        restaurantName: resRestaurante[0].nombre || 'El local',
-                        total: total.toFixed(2),
-                        orderId: pedidoId.toString(),
-                        horarioProgramado: horarioProgramado || null,
-                    }).catch(err => {
-                        console.error("❌ Error en envío de WhatsApp al cliente en background:", err);
-                    });
-                }
-            } catch (err) {
-                console.error("❌ Error obteniendo datos del restaurante para enviar WhatsApp al cliente:", err);
+            // Aviso automático al cliente (pago confirmado). Va por `notificarClientePagoConfirmado`,
+            // que aplica el gate de plan (avisos_whatsapp_cliente = Intermedio+): en el plan Básico el
+            // cliente NUNCA recibe este mensaje (lo manda él con el botón "Enviar pedido al WhatsApp").
+            // Además resuelve las credenciales de Meta del local (marca propia) y registra el mensaje.
+            if (telefono) {
+                notificarClientePagoConfirmado(c, { restauranteId, pedidoId }).catch(err => {
+                    console.error("❌ Error en envío de WhatsApp al cliente en background:", err);
+                });
             }
 
             wsManager.notifyAdmins(restauranteId, {
@@ -1043,6 +1049,12 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             .from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
         if (takeawayCheck && takeawayCheck.takeawayEnabled === false) {
             return c.json({ message: 'El take away no está disponible en este momento', success: false }, 400)
+        }
+
+        // Local pausado por suscripción (Claim Flow · Tarea 8): tienda "cerrada temporalmente",
+        // no toma pedidos nuevos. Defensa server-side (ver /delivery/create).
+        if (await estaPausadoPorSuscripcion(db, restauranteId)) {
+            return c.json({ message: 'El local no está recibiendo pedidos en este momento', success: false }, 400)
         }
 
         const errorHorarioProgramado = await validarHorarioProgramadoObligatorio(db, restauranteId, horarioProgramado)
@@ -1368,22 +1380,14 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         }
 
         if (!waitToPay) {
-            try {
-                if (resRestaurante[0]?.notificarClientesWhatsapp && telefono && !resRestaurante[0]?.modoConfirmacionManual) {
-                    console.log("⏳ Iniciando envío de WhatsApp al cliente:", telefono);
-                    sendClientPaymentConfirmedWhatsApp(c, {
-                        phone: telefono,
-                        customerName: nombreCliente || 'Cliente',
-                        restaurantName: resRestaurante[0].nombre || 'El local',
-                        total: total.toFixed(2),
-                        orderId: pedidoId.toString(),
-                        horarioProgramado: horarioProgramado || null,
-                    }).catch(err => {
-                        console.error("❌ Error en envío de WhatsApp al cliente en background:", err);
-                    });
-                }
-            } catch (err) {
-                console.error("❌ Error obteniendo datos del restaurante para enviar WhatsApp al cliente:", err);
+            // Aviso automático al cliente (pago confirmado). Va por `notificarClientePagoConfirmado`,
+            // que aplica el gate de plan (avisos_whatsapp_cliente = Intermedio+): en el plan Básico el
+            // cliente NUNCA recibe este mensaje (lo manda él con el botón "Enviar pedido al WhatsApp").
+            // Además resuelve las credenciales de Meta del local (marca propia) y registra el mensaje.
+            if (telefono) {
+                notificarClientePagoConfirmado(c, { restauranteId, pedidoId }).catch(err => {
+                    console.error("❌ Error en envío de WhatsApp al cliente en background:", err);
+                });
             }
 
             wsManager.notifyAdmins(restauranteId, {

@@ -110,36 +110,48 @@ CREATE TABLE IF NOT EXISTS `recarga_mensajes` (
 
 INSERT INTO `plan` (`codigo`, `nombre`, `descripcion`, `precio_mensual`, `mensajes_incluidos`, `mensajes_marketing_incluidos`, `mensajes_ilimitados`, `orden`, `activo`)
 VALUES
-  ('basico',     'Básico',    'Recepción de pedidos, impresión de comandas, menú ilimitado, todos los métodos de pago, cupones, estadísticas y reportes.', 20000.00, 0, 0, false, 1, true),
-  ('intermedio', 'Intermedio','Todo lo del Básico más avisos automáticos al cliente por WhatsApp (200/mes), facturación ARCA, Rapiboy, múltiples sucursales y estadísticas avanzadas.', 50000.00, 200, 0, false, 2, true),
-  ('avanzado',   'Avanzado',  'Todo lo del Intermedio más 100 mensajes de marketing/mes, dominio propio y Motor de Recompra.', 120000.00, 200, 100, false, 3, true)
+  ('basico',     'Básico',    'Recepción de pedidos, impresión de comandas, menú ilimitado, todos los métodos de pago, cupones, estadísticas y reportes, múltiples sucursales y dominio propio.', 20000.00, 0, 0, false, 1, true),
+  ('intermedio', 'Intermedio','Todo lo del Básico más avisos automáticos al cliente por WhatsApp (200/mes), facturación ARCA, Rapiboy y estadísticas avanzadas.', 50000.00, 200, 0, false, 2, true),
+  ('avanzado',   'Avanzado',  'Todo lo del Intermedio más 100 mensajes de marketing/mes y Motor de Recompra.', 120000.00, 200, 100, false, 3, true)
 ON DUPLICATE KEY UPDATE `nombre` = VALUES(`nombre`);
 
--- Features del plan Intermedio (Intermedio+).
+-- Features del plan Básico (Básico+: múltiples sucursales y dominio propio).
 INSERT INTO `plan_feature` (`plan_id`, `feature_key`)
 SELECT p.id, f.feature_key
 FROM `plan` p
 JOIN (
-  SELECT 'avisos_whatsapp_cliente' AS feature_key
+  SELECT 'multisucursal' AS feature_key
+  UNION ALL SELECT 'dominio_propio'
+) f
+WHERE p.codigo = 'basico'
+ON DUPLICATE KEY UPDATE `habilitado` = true;
+
+-- Features del plan Intermedio (todo lo del Básico + avisos, ARCA, Rapiboy, estadísticas avanzadas).
+INSERT INTO `plan_feature` (`plan_id`, `feature_key`)
+SELECT p.id, f.feature_key
+FROM `plan` p
+JOIN (
+  SELECT 'multisucursal' AS feature_key
+  UNION ALL SELECT 'dominio_propio'
+  UNION ALL SELECT 'avisos_whatsapp_cliente'
   UNION ALL SELECT 'facturacion_arca'
   UNION ALL SELECT 'rapiboy'
-  UNION ALL SELECT 'multisucursal'
   UNION ALL SELECT 'estadisticas_avanzadas'
 ) f
 WHERE p.codigo = 'intermedio'
 ON DUPLICATE KEY UPDATE `habilitado` = true;
 
--- Features del plan Avanzado (todo lo del Intermedio + dominio propio + motor de recompra).
+-- Features del plan Avanzado (todo lo del Intermedio + motor de recompra).
 INSERT INTO `plan_feature` (`plan_id`, `feature_key`)
 SELECT p.id, f.feature_key
 FROM `plan` p
 JOIN (
-  SELECT 'avisos_whatsapp_cliente' AS feature_key
+  SELECT 'multisucursal' AS feature_key
+  UNION ALL SELECT 'dominio_propio'
+  UNION ALL SELECT 'avisos_whatsapp_cliente'
   UNION ALL SELECT 'facturacion_arca'
   UNION ALL SELECT 'rapiboy'
-  UNION ALL SELECT 'multisucursal'
   UNION ALL SELECT 'estadisticas_avanzadas'
-  UNION ALL SELECT 'dominio_propio'
   UNION ALL SELECT 'motor_recompra'
 ) f
 WHERE p.codigo = 'avanzado'

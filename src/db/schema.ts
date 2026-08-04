@@ -105,6 +105,17 @@ export const restaurante = mysqlTable("restaurante", {
   // (tieneAccesoAlPanel) y el gate del admin (ProtectedLayout → /suscribir).
   requiereSuscripcion: boolean("requiere_suscripcion").default(false).notNull(),
 
+  // ── Claim flow (onboarding outbound) — ver docs/ROADMAP_CLAIM_FLOW.md ──
+  // Cómo nació la cuenta. 'self_serve' = registro/onboarding normal (default, no cambia nada del
+  // flujo actual). 'outbound' = tienda demo que arma el fundador y el dueño "reclama" por link.
+  origen: mysqlEnum("origen", ["self_serve", "outbound"]).default("self_serve").notNull(),
+  // Token único del link de reclamo (admin.piru.app/mi-tienda/{claimToken}). Nullable: sólo las
+  // tiendas outbound a las que se les generó link lo tienen. Se limpia (o expira) al reclamarse.
+  claimToken: varchar("claim_token", { length: 64 }).unique(),
+  claimTokenExpira: timestamp("claim_token_expira"),
+  // Cuándo el dueño reclamó la tienda (verificó su WhatsApp). null = todavía es prospecto.
+  claimedAt: timestamp("claimed_at"),
+
   // AFIP / ARCA - facturación electrónica
   afipHabilitado: boolean("afip_habilitado").default(false).notNull(),
   afipCuit: varchar("afip_cuit", { length: 11 }),
@@ -733,6 +744,10 @@ export const suscripcion = mysqlTable("suscripcion", {
   graciaHasta: timestamp("gracia_hasta"),
   // Fecha de baja voluntaria.
   fechaCancelacion: timestamp("fecha_cancelacion"),
+  // Cuándo se envió el aviso "tu prueba está por vencer" (día ~12) por WhatsApp. Sirve de flag
+  // anti-reenvío del scheduler: mientras no sea null, el aviso ya salió y no se repite en cada tick.
+  // Se resetea a null al arrancar un trial nuevo (iniciarTrial) para que un re-trial vuelva a avisar.
+  avisoTrialVencimientoAt: timestamp("aviso_trial_vencimiento_at"),
   // Precio congelado al momento de contratar (por si luego cambia el precio del plan).
   precioMensual: decimal("precio_mensual", { precision: 10, scale: 2 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -890,6 +905,11 @@ export const pagoSuscripcion = mysqlTable("pago_suscripcion", {
   // Referencias de MercadoPago (pago a la cuenta de la plataforma Piru).
   mpPreferenceId: varchar("mp_preference_id", { length: 255 }),
   mpPaymentId: varchar("mp_payment_id", { length: 255 }),
+  // Link de pago (`/pago/:token`): token de un solo uso para pagar la cuota del plan desde
+  // otro dispositivo (el celular) SIN login — se envía por WhatsApp al dueño. `tokenExpiraEn`
+  // acota su validez. Comparte el espacio de tokens con `recargaMensajes.token`.
+  token: varchar("token", { length: 64 }).unique(),
+  tokenExpiraEn: timestamp("token_expira_en"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

@@ -1,20 +1,24 @@
 // src/routes/pago.ts
-// Página de pago por link/QR: SIN autenticación. El token (creado por POST /mensajes/pago-qr,
-// autenticado) es la única autorización de ese pago único. Sirve el patrón "la compu muestra,
-// el celu paga": el desktop genera el QR, el dueño lo escanea con el celular y paga ahí, sin
-// loguearse. Por ahora sólo MercadoPago como medio de pago. El crédito al wallet lo aplica el
-// webhook de MP (external_reference `piru-recarga-{id}`), idéntico al checkout autenticado.
+// Página de pago por link: SIN autenticación. El token (creado autenticado, enviado por WhatsApp
+// al dueño) es la única autorización de ese pago único. Sirve para pagar desde el celular sin
+// loguearse. Un mismo token puede ser de DOS cosas (comparten espacio de tokens):
+//   • recarga de mensajes  → `recarga_mensajes.token`   (webhook `piru-recarga-{id}`)
+//   • cuota del plan        → `pago_suscripcion.token`   (webhook `piru-plansub-{id}`)
+// Por ahora sólo MercadoPago como medio de pago. El efecto (acreditar saldo / activar suscripción)
+// lo aplica el webhook de MP, idéntico al checkout autenticado.
 import { Hono } from 'hono'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { eq } from 'drizzle-orm'
 import { pool } from '../db'
 import {
-  recargaMensajes as RecargaMensajesTable,
   restaurante as RestauranteTable,
   packRecarga as PackRecargaTable,
+  plan as PlanTable,
 } from '../db/schema'
 import { getRecargaPorToken, setRecargaPreferencia } from '../lib/mensajes-wallet'
 import { crearPreferenciaRecargaMP, pagosRecargaDisponibles } from '../lib/mp-recarga'
+import { getPagoSuscripcionPorToken, setPagoSuscripcionPreferencia } from '../lib/suscripciones'
+import { crearPreferenciaSuscripcionMP } from '../lib/mp-suscripcion'
 
 const ADMIN_URL = (process.env.ADMIN_URL || 'https://admin.piru.app').replace(/\/$/, '')
 
@@ -27,31 +31,79 @@ function unidad(categoria: string): string {
   return categoria === 'marketing' ? 'mensajes de campaña' : 'avisos por WhatsApp'
 }
 
-/** Carga la recarga por token + datos para mostrar (restaurante, pack) y resuelve el estado. */
-async function cargarLink(db: ReturnType<typeof drizzle>, token: string) {
-  const recarga = await getRecargaPorToken(db, token)
-  if (!recarga) return null
+function resolverEstado(estadoPago: string, tokenExpiraEn: Date | string | null): EstadoLink {
+  if (estadoPago === 'paid') return 'paid'
+  const vencido = tokenExpiraEn ? new Date(tokenExpiraEn) < new Date() : false
+  return vencido ? 'expired' : 'pending'
+}
 
+async function nombreRestaurante(db: ReturnType<typeof drizzle>, restauranteId: number): Promise<string> {
   const [rest] = await db
     .select({ nombre: RestauranteTable.nombre })
     .from(RestauranteTable)
-    .where(eq(RestauranteTable.id, recarga.restauranteId))
+    .where(eq(RestauranteTable.id, restauranteId))
     .limit(1)
+  return rest?.nombre ?? 'El local'
+}
 
-  let packNombre: string | null = null
-  if (recarga.packRecargaId) {
-    const [pack] = await db
-      .select({ nombre: PackRecargaTable.nombre })
-      .from(PackRecargaTable)
-      .where(eq(PackRecargaTable.id, recarga.packRecargaId))
-      .limit(1)
-    packNombre = pack?.nombre ?? null
+type LinkResuelto =
+  | {
+      tipo: 'recarga'
+      recarga: NonNullable<Awaited<ReturnType<typeof getRecargaPorToken>>>
+      restauranteNombre: string
+      packNombre: string | null
+      estado: EstadoLink
+    }
+  | {
+      tipo: 'suscripcion'
+      pago: NonNullable<Awaited<ReturnType<typeof getPagoSuscripcionPorToken>>>
+      restauranteNombre: string
+      planNombre: string
+      estado: EstadoLink
+    }
+
+/**
+ * Resuelve un token contra ambos tipos de pago (recarga primero, luego suscripción) y trae los
+ * datos para mostrar + el estado. Devuelve null si el token no existe en ninguna tabla.
+ */
+async function cargarLink(db: ReturnType<typeof drizzle>, token: string): Promise<LinkResuelto | null> {
+  const recarga = await getRecargaPorToken(db, token)
+  if (recarga) {
+    let packNombre: string | null = null
+    if (recarga.packRecargaId) {
+      const [pack] = await db
+        .select({ nombre: PackRecargaTable.nombre })
+        .from(PackRecargaTable)
+        .where(eq(PackRecargaTable.id, recarga.packRecargaId))
+        .limit(1)
+      packNombre = pack?.nombre ?? null
+    }
+    return {
+      tipo: 'recarga',
+      recarga,
+      restauranteNombre: await nombreRestaurante(db, recarga.restauranteId),
+      packNombre,
+      estado: resolverEstado(recarga.estado, recarga.tokenExpiraEn),
+    }
   }
 
-  const vencido = recarga.tokenExpiraEn ? new Date(recarga.tokenExpiraEn) < new Date() : false
-  const estado: EstadoLink = recarga.estado === 'paid' ? 'paid' : vencido ? 'expired' : 'pending'
+  const pago = await getPagoSuscripcionPorToken(db, token)
+  if (pago) {
+    const [planRow] = await db
+      .select({ nombre: PlanTable.nombre })
+      .from(PlanTable)
+      .where(eq(PlanTable.id, pago.planId))
+      .limit(1)
+    return {
+      tipo: 'suscripcion',
+      pago,
+      restauranteNombre: await nombreRestaurante(db, pago.restauranteId),
+      planNombre: planRow?.nombre ?? 'tu plan',
+      estado: resolverEstado(pago.estado, pago.tokenExpiraEn),
+    }
+  }
 
-  return { recarga, restauranteNombre: rest?.nombre ?? 'El local', packNombre, estado }
+  return null
 }
 
 /** Info pública del link de pago (para renderizar la página `/pago/:token`). */
@@ -63,10 +115,25 @@ pagoRoute.get('/:token', async (c) => {
     const info = await cargarLink(db, token)
     if (!info) return c.json({ message: 'Link de pago no encontrado', success: false }, 404)
 
+    if (info.tipo === 'suscripcion') {
+      const cicloTxt = info.pago.ciclo === 'anual' ? 'Anual' : 'Mensual'
+      return c.json({
+        success: true,
+        data: {
+          tipo: 'suscripcion',
+          estado: info.estado,
+          restauranteNombre: info.restauranteNombre,
+          concepto: `Plan ${info.planNombre} · ${cicloTxt}`,
+          monto: info.pago.monto,
+        },
+      }, 200)
+    }
+
     const { recarga, restauranteNombre, packNombre, estado } = info
     return c.json({
       success: true,
       data: {
+        tipo: 'recarga',
         estado,
         restauranteNombre,
         concepto: packNombre ?? `${recarga.cantidad} ${unidad(recarga.categoria)}`,
@@ -83,16 +150,16 @@ pagoRoute.get('/:token', async (c) => {
 })
 
 /**
- * Inicia el pago del link con MercadoPago: crea la preferencia de Checkout Pro sobre la
- * recarga pendiente del token y devuelve el init_point. Idempotente frente a estados: si ya
- * está pagado o vencido, no cobra de nuevo.
+ * Inicia el pago del link con MercadoPago: crea la preferencia de Checkout Pro sobre el pago
+ * pendiente del token (recarga o suscripción) y devuelve el init_point. Idempotente frente a
+ * estados: si ya está pagado o vencido, no cobra de nuevo.
  */
 pagoRoute.post('/:token/checkout', async (c) => {
   const db = drizzle(pool)
   const token = c.req.param('token')
 
   if (!pagosRecargaDisponibles()) {
-    console.error('❌ [Pago QR] Falta MP_ACCESS_TOKEN para cobrar recargas')
+    console.error('❌ [Pago link] Falta MP_ACCESS_TOKEN para cobrar')
     return c.json({ message: 'Pagos no disponibles temporalmente', success: false }, 503)
   }
 
@@ -106,20 +173,33 @@ pagoRoute.post('/:token/checkout', async (c) => {
       return c.json({ message: 'El link de pago venció. Pedí uno nuevo desde el panel.', success: false, estado: 'expired' }, 410)
     }
 
-    const { recarga, packNombre } = info
-    const precio = parseFloat(String(recarga.monto))
     const backUrl = `${ADMIN_URL}/pago/${token}?estado=success`
 
+    if (info.tipo === 'suscripcion') {
+      const cicloTxt = info.pago.ciclo === 'anual' ? 'Anual' : 'Mensual'
+      const pref = await crearPreferenciaSuscripcionMP({
+        pagoId: info.pago.id,
+        titulo: `Piru ${info.planNombre} · ${cicloTxt}`,
+        precio: parseFloat(String(info.pago.monto)),
+        backUrl,
+      })
+      if (!pref.ok) {
+        return c.json({ message: 'Error al iniciar el pago', success: false }, 502)
+      }
+      await setPagoSuscripcionPreferencia(db, info.pago.id, pref.preferenceId)
+      return c.json({ success: true, data: { url_pago: pref.initPoint } }, 200)
+    }
+
+    const { recarga, packNombre } = info
     const pref = await crearPreferenciaRecargaMP({
       recargaId: recarga.id,
       titulo: packNombre ?? `${recarga.cantidad} ${unidad(recarga.categoria)}`,
-      precio,
+      precio: parseFloat(String(recarga.monto)),
       backUrl,
     })
     if (!pref.ok) {
       return c.json({ message: 'Error al iniciar el pago', success: false }, 502)
     }
-
     await setRecargaPreferencia(db, recarga.id, pref.preferenceId)
     return c.json({ success: true, data: { url_pago: pref.initPoint } }, 200)
   } catch (error) {

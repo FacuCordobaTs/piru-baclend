@@ -27,8 +27,9 @@ export type PlanCode = (typeof PLAN_CODES)[keyof typeof PLAN_CODES]
 /**
  * Claves canónicas de feature (columna plan_feature.feature_key).
  * Gating por plan (según el modelo de negocio):
- *   Intermedio+ : AVISOS_WHATSAPP_CLIENTE, FACTURACION_ARCA, RAPIBOY, MULTISUCURSAL, ESTADISTICAS_AVANZADAS
- *   Avanzado    : DOMINIO_PROPIO, MOTOR_RECOMPRA
+ *   Básico+     : MULTISUCURSAL, DOMINIO_PROPIO
+ *   Intermedio+ : AVISOS_WHATSAPP_CLIENTE, FACTURACION_ARCA, RAPIBOY, ESTADISTICAS_AVANZADAS
+ *   Avanzado    : MOTOR_RECOMPRA
  * Todo lo demás (recepción de pedidos, impresión, cupones, etc.) NO se gatea: está en todos los planes.
  */
 export const FEATURE_KEYS = {
@@ -38,11 +39,11 @@ export const FEATURE_KEYS = {
   FACTURACION_ARCA: 'facturacion_arca',
   /** Integración con Rapiboy (cadetes). */
   RAPIBOY: 'rapiboy',
-  /** Múltiples sucursales. */
+  /** Múltiples sucursales (Básico+). */
   MULTISUCURSAL: 'multisucursal',
   /** Estadísticas avanzadas. */
   ESTADISTICAS_AVANZADAS: 'estadisticas_avanzadas',
-  /** Dominio propio. */
+  /** Dominio propio / landing propia (Básico+). */
   DOMINIO_PROPIO: 'dominio_propio',
   /** Motor de Recompra (CRM gastronómico). ROADMAP: aún no construido. */
   MOTOR_RECOMPRA: 'motor_recompra',
@@ -52,21 +53,25 @@ export type FeatureKey = (typeof FEATURE_KEYS)[keyof typeof FEATURE_KEYS]
 
 /** Features que habilita cada plan por default (el plan superior incluye todo lo del inferior). */
 export const PLAN_FEATURES: Record<PlanCode, FeatureKey[]> = {
-  [PLAN_CODES.BASICO]: [],
+  [PLAN_CODES.BASICO]: [
+    FEATURE_KEYS.MULTISUCURSAL,
+    FEATURE_KEYS.DOMINIO_PROPIO,
+  ],
   [PLAN_CODES.INTERMEDIO]: [
+    FEATURE_KEYS.MULTISUCURSAL,
+    FEATURE_KEYS.DOMINIO_PROPIO,
     FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE,
     FEATURE_KEYS.FACTURACION_ARCA,
     FEATURE_KEYS.RAPIBOY,
-    FEATURE_KEYS.MULTISUCURSAL,
     FEATURE_KEYS.ESTADISTICAS_AVANZADAS,
   ],
   [PLAN_CODES.AVANZADO]: [
+    FEATURE_KEYS.MULTISUCURSAL,
+    FEATURE_KEYS.DOMINIO_PROPIO,
     FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE,
     FEATURE_KEYS.FACTURACION_ARCA,
     FEATURE_KEYS.RAPIBOY,
-    FEATURE_KEYS.MULTISUCURSAL,
     FEATURE_KEYS.ESTADISTICAS_AVANZADAS,
-    FEATURE_KEYS.DOMINIO_PROPIO,
     FEATURE_KEYS.MOTOR_RECOMPRA,
   ],
 }

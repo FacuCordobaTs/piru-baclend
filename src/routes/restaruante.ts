@@ -14,6 +14,7 @@ import { contarPedidosPagadosFranja } from '../lib/franjas'
 import { requireFeature } from '../middleware/plan'
 import { FEATURE_KEYS, resolverSuscripcion, tieneAccesoAlPanel } from '../lib/planes'
 import { resolverEstadoVigente } from '../lib/suscripciones'
+import { computarInventarioClaim } from '../lib/claim'
 
 // Configuración de R2
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID
@@ -231,6 +232,22 @@ restauranteRoute.get('/profile', async (c) => {
   } catch (error) {
     console.error('Error getting profile:', error)
     return c.json({ message: 'Error getting profile', error: (error as Error).message }, 500)
+  }
+})
+
+// Inventario del claim para la cuenta AUTENTICADA (checklist "esto ya está listo" del onboarding
+// outbound, Tarea 5). Reusa el mismo cómputo que el preview público del claim (lib/claim.ts) pero
+// para el dueño ya adentro: incluye `primerPedido` (¿existe ≥1 pedidoUnificado?), el gate de la
+// prueba. Aditivo: los admins viejos no lo llaman.
+restauranteRoute.get('/inventario-claim', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  try {
+    const inventario = await computarInventarioClaim(db, restauranteId)
+    return c.json({ success: true, inventario }, 200)
+  } catch (error) {
+    console.error('Error getting inventario-claim:', error)
+    return c.json({ success: false, message: 'Error al obtener el inventario' }, 500)
   }
 })
 

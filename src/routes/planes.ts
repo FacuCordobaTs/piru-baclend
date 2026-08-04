@@ -1,7 +1,8 @@
 import { Hono } from 'hono'
+import { randomUUID } from 'crypto'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
-import { eq, asc, and } from 'drizzle-orm'
+import { eq, asc, and, gte, sql } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { authMiddleware } from '../middleware/auth'
@@ -9,6 +10,7 @@ import {
   plan as PlanTable,
   planFeature as PlanFeatureTable,
   restaurante as RestauranteTable,
+  pedidoUnificado as PedidoUnificadoTable,
 } from '../db/schema'
 import { resolverSuscripcion, tieneAccesoAlPanel } from '../lib/planes'
 import { resumenWallet } from '../lib/mensajes-wallet'
@@ -21,12 +23,16 @@ import {
   montoPorCiclo,
   type CicloPago,
 } from '../lib/suscripciones'
+import { crearPreferenciaSuscripcionMP } from '../lib/mp-suscripcion'
+import { sendPaymentLinkWhatsApp } from '../services/whatsapp'
+
+/** Minutos de validez del link de pago (enviado por WhatsApp) antes de vencer. */
+const PAGO_LINK_TTL_MIN = 60
 
 // Los pagos de la cuota del plan van a la cuenta de la PLATAFORMA (Piru), con el
 // token de plataforma y sin marketplace_fee (100% a Piru). Checkout Pro, pago único.
 const MP_PLATFORM_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN
 const ADMIN_URL = (process.env.ADMIN_URL || 'https://admin.piru.app').replace(/\/$/, '')
-const MP_WEBHOOK_URL = 'https://api.piru.app/api/mp/webhook'
 
 const planesRoute = new Hono()
 
@@ -94,6 +100,46 @@ planesRoute.get('/mi-suscripcion', async (c) => {
       .limit(1)
     const requiereSuscripcion = !!restauranteRow?.requiereSuscripcion
 
+    // Contador de VALOR (no de días): "Recibiste X pedidos por $Y". Cuenta los pedidos que
+    // ENTRARON por Piru (web, no anotados a mano) desde que arrancó el ciclo (`fechaInicio`).
+    const contarValorPiru = async (desde: Date): Promise<{ pedidos: number; monto: number }> => {
+      const [valorRow] = await db
+        .select({
+          pedidos: sql<number>`COUNT(*)`,
+          monto: sql<string>`COALESCE(SUM(${PedidoUnificadoTable.total}), 0)`,
+        })
+        .from(PedidoUnificadoTable)
+        .where(
+          and(
+            eq(PedidoUnificadoTable.restauranteId, restauranteId),
+            eq(PedidoUnificadoTable.anotadoManualmente, false),
+            gte(PedidoUnificadoTable.createdAt, desde),
+          ),
+        )
+      return {
+        pedidos: Number(valorRow?.pedidos ?? 0),
+        monto: parseFloat(String(valorRow?.monto ?? '0')),
+      }
+    }
+
+    // Trial (Tarea 6 del Claim Flow): el día del pago la pregunta es "¿dejo de recibir esto?".
+    // Sólo en trial (evita el query en cuentas ya pagas). Aditivo: nullable.
+    let trialFin: Date | null = null
+    let trialValor: { pedidos: number; monto: number } | null = null
+    // Pausado (Tarea 8): el mismo número, pero para el local suspendido/cancelado — "tenés $Y en
+    // pedidos esperando reactivarse". Es el "números visibles" de la pantalla de reactivación por pago.
+    let valorPausa: { pedidos: number; monto: number } | null = null
+    const desde = vigente?.fechaInicio ?? null
+    if (vigente?.estado === 'trial') {
+      trialFin = vigente.trialFin ?? null
+      if (desde) trialValor = await contarValorPiru(desde)
+    } else if (
+      desde &&
+      (vigente?.estado === 'suspendida' || vigente?.estado === 'cancelada')
+    ) {
+      valorPausa = await contarValorPiru(desde)
+    }
+
     return c.json(
       {
         success: true,
@@ -109,6 +155,11 @@ planesRoute.get('/mi-suscripcion', async (c) => {
           accesoPanel: tieneAccesoAlPanel(requiereSuscripcion, suscripcion),
           // Fechas de facturación (para mostrar próximo cobro / gracia en la UI).
           fechaProximoCobro: vigente?.fechaProximoCobro ?? null,
+          // Fin del trial + valor generado (para el contador de valor del panel, Tarea 6).
+          trialFin,
+          trialValor,
+          // Valor acumulado para la pantalla de reactivación de un local pausado (Tarea 8).
+          valorPausa,
           graciaHasta: vigente?.graciaHasta ?? null,
           fechaCancelacion: vigente?.fechaCancelacion ?? null,
           precioMensual: vigente?.precioMensual ?? null,
@@ -173,47 +224,27 @@ planesRoute.post('/suscribir', zValidator('json', suscribirSchema), async (c) =>
       monto,
     })
 
-    const externalReference = `piru-plansub-${pagoId}`
     const backUrl = `${ADMIN_URL}/dashboard/ajustes/plan?plan=success`
 
     // 2. Preferencia de Checkout Pro con el token de plataforma (sin marketplace_fee).
-    const mpResponse = await fetch('https://api.mercadopago.com/checkout/preferences', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${MP_PLATFORM_ACCESS_TOKEN}`,
-      },
-      body: JSON.stringify({
-        items: [{
-          title: `Piru ${planRow.nombre} · ${ciclo === 'anual' ? 'Anual' : 'Mensual'}`,
-          quantity: 1,
-          currency_id: 'ARS',
-          unit_price: monto,
-        }],
-        back_urls: { success: backUrl, failure: backUrl, pending: backUrl },
-        auto_return: 'approved',
-        external_reference: externalReference,
-        notification_url: MP_WEBHOOK_URL,
-        statement_descriptor: 'PIRU',
-        expires: true,
-        expiration_date_to: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      }),
+    const pref = await crearPreferenciaSuscripcionMP({
+      pagoId,
+      titulo: `Piru ${planRow.nombre} · ${ciclo === 'anual' ? 'Anual' : 'Mensual'}`,
+      precio: monto,
+      backUrl,
     })
-
-    const preference = await mpResponse.json() as any
-    if (!mpResponse.ok) {
-      console.error('❌ [Suscripción] Error creando preferencia MP:', preference)
+    if (!pref.ok) {
       return c.json({ message: 'Error al iniciar el pago', success: false }, 502)
     }
 
-    await setPagoSuscripcionPreferencia(db, pagoId, String(preference.id))
+    await setPagoSuscripcionPreferencia(db, pagoId, pref.preferenceId)
 
     return c.json({
       success: true,
       data: {
         pagoId,
-        url_pago: preference.init_point,
-        preference_id: preference.id,
+        url_pago: pref.initPoint,
+        preference_id: pref.preferenceId,
         monto: monto.toFixed(2),
         ciclo,
       },
@@ -221,6 +252,75 @@ planesRoute.post('/suscribir', zValidator('json', suscribirSchema), async (c) =>
   } catch (error) {
     console.error('Error en checkout de suscripción:', error)
     return c.json({ message: 'Error al iniciar el pago del plan', success: false }, 500)
+  }
+})
+
+/**
+ * Envía al WhatsApp del DUEÑO el link para pagar la cuota del plan desde el celular (misma idea
+ * que la recarga por link). Crea el pago pendiente CON token y manda la plantilla utility
+ * `pago_link_v1` desde el número de Piru, con el botón apuntando a `/pago/:token` (no a MP directo).
+ * El precio SIEMPRE sale del plan en la DB. La suscripción se activa recién en el webhook al pagarse.
+ */
+planesRoute.post('/pago-link-whatsapp', zValidator('json', suscribirSchema), async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const { planId, ciclo: cicloInput } = c.req.valid('json')
+  const ciclo: CicloPago = cicloInput === 'anual' ? 'anual' : 'mensual'
+
+  if (!MP_PLATFORM_ACCESS_TOKEN) {
+    console.error('❌ [Pago link plan WhatsApp] Falta MP_ACCESS_TOKEN para cobrar la cuota')
+    return c.json({ message: 'Pagos no disponibles temporalmente', success: false }, 503)
+  }
+
+  try {
+    const [planRow] = await db
+      .select()
+      .from(PlanTable)
+      .where(and(eq(PlanTable.id, planId), eq(PlanTable.activo, true)))
+      .limit(1)
+    if (!planRow) {
+      return c.json({ message: 'Plan no encontrado', success: false }, 404)
+    }
+
+    const precioMensual = parseFloat(String(planRow.precioMensual))
+    const monto = montoPorCiclo(precioMensual, ciclo, planRow.descuentoAnual)
+    if (monto <= 0) {
+      return c.json({ message: 'Este plan no requiere pago', success: false }, 400)
+    }
+
+    const [rest] = await db
+      .select({ telefono: RestauranteTable.telefono })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
+
+    const telefono = (rest?.telefono || '').replace(/\D/g, '')
+    if (!telefono || telefono.length < 8) {
+      return c.json({
+        message: 'No tenés un número de WhatsApp verificado en tu cuenta para recibir el link.',
+        success: false,
+      }, 400)
+    }
+
+    const token = randomUUID()
+    const tokenExpiraEn = new Date(Date.now() + PAGO_LINK_TTL_MIN * 60 * 1000)
+    await crearPagoSuscripcionPendiente(db, restauranteId, { planId, ciclo, monto, token, tokenExpiraEn })
+
+    const concepto = `Plan ${planRow.nombre} · ${ciclo === 'anual' ? 'Anual' : 'Mensual'}`
+    const montoFmt = new Intl.NumberFormat('es-AR', {
+      style: 'currency', currency: 'ARS', maximumFractionDigits: 0,
+    }).format(monto)
+
+    const envio = await sendPaymentLinkWhatsApp(c, { phone: telefono, concepto, monto: montoFmt, token })
+    if (!envio.success) {
+      return c.json({ message: 'No se pudo enviar el link por WhatsApp. Probá de nuevo.', success: false }, 502)
+    }
+
+    const telefonoMask = telefono.length > 4 ? `••••${telefono.slice(-4)}` : telefono
+    return c.json({ success: true, data: { enviado: true, telefono: telefonoMask } }, 200)
+  } catch (error) {
+    console.error('Error enviando link de pago del plan por WhatsApp:', error)
+    return c.json({ message: 'Error al enviar el link de pago', success: false }, 500)
   }
 })
 

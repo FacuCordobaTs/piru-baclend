@@ -186,3 +186,22 @@ onboardingRoute.put('/complete', zValidator('json', completeOnboardingSchema), a
     return c.json({ success: false, message: 'Error interno del servidor', error: (error as Error).message }, 500)
   }
 })
+
+// Marca el onboarding como completado SIN tocar ningún otro dato (Tarea 5, claim outbound). El
+// self-serve usa /complete (que arma la tienda de cero); acá la tienda YA está construida por el
+// fundador y sólo queremos cerrar el onboarding de reclamo (checklist + primer pedido de prueba),
+// así ProtectedLayout deja de redirigir a /onboarding. Idempotente y aditivo.
+onboardingRoute.put('/marcar-completado', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  try {
+    await db
+      .update(RestauranteTable)
+      .set({ completedOnboarding: true })
+      .where(eq(RestauranteTable.id, restauranteId))
+    return c.json({ success: true, message: 'Onboarding marcado como completado' })
+  } catch (error) {
+    console.error('Error marking onboarding complete:', error)
+    return c.json({ success: false, message: 'Error interno del servidor', error: (error as Error).message }, 500)
+  }
+})

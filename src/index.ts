@@ -40,7 +40,9 @@ import { planesRoute } from './routes/planes';
 import { mensajesRoute } from './routes/mensajes';
 import { pagoRoute } from './routes/pago';
 import { internoRoute } from './routes/interno';
+import { claimRoute } from './routes/claim';
 import { tickMotorRecompra } from './lib/motor-recompra';
+import { tickAvisosTrial } from './lib/trial-avisos';
 import { serveStatic } from 'hono/bun';
 import { readFileSync } from 'node:fs';
 
@@ -187,6 +189,7 @@ app.basePath('/api')
   .route('/mp', mercadopagoRoute)
   .route('/notificacion', notificacionRoute)
   .route('/public', publicRoute)
+  .route('/public/claim', claimRoute)
   .route('/clientes', clientesRoute)
   .route('/webhook', webhookRoute)
   .route('/cucuru', cucuruRoute)
@@ -730,6 +733,17 @@ setInterval(() => {
     console.error('❌ [Motor Recompra] tick del scheduler falló:', err)
   })
 }, MOTOR_TICK_MS)
+
+// ── Claim Flow · aviso "tu prueba está por vencer" (día ~12) ─────────────────
+// Tick cada 15 min: busca trials que vencen en ~2 días y aún no avisados, y les manda por WhatsApp
+// (número de Piru) el aviso con el link de pago para activar el plan. Una sola vez por trial (flag
+// `suscripcion.avisoTrialVencimientoAt`). Best-effort: si falla, se reintenta en el próximo tick.
+const TRIAL_AVISO_TICK_MS = 15 * 60 * 1000
+setInterval(() => {
+  tickAvisosTrial(drizzle(pool)).catch((err) => {
+    console.error('❌ [Trial aviso] tick del scheduler falló:', err)
+  })
+}, TRIAL_AVISO_TICK_MS)
 
 export default {
   port: process.env.PORT || 3000,

@@ -16,6 +16,9 @@ import {
   resolverPackAutoRecarga,
 } from '../lib/mensajes-wallet'
 import { crearPreferenciaRecargaMP } from '../lib/mp-recarga'
+import { restaurante as RestauranteTable } from '../db/schema'
+import { eq } from 'drizzle-orm'
+import { sendPaymentLinkWhatsApp } from '../services/whatsapp'
 
 // Pago de recargas: van a la cuenta de la PLATAFORMA (Piru), no a la del restaurante,
 // por eso se usa el access token de plataforma y sin marketplace_fee.
@@ -79,6 +82,32 @@ async function iniciarCheckoutRecarga(
       monto: precio.toFixed(2),
     },
   }
+}
+
+/**
+ * Crea una recarga pendiente con un token de un solo uso y devuelve el link público `/pago/:token`.
+ * Es la base de "pagar desde otro lado": lo consume tanto el QR (legacy) como el envío del link por
+ * WhatsApp. El pago (elegir MP → Checkout Pro) ocurre después en la página pública, sin login.
+ */
+async function crearRecargaConToken(
+  db: ReturnType<typeof drizzle>,
+  restauranteId: number,
+  pack: PackRow,
+): Promise<{ recargaId: number; token: string; url: string; expiraEn: Date }> {
+  const token = randomUUID()
+  const expiraEn = new Date(Date.now() + PAGO_QR_TTL_MIN * 60 * 1000)
+
+  const recargaId = await crearRecargaPendiente(db, restauranteId, {
+    categoria: pack.categoria as 'utility' | 'marketing',
+    cantidad: pack.cantidad,
+    monto: pack.precio,
+    packRecargaId: pack.id,
+    origen: 'manual',
+    token,
+    tokenExpiraEn: expiraEn,
+  })
+
+  return { recargaId, token, url: `${ADMIN_URL}/pago/${token}`, expiraEn }
 }
 
 /** Saldo / wallet de mensajes del restaurante autenticado (para el widget de saldo + recarga). */
@@ -202,31 +231,74 @@ mensajesRoute.post('/pago-qr', zValidator('json', checkoutSchema), async (c) => 
       return c.json({ message: 'Pack no encontrado', success: false }, 404)
     }
 
-    const token = randomUUID()
-    const expiraEn = new Date(Date.now() + PAGO_QR_TTL_MIN * 60 * 1000)
-
-    const recargaId = await crearRecargaPendiente(db, restauranteId, {
-      categoria: pack.categoria as 'utility' | 'marketing',
-      cantidad: pack.cantidad,
-      monto: pack.precio,
-      packRecargaId: pack.id,
-      origen: 'manual',
-      token,
-      tokenExpiraEn: expiraEn,
-    })
+    const { recargaId, token, url, expiraEn } = await crearRecargaConToken(db, restauranteId, pack)
 
     return c.json({
       success: true,
-      data: {
-        recargaId,
-        token,
-        url: `${ADMIN_URL}/pago/${token}`,
-        expiraEn: expiraEn.toISOString(),
-      },
+      data: { recargaId, token, url, expiraEn: expiraEn.toISOString() },
     }, 200)
   } catch (error) {
     console.error('Error generando link de pago QR:', error)
     return c.json({ message: 'Error al generar el link de pago', success: false }, 500)
+  }
+})
+
+/**
+ * Envía al WhatsApp del DUEÑO el link de pago de un pack (reemplaza al QR: en vez de escanear,
+ * recibe el link en su celular). Crea la recarga pendiente con token y manda la plantilla utility
+ * `pago_link_v1` desde el número de Piru, con el botón apuntando a `/pago/:token` (no a MP directo).
+ * El precio SIEMPRE sale del pack en la DB. El saldo se acredita solo por webhook al pagarse.
+ */
+mensajesRoute.post('/pago-link-whatsapp', zValidator('json', checkoutSchema), async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const { packId } = c.req.valid('json')
+
+  if (!MP_PLATFORM_ACCESS_TOKEN) {
+    console.error('❌ [Pago link WhatsApp] Falta MP_ACCESS_TOKEN para cobrar recargas')
+    return c.json({ message: 'Pagos no disponibles temporalmente', success: false }, 503)
+  }
+
+  try {
+    const pack = await getPack(db, packId)
+    if (!pack) {
+      return c.json({ message: 'Pack no encontrado', success: false }, 404)
+    }
+
+    const [rest] = await db
+      .select({ telefono: RestauranteTable.telefono })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
+
+    const telefono = (rest?.telefono || '').replace(/\D/g, '')
+    if (!telefono || telefono.length < 8) {
+      return c.json({
+        message: 'No tenés un número de WhatsApp verificado en tu cuenta para recibir el link.',
+        success: false,
+      }, 400)
+    }
+
+    const { token } = await crearRecargaConToken(db, restauranteId, pack)
+
+    const unidad = pack.categoria === 'marketing' ? 'mensajes de campaña' : 'avisos por WhatsApp'
+    const concepto = `${pack.cantidad} ${unidad}`
+    const monto = new Intl.NumberFormat('es-AR', {
+      style: 'currency', currency: 'ARS', maximumFractionDigits: 0,
+    }).format(parseFloat(String(pack.precio)))
+
+    const envio = await sendPaymentLinkWhatsApp(c, { phone: telefono, concepto, monto, token })
+    if (!envio.success) {
+      return c.json({ message: 'No se pudo enviar el link por WhatsApp. Probá de nuevo.', success: false }, 502)
+    }
+
+    // Teléfono ofuscado para confirmar al usuario a qué número lo mandamos, sin exponerlo entero.
+    const telefonoMask = telefono.length > 4 ? `••••${telefono.slice(-4)}` : telefono
+
+    return c.json({ success: true, data: { enviado: true, telefono: telefonoMask } }, 200)
+  } catch (error) {
+    console.error('Error enviando link de pago por WhatsApp:', error)
+    return c.json({ message: 'Error al enviar el link de pago', success: false }, 500)
   }
 })
 

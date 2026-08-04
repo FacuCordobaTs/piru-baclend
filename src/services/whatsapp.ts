@@ -618,6 +618,209 @@ export const sendClientRecuperoWhatsApp = async (c: any, data: ClientRecuperoDat
     }
 };
 
+export interface PaymentLinkData {
+    phone: string;    // teléfono del DUEÑO del local (formato internacional, solo dígitos)
+    concepto: string; // {{1}} — qué está pagando, ej: "500 avisos por WhatsApp" o "Plan Intermedio"
+    monto: string;    // {{2}} — total formateado, ej: "$35.000"
+    token: string;    // sufijo dinámico del botón URL → /pago/:token (la página pública de pago)
+}
+
+/**
+ * Envía al DUEÑO del local un link para pagar una recarga desde el celular (reemplaza al QR).
+ * Es un mensaje de PLATAFORMA: sale del número de Piru (`WHATSAPP_PHONE_ID`), no del número del
+ * local, porque es Piru quien le cobra. Por eso NO recibe `creds` (siempre usa el número de Piru).
+ *
+ * El botón NO apunta a MercadoPago directo: apunta a la página pública `/pago/:token`, donde el
+ * dueño elige pagar (sin login) y recién ahí se abre el Checkout Pro. Así el mismo link sirve para
+ * abrirlo desde cualquier dispositivo y el pago se acredita solo por webhook.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * PLANTILLA A CREAR EN META (WhatsApp Manager → Plantillas de mensajes):
+ *   • Nombre:        pago_link_v1
+ *   • Categoría:     UTILITY  (es un aviso transaccional: un pago que el dueño inició)
+ *   • Idioma:        Español (Argentina) — es_AR
+ *   • Encabezado:    (ninguno)
+ *   • Cuerpo (con variables POSICIONALES {{1}} y {{2}}):
+ *
+ *        ¡Hola! 👋 Generaste un pago en Piru.
+ *
+ *        *{{1}}*
+ *        Total: {{2}}
+ *
+ *        Tocá el botón para pagarlo de forma segura con Mercado Pago. El link vence en 30 minutos ⏱️
+ *
+ *     El ORDEN es el contrato (lo respeta el `body.parameters` de abajo):
+ *       {{1}} concepto · {{2}} monto
+ *     Muestras sugeridas: {{1}}=500 avisos por WhatsApp · {{2}}=$35.000
+ *   • Botón:         Uno solo, tipo "Visitar sitio web" → URL DINÁMICA.
+ *                    Base EXACTA: https://admin.piru.app/pago/    Variable {{1}}: el token (uuid).
+ *                    ⚠️ La base tiene que coincidir con ADMIN_URL del backend; en el envío sólo
+ *                    mandamos el token como sufijo. Texto del botón sugerido: "Pagar ahora".
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+export const sendPaymentLinkWhatsApp = async (c: any, data: PaymentLinkData) => {
+    const { WHATSAPP_API_TOKEN, WHATSAPP_PHONE_ID } = env<{ WHATSAPP_API_TOKEN: string; WHATSAPP_PHONE_ID: string }>(c);
+    const url = `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_ID}/messages`;
+
+    const body = {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: data.phone,
+        type: "template",
+        template: {
+            name: "pago_link_v1",
+            language: { code: "es_AR" },
+            components: [
+                {
+                    type: "body",
+                    // Variables POSICIONALES {{1}} concepto · {{2}} monto. El orden ES el contrato.
+                    parameters: [
+                        { type: "text", text: data.concepto }, // {{1}}
+                        { type: "text", text: data.monto }      // {{2}}
+                    ]
+                },
+                {
+                    type: "button",
+                    sub_type: "url",
+                    index: 0,
+                    parameters: [
+                        // Sufijo dinámico del botón: base https://admin.piru.app/pago/ + {{1}} = token.
+                        { type: "text", text: data.token }
+                    ]
+                }
+            ]
+        }
+    };
+
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${WHATSAPP_API_TOKEN}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            console.error("❌ Error WhatsApp API (link de pago):", JSON.stringify(result, null, 2));
+            return { success: false, error: result };
+        }
+
+        console.log("✅ Link de pago WhatsApp enviado correctamente");
+        return { success: true, id: result.messages?.[0]?.id };
+
+    } catch (error) {
+        console.error("❌ Error de red enviando link de pago:", error);
+        return { success: false, error };
+    }
+};
+
+export interface TrialEndingData {
+    phone: string;    // teléfono del DUEÑO del local (formato internacional, solo dígitos)
+    nombre: string;   // {{1}} — nombre del dueño/local, ej: "Milanesas del Centro"
+    fechaFin: string; // {{2}} — fecha de fin del trial, ej: "viernes 8/8"
+    plata: string;    // {{3}} — plata en pedidos generada en el trial, ej: "$612.000"
+    precio: string;   // {{4}} — precio del plan sin símbolo, ej: "20.000"
+    token: string;    // sufijo dinámico del botón URL → /pago/:token (la página pública de pago)
+}
+
+/**
+ * Aviso "tu prueba está por vencer" (día ~12 del trial de 14) al DUEÑO del local, con el link para
+ * pagar ahí mismo. Mensaje de PLATAFORMA: sale del número de Piru (`WHATSAPP_PHONE_ID`), no del
+ * número del local, porque es Piru quien le cobra la cuota. Por eso NO recibe `creds`.
+ *
+ * El botón apunta a la página pública `/pago/:token` (misma infra que `pago_link_v1`), donde el
+ * dueño paga sin login con Checkout Pro y el pago se acredita solo por webhook.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * PLANTILLA A CREAR EN META (WhatsApp Manager → Plantillas de mensajes):
+ *   • Nombre:        trial_por_vencer_v1
+ *   • Categoría:     UTILITY  (aviso transaccional sobre la cuenta/prueba del dueño)
+ *   • Idioma:        Español (Argentina) — es_AR
+ *   • Encabezado:    (ninguno)
+ *   • Cuerpo (con variables POSICIONALES {{1}}..{{4}}):
+ *
+ *        ¡Hola {{1}}! 👋 Tu prueba de Piru termina el {{2}}.
+ *
+ *        Este mes tu local recibió {{3}} en pedidos por Piru. Para no perder eso y seguir
+ *        recibiendo pedidos, activá tu plan (${{4}}/mes).
+ *
+ *        Tocá el botón para pagar de forma segura con Mercado Pago 👇
+ *
+ *     El ORDEN es el contrato (lo respeta el `body.parameters` de abajo):
+ *       {{1}} nombre del dueño/local · {{2}} fecha de fin · {{3}} plata en pedidos · {{4}} precio del plan
+ *     Muestras: {{1}}=Milanesas del Centro · {{2}}=viernes 8/8 · {{3}}=$612.000 · {{4}}=20.000
+ *   • Botón:         Uno solo, tipo "Visitar sitio web" → URL DINÁMICA.
+ *                    Base EXACTA: https://admin.piru.app/pago/    Variable {{1}}: el token (uuid).
+ *                    ⚠️ La base tiene que coincidir con ADMIN_URL del backend; en el envío sólo
+ *                    mandamos el token como sufijo. Texto del botón sugerido: "Pagar ahora".
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+export const sendTrialEndingWhatsApp = async (c: any, data: TrialEndingData) => {
+    const { WHATSAPP_API_TOKEN, WHATSAPP_PHONE_ID } = env<{ WHATSAPP_API_TOKEN: string; WHATSAPP_PHONE_ID: string }>(c);
+    const url = `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_ID}/messages`;
+
+    const body = {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: data.phone,
+        type: "template",
+        template: {
+            name: "trial_por_vencer_v1",
+            language: { code: "es_AR" },
+            components: [
+                {
+                    type: "body",
+                    // Variables POSICIONALES {{1}} nombre · {{2}} fecha fin · {{3}} plata · {{4}} precio.
+                    parameters: [
+                        { type: "text", text: data.nombre },   // {{1}}
+                        { type: "text", text: data.fechaFin },  // {{2}}
+                        { type: "text", text: data.plata },     // {{3}}
+                        { type: "text", text: data.precio }     // {{4}}
+                    ]
+                },
+                {
+                    type: "button",
+                    sub_type: "url",
+                    index: 0,
+                    parameters: [
+                        // Sufijo dinámico del botón: base https://admin.piru.app/pago/ + {{1}} = token.
+                        { type: "text", text: data.token }
+                    ]
+                }
+            ]
+        }
+    };
+
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${WHATSAPP_API_TOKEN}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            console.error("❌ Error WhatsApp API (trial por vencer):", JSON.stringify(result, null, 2));
+            return { success: false, error: result };
+        }
+
+        console.log("✅ Aviso de trial por vencer enviado correctamente");
+        return { success: true, id: result.messages?.[0]?.id };
+
+    } catch (error) {
+        console.error("❌ Error de red enviando aviso de trial por vencer:", error);
+        return { success: false, error };
+    }
+};
+
 export interface WhatsAppTextMessage {
   phone: string;
   text: string;

@@ -70,7 +70,7 @@ export function montoPorCiclo(
 export async function crearPagoSuscripcionPendiente(
   db: Db,
   restauranteId: number,
-  opts: { planId: number; ciclo: CicloPago; monto: number },
+  opts: { planId: number; ciclo: CicloPago; monto: number; token?: string; tokenExpiraEn?: Date },
 ): Promise<number> {
   const insert = await db.insert(PagoSuscripcionTable).values({
     restauranteId,
@@ -78,8 +78,20 @@ export async function crearPagoSuscripcionPendiente(
     ciclo: opts.ciclo,
     monto: opts.monto.toFixed(2),
     estado: 'pending',
+    token: opts.token ?? null,
+    tokenExpiraEn: opts.tokenExpiraEn ?? null,
   })
   return Number((insert as any)[0].insertId)
+}
+
+/** Busca un pago de suscripción por su token de pago (para la página pública `/pago/:token`). */
+export async function getPagoSuscripcionPorToken(db: Db, token: string) {
+  const [pago] = await db
+    .select()
+    .from(PagoSuscripcionTable)
+    .where(eq(PagoSuscripcionTable.token, token))
+    .limit(1)
+  return pago ?? null
 }
 
 /** Guarda el preference_id de MercadoPago sobre un pago pendiente. */
@@ -296,6 +308,90 @@ export async function asignarPlanManual(
   return { planId, periodoHasta }
 }
 
+/** Duración por defecto del trial outbound (2 fines de semana completos — ver ROADMAP_CLAIM_FLOW). */
+export const DIAS_TRIAL_DEFAULT = 14
+
+/**
+ * Arranca el TRIAL de un local (onboarding outbound). A diferencia de asignarPlanManual (que da
+ * de alta 'activa' cobrando), acá el local entra en `estado='trial'` con acceso completo al plan
+ * SIN pagar, por `dias` días. ⚠️ Se llama cuando el fundador lo decide desde el panel interno,
+ * no en el claim ni en el registro (el reloj de los 14 días arranca acá).
+ *
+ * Efecto:
+ *  - upsert de la suscripción → estado 'trial', trialFin = fechaProximoCobro = ahora + dias.
+ *    Poner fechaProximoCobro = trialFin hace que, al vencer, `resolverEstadoVigente` transicione
+ *    solo a pago_pendiente (gracia) y luego suspendida ("pausada") — sin cron.
+ *  - acredita el cupo utility del plan de inmediato (best-effort).
+ * Devuelve { planId, trialFin } o null si el plan no existe.
+ */
+export async function iniciarTrial(
+  db: Db,
+  restauranteId: number,
+  planId: number,
+  dias: number = DIAS_TRIAL_DEFAULT,
+): Promise<{ planId: number; trialFin: Date } | null> {
+  const [planRow] = await db
+    .select()
+    .from(PlanTable)
+    .where(eq(PlanTable.id, planId))
+    .limit(1)
+  if (!planRow) return null
+
+  const ahora = new Date()
+  const trialFin = new Date(ahora.getTime() + dias * 24 * 60 * 60 * 1000)
+  const precioMensual = String(planRow.precioMensual)
+
+  const [subActual] = await db
+    .select()
+    .from(SuscripcionTable)
+    .where(eq(SuscripcionTable.restauranteId, restauranteId))
+    .limit(1)
+
+  if (subActual) {
+    await db
+      .update(SuscripcionTable)
+      .set({
+        planId,
+        estado: SUSCRIPCION_ESTADOS.TRIAL,
+        ciclo: 'mensual',
+        fechaInicio: ahora,
+        trialFin,
+        fechaProximoCobro: trialFin,
+        graciaHasta: null,
+        fechaCancelacion: null,
+        // Reset del flag anti-reenvío: un trial nuevo debe poder avisar su vencimiento de nuevo.
+        avisoTrialVencimientoAt: null,
+        precioMensual,
+        updatedAt: ahora,
+      })
+      .where(eq(SuscripcionTable.restauranteId, restauranteId))
+  } else {
+    await db.insert(SuscripcionTable).values({
+      restauranteId,
+      planId,
+      estado: SUSCRIPCION_ESTADOS.TRIAL,
+      ciclo: 'mensual',
+      fechaInicio: ahora,
+      trialFin,
+      fechaProximoCobro: trialFin,
+      precioMensual,
+    })
+  }
+
+  // Acreditar el cupo utility del plan (best-effort: el wallet nunca tumba el alta del trial).
+  try {
+    await acreditarCupoPlan(db, restauranteId, {
+      mensajesIncluidos: planRow.mensajesIncluidos ?? 0,
+      mensajesMarketingIncluidos: planRow.mensajesMarketingIncluidos ?? 0,
+      ilimitado: !!planRow.mensajesIlimitados,
+    })
+  } catch (err) {
+    console.error('acreditarCupoPlan falló tras iniciar trial:', err)
+  }
+
+  return { planId, trialFin }
+}
+
 /**
  * Estado "vigente" de la suscripción teniendo en cuenta el paso del tiempo, sin cron:
  * si venció el cobro entra en gracia (pago_pendiente) y, agotada la gracia, se suspende.
@@ -343,6 +439,23 @@ export async function resolverEstadoVigente(db: Db, restauranteId: number) {
 
 function addMonthsGracia(desde: Date): Date {
   return new Date(desde.getTime() + DIAS_GRACIA * 24 * 60 * 60 * 1000)
+}
+
+/**
+ * ¿El local está "pausado" por su suscripción? (Claim Flow · Tarea 8 — degradación, no apagón.)
+ * True cuando TENÍA un plan y lo perdió: `suspendida` (trial/pago vencido tras agotarse la gracia)
+ * o `cancelada` (baja voluntaria). En ese estado la tienda pública se muestra "cerrada
+ * temporalmente" y no toma pedidos nuevos, y el panel queda de sólo lectura / reactivación por pago.
+ * NO aplica a cuentas sin suscripción (pre-planes: null) ni a trial/activa/pago_pendiente (gracia):
+ * esas siguen operando con normalidad. Resuelve el estado lazy antes de decidir (sin cron).
+ */
+export async function estaPausadoPorSuscripcion(db: Db, restauranteId: number): Promise<boolean> {
+  const vigente = await resolverEstadoVigente(db, restauranteId)
+  if (!vigente) return false
+  return (
+    vigente.estado === SUSCRIPCION_ESTADOS.SUSPENDIDA ||
+    vigente.estado === SUSCRIPCION_ESTADOS.CANCELADA
+  )
 }
 
 /** Baja voluntaria. No corta nada en el acto: los pedidos/avisos en curso siguen. */
