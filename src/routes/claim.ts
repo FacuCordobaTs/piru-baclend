@@ -4,8 +4,9 @@
 // El fundador arma una tienda demo (prospecto) y comparte admin.piru.app/mi-tienda/{claimToken}.
 // El dueño la "reclama" verificando su WhatsApp: la cuenta del prospecto y la del dueño son LA MISMA
 // fila de `restaurante` (el claim sólo cambia el estado). El claim = login por teléfono con scope de
-// token: reusa el mismo OTP por WhatsApp que `auth.ts` (registroTelefono + sendVerificationCodeWhatsApp),
-// pero el número ya lo conoce el sistema (rest.telefono) — no se lo pedimos al usuario.
+// token: reusa el mismo OTP por WhatsApp que `auth.ts` (registroTelefono + sendVerificationCodeWhatsApp).
+// El WhatsApp SIEMPRE se lo pedimos al dueño (puede diferir del que cargó Facu, o no haber ninguno):
+// el número que verifica queda guardado en la cuenta para el login por teléfono.
 import { Hono } from 'hono'
 import { randomUUID, randomInt } from 'crypto'
 import { drizzle } from 'drizzle-orm/mysql2'
@@ -32,6 +33,16 @@ const OTP_MAX_INTENTOS = 5 // intentos fallidos antes de invalidar la sesión
 const normalizarTelefono = (raw: string): string => raw.replace(/\D/g, '')
 const generarCodigo = (): string => String(randomInt(0, 1_000_000)).padStart(6, '0')
 
+/**
+ * Normaliza el WhatsApp que el dueño escribe en el claim: sólo dígitos y, si no viene con el código
+ * de país (54), se lo anteponemos — mismo criterio que el registro por teléfono (Register.tsx / auth).
+ */
+const normalizarConPrefijo = (raw: string): string => {
+  const d = normalizarTelefono(raw)
+  if (!d) return ''
+  return d.startsWith('54') ? d : `54${d}`
+}
+
 /** Enmascara el teléfono para el preview público: sólo se ven los últimos 3 dígitos. */
 const enmascararTelefono = (raw: string | null | undefined): string | null => {
   const d = normalizarTelefono(raw || '')
@@ -43,6 +54,12 @@ const enmascararTelefono = (raw: string | null | undefined): string | null => {
 const verifySchema = z.object({
   verificationId: z.string().uuid(),
   codigo: z.string().regex(/^\d{6}$/),
+})
+
+// El claim SIEMPRE pide el WhatsApp: el dueño escribe el número donde quiere recibir el código y con
+// el que va a entrar. Puede diferir del que Facu cargó (o la tienda podría no tener ninguno cargado).
+const startSchema = z.object({
+  telefono: z.string().min(6),
 })
 
 export const claimRoute = new Hono()
@@ -85,11 +102,12 @@ claimRoute.get('/:token', async (c) => {
   }
 })
 
-// 2) Iniciar el reclamo: manda el OTP al WhatsApp que YA está en la cuenta del prospecto (rest.telefono).
-// No pedimos el número: lo conoce el sistema. Devuelve verificationId + el teléfono enmascarado.
-claimRoute.post('/:token/start', async (c) => {
+// 2) Iniciar el reclamo: manda el OTP al WhatsApp que el DUEÑO escribe (siempre se lo pedimos).
+// Devuelve verificationId + el teléfono enmascarado.
+claimRoute.post('/:token/start', zValidator('json', startSchema), async (c) => {
   const db = drizzle(pool)
   const token = c.req.param('token')
+  const { telefono: telefonoInput } = c.req.valid('json')
 
   try {
     const rest = await getRestaurantePorClaimToken(db, token)
@@ -103,10 +121,9 @@ claimRoute.post('/:token/start', async (c) => {
       return c.json({ message: 'Este link venció', success: false, vencido: true }, 404)
     }
 
-    const telefono = normalizarTelefono(rest.telefono || '')
+    const telefono = normalizarConPrefijo(telefonoInput)
     if (telefono.length < 8) {
-      // El prospecto no tiene un teléfono cargado: el fundador debe completarlo desde interno.
-      return c.json({ message: 'Esta tienda no tiene un WhatsApp asociado. Escribinos para reclamarla.', success: false }, 409)
+      return c.json({ message: 'Ingresá un número de WhatsApp válido', success: false }, 400)
     }
 
     // Anti-spam: no generar otro código para el mismo número dentro del cooldown.
@@ -211,6 +228,18 @@ claimRoute.post('/:token/verify', zValidator('json', verifySchema), async (c) =>
       }, 400)
     }
 
+    // Como ahora el número lo elige el dueño, puede chocar con OTRA cuenta ya verificada con ese
+    // WhatsApp (el login por teléfono usa telefono + telefonoVerificado como identidad). Si es de
+    // otra cuenta, no dejamos reclamar con ese número. Si el número ya es de ESTA misma tienda, ok.
+    const cuentaConEseNumero = await db.select({ id: RestauranteTable.id })
+      .from(RestauranteTable)
+      .where(and(eq(RestauranteTable.telefono, reg.telefono), eq(RestauranteTable.telefonoVerificado, true)))
+      .limit(1)
+
+    if (cuentaConEseNumero.length && cuentaConEseNumero[0].id !== rest.id) {
+      return c.json({ message: 'Ya existe una cuenta registrada con este número de WhatsApp. Usá otro número o iniciá sesión.', success: false }, 409)
+    }
+
     // Reclamo atómico: marcamos verificado sólo si seguía en false (evita doble-reclamo simultáneo).
     const claim = await db.update(registroTelefono)
       .set({ verificado: true })
@@ -220,9 +249,10 @@ claimRoute.post('/:token/verify', zValidator('json', verifySchema), async (c) =>
       return c.json({ message: 'Estamos terminando de reclamar tu tienda, probá de nuevo en un momento.', success: false }, 409)
     }
 
-    // La cuenta pasa a reclamada: es dueña verificada del número. El pipeline se deriva a 'reclamada'.
+    // La cuenta pasa a reclamada: es dueña verificada del número. Guardamos el WhatsApp que el dueño
+    // verificó (puede diferir del que cargó Facu) para que el login por teléfono funcione con él.
     await db.update(RestauranteTable)
-      .set({ claimedAt: new Date(), telefonoVerificado: true })
+      .set({ claimedAt: new Date(), telefonoVerificado: true, telefono: reg.telefono })
       .where(eq(RestauranteTable.id, rest.id))
 
     const [cuenta] = await db.select().from(RestauranteTable)

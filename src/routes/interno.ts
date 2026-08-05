@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
-import { asc, eq } from 'drizzle-orm'
+import { and, asc, eq } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import * as jwt from 'jsonwebtoken'
@@ -77,6 +77,7 @@ internoRoute.get('/locales', async (c) => {
         nombre: RestauranteTable.nombre,
         email: RestauranteTable.email,
         telefono: RestauranteTable.telefono,
+        telefonoVerificado: RestauranteTable.telefonoVerificado,
         whatsappEnabled: RestauranteTable.whatsappEnabled,
         whatsappNumber: RestauranteTable.whatsappNumber,
         whatsappPhoneId: RestauranteTable.whatsappPhoneId,
@@ -110,6 +111,9 @@ internoRoute.get('/locales', async (c) => {
           nombre: r.nombre,
           email: r.email,
           telefono: r.telefono,
+          // Identidad de login por WhatsApp: sólo cuenta si está verificado. Liberar el número =
+          // poner esto en false (deja de ocupar el teléfono para altas nuevas). Campo aditivo.
+          telefonoVerificado: r.telefonoVerificado,
           planId: sus.planId,
           planCodigo: sus.planCodigo,
           planNombre: sus.planNombre,
@@ -307,6 +311,74 @@ internoRoute.put(
     } catch (error) {
       console.error('Error configurando WhatsApp (interno):', error)
       return c.json({ success: false, message: 'Error al configurar WhatsApp' }, 500)
+    }
+  },
+)
+
+/**
+ * Liberar / reactivar el NÚMERO DE WHATSAPP (identidad de login) de una cuenta.
+ *
+ * El problema que resuelve: la identidad de login por WhatsApp es `telefono + telefonoVerificado=true`,
+ * y es única a nivel app. Con un solo número de prueba no se pueden tener dos cuentas verificadas con
+ * él. "Liberar" (verificado=false) saca el número del pool de unicidad → se puede crear OTRA cuenta
+ * (por teléfono o por claim) con el mismo número. La cuenta liberada sigue existiendo (entra por email
+ * si tiene contraseña), sólo pierde el login por WhatsApp.
+ *
+ * Reactivar (verificado=true) exige que NINGUNA otra cuenta tenga ese número verificado (si no, habría
+ * dos identidades iguales y el login sería ambiguo) → 409 en ese caso.
+ */
+const telefonoVerificadoSchema = z.object({ verificado: z.boolean() })
+
+internoRoute.put(
+  '/locales/:id/telefono-verificado',
+  zValidator('json', telefonoVerificadoSchema),
+  async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = Number(c.req.param('id'))
+    if (!Number.isInteger(restauranteId) || restauranteId <= 0) {
+      return c.json({ success: false, message: 'Local inválido' }, 400)
+    }
+
+    const { verificado } = c.req.valid('json')
+
+    try {
+      const [rest] = await db
+        .select({ id: RestauranteTable.id, telefono: RestauranteTable.telefono })
+        .from(RestauranteTable)
+        .where(eq(RestauranteTable.id, restauranteId))
+        .limit(1)
+      if (!rest) {
+        return c.json({ success: false, message: 'Local no encontrado' }, 404)
+      }
+
+      // Reactivar: no permitir dos cuentas verificadas con el mismo número.
+      if (verificado) {
+        const tel = (rest.telefono || '').replace(/\D/g, '')
+        if (tel.length < 8) {
+          return c.json({ success: false, message: 'Esta cuenta no tiene un número de WhatsApp cargado' }, 400)
+        }
+        const [otra] = await db
+          .select({ id: RestauranteTable.id })
+          .from(RestauranteTable)
+          .where(and(
+            eq(RestauranteTable.telefono, rest.telefono as string),
+            eq(RestauranteTable.telefonoVerificado, true),
+          ))
+          .limit(1)
+        if (otra && otra.id !== restauranteId) {
+          return c.json({ success: false, message: 'Otra cuenta ya tiene ese número verificado. Liberala primero.' }, 409)
+        }
+      }
+
+      await db
+        .update(RestauranteTable)
+        .set({ telefonoVerificado: verificado })
+        .where(eq(RestauranteTable.id, restauranteId))
+
+      return c.json({ success: true, data: { telefonoVerificado: verificado } }, 200)
+    } catch (error) {
+      console.error('Error cambiando verificación de teléfono (interno):', error)
+      return c.json({ success: false, message: 'Error al actualizar el número' }, 500)
     }
   },
 )
