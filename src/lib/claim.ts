@@ -7,11 +7,16 @@
 // Este módulo centraliza: generar/resolver el token, computar el inventario ("esto ya está listo")
 // y derivar el pipeline (prospecto → reclamada → trial → activa → pausada) desde los datos.
 import { type MySql2Database } from 'drizzle-orm/mysql2'
-import { eq, count } from 'drizzle-orm'
+import { eq, count, and, inArray } from 'drizzle-orm'
 import { randomUUID } from 'crypto'
 import {
   restaurante as RestauranteTable,
   producto as ProductoTable,
+  varianteProducto as VarianteProductoTable,
+  ingrediente as IngredienteTable,
+  productoIngrediente as ProductoIngredienteTable,
+  agregado as AgregadoTable,
+  productoAgregado as ProductoAgregadoTable,
   zonaDelivery as ZonaDeliveryTable,
   pedidoUnificado as PedidoUnificadoTable,
 } from '../db/schema'
@@ -162,7 +167,16 @@ export interface ConfigClaim {
       color: string | null
     }>
   }
-  productos: Array<{ id: number; nombre: string; precio: string; imagenUrl: string | null }>
+  productos: Array<{
+    id: number
+    nombre: string
+    precio: string
+    descripcion: string | null
+    imagenUrl: string | null
+    variantes: Array<{ nombre: string; precio: number }>
+    ingredientes: string[]
+    extras: Array<{ nombre: string; precio: number }>
+  }>
 }
 
 /**
@@ -208,11 +222,53 @@ export async function computarConfigClaim(db: Db, restauranteId: number): Promis
         id: ProductoTable.id,
         nombre: ProductoTable.nombre,
         precio: ProductoTable.precio,
+        descripcion: ProductoTable.descripcion,
         imagenUrl: ProductoTable.imagenUrl,
       })
       .from(ProductoTable)
       .where(eq(ProductoTable.restauranteId, restauranteId)),
   ])
+
+  // Detalle de cada producto (variantes, ingredientes, extras) para que la tarjeta del claim se vea
+  // igual que la revisión de carta del onboarding self-serve. Se agrupa por productoId en memoria.
+  const productoIds = productos.map((p) => p.id)
+  const [variantes, ingredientesRows, extras] = productoIds.length
+    ? await Promise.all([
+        db
+          .select({ productoId: VarianteProductoTable.productoId, nombre: VarianteProductoTable.nombre, precio: VarianteProductoTable.precio })
+          .from(VarianteProductoTable)
+          .where(and(inArray(VarianteProductoTable.productoId, productoIds), eq(VarianteProductoTable.activo, true))),
+        db
+          .select({ productoId: ProductoIngredienteTable.productoId, nombre: IngredienteTable.nombre })
+          .from(ProductoIngredienteTable)
+          .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
+          .where(inArray(ProductoIngredienteTable.productoId, productoIds)),
+        db
+          .select({ productoId: ProductoAgregadoTable.productoId, nombre: AgregadoTable.nombre, precio: AgregadoTable.precio })
+          .from(ProductoAgregadoTable)
+          .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
+          .where(and(inArray(ProductoAgregadoTable.productoId, productoIds), eq(AgregadoTable.activo, true))),
+      ])
+    : [[], [], []]
+
+  const variantesPorProd = new Map<number, Array<{ nombre: string; precio: number }>>()
+  for (const v of variantes) {
+    const arr = variantesPorProd.get(v.productoId) ?? []
+    arr.push({ nombre: v.nombre, precio: Number(v.precio) })
+    variantesPorProd.set(v.productoId, arr)
+  }
+  const ingredientesPorProd = new Map<number, string[]>()
+  for (const ing of ingredientesRows) {
+    const arr = ingredientesPorProd.get(ing.productoId) ?? []
+    arr.push(ing.nombre)
+    ingredientesPorProd.set(ing.productoId, arr)
+  }
+  const extrasPorProd = new Map<number, Array<{ nombre: string; precio: number }>>()
+  for (const ex of extras) {
+    const arr = extrasPorProd.get(ex.productoId) ?? []
+    arr.push({ nombre: ex.nombre, precio: Number(ex.precio) })
+    extrasPorProd.set(ex.productoId, arr)
+  }
 
   const cfg = rest
     ? resolveMetodosPagoConfig(rowToPagoRow(rest))
@@ -248,7 +304,11 @@ export async function computarConfigClaim(db: Db, restauranteId: number): Promis
       id: p.id,
       nombre: p.nombre,
       precio: String(p.precio),
+      descripcion: p.descripcion ?? null,
       imagenUrl: p.imagenUrl ?? null,
+      variantes: variantesPorProd.get(p.id) ?? [],
+      ingredientes: ingredientesPorProd.get(p.id) ?? [],
+      extras: extrasPorProd.get(p.id) ?? [],
     })),
   }
 }
