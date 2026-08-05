@@ -16,6 +16,7 @@ import {
   pedidoUnificado as PedidoUnificadoTable,
 } from '../db/schema'
 import { SUSCRIPCION_ESTADOS } from './planes'
+import { resolveMetodosPagoConfig, rowToPagoRow } from './metodos-pago'
 
 type Db = MySql2Database<Record<string, never>>
 
@@ -126,6 +127,129 @@ export async function computarInventarioClaim(
     primerPedido: Number(pedidoRow?.n ?? 0) > 0,
     tieneNombre: !!rest?.nombre,
     tieneLink: !!rest?.username,
+  }
+}
+
+/**
+ * Config editable de la tienda para el claim (onboarding outbound). El dueño, al reclamar, puede
+ * revisar y ajustar lo que Facu dejó cargado SIN entrar todavía al panel: métodos de pago + alias,
+ * precio/zonas de delivery y ver sus productos. Es la materia prima del recorrido de aprobación
+ * (`ClaimTienda.tsx`). Público bajo el token secreto del claim; todos estos datos ya son visibles
+ * para el comensal en la tienda (métodos al checkout, alias al transferir, precios de envío), así
+ * que no expone nada nuevo.
+ */
+export interface ConfigClaim {
+  pagos: {
+    efectivo: boolean
+    transferenciaManual: boolean
+    transferenciaAutomatica: boolean
+    mercadopagoCheckout: boolean
+    transferenciaAlias: string | null
+    /** Transferencia automática (Cucuru/Talo) disponible: si lo está, la manual no se usa. */
+    autoTransferAvailable: boolean
+    mpConnected: boolean
+  }
+  delivery: {
+    deliveryEnabled: boolean
+    /** Centro para el mapa (dirección del local); null si no está geocodificada. */
+    lat: number | null
+    lng: number | null
+    zonas: Array<{
+      id: number
+      nombre: string
+      precio: string
+      poligono: unknown
+      color: string | null
+    }>
+  }
+  productos: Array<{ id: number; nombre: string; precio: string; imagenUrl: string | null }>
+}
+
+/**
+ * Computa la config editable de la tienda para el recorrido del claim. Barato: una fila de
+ * restaurante + zonas + productos. Reusa `resolveMetodosPagoConfig` (la misma verdad que usa el
+ * checkout) para que lo que ve el dueño coincida con lo que ve el comensal.
+ */
+export async function computarConfigClaim(db: Db, restauranteId: number): Promise<ConfigClaim> {
+  const [rest] = await db
+    .select({
+      metodosPagoConfig: RestauranteTable.metodosPagoConfig,
+      cardsPaymentsEnabled: RestauranteTable.cardsPaymentsEnabled,
+      mpConnected: RestauranteTable.mpConnected,
+      mpPublicKey: RestauranteTable.mpPublicKey,
+      cucuruConfigurado: RestauranteTable.cucuruConfigurado,
+      cucuruEnabled: RestauranteTable.cucuruEnabled,
+      proveedorPago: RestauranteTable.proveedorPago,
+      taloClientId: RestauranteTable.taloClientId,
+      taloClientSecret: RestauranteTable.taloClientSecret,
+      taloUserId: RestauranteTable.taloUserId,
+      transferenciaAlias: RestauranteTable.transferenciaAlias,
+      deliveryEnabled: RestauranteTable.deliveryEnabled,
+      direccionLat: RestauranteTable.direccionLat,
+      direccionLng: RestauranteTable.direccionLng,
+    })
+    .from(RestauranteTable)
+    .where(eq(RestauranteTable.id, restauranteId))
+    .limit(1)
+
+  const [zonas, productos] = await Promise.all([
+    db
+      .select({
+        id: ZonaDeliveryTable.id,
+        nombre: ZonaDeliveryTable.nombre,
+        precio: ZonaDeliveryTable.precio,
+        poligono: ZonaDeliveryTable.poligono,
+        color: ZonaDeliveryTable.color,
+      })
+      .from(ZonaDeliveryTable)
+      .where(eq(ZonaDeliveryTable.restauranteId, restauranteId)),
+    db
+      .select({
+        id: ProductoTable.id,
+        nombre: ProductoTable.nombre,
+        precio: ProductoTable.precio,
+        imagenUrl: ProductoTable.imagenUrl,
+      })
+      .from(ProductoTable)
+      .where(eq(ProductoTable.restauranteId, restauranteId)),
+  ])
+
+  const cfg = rest
+    ? resolveMetodosPagoConfig(rowToPagoRow(rest))
+    : { efectivo: true, transferenciaManual: false, transferenciaAutomatica: false, mercadopagoCheckout: false, mercadopagoBricks: false }
+
+  const autoTransferAvailable =
+    !!(rest?.cucuruConfigurado && rest?.cucuruEnabled !== false) ||
+    (rest?.proveedorPago === 'talo' && !!(rest?.taloClientId && rest?.taloClientSecret && rest?.taloUserId))
+
+  return {
+    pagos: {
+      efectivo: cfg.efectivo,
+      transferenciaManual: cfg.transferenciaManual,
+      transferenciaAutomatica: cfg.transferenciaAutomatica,
+      mercadopagoCheckout: cfg.mercadopagoCheckout,
+      transferenciaAlias: rest?.transferenciaAlias ?? null,
+      autoTransferAvailable,
+      mpConnected: !!rest?.mpConnected,
+    },
+    delivery: {
+      deliveryEnabled: rest?.deliveryEnabled !== false,
+      lat: rest?.direccionLat != null ? Number(rest.direccionLat) : null,
+      lng: rest?.direccionLng != null ? Number(rest.direccionLng) : null,
+      zonas: zonas.map((z) => ({
+        id: z.id,
+        nombre: z.nombre,
+        precio: String(z.precio),
+        poligono: z.poligono,
+        color: z.color ?? null,
+      })),
+    },
+    productos: productos.map((p) => ({
+      id: p.id,
+      nombre: p.nombre,
+      precio: String(p.precio),
+      imagenUrl: p.imagenUrl ?? null,
+    })),
   }
 }
 

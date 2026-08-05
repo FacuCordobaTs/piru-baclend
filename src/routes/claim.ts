@@ -23,6 +23,7 @@ import {
   getRestaurantePorClaimToken,
   claimTokenVigente,
   computarInventarioClaim,
+  computarConfigClaim,
 } from '../lib/claim'
 
 // Mismos parámetros de OTP que el registro/login por teléfono (auth.ts), para consistencia.
@@ -83,7 +84,10 @@ claimRoute.get('/:token', async (c) => {
       return c.json({ message: 'Este link venció', success: false, vencido: true }, 404)
     }
 
-    const inventario = await computarInventarioClaim(db, rest.id)
+    const [inventario, config] = await Promise.all([
+      computarInventarioClaim(db, rest.id),
+      computarConfigClaim(db, rest.id),
+    ])
 
     return c.json({
       success: true,
@@ -95,6 +99,7 @@ claimRoute.get('/:token', async (c) => {
         telefonoEnmascarado: enmascararTelefono(rest.telefono),
       },
       inventario,
+      config,
     }, 200)
   } catch (error) {
     console.error('Error en preview de claim:', error)
