@@ -22,6 +22,7 @@ import {
   claimTokenVigente,
   derivarPipeline,
   derivarExpiracionClaim,
+  CLAIM_TOKEN_TTL_DIAS,
 } from '../lib/claim'
 
 /** Días restantes (redondeado hacia arriba, mínimo 0) hasta una fecha. */
@@ -410,6 +411,55 @@ internoRoute.post('/locales/:id/claim-link', async (c) => {
   } catch (error) {
     console.error('Error generando link de reclamo (interno):', error)
     return c.json({ success: false, message: 'Error al generar el link de reclamo' }, 500)
+  }
+})
+
+/**
+ * ⚠️ SOLO PRUEBAS DEL FUNDADOR. Reinicia el estado de reclamo de una tienda para poder volver a
+ * correr el flujo de claim después de haberlo probado uno mismo (si no, el preview responde "Esta
+ * tienda ya es tuya"). Limpia `claimedAt`, libera el número de login (`telefonoVerificado=false`) y
+ * reextiende el link de reclamo (reusa el mismo token si existe; genera uno si no). NO toca el menú,
+ * los pagos ni la suscripción: solo reabre la puerta del reclamo.
+ */
+internoRoute.post('/locales/:id/reset-claim', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = Number(c.req.param('id'))
+  if (!Number.isInteger(restauranteId) || restauranteId <= 0) {
+    return c.json({ success: false, message: 'Local inválido' }, 400)
+  }
+
+  try {
+    const [rest] = await db
+      .select({ id: RestauranteTable.id, claimToken: RestauranteTable.claimToken })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
+    if (!rest) {
+      return c.json({ success: false, message: 'Local no encontrado' }, 404)
+    }
+
+    // Reabrir el reclamo: sin fecha de reclamo, número liberado y link vigente de nuevo.
+    await db
+      .update(RestauranteTable)
+      .set({
+        claimedAt: null,
+        telefonoVerificado: false,
+        origen: 'outbound',
+        claimTokenExpira: new Date(Date.now() + CLAIM_TOKEN_TTL_DIAS * 24 * 60 * 60 * 1000),
+      })
+      .where(eq(RestauranteTable.id, restauranteId))
+
+    // Si la cuenta no tenía token de reclamo, generamos uno ahora.
+    let token = rest.claimToken
+    if (!token) {
+      const gen = await generarClaimLink(db, restauranteId)
+      token = gen.token
+    }
+
+    return c.json({ success: true, data: { token, url: buildClaimUrl(token) } }, 200)
+  } catch (error) {
+    console.error('Error reiniciando el reclamo (interno):', error)
+    return c.json({ success: false, message: 'Error al reiniciar el reclamo' }, 500)
   }
 })
 
