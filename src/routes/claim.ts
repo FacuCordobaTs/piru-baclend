@@ -9,10 +9,15 @@
 // el número que verifica queda guardado en la cuenta para el login por teléfono.
 import { Hono } from 'hono'
 import { randomUUID, randomInt } from 'crypto'
-import { drizzle } from 'drizzle-orm/mysql2'
+import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
 import { setCookie } from 'hono/cookie'
-import { restaurante as RestauranteTable, registroTelefono } from '../db/schema'
+import {
+  restaurante as RestauranteTable,
+  registroTelefono,
+  plan as PlanTable,
+  suscripcion as SuscripcionTable,
+} from '../db/schema'
 import { and, eq, gt } from 'drizzle-orm'
 import { createAccessToken } from '../libs/jwt'
 import { zValidator } from '@hono/zod-validator'
@@ -25,6 +30,50 @@ import {
   computarInventarioClaim,
   computarConfigClaim,
 } from '../lib/claim'
+import { iniciarTrial, DIAS_TRIAL_DEFAULT } from '../lib/suscripciones'
+import { PLAN_CODES } from '../lib/planes'
+
+/**
+ * Arranca el TRIAL de 14 días cuando el dueño reclama su tienda (Claim Flow). El reloj de la prueba
+ * arranca ACÁ, en el claim: el dueño entra con acceso completo al plan Básico sin pagar por 14 días,
+ * y recién al vencer (agotada también la gracia) cae en el paywall/pausa (→ /suscribir). Sin esto, la
+ * cuenta queda `requiereSuscripcion=true` sin suscripción → accesoPanel=false → redirige de una a
+ * /suscribir apenas cierra y reabre. El aviso "tu prueba está por vencer" (día ~12) lo dispara solo
+ * `tickAvisosTrial` a partir del `estado='trial'` que dejamos acá.
+ *
+ * Idempotente: si la cuenta YA tiene una suscripción (p. ej. el fundador le arrancó el trial a mano
+ * desde el panel interno, o ya pagó), no la pisamos. Best-effort: nunca tumba el reclamo.
+ */
+async function arrancarTrialClaim(db: MySql2Database<Record<string, never>>, restauranteId: number): Promise<void> {
+  try {
+    const [subExistente] = await db
+      .select({ id: SuscripcionTable.id })
+      .from(SuscripcionTable)
+      .where(eq(SuscripcionTable.restauranteId, restauranteId))
+      .limit(1)
+    if (subExistente) return // ya tiene suscripción (trial a mano, plan pago, etc.): no la pisamos.
+
+    const [basico] = await db
+      .select({ id: PlanTable.id })
+      .from(PlanTable)
+      .where(eq(PlanTable.codigo, PLAN_CODES.BASICO))
+      .limit(1)
+    if (!basico) {
+      console.warn(`⚠️ [Claim trial] no hay plan Básico configurado; el trial de ${restauranteId} no se inició.`)
+      return
+    }
+
+    await iniciarTrial(db, restauranteId, basico.id, DIAS_TRIAL_DEFAULT)
+    // El trial habilita el panel (estado 'trial' → conAccesoAPago), pero al vencer debe caer en el
+    // paywall/pausa: marcamos la cuenta como que requiere suscripción (igual que el trial interno).
+    await db
+      .update(RestauranteTable)
+      .set({ requiereSuscripcion: true, origen: 'outbound' })
+      .where(eq(RestauranteTable.id, restauranteId))
+  } catch (err) {
+    console.error(`❌ [Claim trial] falló al iniciar el trial de ${restauranteId}:`, err)
+  }
+}
 
 // Mismos parámetros de OTP que el registro/login por teléfono (auth.ts), para consistencia.
 const OTP_EXPIRACION_MS = 10 * 60 * 1000 // el código vive 10 minutos
@@ -259,6 +308,10 @@ claimRoute.post('/:token/verify', zValidator('json', verifySchema), async (c) =>
     await db.update(RestauranteTable)
       .set({ claimedAt: new Date(), telefonoVerificado: true, telefono: reg.telefono })
       .where(eq(RestauranteTable.id, rest.id))
+
+    // Arrancamos el trial de 14 días recién ahora (el reloj corre desde que el dueño reclama). Sin
+    // esto el local queda con requiereSuscripcion pero sin suscripción → redirige de una a /suscribir.
+    await arrancarTrialClaim(db, rest.id)
 
     const [cuenta] = await db.select().from(RestauranteTable)
       .where(eq(RestauranteTable.id, rest.id))
