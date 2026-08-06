@@ -366,6 +366,7 @@ const pedidoUnificadoRoute = new Hono()
           }))
           console.log('⏳ [Onboarding] Enviando pedido de prueba al WhatsApp del dueño:', phone)
           await sendOrderWhatsApp(c, {
+            restauranteId,
             phone,
             customerName: body.nombreCliente || 'Pedido de prueba',
             address: body.tipo === 'delivery' ? (body.direccion || 'Sin dirección') : 'Retiro en el local',

@@ -16,6 +16,7 @@ interface OrderItem {
 }
 
 export interface OrderNotification {
+    restauranteId: number; // Para gatear por plan (los avisos por WhatsApp son Intermedio+)
     phone: string;        // El número del restaurante
     customerName: string; // {{nombre_cliente}}
     address: string;      // {{direccion_cliente}}
@@ -86,6 +87,16 @@ const formatOrderSummary = (items: OrderItem[], horarioProgramado?: string | nul
 };
 
 export const sendOrderWhatsApp = async (c: any, data: OrderNotification, creds?: WaCredentials) => {
+    // El aviso automático de pedido al local por WhatsApp (plantilla `pedido_detalle_v1`, que sale
+    // por la API de Meta y le cuesta plata a Piru) es feature de plan Intermedio+. En el plan Básico
+    // el local recibe el pedido por el botón "Enviar pedido al WhatsApp" (wa.me) que dispara el cliente
+    // desde su propio celular, gratis y sin consumir el wallet. Cuentas pre-planes: fail-open.
+    const db = drizzle(pool);
+    if (!(await tieneAcceso(db, data.restauranteId, FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE))) {
+        console.log(`📲 [Aviso Pedido al Local] Pedido #${data.orderId} omitido (plan sin avisos automáticos por WhatsApp)`);
+        return { success: false, skipped: true as const };
+    }
+
     const { WHATSAPP_API_TOKEN, WHATSAPP_PHONE_ID } = env<{ WHATSAPP_API_TOKEN: string; WHATSAPP_PHONE_ID: string }>(c);
     const phoneId = creds?.phoneId ?? WHATSAPP_PHONE_ID;
     const token = creds?.token ?? WHATSAPP_API_TOKEN;

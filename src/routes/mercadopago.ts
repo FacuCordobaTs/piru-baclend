@@ -454,6 +454,7 @@ mercadopagoRoute.post('/process-brick', async (c) => {
           const restCreds = resolverCredsRestaurante(restaurante[0])
 
           sendOrderWhatsApp(c, {
+            restauranteId: pedido.restauranteId!,
             phone: restaurante[0].whatsappNumber,
             customerName: pedido.nombreCliente || 'Cliente no especificado',
             address: tipoPedido === 'delivery' ? (pedido.direccion || 'Sin dirección') : 'Retira en local (Take Away)',
@@ -782,6 +783,7 @@ mercadopagoRoute.post('/webhook', async (c) => {
           const restCreds = resolverCredsRestaurante(restaurante[0])
 
           sendOrderWhatsApp(c, {
+            restauranteId,
             phone: restaurante[0].whatsappNumber,
             customerName: pedidoData.nombreCliente || 'Cliente no especificado',
             address: tipoPedido === 'delivery' ? (pedidoData.direccion || 'Sin dirección') : 'Retira en local (Take Away)',

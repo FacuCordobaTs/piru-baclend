@@ -950,6 +950,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
                 console.log("⏳ Iniciando envío de WhatsApp a:", whatsappLocalNumber);
                 sendOrderWhatsApp(c, {
+                    restauranteId,
                     phone: whatsappLocalNumber,
                     customerName: nombreCliente || 'Cliente no especificado',
                     address: direccion || 'Sin dirección',
@@ -1371,6 +1372,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
 
                 console.log("⏳ Iniciando envío de WhatsApp a:", whatsappLocalNumber);
                 sendOrderWhatsApp(c, {
+                    restauranteId,
                     phone: whatsappLocalNumber,
                     customerName: nombreCliente || 'Cliente no especificado',
                     address: 'Retira en local (Take Away)',

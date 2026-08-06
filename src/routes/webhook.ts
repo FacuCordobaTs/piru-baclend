@@ -252,6 +252,7 @@ const cucuruWebhookHandler = async (c: any) => {
           const restCreds = resolverCredsRestaurante(restaurante[0])
 
           sendOrderWhatsApp(c, {
+            restauranteId: targetRestauranteId,
             phone: restaurante[0].whatsappNumber,
             customerName: pedido.nombreCliente || 'Cliente no especificado',
             address: tipoEncontrado === 'delivery' ? (pedido.direccion || 'Sin dirección') : 'Retira en local (Take Away)',
@@ -524,6 +525,7 @@ webhookRoute.post('/talo', async (c) => {
         sendOrderWhatsApp(
           { env: envForBackground } as any,
           {
+            restauranteId,
             phone: restaurante[0].whatsappNumber,
             customerName: pedido.nombreCliente || 'Cliente no especificado',
             address:
