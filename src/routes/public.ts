@@ -369,11 +369,18 @@ publicRoute.get('/sala/join/:token', async (c) => {
             username: RestauranteTable.username,
             transferenciaAlias: RestauranteTable.transferenciaAlias,
             mpPublicKey: RestauranteTable.mpPublicKey,
+            telefono: RestauranteTable.telefono,
+            comprobantesWhatsapp: RestauranteTable.comprobantesWhatsapp,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, sala[0].restauranteId!)).limit(1)
 
         if (!restaurante[0]) {
             return c.json({ success: false, message: 'Restaurante no encontrado' }, 404)
         }
+
+        // ¿El local tiene los avisos automáticos al cliente (feature Intermedio+)? El cliente usa
+        // esto para decidir si muestra el botón "Enviar pedido al WhatsApp": ese botón manual es
+        // el canal del plan Básico (sin avisos automáticos), por lo que solo aparece cuando esto es false.
+        const avisosWhatsappClienteEnabled = await tieneAcceso(db, sala[0].restauranteId!, FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE)
 
         const productosRaw = await db.select({
             id: ProductoTable.id,
@@ -424,7 +431,7 @@ publicRoute.get('/sala/join/:token', async (c) => {
                     restauranteId: sala[0].restauranteId,
                 },
                 productos,
-                restaurante: restaurante[0],
+                restaurante: { ...restaurante[0], avisosWhatsappClienteEnabled },
             }
         }, 200)
     } catch (error) {

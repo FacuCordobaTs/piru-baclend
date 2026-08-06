@@ -8,6 +8,7 @@ import { z } from 'zod'
 import {
   resumenWallet,
   listarTransacciones,
+  estadisticasEnvios,
   setAutoRecarga,
   listarPacks,
   getPack,
@@ -59,7 +60,7 @@ async function iniciarCheckoutRecarga(
     origen,
   })
 
-  const backUrl = `${ADMIN_URL}/dashboard/ajustes/plan?recarga=success`
+  const backUrl = `${ADMIN_URL}/dashboard/mensajes?recarga=success`
   const pref = await crearPreferenciaRecargaMP({
     recargaId,
     titulo: `${pack.nombre} · ${pack.cantidad} mensajes`,
@@ -140,6 +141,19 @@ mensajesRoute.get('/transacciones', async (c) => {
   } catch (error) {
     console.error('Error getting transacciones de mensajes:', error)
     return c.json({ message: 'Error al obtener movimientos', success: false }, 500)
+  }
+})
+
+/** Cantidad de mensajes enviados por período (hoy / 7d / 30d / total), por bucket. */
+mensajesRoute.get('/estadisticas', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  try {
+    const data = await estadisticasEnvios(db, restauranteId)
+    return c.json({ success: true, data }, 200)
+  } catch (error) {
+    console.error('Error getting estadisticas de mensajes:', error)
+    return c.json({ message: 'Error al obtener estadísticas', success: false }, 500)
   }
 })
 

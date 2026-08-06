@@ -4,7 +4,7 @@
 // de consumo, recarga, renovación de ciclo y alertas vive acá. Regla dura: NUNCA
 // se corta un mensaje por falta de saldo — el saldo puede quedar negativo.
 import { type MySql2Database } from 'drizzle-orm/mysql2'
-import { and, eq, desc } from 'drizzle-orm'
+import { and, eq, desc, gte, sql } from 'drizzle-orm'
 import {
   saldoMensajes as SaldoMensajesTable,
   transaccionMensajes as TransaccionMensajesTable,
@@ -742,6 +742,82 @@ export async function resolverPackAutoRecarga(db: Db, restauranteId: number) {
     .sort((a, b) => a.cantidad - b.cantidad)
   if (alcanza[0]) return alcanza[0]
   return [...packs].sort((a, b) => b.cantidad - a.cantidad)[0]
+}
+
+/**
+ * Inicio del día de hoy en hora Argentina (UTC-3), devuelto como Date UTC. Se usa para
+ * el bucket "hoy" de las estadísticas de envíos (mismo criterio de día que el resto del motor).
+ */
+function inicioDiaAR(d: Date = new Date()): Date {
+  const ar = new Date(d.getTime() - 3 * 3600000)
+  ar.setUTCHours(0, 0, 0, 0)
+  return new Date(ar.getTime() + 3 * 3600000)
+}
+
+export type EstadisticasEnvios = {
+  utility: { hoy: number; semana: number; mes: number; total: number }
+  marketing: { hoy: number; semana: number; mes: number; total: number }
+}
+
+/**
+ * Cantidad de mensajes efectivamente enviados (movimientos de tipo `consumo`) por período,
+ * separados por bucket. Cada consumo = 1 mensaje. Los períodos son: hoy (día calendario AR),
+ * últimos 7 días y últimos 30 días (ventanas móviles) y total histórico. Alimenta la pantalla
+ * de Mensajes del admin.
+ */
+export async function estadisticasEnvios(db: Db, restauranteId: number): Promise<EstadisticasEnvios> {
+  const ahora = new Date()
+  const inicioHoy = inicioDiaAR(ahora)
+  const hace7 = new Date(ahora.getTime() - 7 * 86400000)
+  const hace30 = new Date(ahora.getTime() - 30 * 86400000)
+
+  const base = { hoy: 0, semana: 0, mes: 0, total: 0 }
+  const acc: EstadisticasEnvios = { utility: { ...base }, marketing: { ...base } }
+
+  // Ventana de 30 días: se recorre en JS para bucketizar hoy/semana/mes (volumen bajo por local).
+  const recientes = await db
+    .select({
+      categoria: TransaccionMensajesTable.categoria,
+      createdAt: TransaccionMensajesTable.createdAt,
+    })
+    .from(TransaccionMensajesTable)
+    .where(
+      and(
+        eq(TransaccionMensajesTable.restauranteId, restauranteId),
+        eq(TransaccionMensajesTable.tipo, 'consumo'),
+        gte(TransaccionMensajesTable.createdAt, hace30),
+      ),
+    )
+
+  for (const r of recientes) {
+    const bucket = r.categoria === 'marketing' ? acc.marketing : acc.utility
+    const ts = new Date(r.createdAt as any).getTime()
+    bucket.mes += 1
+    if (ts >= hace7.getTime()) bucket.semana += 1
+    if (ts >= inicioHoy.getTime()) bucket.hoy += 1
+  }
+
+  // Total histórico: count agrupado (no requiere traer todas las filas).
+  const totales = await db
+    .select({
+      categoria: TransaccionMensajesTable.categoria,
+      total: sql<number>`count(*)`,
+    })
+    .from(TransaccionMensajesTable)
+    .where(
+      and(
+        eq(TransaccionMensajesTable.restauranteId, restauranteId),
+        eq(TransaccionMensajesTable.tipo, 'consumo'),
+      ),
+    )
+    .groupBy(TransaccionMensajesTable.categoria)
+
+  for (const t of totales) {
+    const bucket = t.categoria === 'marketing' ? acc.marketing : acc.utility
+    bucket.total = Number(t.total) || 0
+  }
+
+  return acc
 }
 
 /** Historial de movimientos (ledger) para auditoría / resolución de reclamos. */
