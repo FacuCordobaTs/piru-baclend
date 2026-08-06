@@ -6,6 +6,7 @@ import {
   pedido as PedidoTable,
   itemPedido as ItemPedidoTable,
   producto as ProductoTable,
+  categoria as CategoriaTable,
   mesa as MesaTable,
   sala as SalaTable,
   restaurante as RestauranteTable,
@@ -1419,8 +1420,22 @@ class WebSocketManager {
       ));
       this.broadcastAdminUpdate(sala[0].restauranteId!, checkoutData.tipoPedido);
 
+      // Categoría por producto para agrupar el mensaje de WhatsApp del cliente al local.
+      const categoriaPorProducto = new Map<number, string | null>();
+      const productoIds = Array.from(new Set(items.map(i => i.productoId).filter((id): id is number => id != null)));
+      if (productoIds.length > 0) {
+        const { inArray } = await import('drizzle-orm');
+        const cats = await this.db
+          .select({ productoId: ProductoTable.id, categoria: CategoriaTable.nombre })
+          .from(ProductoTable)
+          .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
+          .where(inArray(ProductoTable.id, productoIds));
+        for (const c of cats) categoriaPorProducto.set(c.productoId, c.categoria);
+      }
+
       const itemsParaFront = items.map(i => ({
         productoId: i.productoId,
+        categoria: categoriaPorProducto.get(i.productoId) ?? null,
         cantidad: i.cantidad,
         precio: i.precioUnitario,
         nombre: i.nombreProducto,
