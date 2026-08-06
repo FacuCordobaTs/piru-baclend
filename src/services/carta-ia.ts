@@ -205,6 +205,13 @@ async function llamarClaudeConTool(system: string, content: any[]): Promise<Cart
   return normalizarCarta(toolUse.input as CartaExtraida)
 }
 
+// Arma una descripción simple a partir del listado de ingredientes: los une con comas
+// y capitaliza la primera letra. Ej: ["carne","cheddar","lechuga"] → "Carne, cheddar, lechuga".
+function descripcionDesdeIngredientes(ingredientes: string[]): string {
+  const texto = ingredientes.join(', ')
+  return texto.charAt(0).toUpperCase() + texto.slice(1)
+}
+
 // Limpia / valida la estructura para que sea segura de consumir.
 function normalizarCarta(raw: any): CartaExtraida {
   const categorias: CategoriaExtraida[] = []
@@ -225,9 +232,17 @@ function normalizarCarta(raw: any): CartaExtraida {
         .filter((i: any) => typeof i === 'string' && i.trim())
         .map((i: string) => i.trim())
 
+      // La descripción es siempre el listado simple de ingredientes. Si la carta trae una
+      // descripción propia (texto libre, ej: picadas), la respetamos; si no, la derivamos de
+      // los ingredientes ya extraídos para que TODOS los productos tengan descripción.
+      const descripcionPropia =
+        typeof p.descripcion === 'string' && p.descripcion.trim() ? p.descripcion.trim() : null
+      const descripcion =
+        descripcionPropia ?? (ingredientes.length > 0 ? descripcionDesdeIngredientes(ingredientes) : null)
+
       productos.push({
         nombre: p.nombre.trim(),
-        descripcion: typeof p.descripcion === 'string' && p.descripcion.trim() ? p.descripcion.trim() : null,
+        descripcion,
         precio: p.precio == null ? null : Number(p.precio),
         ingredientes,
         variantes,

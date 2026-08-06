@@ -529,4 +529,121 @@ internoRoute.post('/locales/:id/trial', zValidator('json', trialSchema), async (
   }
 })
 
+/**
+ * ⚠️ ELIMINACIÓN TOTAL Y PERMANENTE de un local. Borra la cuenta del restaurante y, EN CASCADA,
+ * TODO lo que cuelga de ella: menú (productos, variantes, ingredientes, agregados, categorías,
+ * etiquetas, puntos), pedidos de todos los sistemas (unificado + legacy pedido/delivery/takeaway
+ * con sus items, pagos y subtotales), clientes y su CRM (recupero, campañas y cola del Motor de
+ * Recompra), sucursales, repartidores, zonas y horarios, mesas/salas, notificaciones, mensajes y
+ * conversaciones de WhatsApp, y todo el billing (suscripción, wallet de mensajes, transacciones,
+ * recargas, pagos de suscripción). NO es reversible.
+ *
+ * Implementación: una sola conexión del pool, dentro de una transacción, con FOREIGN_KEY_CHECKS
+ * desactivado para no depender del orden exacto de las FK (el schema tiene FKs sin ON DELETE
+ * CASCADE y tablas legacy). Se enumeran TODAS las tablas con `restaurante_id`, más las tablas hijas
+ * que cuelgan por pedido/producto (que no tienen `restaurante_id` propio y se resuelven por subquery
+ * contra su padre — por eso se borran ANTES que el padre). FOREIGN_KEY_CHECKS se restaura SIEMPRE
+ * en la misma sesión antes de soltar la conexión al pool.
+ *
+ * Los planes (`plan`, `plan_feature`, `pack_recarga`) son globales de la plataforma: NO se tocan.
+ */
+internoRoute.delete('/locales/:id', async (c) => {
+  const restauranteId = Number(c.req.param('id'))
+  if (!Number.isInteger(restauranteId) || restauranteId <= 0) {
+    return c.json({ success: false, message: 'Local inválido' }, 400)
+  }
+
+  const conn = await pool.getConnection()
+  try {
+    // Existe? (con un mensaje claro antes de destruir nada)
+    const [rows]: any = await conn.query('SELECT id FROM restaurante WHERE id = ? LIMIT 1', [restauranteId])
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return c.json({ success: false, message: 'Local no encontrado' }, 404)
+    }
+
+    // Hijas por pedido/producto: se resuelven por subquery contra el padre → van PRIMERO (mientras
+    // el padre todavía existe). params = cuántas veces aparece `?` en la sentencia.
+    const grandchildren: Array<[string, number[]]> = [
+      ['DELETE FROM item_pedido_unificado WHERE pedido_id IN (SELECT id FROM pedido_unificado WHERE restaurante_id = ?)', [restauranteId]],
+      ['DELETE FROM item_pedido WHERE pedido_id IN (SELECT id FROM pedido WHERE restaurante_id = ?)', [restauranteId]],
+      ['DELETE FROM pago_subtotal WHERE pedido_id IN (SELECT id FROM pedido WHERE restaurante_id = ?)', [restauranteId]],
+      ['DELETE FROM item_pedido_delivery WHERE pedido_delivery_id IN (SELECT id FROM pedido_delivery WHERE restaurante_id = ?)', [restauranteId]],
+      ['DELETE FROM item_pedido_takeaway WHERE pedido_takeaway_id IN (SELECT id FROM pedido_takeaway WHERE restaurante_id = ?)', [restauranteId]],
+      [
+        'DELETE FROM pago WHERE pedido_id IN (SELECT id FROM pedido WHERE restaurante_id = ?) ' +
+          'OR pedido_delivery_id IN (SELECT id FROM pedido_delivery WHERE restaurante_id = ?) ' +
+          'OR pedido_takeaway_id IN (SELECT id FROM pedido_takeaway WHERE restaurante_id = ?) ' +
+          'OR pedido_unificado_id IN (SELECT id FROM pedido_unificado WHERE restaurante_id = ?)',
+        [restauranteId, restauranteId, restauranteId, restauranteId],
+      ],
+      ['DELETE FROM variante_producto WHERE producto_id IN (SELECT id FROM producto WHERE restaurante_id = ?)', [restauranteId]],
+      ['DELETE FROM producto_ingrediente WHERE producto_id IN (SELECT id FROM producto WHERE restaurante_id = ?)', [restauranteId]],
+      ['DELETE FROM producto_agregado WHERE producto_id IN (SELECT id FROM producto WHERE restaurante_id = ?)', [restauranteId]],
+    ]
+
+    // Tablas con `restaurante_id` propio. Con FOREIGN_KEY_CHECKS=0 el orden entre ellas es indistinto.
+    const directas = [
+      'etiqueta',
+      'producto_puntos',
+      'cola_recompra',
+      'campana_recompra_cliente',
+      'campana_recompra',
+      'recupero_cliente',
+      'mensaje_whatsapp',
+      'whatsapp_conversacion',
+      'notificacion',
+      'pedido_unificado',
+      'pedido_delivery',
+      'pedido_takeaway',
+      'pedido',
+      'zona_delivery',
+      'franja_horario_pedido',
+      'horario_restaurante',
+      'codigo_descuento',
+      'registro_telefono',
+      'cliente',
+      'producto',
+      'categoria',
+      'ingrediente',
+      'agregado',
+      'sala',
+      'mesa',
+      'repartidor',
+      'sucursal',
+      'account_pool',
+      'recarga_mensajes',
+      'transaccion_mensajes',
+      'saldo_mensajes',
+      'pago_suscripcion',
+      'suscripcion',
+    ]
+
+    await conn.beginTransaction()
+    await conn.query('SET FOREIGN_KEY_CHECKS = 0')
+    try {
+      for (const [sql, params] of grandchildren) {
+        await conn.query(sql, params)
+      }
+      for (const tabla of directas) {
+        await conn.query(`DELETE FROM ${tabla} WHERE restaurante_id = ?`, [restauranteId])
+      }
+      await conn.query('DELETE FROM restaurante WHERE id = ?', [restauranteId])
+      await conn.query('SET FOREIGN_KEY_CHECKS = 1')
+      await conn.commit()
+    } catch (e) {
+      await conn.rollback()
+      // Rehabilitar los checks en ESTA sesión antes de devolver la conexión al pool.
+      await conn.query('SET FOREIGN_KEY_CHECKS = 1').catch(() => {})
+      throw e
+    }
+
+    return c.json({ success: true, data: { id: restauranteId, eliminado: true } }, 200)
+  } catch (error) {
+    console.error('Error eliminando local (interno):', error)
+    return c.json({ success: false, message: 'Error al eliminar el local' }, 500)
+  } finally {
+    conn.release()
+  }
+})
+
 export { internoRoute }
