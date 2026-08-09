@@ -117,6 +117,36 @@ const pedidoUnificadoRoute = new Hono()
     }, 200)
   })
 
+  // Listar pedidos de un solo día (día calendario AR, por defecto hoy).
+  // Endpoint nuevo aparte de /list para no romper apps no actualizadas.
+  // Mismos datos y forma que /list; agrega el filtro `dia` (YYYY-MM-DD).
+  .get('/list-dia', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const page = Number(c.req.query('page')) || 1
+    const limit = Number(c.req.query('limit')) || 50
+    const estado = c.req.query('estado')
+    const tipo = c.req.query('tipo') as 'delivery' | 'takeaway' | 'all' | undefined
+    const offset = (page - 1) * limit
+    const sucursalIdParam = c.req.query('sucursalId')
+
+    const diaParam = c.req.query('dia')
+    const dia = diaParam && /^\d{4}-\d{2}-\d{2}$/.test(diaParam)
+      ? diaParam
+      : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' })
+
+    const whereCondition = await buildPedidosWhere(db, restauranteId, tipo, sucursalIdParam, estado, { dia })
+    const pedidosConItems = await selectPedidosEnriquecidos(db, whereCondition, { limit, offset })
+
+    return c.json({
+      message: 'Pedidos del día encontrados',
+      success: true,
+      data: pedidosConItems,
+      dia,
+      pagination: { page, limit, hasMore: pedidosConItems.length === limit },
+    }, 200)
+  })
+
   // Obtener pedidos activos (hidratación inicial) — DEBE ir antes de /:id
   .get('/activos', async (c) => {
     const db = drizzle(pool)

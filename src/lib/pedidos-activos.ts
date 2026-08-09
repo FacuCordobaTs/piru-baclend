@@ -92,7 +92,7 @@ export async function buildPedidosWhere(
   tipo: 'delivery' | 'takeaway' | 'all' | undefined,
   sucursalIdParam: string | undefined,
   estado: string | undefined,
-  opts?: { excludeArchived?: boolean },
+  opts?: { excludeArchived?: boolean; dia?: string },
 ) {
   const restaurante = await db
     .select({
@@ -159,6 +159,15 @@ export async function buildPedidosWhere(
   }
   if (opts?.excludeArchived) {
     whereCondition = and(whereCondition, notInArray(PedidoUnificadoTable.estado, ['archived']))
+  }
+  // Filtro por día calendario AR. createdAt se guarda como hora AR menos 3h
+  // (la app suma 3h para obtener el instante real: ver getPedidoInstant en el front),
+  // por lo que el día AR se obtiene con DATE(createdAt + INTERVAL 3 HOUR).
+  if (opts?.dia && /^\d{4}-\d{2}-\d{2}$/.test(opts.dia)) {
+    whereCondition = and(
+      whereCondition,
+      sql`DATE(${PedidoUnificadoTable.createdAt} + INTERVAL 3 HOUR) = ${opts.dia}`,
+    )
   }
   if (sucursalIdParam !== undefined && sucursalIdParam !== '') {
     const sid = Number(sucursalIdParam)
