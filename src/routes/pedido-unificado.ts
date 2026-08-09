@@ -38,7 +38,7 @@ import {
 } from '../lib/pedidos-activos'
 import { requireFeature } from '../middleware/plan'
 import { FEATURE_KEYS } from '../lib/planes'
-import { consumirMensaje, estadoEnvioUtility } from '../lib/mensajes-wallet'
+import { consumirMensaje, estadoEnvioUtility, avisarSaldoBajoSiCorresponde } from '../lib/mensajes-wallet'
 
 const itemSchema = z.object({
   productoId: z.number().int().positive(),
@@ -720,6 +720,15 @@ const pedidoUnificadoRoute = new Hono()
       console.error('⚠️ [Wallet] Error evaluando gracia (despachado), se envía igual:', e)
     }
 
+    // Aviso de saldo bajo al dueño por WhatsApp (plantilla saldo_bajo_v1, link de packs).
+    // Se checa en cada envío de un aviso al cliente; best-effort: si falla, el aviso al
+    // comensal sigue su curso (un fallo de contabilidad jamás corta un aviso).
+    try {
+      await avisarSaldoBajoSiCorresponde(db, restauranteId)
+    } catch (e) {
+      console.error('⚠️ [Wallet] Error evaluando aviso de saldo bajo (despachado):', e)
+    }
+
     try {
       const restCreds = resolverCredsRestaurante(restaurante)
 
@@ -848,6 +857,13 @@ const pedidoUnificadoRoute = new Hono()
       }
     } catch (e) {
       console.error('⚠️ [Wallet] Error evaluando gracia (confirmado), se envía igual:', e)
+    }
+
+    // Aviso de saldo bajo al dueño por WhatsApp (ver nota en notificar-cliente).
+    try {
+      await avisarSaldoBajoSiCorresponde(db, restauranteId)
+    } catch (e) {
+      console.error('⚠️ [Wallet] Error evaluando aviso de saldo bajo (confirmado):', e)
     }
 
     try {

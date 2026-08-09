@@ -798,6 +798,13 @@ export const saldoMensajes = mysqlTable("saldo_mensajes", {
   autoRecargaUmbral: int("auto_recarga_umbral"),     // dispara cuando disponible <= umbral
   autoRecargaCantidad: int("auto_recarga_cantidad"), // tamaño del pack a comprar (ej: 500)
 
+  // Aviso por WhatsApp al DUEÑO cuando el saldo utility está bajo (plantilla `saldo_bajo_v1`,
+  // con link de pago de selección de pack). Nivel del último aviso enviado este ciclo:
+  // null = no se avisó · 1 = 80% del cupo consumido · 2 = 95% · 3 = saldo agotado (<= 0).
+  // Se resetea a null al renovar el ciclo (mismo criterio que aviso80Enviado/aviso95Enviado).
+  // La progresión 1→2→3 acota el spam a un máximo de 3 mensajes por ciclo.
+  avisoSaldoBajoNivel: int("aviso_saldo_bajo_nivel"),
+
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
@@ -870,6 +877,11 @@ export const recargaMensajes = mysqlTable("recarga_mensajes", {
   // Estado del pago. 'paid' por default: los créditos directos (ajuste/auto) nacen acreditados;
   // las compras vía MercadoPago nacen 'pending' y pasan a 'paid' recién con el webhook.
   estado: mysqlEnum("estado_recarga", ["pending", "paid", "failed"]).default("paid").notNull(),
+  // Link ABIERTO (sin pack definido): la recarga nace con packRecargaId/cantidad/monto en 0 y la
+  // página pública `/pago/:token` muestra los packs; recién al elegir uno se fijan
+  // packRecargaId/cantidad/monto y se crea la preferencia MP. Lo usa el aviso de saldo bajo por
+  // WhatsApp (`saldo_bajo_v1`), donde no sabemos qué pack va a querer el dueño.
+  seleccionPack: boolean("seleccion_pack").default(false).notNull(),
   // Referencias de MercadoPago (pago a la cuenta de la plataforma Piru).
   mpPreferenceId: varchar("mp_preference_id", { length: 255 }),
   mpPaymentId: varchar("mp_payment_id", { length: 255 }),

@@ -13,9 +13,10 @@ import { pool } from '../db'
 import {
   restaurante as RestauranteTable,
   packRecarga as PackRecargaTable,
+  recargaMensajes as RecargaMensajesTable,
   plan as PlanTable,
 } from '../db/schema'
-import { getRecargaPorToken, setRecargaPreferencia } from '../lib/mensajes-wallet'
+import { getRecargaPorToken, setRecargaPreferencia, listarPacks, getPack } from '../lib/mensajes-wallet'
 import { crearPreferenciaRecargaMP, pagosRecargaDisponibles } from '../lib/mp-recarga'
 import { getPagoSuscripcionPorToken, setPagoSuscripcionPreferencia } from '../lib/suscripciones'
 import { crearPreferenciaSuscripcionMP } from '../lib/mp-suscripcion'
@@ -130,6 +131,28 @@ pagoRoute.get('/:token', async (c) => {
     }
 
     const { recarga, restauranteNombre, packNombre, estado } = info
+
+    // Link ABIERTO (aviso de saldo bajo por WhatsApp): la recarga nació SIN pack definido.
+    // La página muestra los packs de recarga y recién al elegir uno se arma el pago de MP.
+    // Hasta que no elige, no hay concepto/monto que mostrar (se fijan en el checkout).
+    if (recarga.seleccionPack && !recarga.packRecargaId) {
+      const packs = await listarPacks(db, 'utility')
+      return c.json({
+        success: true,
+        data: {
+          tipo: 'recarga',
+          estado,
+          restauranteNombre,
+          requiereSeleccionPack: true,
+          packs,
+          concepto: 'Recarga de avisos por WhatsApp',
+          cantidad: null,
+          unidad: unidad('utility'),
+          monto: null, // sin pack elegido todavía no hay monto
+        },
+      }, 200)
+    }
+
     return c.json({
       success: true,
       data: {
@@ -173,6 +196,11 @@ pagoRoute.post('/:token/checkout', async (c) => {
       return c.json({ message: 'El link de pago venció. Pedí uno nuevo desde el panel.', success: false, estado: 'expired' }, 410)
     }
 
+    // En los links ABIERTOS (selección de pack) el dueño elige el pack en la página y lo manda
+    // acá recién ahora. En el resto de los links no hay body: el pack ya viene resuelto.
+    const body = await c.req.json().catch(() => ({}))
+    const packId = body.packId != null ? Number(body.packId) : null
+
     const backUrl = `${ADMIN_URL}/pago/${token}?estado=success`
 
     if (info.tipo === 'suscripcion') {
@@ -191,10 +219,34 @@ pagoRoute.post('/:token/checkout', async (c) => {
     }
 
     const { recarga, packNombre } = info
+
+    // Link ABIERTO: el pack todavía no estaba definido. Sin packId no hay pago posible
+    // (el precio SIEMPRE sale del pack en la DB, nunca del cliente). Se fija pack,
+    // cantidad y monto sobre la recarga pendiente; el webhook acredita eso mismo.
+    let pack = null
+    if (recarga.seleccionPack && !recarga.packRecargaId) {
+      if (!packId) {
+        return c.json({ message: 'Elegí un pack para continuar', success: false }, 400)
+      }
+      pack = await getPack(db, packId)
+      if (!pack) {
+        return c.json({ message: 'Pack no encontrado', success: false }, 404)
+      }
+      await db
+        .update(RecargaMensajesTable)
+        .set({ packRecargaId: pack.id, cantidad: pack.cantidad, monto: String(pack.precio) })
+        .where(eq(RecargaMensajesTable.id, recarga.id))
+    }
+
+    const titulo = pack
+      ? `${pack.nombre} · ${pack.cantidad} ${unidad(pack.categoria)}`
+      : packNombre ?? `${recarga.cantidad} ${unidad(recarga.categoria)}`
+    const precio = pack ? parseFloat(String(pack.precio)) : parseFloat(String(recarga.monto))
+
     const pref = await crearPreferenciaRecargaMP({
       recargaId: recarga.id,
-      titulo: packNombre ?? `${recarga.cantidad} ${unidad(recarga.categoria)}`,
-      precio: parseFloat(String(recarga.monto)),
+      titulo,
+      precio,
       backUrl,
     })
     if (!pref.ok) {

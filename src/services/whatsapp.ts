@@ -8,6 +8,7 @@ import {
     mensajeWhatsapp as MensajeWhatsappTable,
 } from '../db/schema'
 import { tieneAcceso, FEATURE_KEYS } from '../lib/planes'
+import { avisarSaldoBajoSiCorresponde } from '../lib/mensajes-wallet'
 
 // Interfaces para tipado estricto
 interface OrderItem {
@@ -454,6 +455,15 @@ export const notificarClientePagoConfirmado = async (
         return;
     }
 
+    // Aviso de saldo bajo al dueño por WhatsApp (plantilla saldo_bajo_v1, link de packs).
+    // Se checa en cada envío de un aviso al cliente; best-effort: un fallo acá jamás debe
+    // impedir el aviso al comensal.
+    try {
+        await avisarSaldoBajoSiCorresponde(db, restauranteId);
+    } catch (e) {
+        console.error('⚠️ [Wallet] Error evaluando aviso de saldo bajo (pago confirmado):', e);
+    }
+
     const [row] = await db
         .select({
             telefono: PedidoUnificadoTable.telefono,
@@ -725,6 +735,108 @@ export const sendPaymentLinkWhatsApp = async (c: any, data: PaymentLinkData) => 
 
     } catch (error) {
         console.error("❌ Error de red enviando link de pago:", error);
+        return { success: false, error };
+    }
+};
+
+export interface SaldoBajoData {
+    phone: string;  // teléfono del DUEÑO del local (formato internacional, solo dígitos)
+    estado: string; // {{1}} — cómo está el saldo, ej: "te queda menos del 5% de los avisos incluidos de este mes"
+    token: string;  // sufijo dinámico del botón URL → /pago/:token (link ABIERTO: el dueño elige el pack)
+}
+
+/**
+ * Aviso automático al DUEÑO del local cuando se está quedando sin avisos de WhatsApp
+ * (plantilla `saldo_bajo_v1`), con un link de pago ABIERTO: el botón lleva a la página pública
+ * `/pago/:token` donde el dueño PRIMERO elige cuál de los packs de recarga quiere y recién
+ * ahí aparece el botón de Mercado Pago (nada de link ya resuelto a un pack puntual).
+ * Es un mensaje de PLATAFORMA: sale del número de Piru (`WHATSAPP_PHONE_ID`), no del número
+ * del local, porque es Piru quien le vende los packs. Por eso NO recibe `creds`.
+ *
+ * Se dispara desde `avisarSaldoBajoSiCorresponde` (lib/mensajes-wallet.ts), que se invoca en
+ * cada path de envío de un aviso al cliente y limita el spam a máx. 3 avisos por ciclo
+ * (80% / 95% / agotado), con `saldo_mensajes.aviso_saldo_bajo_nivel` como flag anti-reenvío.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * PLANTILLA A CREAR EN META (WhatsApp Manager → Plantillas de mensajes):
+ *   • Nombre:        saldo_bajo_v1
+ *   • Categoría:     UTILITY  (aviso transaccional sobre la cuenta del dueño)
+ *   • Idioma:        Español (Argentina) — es_AR
+ *   • Encabezado:    (ninguno)
+ *   • Cuerpo (con variable POSICIONAL {{1}}):
+ *
+ *        Tu saldo de avisos por WhatsApp de Piru está por agotarse: {{1}}.
+ *
+ *        Para que los avisos a tus clientes sigan saliendo, tocá el botón y gestioná tu saldo.
+ *
+ *     ⚠️ Redactado como NOTIFICACIÓN DE CUENTA para pasar la revisión de UTILITY de Meta:
+ *     sin tono promocional (nada de "recargá en un toque", "sin cortes" ni emojis), sin
+ *     mencionar "packs" ni "Mercado Pago" en el texto ni en el botón — la compra queda
+ *     detrás del link. El ORDEN es el contrato (lo respeta el `body.parameters` de abajo):
+ *       {{1}} estado del saldo
+ *     Muestras sugeridas: {{1}}=te queda menos del 20% de los avisos incluidos de este mes ·
+ *     {{1}}=te queda menos del 5% de los avisos incluidos de este mes · {{1}}=tu saldo de avisos quedó en cero
+ *   • Botón:         Uno solo, tipo "Visitar sitio web" → URL DINÁMICA.
+ *                    Base EXACTA: https://admin.piru.app/pago/    Variable {{1}}: el token (uuid).
+ *                    ⚠️ La base tiene que coincidir con ADMIN_URL del backend; en el envío sólo
+ *                    mandamos el token como sufijo. Texto del botón: "Gestionar saldo" (neutro).
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+export const sendSaldoBajoWhatsApp = async (c: any, data: SaldoBajoData) => {
+    const { WHATSAPP_API_TOKEN, WHATSAPP_PHONE_ID } = env<{ WHATSAPP_API_TOKEN: string; WHATSAPP_PHONE_ID: string }>(c);
+    const url = `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_ID}/messages`;
+
+    const body = {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: data.phone,
+        type: "template",
+        template: {
+            name: "saldo_bajo_v1",
+            language: { code: "es_AR" },
+            components: [
+                {
+                    type: "body",
+                    // Variable POSICIONAL {{1}} = estado del saldo. El orden ES el contrato.
+                    parameters: [
+                        { type: "text", text: data.estado }
+                    ]
+                },
+                {
+                    type: "button",
+                    sub_type: "url",
+                    index: 0,
+                    parameters: [
+                        // Sufijo dinámico del botón: base https://admin.piru.app/pago/ + {{1}} = token.
+                        { type: "text", text: data.token }
+                    ]
+                }
+            ]
+        }
+    };
+
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${WHATSAPP_API_TOKEN}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            console.error("❌ Error WhatsApp API (saldo bajo):", JSON.stringify(result, null, 2));
+            return { success: false, error: result };
+        }
+
+        console.log("✅ Aviso de saldo bajo enviado correctamente");
+        return { success: true, id: result.messages?.[0]?.id };
+
+    } catch (error) {
+        console.error("❌ Error de red enviando aviso de saldo bajo:", error);
         return { success: false, error };
     }
 };

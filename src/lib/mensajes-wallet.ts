@@ -5,13 +5,16 @@
 // se corta un mensaje por falta de saldo — el saldo puede quedar negativo.
 import { type MySql2Database } from 'drizzle-orm/mysql2'
 import { and, eq, desc, gte, sql } from 'drizzle-orm'
+import { randomUUID } from 'crypto'
 import {
   saldoMensajes as SaldoMensajesTable,
   transaccionMensajes as TransaccionMensajesTable,
   recargaMensajes as RecargaMensajesTable,
   packRecarga as PackRecargaTable,
+  restaurante as RestauranteTable,
 } from '../db/schema'
 import { resolverSuscripcion, type SuscripcionResuelta } from './planes'
+import { sendSaldoBajoWhatsApp } from '../services/whatsapp'
 
 type Db = MySql2Database<Record<string, never>>
 
@@ -35,6 +38,26 @@ export const DEUDA_MAXIMA_UTILITY = 100
 /** Umbrales de aviso de consumo del cupo utility del plan. */
 export const UMBRAL_AVISO_80 = 0.8
 export const UMBRAL_AVISO_95 = 0.95
+
+// ─── Aviso de saldo bajo al dueño por WhatsApp ─────────────────────────────────
+// Niveles progresivos del aviso (plantilla `saldo_bajo_v1`): 1 = 80% del cupo consumido,
+// 2 = 95%, 3 = saldo disponible <= 0 (agotado). Uno por nivel por ciclo: máx. 3 mensajes.
+export const NIVEL_AVISO_80 = 1
+export const NIVEL_AVISO_95 = 2
+export const NIVEL_AVISO_AGOTADO = 3
+
+/** Validez del link abierto de recarga que viaja en el aviso (el dueño puede abrirlo días después). */
+export const AVISO_SALDO_BAJO_LINK_DIAS = 7
+
+/** Texto del estado actual para la variable {{1}} de la plantilla `saldo_bajo_v1`. */
+const TEXTO_ESTADO_SALDO: Record<number, string> = {
+  [NIVEL_AVISO_80]: 'te queda menos del 20% de los avisos incluidos de este mes',
+  [NIVEL_AVISO_95]: 'te queda menos del 5% de los avisos incluidos de este mes',
+  [NIVEL_AVISO_AGOTADO]: 'tu saldo de avisos quedó en cero',
+}
+
+/** Contexto falso para leer env fuera de un request (mismo patrón que trial-avisos). */
+const fakeCtx = { env: process.env } as any
 
 const MS_UN_CICLO = 30 * 24 * 60 * 60 * 1000 // ~1 mes
 
@@ -158,6 +181,7 @@ export async function renovarCicloSiCorresponde(
       marketingIncluidosRestantes: marketingIncluidos,
       aviso80Enviado: false,
       aviso95Enviado: false,
+      avisoSaldoBajoNivel: null,
       updatedAt: ahora,
     })
     .where(eq(SaldoMensajesTable.restauranteId, restauranteId))
@@ -498,6 +522,7 @@ export async function acreditarCupoPlan(
       marketingIncluidosRestantes: marketingIncluidos,
       aviso80Enviado: false,
       aviso95Enviado: false,
+      avisoSaldoBajoNivel: null,
       updatedAt: ahora,
     })
     .where(eq(SaldoMensajesTable.restauranteId, restauranteId))
@@ -541,6 +566,9 @@ export async function crearRecargaPendiente(
     origen?: 'manual' | 'auto'
     token?: string | null
     tokenExpiraEn?: Date | null
+    /** Link ABIERTO: la recarga nace sin pack definido; la página /pago/:token muestra los packs
+     *  y recién al elegir uno se fija pack/cantidad/monto y se crea la preferencia MP. */
+    seleccionPack?: boolean
   },
 ): Promise<number> {
   const insert = await db.insert(RecargaMensajesTable).values({
@@ -551,9 +579,10 @@ export async function crearRecargaPendiente(
     monto: typeof opts.monto === 'string' ? opts.monto : opts.monto.toFixed(2),
     origen: opts.origen ?? 'manual',
     estado: 'pending',
-    // Sólo se referencian las columnas de token cuando el flujo QR las usa: así el
+    // Sólo se referencian las columnas de token/selección cuando el flujo de link las usa: así el
     // checkout normal no toca columnas nuevas si la migración todavía no corrió.
     ...(opts.token ? { token: opts.token, tokenExpiraEn: opts.tokenExpiraEn ?? null } : {}),
+    ...(opts.seleccionPack ? { seleccionPack: true } : {}),
   })
   return Number((insert as any)[0].insertId)
 }
@@ -851,5 +880,88 @@ export async function setAutoRecarga(
       ...(cfg.cantidad !== undefined ? { autoRecargaCantidad: cfg.cantidad } : {}),
       updatedAt: new Date(),
     })
+    .where(eq(SaldoMensajesTable.restauranteId, restauranteId))
+}
+
+// ─── Aviso de saldo bajo al DUEÑO (WhatsApp, plantilla `saldo_bajo_v1`) ──────────
+// Se invoca desde CADA path de envío de un aviso al cliente (best-effort, try/catch en el
+// caller): un fallo acá jamás debe impedir que salga el aviso al comensal.
+
+/**
+ * Decide si corresponde avisar al dueño que se está quedando sin avisos y, si corresponde,
+ * le manda un WhatsApp de PLATAFORMA (número de Piru) con un link de pago ABIERTO (sin pack
+ * definido): el dueño abre `/pago/:token`, elige el pack y recién ahí se arma el pago de MP.
+ *
+ * Niveles progresivos (máximo 3 avisos por ciclo, uno por nivel):
+ *   - NIVEL_AVISO_80     → 80% del cupo del plan consumido.
+ *   - NIVEL_AVISO_95     → 95% del cupo del plan consumido.
+ *   - NIVEL_AVISO_AGOTADO→ saldo disponible <= 0 (el modo gracia ya está corriendo en negativo).
+ * El nivel alcanzado queda en `avisoSaldoBajoNivel` (se resetea en cada renovación de ciclo).
+ * Si el envío falla por un motivo transitorio NO se marca: se reintenta en el próximo aviso.
+ * Cuentas pre-planes/ilimitadas (fail-open) y locales Básico sin consumo se saltean.
+ */
+export async function avisarSaldoBajoSiCorresponde(db: Db, restauranteId: number): Promise<void> {
+  const suscripcion = await resolverSuscripcion(db, restauranteId)
+  if (suscripcion.mensajesIlimitados) return
+
+  let saldo = await getOrCreateSaldo(db, restauranteId, { mensajesIncluidos: suscripcion.mensajesIncluidos })
+  saldo = await renovarCicloSiCorresponde(db, restauranteId, suscripcion, saldo)
+
+  const utilDisp = utilityDisponible(saldo)
+  const cupo = suscripcion.mensajesIncluidos
+
+  // Básico sin cupo y sin deuda de recarga: no hay avisos que se estén agotando, nada que avisar.
+  if (cupo <= 0 && saldo.utilityRecargaSaldo === 0) return
+
+  const pct = cupo > 0 ? Math.min(1, (cupo - saldo.utilityIncluidosRestantes) / cupo) : 0
+  const nivel = utilDisp <= 0 ? NIVEL_AVISO_AGOTADO : pct >= UMBRAL_AVISO_95 ? NIVEL_AVISO_95 : pct >= UMBRAL_AVISO_80 ? NIVEL_AVISO_80 : 0
+  if (nivel === 0) return
+  if (nivel <= (saldo.avisoSaldoBajoNivel ?? 0)) return // este nivel (o uno peor) ya se avisó este ciclo
+
+  const [rest] = await db
+    .select({ telefono: RestauranteTable.telefono })
+    .from(RestauranteTable)
+    .where(eq(RestauranteTable.id, restauranteId))
+    .limit(1)
+  const telefono = (rest?.telefono || '').replace(/\D/g, '')
+  if (!telefono || telefono.length < 8) {
+    // Sin teléfono no hay canal; marcamos igual (no va a aparecer solo) y queda el banner del admin.
+    await marcarAvisoSaldoBajo(db, restauranteId, nivel)
+    return
+  }
+
+  // Link ABIERTO de recarga (sin pack): la página /pago/:token muestra los packs y recién al
+  // elegir uno se fija pack/cantidad/monto y se arma el pago. Validez larga: el dueño puede
+  // abrirlo días después de recibir el aviso.
+  const token = randomUUID()
+  const expiraEn = new Date(Date.now() + AVISO_SALDO_BAJO_LINK_DIAS * 86400000)
+  await crearRecargaPendiente(db, restauranteId, {
+    categoria: 'utility',
+    cantidad: 0,
+    monto: '0.00',
+    origen: 'auto',
+    seleccionPack: true,
+    token,
+    tokenExpiraEn: expiraEn,
+  })
+
+  const envio = await sendSaldoBajoWhatsApp(fakeCtx, {
+    phone: telefono,
+    estado: TEXTO_ESTADO_SALDO[nivel],
+    token,
+  })
+  if (!envio.success) {
+    console.error(`⚠️ [Saldo bajo] No se pudo avisar al dueño del local ${restauranteId}:`, envio.error)
+    return // transitorio: no marcamos, se reintenta en el próximo aviso al cliente
+  }
+
+  await marcarAvisoSaldoBajo(db, restauranteId, nivel)
+  console.log(`📲 [Saldo bajo] Aviso nivel ${nivel} enviado al dueño del local ${restauranteId} (saldo utility ${utilDisp})`)
+}
+
+async function marcarAvisoSaldoBajo(db: Db, restauranteId: number, nivel: number): Promise<void> {
+  await db
+    .update(SaldoMensajesTable)
+    .set({ avisoSaldoBajoNivel: nivel, updatedAt: new Date() })
     .where(eq(SaldoMensajesTable.restauranteId, restauranteId))
 }
