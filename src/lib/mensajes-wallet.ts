@@ -391,9 +391,16 @@ async function aplicarCreditoRecarga(
   let saldoResultante: number
   if (categoria === 'utility') {
     saldoResultante = saldo.utilityRecargaSaldo + cantidad
+    // La recarga RESOLVIÓ el agotamiento: se rearma el flag del aviso de saldo bajo para
+    // que un próximo agotamiento vuelva a alertar al dueño (sin esto, el flag quedaba
+    // clavado en nivel 3 y el dueño no recibía más avisos hasta la renovación mensual).
     await db
       .update(SaldoMensajesTable)
-      .set({ utilityRecargaSaldo: saldoResultante, updatedAt: new Date() })
+      .set({
+        utilityRecargaSaldo: saldoResultante,
+        ...(saldoResultante > 0 ? { avisoSaldoBajoNivel: null } : {}),
+        updatedAt: new Date(),
+      })
       .where(eq(SaldoMensajesTable.restauranteId, restauranteId))
   } else {
     saldoResultante = saldo.marketingRecargaSaldo + cantidad
@@ -893,10 +900,12 @@ export async function setAutoRecarga(
  * definido): el dueño abre `/pago/:token`, elige el pack y recién ahí se arma el pago de MP.
  *
  * Niveles progresivos (máximo 3 avisos por ciclo, uno por nivel):
- *   - NIVEL_AVISO_80     → 80% del cupo del plan consumido.
- *   - NIVEL_AVISO_95     → 95% del cupo del plan consumido.
+ *   - NIVEL_AVISO_80     → 80% del cupo del plan consumido (solo mientras queda cupo sin usar).
+ *   - NIVEL_AVISO_95     → 95% del cupo del plan consumido (ídem).
  *   - NIVEL_AVISO_AGOTADO→ saldo disponible <= 0 (el modo gracia ya está corriendo en negativo).
- * El nivel alcanzado queda en `avisoSaldoBajoNivel` (se resetea en cada renovación de ciclo).
+ * El nivel alcanzado queda en `avisoSaldoBajoNivel`. Se resetea en cada renovación de ciclo Y al
+ * recargar con saldo positivo (ver `aplicarCreditoRecarga`): así, si el dueño recarga y después
+ * se vuelve a quedar sin saldo, recibe un nuevo aviso de agotado (uno por evento de agotamiento).
  * Si el envío falla por un motivo transitorio NO se marca: se reintenta en el próximo aviso.
  * Cuentas pre-planes/ilimitadas (fail-open) y locales Básico sin consumo se saltean.
  */
@@ -914,7 +923,17 @@ export async function avisarSaldoBajoSiCorresponde(db: Db, restauranteId: number
   if (cupo <= 0 && saldo.utilityRecargaSaldo === 0) return
 
   const pct = cupo > 0 ? Math.min(1, (cupo - saldo.utilityIncluidosRestantes) / cupo) : 0
-  const nivel = utilDisp <= 0 ? NIVEL_AVISO_AGOTADO : pct >= UMBRAL_AVISO_95 ? NIVEL_AVISO_95 : pct >= UMBRAL_AVISO_80 ? NIVEL_AVISO_80 : 0
+  // Los niveles 80/95 describen el consumo del cupo del plan: solo aplican mientras queda
+  // cupo sin consumir. Con el cupo agotado y saldo de recarga positivo no se avisa nada
+  // (está todo bien, tiene saldo); el único aviso posible ahí es "agotado" (disponible <= 0).
+  const nivel =
+    utilDisp <= 0
+      ? NIVEL_AVISO_AGOTADO
+      : saldo.utilityIncluidosRestantes > 0 && pct >= UMBRAL_AVISO_95
+        ? NIVEL_AVISO_95
+        : saldo.utilityIncluidosRestantes > 0 && pct >= UMBRAL_AVISO_80
+          ? NIVEL_AVISO_80
+          : 0
   if (nivel === 0) return
   if (nivel <= (saldo.avisoSaldoBajoNivel ?? 0)) return // este nivel (o uno peor) ya se avisó este ciclo
 
