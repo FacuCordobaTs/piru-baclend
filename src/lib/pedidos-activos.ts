@@ -160,13 +160,15 @@ export async function buildPedidosWhere(
   if (opts?.excludeArchived) {
     whereCondition = and(whereCondition, notInArray(PedidoUnificadoTable.estado, ['archived']))
   }
-  // Filtro por día calendario AR. createdAt se guarda como hora AR menos 3h
-  // (la app suma 3h para obtener el instante real: ver getPedidoInstant en el front),
-  // por lo que el día AR se obtiene con DATE(createdAt + INTERVAL 3 HOUR).
+  // Filtro por día calendario AR. La conexión MySQL corre en horario AR (-03:00),
+  // así que el servidor ya evalúa DATE(createdAt) en hora local argentina: el día
+  // calendario AR sale directo, sin sumar offset. (El +3h que hace el front en
+  // getPedidoInstant sólo corrige que drizzle etiqueta el string como UTC al pasarlo
+  // a JS; ese desfase no existe del lado del servidor SQL.)
   if (opts?.dia && /^\d{4}-\d{2}-\d{2}$/.test(opts.dia)) {
     whereCondition = and(
       whereCondition,
-      sql`DATE(${PedidoUnificadoTable.createdAt} + INTERVAL 3 HOUR) = ${opts.dia}`,
+      sql`DATE(${PedidoUnificadoTable.createdAt}) = ${opts.dia}`,
     )
   }
   if (sucursalIdParam !== undefined && sucursalIdParam !== '') {
