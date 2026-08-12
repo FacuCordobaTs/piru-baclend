@@ -10,6 +10,7 @@ import {
   plan as PlanTable,
   planFeature as PlanFeatureTable,
   restaurante as RestauranteTable,
+  suscripcion as SuscripcionTable,
   pedidoUnificado as PedidoUnificadoTable,
 } from '../db/schema'
 import { resolverSuscripcion, tieneAccesoAlPanel } from '../lib/planes'
@@ -321,6 +322,68 @@ planesRoute.post('/pago-link-whatsapp', zValidator('json', suscribirSchema), asy
   } catch (error) {
     console.error('Error enviando link de pago del plan por WhatsApp:', error)
     return c.json({ message: 'Error al enviar el link de pago', success: false }, 500)
+  }
+})
+
+/**
+ * DEBUG TEMPORAL. Envía un link de $10 que renueva exactamente el plan y ciclo actuales.
+ * Conserva el mismo comprobante y webhook que un pago normal, por lo que la acreditación
+ * es idéntica. Eliminar junto con el botón de Mi Plan al finalizar las pruebas.
+ */
+planesRoute.post('/debug/pago-link-whatsapp', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  if (!MP_PLATFORM_ACCESS_TOKEN) {
+    return c.json({ message: 'Pagos no disponibles temporalmente', success: false }, 503)
+  }
+
+  try {
+    const suscripcion = await resolverSuscripcion(db, restauranteId)
+    if (!suscripcion.planId || suscripcion.sinSuscripcion) {
+      return c.json({ message: 'No tenés un plan actual para renovar', success: false }, 400)
+    }
+
+    const [subRow] = await db
+      .select({ ciclo: SuscripcionTable.ciclo })
+      .from(SuscripcionTable)
+      .where(eq(SuscripcionTable.restauranteId, restauranteId))
+      .limit(1)
+    const ciclo: CicloPago = subRow?.ciclo === 'anual' ? 'anual' : 'mensual'
+
+    const [rest] = await db
+      .select({ telefono: RestauranteTable.telefono })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
+    const telefono = (rest?.telefono || '').replace(/\D/g, '')
+    if (!telefono || telefono.length < 8) {
+      return c.json({ message: 'No tenés un número de WhatsApp verificado en tu cuenta para recibir el link.', success: false }, 400)
+    }
+
+    const token = randomUUID()
+    const tokenExpiraEn = new Date(Date.now() + PAGO_LINK_TTL_MIN * 60 * 1000)
+    await crearPagoSuscripcionPendiente(db, restauranteId, {
+      planId: suscripcion.planId,
+      ciclo,
+      monto: 10,
+      token,
+      tokenExpiraEn,
+    })
+
+    const envio = await sendPaymentLinkWhatsApp(c, {
+      phone: telefono,
+      concepto: `DEBUG · Renovación ${suscripcion.planNombre ?? 'del plan'} (${ciclo})`,
+      monto: '$10',
+      token,
+    })
+    if (!envio.success) return c.json({ message: 'No se pudo enviar el link por WhatsApp. Probá de nuevo.', success: false }, 502)
+
+    const telefonoMask = telefono.length > 4 ? `••••${telefono.slice(-4)}` : telefono
+    return c.json({ success: true, data: { enviado: true, telefono: telefonoMask } }, 200)
+  } catch (error) {
+    console.error('Error enviando link DEBUG de renovación:', error)
+    return c.json({ message: 'Error al enviar el link de pago de prueba', success: false }, 500)
   }
 })
 

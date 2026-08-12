@@ -317,6 +317,57 @@ mensajesRoute.post('/pago-link-whatsapp', zValidator('json', checkoutSchema), as
 })
 
 /**
+ * DEBUG TEMPORAL. Link de $10 que acredita 200 avisos utility al aprobarse el pago.
+ * Usa la misma recarga pendiente y el mismo webhook que los packs reales. Eliminar junto
+ * con el botón de Mensajes al finalizar las pruebas.
+ */
+mensajesRoute.post('/debug/pago-link-whatsapp', async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  if (!MP_PLATFORM_ACCESS_TOKEN) {
+    return c.json({ message: 'Pagos no disponibles temporalmente', success: false }, 503)
+  }
+
+  try {
+    const [rest] = await db
+      .select({ telefono: RestauranteTable.telefono })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
+    const telefono = (rest?.telefono || '').replace(/\D/g, '')
+    if (!telefono || telefono.length < 8) {
+      return c.json({ message: 'No tenés un número de WhatsApp verificado en tu cuenta para recibir el link.', success: false }, 400)
+    }
+
+    const token = randomUUID()
+    const tokenExpiraEn = new Date(Date.now() + PAGO_QR_TTL_MIN * 60 * 1000)
+    await crearRecargaPendiente(db, restauranteId, {
+      categoria: 'utility',
+      cantidad: 200,
+      monto: 10,
+      origen: 'manual',
+      token,
+      tokenExpiraEn,
+    })
+
+    const envio = await sendPaymentLinkWhatsApp(c, {
+      phone: telefono,
+      concepto: 'DEBUG · 200 avisos por WhatsApp',
+      monto: '$10',
+      token,
+    })
+    if (!envio.success) return c.json({ message: 'No se pudo enviar el link por WhatsApp. Probá de nuevo.', success: false }, 502)
+
+    const telefonoMask = telefono.length > 4 ? `••••${telefono.slice(-4)}` : telefono
+    return c.json({ success: true, data: { enviado: true, telefono: telefonoMask } }, 200)
+  } catch (error) {
+    console.error('Error enviando link DEBUG de recarga:', error)
+    return c.json({ message: 'Error al enviar el link de pago de prueba', success: false }, 500)
+  }
+})
+
+/**
  * Auto-recarga asistida: sin card-on-file no se cobra en silencio. Cuando el saldo cae
  * bajo el umbral configurado, el local activa la auto-recarga y con un tap dispara este
  * endpoint, que elige el pack por su config y arma el Checkout Pro listo para pagar
