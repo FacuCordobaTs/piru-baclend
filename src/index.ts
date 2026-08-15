@@ -5,6 +5,7 @@ import { cors } from 'hono/cors'
 import { authRoute } from './routes/auth'
 import { restauranteRoute } from './routes/restaruante'
 import { mesaRoute } from './routes/mesa';
+import { mesasLocalesRoute } from './routes/mesas-locales';
 import { productoRoute } from './routes/producto';
 import { pedidoRoute } from './routes/pedido';
 import { categoriaRoute } from './routes/categoria';
@@ -42,6 +43,10 @@ import { modulosRoute } from './routes/modulos';
 import { pagoRoute } from './routes/pago';
 import { internoRoute } from './routes/interno';
 import { claimRoute } from './routes/claim';
+import { staffLoginRoute, staffRoute } from './routes/staff';
+import { mozosRoute } from './routes/mozos';
+import { resolverSesionStaff } from './lib/staff';
+import { MODULE_KEYS, tieneModuloActivo } from './lib/modulos';
 import { tickMotorRecompra } from './lib/motor-recompra';
 import { tickAvisosTrial } from './lib/trial-avisos';
 import { serveStatic } from 'hono/bun';
@@ -86,6 +91,7 @@ app.use('*', cors({
     'http://localhost:3000',
     'http://localhost:5173',
     'http://localhost:5174', // panel interno (Vite dev, puerto siguiente al del admin)
+    'http://localhost:5175', // PWA de mozos (Vite dev)
     'https://piru.app',
     'https://admin.piru.app',
     'https://interno.piru.app',      // panel interno del fundador (Cloudflare Pages)
@@ -182,6 +188,7 @@ app.basePath('/api')
   .route('/auth', authRoute)
   .route('/restaurante', restauranteRoute)
   .route('/mesa', mesaRoute)
+  .route('/mesas-locales', mesasLocalesRoute)
   .route('/producto', productoRoute)
   .route('/pedido', pedidoRoute)
   .route('/categoria', categoriaRoute)
@@ -208,6 +215,9 @@ app.basePath('/api')
   .route('/suscripcion', suscripcionRoute)
   .route('/planes', planesRoute)
   .route('/modulos', modulosRoute)
+  .route('/staff', staffLoginRoute)
+  .route('/staff', staffRoute)
+  .route('/mozos', mozosRoute)
   .route('/mensajes', mensajesRoute)
   .route('/pago', pagoRoute)
   .route('/interno', internoRoute)
@@ -317,6 +327,41 @@ app.get(
       }
     };
   })
+)
+
+// Canal exclusivo de la PWA de mozos. La sesión se verifica antes del upgrade
+// y cada conexión recibe eventos únicamente de su restaurante/sucursal.
+app.get(
+  '/ws/mozos',
+  upgradeWebSocket(async (c: any) => {
+    const token = c.req.query('token')
+    const principal = token ? await resolverSesionStaff(drizzle(pool), token) : null
+    const db = drizzle(pool)
+    const modulosActivos = principal?.sucursalId ? await Promise.all([
+      tieneModuloActivo(db, principal.restauranteId, MODULE_KEYS.POS),
+      tieneModuloActivo(db, principal.restauranteId, MODULE_KEYS.MESAS),
+    ]) : [false, false]
+    if (!principal?.sucursalId || !modulosActivos.every(Boolean)) {
+      return {
+        async onOpen(_event: any, ws: any) { ws.close(1008, 'Sesión de staff inválida o sin sucursal asignada') },
+        async onMessage() {}, async onClose() {}, async onError() {},
+      }
+    }
+    return {
+      async onOpen(_event: any, ws: any) {
+        wsManager.addMozoConnection(principal.restauranteId, principal.sucursalId!, ws)
+        ws.send(JSON.stringify({ type: 'MOZO_READY', payload: { sucursalId: principal.sucursalId } }))
+      },
+      async onMessage(event: any, ws: any) {
+        try {
+          const data = JSON.parse(typeof event.data === 'string' ? event.data : event.data.toString())
+          if (data.type === 'PING') ws.send(JSON.stringify({ type: 'PONG' }))
+        } catch { /* mensajes inválidos no alteran el canal */ }
+      },
+      async onClose(_event: any, ws: any) { wsManager.removeMozoConnection(principal.restauranteId, principal.sucursalId!, ws) },
+      async onError(event: any) { console.error('❌ Mozo WebSocket error:', event) },
+    }
+  }),
 )
 
 // WebSocket endpoint for order tracking (customer-facing MisPedidos)

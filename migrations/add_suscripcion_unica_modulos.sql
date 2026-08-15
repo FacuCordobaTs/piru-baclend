@@ -11,9 +11,10 @@
 -- confirma DDL implícitamente. Esta migración no borra tablas ni datos legacy.
 --
 -- Orden seguro: crear catálogo -> extender tablas existentes -> backfill -> seeds
--- -> entitlement puntual de Alfajor. Requiere MySQL 8.0.29+ por IF NOT EXISTS en
--- ALTER TABLE; en versiones anteriores ejecutar las ALTER una sola vez omitiendo
--- las columnas que ya existan.
+-- -> entitlement puntual de Alfajor. Las extensiones de tablas usan consultas a
+-- information_schema dentro de un procedimiento temporal, por lo que también
+-- son re-ejecutables en MySQL anterior a 8.0.29 (que no soporta
+-- ALTER TABLE ... ADD COLUMN IF NOT EXISTS).
 
 CREATE TABLE IF NOT EXISTS `configuracion_suscripcion` (
   `id` INT NOT NULL AUTO_INCREMENT,
@@ -105,25 +106,93 @@ CREATE TABLE IF NOT EXISTS `pago_suscripcion_item` (
   CONSTRAINT `fk_pago_suscripcion_item_modulo` FOREIGN KEY (`modulo_id`) REFERENCES `modulo` (`id`)
 );
 
-ALTER TABLE `suscripcion`
-  ADD COLUMN IF NOT EXISTS `configuracion_suscripcion_id` INT NULL DEFAULT NULL AFTER `plan_id`,
-  ADD COLUMN IF NOT EXISTS `precio_base_mensual` DECIMAL(10,2) NULL DEFAULT NULL AFTER `precio_mensual`,
-  ADD COLUMN IF NOT EXISTS `monto_modulos_mensual` DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER `precio_base_mensual`,
-  ADD COLUMN IF NOT EXISTS `monto_total_mensual` DECIMAL(10,2) NULL DEFAULT NULL AFTER `monto_modulos_mensual`,
-  ADD KEY IF NOT EXISTS `idx_suscripcion_configuracion` (`configuracion_suscripcion_id`);
-
-ALTER TABLE `pago_suscripcion`
-  ADD COLUMN IF NOT EXISTS `configuracion_suscripcion_id` INT NULL DEFAULT NULL AFTER `plan_id`,
-  ADD COLUMN IF NOT EXISTS `monto_base` DECIMAL(10,2) NULL DEFAULT NULL AFTER `monto`,
-  ADD COLUMN IF NOT EXISTS `monto_modulos` DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER `monto_base`,
-  ADD COLUMN IF NOT EXISTS `monto_total` DECIMAL(10,2) NULL DEFAULT NULL AFTER `monto_modulos`,
-  ADD KEY IF NOT EXISTS `idx_pago_suscripcion_configuracion` (`configuracion_suscripcion_id`);
-
--- MySQL no admite ADD CONSTRAINT IF NOT EXISTS. Las dos FKs se agregan de
--- forma condicional para que una segunda ejecución controlada sea segura.
+-- MySQL no admite ADD ... IF NOT EXISTS en todas las versiones soportadas.
+-- Cada columna, índice y FK se agrega condicionalmente para que una segunda
+-- ejecución controlada sea segura, incluso si la primera quedó interrumpida.
 DELIMITER //
-CREATE PROCEDURE `t01_agregar_fks_configuracion`()
+DROP PROCEDURE IF EXISTS `t01_extender_suscripcion_unica`//
+CREATE PROCEDURE `t01_extender_suscripcion_unica`()
 BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'suscripcion'
+      AND COLUMN_NAME = 'configuracion_suscripcion_id'
+  ) THEN
+    ALTER TABLE `suscripcion` ADD COLUMN `configuracion_suscripcion_id` INT NULL DEFAULT NULL AFTER `plan_id`;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'suscripcion'
+      AND COLUMN_NAME = 'precio_base_mensual'
+  ) THEN
+    ALTER TABLE `suscripcion` ADD COLUMN `precio_base_mensual` DECIMAL(10,2) NULL DEFAULT NULL AFTER `precio_mensual`;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'suscripcion'
+      AND COLUMN_NAME = 'monto_modulos_mensual'
+  ) THEN
+    ALTER TABLE `suscripcion` ADD COLUMN `monto_modulos_mensual` DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER `precio_base_mensual`;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'suscripcion'
+      AND COLUMN_NAME = 'monto_total_mensual'
+  ) THEN
+    ALTER TABLE `suscripcion` ADD COLUMN `monto_total_mensual` DECIMAL(10,2) NULL DEFAULT NULL AFTER `monto_modulos_mensual`;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'suscripcion'
+      AND INDEX_NAME = 'idx_suscripcion_configuracion'
+  ) THEN
+    ALTER TABLE `suscripcion` ADD KEY `idx_suscripcion_configuracion` (`configuracion_suscripcion_id`);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pago_suscripcion'
+      AND COLUMN_NAME = 'configuracion_suscripcion_id'
+  ) THEN
+    ALTER TABLE `pago_suscripcion` ADD COLUMN `configuracion_suscripcion_id` INT NULL DEFAULT NULL AFTER `plan_id`;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pago_suscripcion'
+      AND COLUMN_NAME = 'monto_base'
+  ) THEN
+    ALTER TABLE `pago_suscripcion` ADD COLUMN `monto_base` DECIMAL(10,2) NULL DEFAULT NULL AFTER `monto`;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pago_suscripcion'
+      AND COLUMN_NAME = 'monto_modulos'
+  ) THEN
+    ALTER TABLE `pago_suscripcion` ADD COLUMN `monto_modulos` DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER `monto_base`;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pago_suscripcion'
+      AND COLUMN_NAME = 'monto_total'
+  ) THEN
+    ALTER TABLE `pago_suscripcion` ADD COLUMN `monto_total` DECIMAL(10,2) NULL DEFAULT NULL AFTER `monto_modulos`;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pago_suscripcion'
+      AND INDEX_NAME = 'idx_pago_suscripcion_configuracion'
+  ) THEN
+    ALTER TABLE `pago_suscripcion` ADD KEY `idx_pago_suscripcion_configuracion` (`configuracion_suscripcion_id`);
+  END IF;
+
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.TABLE_CONSTRAINTS
     WHERE CONSTRAINT_SCHEMA = DATABASE()
@@ -146,8 +215,8 @@ BEGIN
       FOREIGN KEY (`configuracion_suscripcion_id`) REFERENCES `configuracion_suscripcion` (`id`);
   END IF;
 END//
-CALL `t01_agregar_fks_configuracion`()//
-DROP PROCEDURE `t01_agregar_fks_configuracion`//
+CALL `t01_extender_suscripcion_unica`()//
+DROP PROCEDURE `t01_extender_suscripcion_unica`//
 DELIMITER ;
 
 -- Configuración única. Los UPSERTs permiten volver a ejecutar el seed sin
@@ -183,7 +252,7 @@ FROM (
   UNION ALL SELECT 'rapiboy', 'delivery', 'Rapiboy', 'Integración con cadetes Rapiboy.', 'incluido', 0.00, 0, 0, 'disponible', true, 'Bike', 1
   UNION ALL SELECT 'facturacion_arca', 'operacion_administracion', 'Facturación ARCA', 'Emití comprobantes electrónicos.', 'incluido', 0.00, 0, 0, 'disponible', true, 'Receipt', 1
   UNION ALL SELECT 'gestion_stock', 'operacion_administracion', 'Gestión de stock', 'Controlá disponibilidad e inventario.', 'incluido', 0.00, 0, 0, 'proximamente', true, 'Package', 2
-  UNION ALL SELECT 'gestion_cadetes', 'operacion_administracion', 'Gestión de cadetes', 'Organizá repartidores propios.', 'incluido', 0.00, 0, 0, 'proximamente', true, 'Truck', 3
+  UNION ALL SELECT 'gestion_cadetes', 'operacion_administracion', 'Gestión de cadetes', 'Organizá repartidores propios.', 'incluido', 0.00, 0, 0, 'disponible', true, 'Truck', 3
   UNION ALL SELECT 'impresion_comandas', 'operacion_administracion', 'Impresión de comandas', 'Imprimí pedidos automáticamente.', 'incluido', 0.00, 0, 0, 'disponible', true, 'Printer', 4
   UNION ALL SELECT 'multisucursal', 'operacion_administracion', 'Múltiples sucursales', 'Operá más de un local.', 'incluido', 0.00, 0, 0, 'disponible', true, 'Building2', 5
   UNION ALL SELECT 'avisos_automaticos_whatsapp', 'modulos_pagos', 'Avisos automáticos por WhatsApp', 'Avisos de estado de pedidos con la marca del local.', 'pago', 30000.00, 200, 0, 'disponible', true, 'MessageCircle', 1

@@ -62,6 +62,8 @@ export const PEDIDO_LIST_PROJECTION = {
   total: PedidoUnificadoTable.total,
   notas: PedidoUnificadoTable.notas,
   createdAt: PedidoUnificadoTable.createdAt,
+  updatedAt: PedidoUnificadoTable.updatedAt,
+  version: PedidoUnificadoTable.version,
   deliveredAt: PedidoUnificadoTable.deliveredAt,
   pagado: PedidoUnificadoTable.pagado,
   metodoPago: PedidoUnificadoTable.metodoPago,
@@ -70,6 +72,9 @@ export const PEDIDO_LIST_PROJECTION = {
   codigoDescuentoId: PedidoUnificadoTable.codigoDescuentoId,
   montoDescuento: PedidoUnificadoTable.montoDescuento,
   sucursalId: PedidoUnificadoTable.sucursalId,
+  mesaLocalId: PedidoUnificadoTable.mesaLocalId,
+  consumoEnLocal: PedidoUnificadoTable.consumoEnLocal,
+  creadoPorUsuarioId: PedidoUnificadoTable.creadoPorUsuarioId,
   sucursalNombre: SucursalTable.nombre,
   codigoDescuentoCodigo: CodigoDescuentoTable.codigo,
   demoraMinutos: PedidoUnificadoTable.demoraMinutos,
@@ -339,6 +344,9 @@ export async function emitirEventoPedido(
       sucursalId: sucursalId ?? null,
       shouldPrint: !!shouldPrint,
       pedido,
+    })
+    wsManager.broadcastMozoOrderEvent(restauranteId, sucursalId, {
+      event, reason, tipo, pedidoId, sucursalId: sucursalId ?? null, pedido,
     })
   } catch (e) {
     console.error('Error emitiendo evento de pedido:', e)

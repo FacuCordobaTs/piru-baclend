@@ -1,11 +1,15 @@
 // pedido-unificado.ts - Gestión unificada de pedidos delivery y takeaway
-import { Hono } from 'hono'
+import { Hono, type Context, type Next } from 'hono'
 import { pool } from '../db'
 import {
   pedidoUnificado as PedidoUnificadoTable,
   itemPedidoUnificado as ItemPedidoUnificadoTable,
   producto as ProductoTable,
   ingrediente as IngredienteTable,
+  agregado as AgregadoTable,
+  productoIngrediente as ProductoIngredienteTable,
+  productoAgregado as ProductoAgregadoTable,
+  pedidoUnificadoAuditoria as PedidoUnificadoAuditoriaTable,
   restaurante as RestauranteTable,
   codigoDescuento as CodigoDescuentoTable,
   mensajeWhatsapp as MensajeWhatsappTable,
@@ -13,6 +17,7 @@ import {
   varianteProducto as VarianteProductoTable,
   sucursal as SucursalTable,
   repartidor as RepartidorTable,
+  mesaLocal as MesaLocalTable,
 } from '../db/schema'
 import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
@@ -39,6 +44,7 @@ import {
 import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS } from '../lib/modulos'
 import { consumirMensaje, estadoEnvioUtility, avisarSaldoBajoSiCorresponde } from '../lib/mensajes-wallet'
+import { asegurarOwnerStaff } from '../lib/staff'
 
 const itemSchema = z.object({
   productoId: z.number().int().positive(),
@@ -59,6 +65,10 @@ const manualFields = {
   pagado: z.boolean().optional(),
   metodoPago: z.string().optional(),
   sucursalId: z.number().int().positive().optional(),
+  // Los admins anteriores ignoran estos campos; el POS de mesas mantiene
+  // tipo=takeaway y explicita la modalidad local mediante consumoEnLocal.
+  mesaLocalId: z.number().int().positive().optional(),
+  consumoEnLocal: z.boolean().optional(),
   // Onboarding: si viene true, además de crear el pedido se envía al WhatsApp del dueño
   // para que vea cómo le llega un pedido real (pedido de prueba). Aditivo/retrocompatible.
   notificarWhatsappPrueba: z.boolean().optional(),
@@ -87,10 +97,238 @@ const createTakeawaySchema = z.object({
 })
 
 const createSchema = z.discriminatedUnion('tipo', [createDeliverySchema, createTakeawaySchema])
+type CreatePedidoInput = z.infer<typeof createSchema>
 
 const updateEstadoSchema = z.object({
   estado: z.enum(['pending', 'preparing', 'ready', 'dispatched', 'delivered', 'cancelled', 'archived']),
 })
+
+const posItemSchema = z.object({
+  productoId: z.number().int().positive(),
+  varianteId: z.number().int().positive().nullable().optional(),
+  cantidad: z.number().int().positive(),
+  ingredientesExcluidos: z.array(z.number().int().positive()).default([]),
+  // Sólo el id del agregado es confiable; nombre y precio se resuelven en servidor.
+  agregados: z.array(z.object({ id: z.number().int().positive() })).default([]),
+  version: z.number().int().positive(),
+})
+
+const deletePosItemSchema = z.object({ version: z.number().int().positive() })
+const datosPosSchema = z.object({
+  nombreCliente: z.string().trim().max(255).nullable().optional(),
+  telefono: z.string().trim().max(50).nullable().optional(),
+  notas: z.string().trim().max(500).nullable().optional(),
+  tipo: z.enum(['delivery', 'takeaway']).optional(),
+  direccion: z.string().trim().max(255).nullable().optional(),
+  latitud: z.union([z.string(), z.number()]).nullable().optional(),
+  longitud: z.union([z.string(), z.number()]).nullable().optional(),
+  deliveryFee: z.union([z.string(), z.number()]).nullable().optional(),
+  metodoPago: z.string().trim().max(64).nullable().optional(),
+  pagado: z.boolean().optional(),
+  version: z.number().int().positive(),
+})
+
+const POS_ESTADOS_EDITABLES = ['pending', 'received', 'preparing'] as const
+const ESTADOS_PEDIDO_CERRADOS = ['archived', 'cancelled', 'delivered'] as const
+
+/**
+ * Serializa las altas por mesa bloqueando primero la propia mesa. MySQL no
+ * ofrece índices únicos parciales, por lo que el lock de esa fila es la
+ * exclusión mutua que evita que dos POS creen pedidos abiertos a la vez.
+ */
+export async function reservarMesaLocal(tx: any, restauranteId: number, mesaLocalId: number, sucursalId: number | null | undefined) {
+  await tx.execute(sql`SELECT id FROM mesa_local WHERE id = ${mesaLocalId} AND restaurante_id = ${restauranteId} FOR UPDATE`)
+  const [mesa] = await tx.select({ id: MesaLocalTable.id, sucursalId: MesaLocalTable.sucursalId, activo: MesaLocalTable.activo })
+    .from(MesaLocalTable)
+    .where(and(eq(MesaLocalTable.id, mesaLocalId), eq(MesaLocalTable.restauranteId, restauranteId)))
+    .limit(1)
+  if (!mesa || !mesa.activo) return { error: 'MESA_NO_DISPONIBLE' as const, message: 'La mesa seleccionada no está disponible' }
+  if (mesa.sucursalId != null && sucursalId != null && mesa.sucursalId !== sucursalId) {
+    return { error: 'MESA_SUCURSAL_INVALIDA' as const, message: 'La mesa no pertenece a la sucursal seleccionada' }
+  }
+
+  const abiertos = await tx.select({ id: PedidoUnificadoTable.id })
+    .from(PedidoUnificadoTable)
+    .where(and(
+      eq(PedidoUnificadoTable.restauranteId, restauranteId),
+      eq(PedidoUnificadoTable.mesaLocalId, mesaLocalId),
+      notInArray(PedidoUnificadoTable.estado, [...ESTADOS_PEDIDO_CERRADOS]),
+    ))
+    .limit(1)
+  if (abiertos.length) return { error: 'MESA_OCUPADA' as const, message: 'Esta mesa ya tiene un pedido abierto' }
+  return { mesa }
+}
+
+/**
+ * `/create` es el endpoint autenticado del pedido anotado desde el POS. El
+ * único caso que puede usarlo sin el módulo es el pedido de prueba durante el
+ * onboarding, antes de que el restaurante entre al panel. No se usa el flag
+ * como un bypass general: debe ser el pedido de prueba explícito y el
+ * onboarding debe seguir incompleto.
+ */
+async function requirePosOPruebaOnboarding(c: Context, next: Next) {
+  const restauranteId = (c as any).user?.id
+  const body = c.req.valid('json') as CreatePedidoInput
+  const esPedidoPruebaOnboarding = body.anotadoManualmente === true
+    && body.notificarWhatsappPrueba === true
+
+  if (esPedidoPruebaOnboarding && restauranteId) {
+    const db = drizzle(pool)
+    const [restaurante] = await db
+      .select({ completedOnboarding: RestauranteTable.completedOnboarding })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
+
+    if (restaurante && !restaurante.completedOnboarding) {
+      return next()
+    }
+  }
+
+  return requireModulo(MODULE_KEYS.POS)(c, next)
+}
+
+function esMetodoAutomatico(metodo: string | null) {
+  return !!metodo && (
+    (METODOS_PAGO_AUTOMATICOS_EN_PEDIDO as readonly string[]).includes(metodo) ||
+    metodo.startsWith('transferencia_automatica_')
+  )
+}
+
+function motivosPedidoNoEditable(pedido: any): string[] {
+  const motivos: string[] = []
+  if (!pedido.anotadoManualmente) motivos.push('El pedido no fue creado desde el POS')
+  if (!(POS_ESTADOS_EDITABLES as readonly string[]).includes(pedido.estado)) motivos.push('El estado del pedido no permite edición')
+  if (pedido.afipFacturado) motivos.push('El pedido ya fue facturado')
+  if (pedido.rapiboyTripId) motivos.push('El pedido ya fue enviado a Rapiboy')
+  if (pedido.grupal || pedido.creadoPorIa) motivos.push('El pedido pertenece a un flujo no editable desde POS')
+  if (esMetodoAutomatico(pedido.metodoPago)) motivos.push('El pedido tiene un cobro automático')
+  return motivos
+}
+
+export async function resolverItemPos(tx: any, restauranteId: number, input: z.infer<typeof posItemSchema>) {
+  const [producto] = await tx.select().from(ProductoTable).where(and(
+    eq(ProductoTable.id, input.productoId),
+    eq(ProductoTable.restauranteId, restauranteId),
+  )).limit(1)
+  if (!producto) return { error: 'ITEM_INVALIDO', message: 'El producto no pertenece al restaurante' } as const
+
+  let variante: any = null
+  if (input.varianteId) {
+    ;[variante] = await tx.select().from(VarianteProductoTable).where(and(
+      eq(VarianteProductoTable.id, input.varianteId),
+      eq(VarianteProductoTable.productoId, producto.id),
+      eq(VarianteProductoTable.activo, true),
+    )).limit(1)
+    if (!variante) return { error: 'ITEM_INVALIDO', message: 'La variante no pertenece al producto' } as const
+  }
+
+  const ingredienteIds = [...new Set(input.ingredientesExcluidos)]
+  if (ingredienteIds.length) {
+    const validos = await tx.select({ id: IngredienteTable.id }).from(ProductoIngredienteTable)
+      .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
+      .where(and(eq(ProductoIngredienteTable.productoId, producto.id), eq(IngredienteTable.restauranteId, restauranteId), inArray(IngredienteTable.id, ingredienteIds)))
+    if (validos.length !== ingredienteIds.length) return { error: 'ITEM_INVALIDO', message: 'Hay ingredientes inválidos para el producto' } as const
+  }
+
+  const agregadoIds = [...new Set(input.agregados.map((a) => a.id))]
+  let agregados: Array<{ id: number; nombre: string; precio: string }> = []
+  if (agregadoIds.length) {
+    const validos = await tx.select({ id: AgregadoTable.id, nombre: AgregadoTable.nombre, precio: AgregadoTable.precio })
+      .from(ProductoAgregadoTable)
+      .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
+      .where(and(eq(ProductoAgregadoTable.productoId, producto.id), eq(AgregadoTable.restauranteId, restauranteId), eq(AgregadoTable.activo, true), inArray(AgregadoTable.id, agregadoIds)))
+    if (validos.length !== agregadoIds.length) return { error: 'ITEM_INVALIDO', message: 'Hay agregados inválidos para el producto' } as const
+    const byId = new Map(validos.map((ag: any) => [ag.id, ag]))
+    // Conserva el orden y las repeticiones pedidos por la comanda, pero nunca precio/nombre del cliente.
+    agregados = input.agregados.map(({ id }) => byId.get(id)!)
+  }
+
+  const precioBase = Number(variante ? variante.precio : producto.precio)
+  const precioUnitario = precioBase + agregados.reduce((sum, ag) => sum + Number(ag.precio), 0)
+  return {
+    productoId: producto.id,
+    varianteId: variante?.id ?? null,
+    varianteNombre: variante?.nombre ?? null,
+    cantidad: input.cantidad,
+    precioUnitario: precioUnitario.toFixed(2),
+    ingredientesExcluidos: ingredienteIds.length ? ingredienteIds : null,
+    agregados: agregados.length ? agregados : null,
+  } as const
+}
+
+export async function respuestaPedidoEditable(db: any, restauranteId: number, pedidoId: number) {
+  const [pedido] = await db.select().from(PedidoUnificadoTable).where(and(
+    eq(PedidoUnificadoTable.id, pedidoId), eq(PedidoUnificadoTable.restauranteId, restauranteId),
+  )).limit(1)
+  if (!pedido) return null
+  const itemsRaw = await db.select({
+    id: ItemPedidoUnificadoTable.id, productoId: ItemPedidoUnificadoTable.productoId,
+    varianteId: ItemPedidoUnificadoTable.varianteId, varianteNombre: ItemPedidoUnificadoTable.varianteNombre,
+    cantidad: ItemPedidoUnificadoTable.cantidad, precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
+    nombreProducto: ProductoTable.nombre, imagenUrl: ProductoTable.imagenUrl,
+    ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos, agregados: ItemPedidoUnificadoTable.agregados,
+    clienteNombre: ItemPedidoUnificadoTable.clienteNombre,
+  }).from(ItemPedidoUnificadoTable).leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
+    .where(eq(ItemPedidoUnificadoTable.pedidoId, pedidoId))
+  const items = await enrichItemsWithProductInfo(db, itemsRaw)
+  const motivosNoEditable = motivosPedidoNoEditable(pedido)
+  return { ...pedido, items, totalItems: items.reduce((sum, item: any) => sum + (item.cantidad || 1), 0), version: pedido.version, editable: motivosNoEditable.length === 0, motivosNoEditable }
+}
+
+export async function ejecutarMutacionPos(
+  db: any,
+  restauranteId: number,
+  pedidoId: number,
+  version: number,
+  mutar: (tx: any, pedido: any, items: any[]) => Promise<{ error?: string; message?: string; operacion?: 'agregar_item' | 'editar_item' | 'eliminar_item' | 'editar_datos_pos'; itemPedidoId?: number | null; antes?: any; despues?: any; reimprimeCocina?: boolean }>,
+  actor?: { id: number; tipo: string },
+): Promise<any> {
+  return db.transaction(async (tx: any) => {
+    // Bloquea la comanda completa hasta asentar ítem, total, versión y auditoría.
+    await tx.execute(sql`SELECT id FROM pedido_unificado WHERE id = ${pedidoId} AND restaurante_id = ${restauranteId} FOR UPDATE`)
+    const [pedido] = await tx.select().from(PedidoUnificadoTable).where(and(
+      eq(PedidoUnificadoTable.id, pedidoId), eq(PedidoUnificadoTable.restauranteId, restauranteId),
+    )).limit(1)
+    if (!pedido) return { error: 'NOT_FOUND' as const }
+    const motivos = motivosPedidoNoEditable(pedido)
+    if (motivos.length) return { error: 'PEDIDO_NO_EDITABLE' as const, message: motivos[0] }
+    if (pedido.version !== version) return { error: 'VERSION_CONFLICT' as const }
+    // T37: las mutaciones que llegan desde el admin del dueño se atribuyen a
+    // su identidad owner. T38 inyecta el staff ya autenticado, sin aceptar un
+    // actor elegido por el cliente.
+    const actorAuditoria = actor ?? { id: (await asegurarOwnerStaff(tx, restauranteId)).id, tipo: 'restaurante_admin' }
+
+    const items = await tx.select().from(ItemPedidoUnificadoTable).where(eq(ItemPedidoUnificadoTable.pedidoId, pedidoId))
+    const cambio = await mutar(tx, pedido, items)
+    if (cambio.error) return cambio
+
+    const [pedidoActual] = await tx.select().from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.id, pedidoId)).limit(1)
+    const itemsFinales = await tx.select().from(ItemPedidoUnificadoTable).where(eq(ItemPedidoUnificadoTable.pedidoId, pedidoId))
+    const subtotal = itemsFinales.reduce((sum: number, item: any) => sum + Number(item.precioUnitario) * item.cantidad, 0)
+    const total = subtotal + Number(pedidoActual.deliveryFee || 0) - Number(pedidoActual.montoDescuento || 0)
+    const shouldPrint = !!cambio.reimprimeCocina && pedido.impreso
+    await tx.update(PedidoUnificadoTable).set({
+      total: total.toFixed(2),
+      version: sql`${PedidoUnificadoTable.version} + 1`,
+      updatedAt: new Date(),
+      ...(shouldPrint ? { impreso: false } : {}),
+    }).where(eq(PedidoUnificadoTable.id, pedidoId))
+    await tx.insert(PedidoUnificadoAuditoriaTable).values({
+      pedidoId, restauranteId, itemPedidoId: cambio.itemPedidoId ?? null,
+      usuarioRestauranteId: actorAuditoria.id, operacion: cambio.operacion!, actorTipo: actorAuditoria.tipo, antes: cambio.antes ?? null, despues: cambio.despues ?? null,
+    })
+    return { pedido, shouldPrint }
+  })
+}
+
+async function responderErrorMutacion(c: any, db: any, restauranteId: number, pedidoId: number, resultado: any) {
+  if (resultado.error === 'NOT_FOUND') return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
+  const pedido = await respuestaPedidoEditable(db, restauranteId, pedidoId)
+  const code = resultado.error || 'ITEM_INVALIDO'
+  const status = code === 'VERSION_CONFLICT' || code === 'PEDIDO_NO_EDITABLE' ? 409 : 422
+  return c.json({ success: false, code, message: resultado.message || 'No se pudo editar el pedido', data: { pedido } }, status)
+}
 
 const pedidoUnificadoRoute = new Hono()
   .use('*', authMiddleware)
@@ -224,6 +462,9 @@ const pedidoUnificadoRoute = new Hono()
         sucursalNombre,
         items,
         totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0),
+        version: pedido[0].version,
+        editable: motivosPedidoNoEditable(pedido[0]).length === 0,
+        motivosNoEditable: motivosPedidoNoEditable(pedido[0]),
       },
     }, 200)
   })
@@ -256,8 +497,97 @@ const pedidoUnificadoRoute = new Hono()
     return c.json({ message: 'Contexto del cliente', success: true, data: contexto }, 200)
   })
 
+  // Edición transaccional de comandas POS. No modifica los flujos web, sala ni IA.
+  .post('/:id/items', requireModulo(MODULE_KEYS.POS), zValidator('json', posItemSchema), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const pedidoId = Number(c.req.param('id'))
+    const body = c.req.valid('json')
+    const resultado = await ejecutarMutacionPos(db, restauranteId, pedidoId, body.version, async (tx) => {
+      const item = await resolverItemPos(tx, restauranteId, body)
+      if ('error' in item) return item
+      const inserted = await tx.insert(ItemPedidoUnificadoTable).values(item)
+      return { operacion: 'agregar_item' as const, itemPedidoId: Number(inserted[0].insertId), despues: item, reimprimeCocina: true }
+    })
+    if (resultado.error) return responderErrorMutacion(c, db, restauranteId, pedidoId, resultado)
+    const data = await respuestaPedidoEditable(db, restauranteId, pedidoId)
+    await emitirEventoPedido(db, { restauranteId, pedidoId, tipo: resultado.pedido.tipo, sucursalId: resultado.pedido.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+    return c.json({ success: true, data }, 200)
+  })
+
+  .put('/:id/items/:itemId', requireModulo(MODULE_KEYS.POS), zValidator('json', posItemSchema), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const pedidoId = Number(c.req.param('id'))
+    const itemId = Number(c.req.param('itemId'))
+    const body = c.req.valid('json')
+    const resultado = await ejecutarMutacionPos(db, restauranteId, pedidoId, body.version, async (tx, _pedido, items) => {
+      const anterior = items.find((item: any) => item.id === itemId)
+      if (!anterior) return { error: 'ITEM_NO_ENCONTRADO', message: 'El ítem no pertenece al pedido' }
+      const item = await resolverItemPos(tx, restauranteId, body)
+      if ('error' in item) return item
+      await tx.update(ItemPedidoUnificadoTable).set(item).where(and(eq(ItemPedidoUnificadoTable.id, itemId), eq(ItemPedidoUnificadoTable.pedidoId, pedidoId)))
+      return { operacion: 'editar_item' as const, itemPedidoId: itemId, antes: anterior, despues: item, reimprimeCocina: true }
+    })
+    if (resultado.error) return responderErrorMutacion(c, db, restauranteId, pedidoId, resultado)
+    const data = await respuestaPedidoEditable(db, restauranteId, pedidoId)
+    await emitirEventoPedido(db, { restauranteId, pedidoId, tipo: resultado.pedido.tipo, sucursalId: resultado.pedido.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+    return c.json({ success: true, data }, 200)
+  })
+
+  .delete('/:id/items/:itemId', requireModulo(MODULE_KEYS.POS), zValidator('json', deletePosItemSchema), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const pedidoId = Number(c.req.param('id'))
+    const itemId = Number(c.req.param('itemId'))
+    const { version } = c.req.valid('json')
+    const resultado = await ejecutarMutacionPos(db, restauranteId, pedidoId, version, async (tx, _pedido, items) => {
+      const anterior = items.find((item: any) => item.id === itemId)
+      if (!anterior) return { error: 'ITEM_NO_ENCONTRADO', message: 'El ítem no pertenece al pedido' }
+      if (items.length <= 1) return { error: 'PEDIDO_SIN_ITEMS', message: 'El pedido debe conservar al menos un ítem' }
+      await tx.delete(ItemPedidoUnificadoTable).where(and(eq(ItemPedidoUnificadoTable.id, itemId), eq(ItemPedidoUnificadoTable.pedidoId, pedidoId)))
+      return { operacion: 'eliminar_item' as const, itemPedidoId: itemId, antes: anterior, reimprimeCocina: true }
+    })
+    if (resultado.error) return responderErrorMutacion(c, db, restauranteId, pedidoId, resultado)
+    const data = await respuestaPedidoEditable(db, restauranteId, pedidoId)
+    await emitirEventoPedido(db, { restauranteId, pedidoId, tipo: resultado.pedido.tipo, sucursalId: resultado.pedido.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+    return c.json({ success: true, data }, 200)
+  })
+
+  .put('/:id/datos-pos', requireModulo(MODULE_KEYS.POS), zValidator('json', datosPosSchema), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const pedidoId = Number(c.req.param('id'))
+    const body = c.req.valid('json')
+    const resultado = await ejecutarMutacionPos(db, restauranteId, pedidoId, body.version, async (tx, pedido) => {
+      const tipo = body.tipo ?? pedido.tipo
+      const direccion = body.direccion !== undefined ? body.direccion : pedido.direccion
+      if (tipo === 'delivery' && (!direccion || direccion.trim().length < 5)) return { error: 'ITEM_INVALIDO', message: 'La dirección es requerida para delivery' }
+      if (body.metodoPago !== undefined && body.metodoPago !== null && esMetodoAutomatico(body.metodoPago)) return { error: 'ITEM_INVALIDO', message: 'El POS no puede asignar un medio de pago automático' }
+      const antes = { nombreCliente: pedido.nombreCliente, telefono: pedido.telefono, notas: pedido.notas, tipo: pedido.tipo, direccion: pedido.direccion, latitud: pedido.latitud, longitud: pedido.longitud, deliveryFee: pedido.deliveryFee, metodoPago: pedido.metodoPago, pagado: pedido.pagado }
+      const cambios: any = {}
+      for (const campo of ['nombreCliente', 'telefono', 'notas', 'metodoPago'] as const) if (body[campo] !== undefined) cambios[campo] = body[campo] || null
+      if (body.pagado !== undefined) cambios.pagado = body.pagado
+      if (body.tipo !== undefined) cambios.tipo = tipo
+      if (tipo === 'delivery') {
+        cambios.direccion = direccion
+        if (body.latitud !== undefined) cambios.latitud = body.latitud == null ? null : String(body.latitud)
+        if (body.longitud !== undefined) cambios.longitud = body.longitud == null ? null : String(body.longitud)
+        if (body.deliveryFee !== undefined) cambios.deliveryFee = (Number(body.deliveryFee) || 0).toFixed(2)
+      } else if (body.tipo === 'takeaway') {
+        cambios.direccion = null; cambios.latitud = null; cambios.longitud = null; cambios.deliveryFee = null
+      }
+      await tx.update(PedidoUnificadoTable).set(cambios).where(eq(PedidoUnificadoTable.id, pedidoId))
+      return { operacion: 'editar_datos_pos' as const, antes, despues: cambios, reimprimeCocina: body.notas !== undefined && body.notas !== pedido.notas }
+    })
+    if (resultado.error) return responderErrorMutacion(c, db, restauranteId, pedidoId, resultado)
+    const data = await respuestaPedidoEditable(db, restauranteId, pedidoId)
+    await emitirEventoPedido(db, { restauranteId, pedidoId, tipo: data!.tipo, sucursalId: data!.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+    return c.json({ success: true, data }, 200)
+  })
+
   // Crear pedido (delivery o takeaway)
-  .post('/create', zValidator('json', createSchema), async (c) => {
+  .post('/create', zValidator('json', createSchema), requirePosOPruebaOnboarding, async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const body = c.req.valid('json')
@@ -306,9 +636,14 @@ const pedidoUnificadoRoute = new Hono()
     }
 
     const anotadoManualmente = body.anotadoManualmente === true
+    const creadorStaff = anotadoManualmente ? await asegurarOwnerStaff(db, restauranteId) : null
     // En el POS del local el pedido se crea ya pagado por defecto
     const pagado = body.pagado != null ? body.pagado === true : anotadoManualmente
     const metodoPago = body.metodoPago && String(body.metodoPago).trim() !== '' ? String(body.metodoPago) : null
+
+    if (body.mesaLocalId != null && (body.tipo !== 'takeaway' || body.consumoEnLocal !== true)) {
+      return c.json({ message: 'Los pedidos de mesa deben ser consumo en el local', success: false }, 422)
+    }
 
     let deliveryFee = 0
     if (body.tipo === 'delivery' && body.deliveryFee != null) {
@@ -328,6 +663,9 @@ const pedidoUnificadoRoute = new Hono()
       pagado,
       metodoPago,
       sucursalId: body.sucursalId ?? null,
+      mesaLocalId: body.mesaLocalId ?? null,
+      consumoEnLocal: body.consumoEnLocal === true,
+      creadoPorUsuarioId: creadorStaff?.id ?? null,
     }
 
     if (body.tipo === 'delivery') {
@@ -337,21 +675,32 @@ const pedidoUnificadoRoute = new Hono()
       baseValues.deliveryFee = deliveryFee.toFixed(2)
     }
 
-    const nuevoPedido = await db.insert(PedidoUnificadoTable).values(baseValues)
-    const pedidoId = Number(nuevoPedido[0].insertId)
-
-    for (const item of items) {
-      await db.insert(ItemPedidoUnificadoTable).values({
-        pedidoId,
-        productoId: item.productoId,
-        varianteId: item.varianteId || null,
-        varianteNombre: item.varianteId && variantesMap.has(item.varianteId) ? variantesMap.get(item.varianteId).nombre : null,
-        cantidad: item.cantidad,
-        precioUnitario: computeItemPrecio(item).toFixed(2),
-        ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
-        agregados: item.agregados?.length ? item.agregados : null,
-      })
+    const creado = await db.transaction(async (tx: any) => {
+      if (body.mesaLocalId != null) {
+        const reserva = await reservarMesaLocal(tx, restauranteId, body.mesaLocalId, body.sucursalId)
+        if ('error' in reserva) return reserva
+      }
+      const nuevoPedido = await tx.insert(PedidoUnificadoTable).values(baseValues)
+      const pedidoId = Number(nuevoPedido[0].insertId)
+      for (const item of items) {
+        await tx.insert(ItemPedidoUnificadoTable).values({
+          pedidoId,
+          productoId: item.productoId,
+          varianteId: item.varianteId || null,
+          varianteNombre: item.varianteId && variantesMap.has(item.varianteId) ? variantesMap.get(item.varianteId).nombre : null,
+          cantidad: item.cantidad,
+          precioUnitario: computeItemPrecio(item).toFixed(2),
+          ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
+          agregados: item.agregados?.length ? item.agregados : null,
+        })
+      }
+      return { pedidoId }
+    })
+    if ('error' in creado) {
+      const status = creado.error === 'MESA_OCUPADA' ? 409 : 422
+      return c.json({ message: creado.message, code: creado.error, success: false }, status)
     }
+    const pedidoId = creado.pedidoId
 
     // Realtime + impresión para otros dispositivos del local
     await emitirEventoPedido(db, {
@@ -460,6 +809,17 @@ const pedidoUnificadoRoute = new Hono()
       .update(PedidoUnificadoTable)
       .set(updateData)
       .where(eq(PedidoUnificadoTable.id, pedidoId))
+
+    // La mesa se libera por estado cerrado, sin borrar mesa_local_id: el pedido
+    // conserva su historial y todos los grids conectados reciben el cambio.
+    await emitirEventoPedido(db, {
+      restauranteId,
+      pedidoId,
+      tipo: pedido.tipo,
+      sucursalId: pedido.sucursalId,
+      event: 'upsert',
+      reason: 'updated',
+    })
 
     const tipo = pedido.tipo
     wsManager.notifyPublicClientEstado(tipo, pedidoId, estado)
@@ -775,8 +1135,8 @@ const pedidoUnificadoRoute = new Hono()
     }
   })
 
-  // Asignar repartidor al pedido
-  .put('/:id/repartidor', async (c) => {
+  // Asignar repartidor al pedido — módulo incluido opt-in.
+  .put('/:id/repartidor', requireModulo(MODULE_KEYS.GESTION_CADETES), async (c) => {
     const t0 = Date.now()
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id

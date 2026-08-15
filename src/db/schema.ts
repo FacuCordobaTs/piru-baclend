@@ -149,6 +149,30 @@ export const sucursal = mysqlTable("sucursal", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Mesas operativas del local. No reutiliza `mesa`: esa tabla sigue sosteniendo
+// el flujo legacy de QR y `sala` el pedido grupal vigente.
+export const mesaLocal = mysqlTable("mesa_local", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  sucursalId: int("sucursal_id").references(() => sucursal.id, { onDelete: "set null" }),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  // Coordenadas y tamaño en unidades del grid del editor (T33), no píxeles.
+  posicionX: int("posicion_x").default(0).notNull(),
+  posicionY: int("posicion_y").default(0).notNull(),
+  ancho: int("ancho").default(1).notNull(),
+  alto: int("alto").default(1).notNull(),
+  capacidad: int("capacidad").default(1).notNull(),
+  // Es una marca manual opcional. T34 siempre deriva la ocupación de pedidos abiertos.
+  estadoManual: varchar("estado_manual", { length: 50 }),
+  activo: boolean("activo").default(true).notNull(),
+  orden: int("orden").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_mesa_local_restaurante_activo_orden").on(table.restauranteId, table.activo, table.orden),
+  index("idx_mesa_local_sucursal_activo").on(table.sucursalId, table.activo),
+]);
+
 export const repartidor = mysqlTable("repartidor", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
@@ -157,10 +181,52 @@ export const repartidor = mysqlTable("repartidor", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Identidades operativas del restaurante. No reutilizan la contraseña ni el
+// JWT del dueño: los mozos ingresan con un PIN propio y una sesión revocable.
+export const usuarioRestaurante = mysqlTable("usuario_restaurante", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id, { onDelete: "cascade" }).notNull(),
+  sucursalId: int("sucursal_id").references(() => sucursal.id, { onDelete: "set null" }),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  rol: mysqlEnum("rol_usuario_restaurante", ["owner", "admin", "mozo"]).notNull(),
+  // Sólo las identidades de staff usan PIN. El owner existente sigue usando
+  // su login de restaurante y nunca se copia su contraseña a esta tabla.
+  pinHash: varchar("pin_hash", { length: 255 }),
+  codigoAcceso: varchar("codigo_acceso", { length: 64 }).unique(),
+  activo: boolean("activo").default(true).notNull(),
+  intentosPinFallidos: int("intentos_pin_fallidos").default(0).notNull(),
+  bloqueadoHasta: timestamp("bloqueado_hasta"),
+  ultimoAccesoAt: timestamp("ultimo_acceso_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_usuario_restaurante_restaurante_activo").on(table.restauranteId, table.activo),
+  index("idx_usuario_restaurante_sucursal_activo").on(table.sucursalId, table.activo),
+]);
+
+// El JWT de staff contiene el id de esta sesión; persistir su hash permite
+// revocarlo sin tener que aceptar ni invalidar el JWT del dueño.
+export const sesionStaff = mysqlTable("sesion_staff", {
+  id: int("id").primaryKey().autoincrement(),
+  usuarioRestauranteId: int("usuario_restaurante_id").references(() => usuarioRestaurante.id, { onDelete: "cascade" }).notNull(),
+  tokenHash: varchar("token_hash", { length: 64 }).notNull().unique(),
+  expiraAt: timestamp("expira_at").notNull(),
+  revocadaAt: timestamp("revocada_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_sesion_staff_usuario_activa").on(table.usuarioRestauranteId, table.revocadaAt, table.expiraAt),
+]);
+
 export const pedidoUnificado = mysqlTable("pedido_unificado", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
   sucursalId: int("sucursal_id").references(() => sucursal.id),
+  // T32: consumo en local conserva tipo=takeaway para admins instalados. El
+  // frontend nuevo deriva modalidad `local` cuando consumoEnLocal es true.
+  mesaLocalId: int("mesa_local_id").references(() => mesaLocal.id, { onDelete: "set null" }),
+  consumoEnLocal: boolean("consumo_en_local").default(false).notNull(),
+  // Nullable: pedidos públicos, IA y el historial anterior no tienen actor de staff.
+  creadoPorUsuarioId: int("creado_por_usuario_id").references(() => usuarioRestaurante.id, { onDelete: "set null" }),
   clienteId: int("cliente_id").references(() => cliente.id), // Nullable si no se registró
 
   // Discriminador principal
@@ -202,6 +268,9 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   // Trazabilidad
   impreso: boolean("impreso").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  // Edición optimista de comandas POS. Las apps antiguas pueden ignorarlos.
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  version: int("version").default(1).notNull(),
   deliveredAt: timestamp("delivered_at"),
 
   // ─── NUEVO: Notificar a whatsapp ─────────
@@ -233,7 +302,10 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   afipNumeroComprobante: int("afip_numero_comprobante"),
   afipPuntoDeVenta: int("afip_punto_de_venta"),
   afipPdfUrl: varchar("afip_pdf_url", { length: 512 }),
-});
+}, (table) => [
+  index("idx_pedido_unificado_mesa_local_estado").on(table.mesaLocalId, table.estado),
+  index("idx_pedido_unificado_creado_por_usuario").on(table.creadoPorUsuarioId),
+]);
 
 export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {
   id: int("id").primaryKey().autoincrement(),
@@ -249,6 +321,22 @@ export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {
   // Nombre del cliente que agregó este item (solo relevante en pedidos grupales)
   clienteNombre: varchar("cliente_nombre", { length: 255 }),
 });
+
+// Ledger de mutaciones POS. El actor se mantiene nullable para el historial previo.
+export const pedidoUnificadoAuditoria = mysqlTable("pedido_unificado_auditoria", {
+  id: int("id").primaryKey().autoincrement(),
+  pedidoId: int("pedido_id").references(() => pedidoUnificado.id, { onDelete: 'cascade' }).notNull(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  itemPedidoId: int("item_pedido_id").references(() => itemPedidoUnificado.id, { onDelete: 'set null' }),
+  usuarioRestauranteId: int("usuario_restaurante_id").references(() => usuarioRestaurante.id, { onDelete: 'set null' }),
+  operacion: mysqlEnum("operacion", ["agregar_item", "editar_item", "eliminar_item", "editar_datos_pos"]).notNull(),
+  actorTipo: varchar("actor_tipo", { length: 40 }).default("restaurante_admin").notNull(),
+  antes: json("antes"),
+  despues: json("despues"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_pedido_unificado_auditoria_usuario_fecha").on(table.usuarioRestauranteId, table.createdAt),
+]);
 
 export const producto = mysqlTable("producto", {
   id: int("id").primaryKey().autoincrement(),

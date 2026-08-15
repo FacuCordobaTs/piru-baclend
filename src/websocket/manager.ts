@@ -42,6 +42,9 @@ export interface SalaOrderCacheEntry {
 class WebSocketManager {
   private sessions: Map<number, MesaSession> = new Map();
   private adminSessions: Map<number, AdminSession> = new Map(); // restauranteId -> AdminSession
+  // PWA de mozos: cada conexión queda aislada por restaurante y sucursal.
+  // Nunca se reutiliza el canal ni el JWT de administración.
+  private mozoSessions: Map<string, Set<any>> = new Map();
   private mesaToRestaurante: Map<number, number> = new Map(); // mesaId -> restauranteId
   public publicClients: Map<string, Set<any>> = new Map(); // key -> Set of ws (key = {tipo}-{pedidoId})
   public trackingClients: Map<string, Set<any>> = new Map(); // key -> Set of ws (key = tracking-{restauranteId}-{telefono})
@@ -80,6 +83,33 @@ class WebSocketManager {
     if (session.connections.size === 0) {
       this.adminSessions.delete(restauranteId);
     }
+  }
+
+  addMozoConnection(restauranteId: number, sucursalId: number, ws: any) {
+    const key = `${restauranteId}:${sucursalId}`
+    const connections = this.mozoSessions.get(key) ?? new Set<any>()
+    connections.add(ws)
+    this.mozoSessions.set(key, connections)
+  }
+
+  removeMozoConnection(restauranteId: number, sucursalId: number, ws: any) {
+    const key = `${restauranteId}:${sucursalId}`
+    const connections = this.mozoSessions.get(key)
+    if (!connections) return
+    connections.delete(ws)
+    if (connections.size === 0) this.mozoSessions.delete(key)
+  }
+
+  broadcastMozoOrderEvent(restauranteId: number, sucursalId: number | null | undefined, payload: any) {
+    if (sucursalId == null) return
+    const connections = this.mozoSessions.get(`${restauranteId}:${sucursalId}`)
+    if (!connections) return
+    const message = JSON.stringify({ type: 'MOZO_PEDIDO_EVENT', payload })
+    connections.forEach((client) => {
+      if (client.readyState === 1) {
+        try { client.send(message) } catch (error) { console.error('Error enviando MOZO_PEDIDO_EVENT:', error) }
+      }
+    })
   }
 
   // Enviar notificación a todos los admins de un restaurante y guardar en BD
