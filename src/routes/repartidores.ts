@@ -6,6 +6,8 @@ import { authMiddleware } from '../middleware/auth'
 import { eq, and } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
+import { requireModulo } from '../middleware/modulo'
+import { MODULE_KEYS } from '../lib/modulos'
 
 const repartidoresRoute = new Hono()
   .use('*', authMiddleware)
@@ -81,7 +83,7 @@ const repartidoresRoute = new Hono()
     return c.json({ success: true, data })
   })
 
-  .post('/create', zValidator('json', z.object({ nombre: z.string().min(1, 'El nombre es requerido').max(255) })), async (c) => {
+  .post('/create', requireModulo(MODULE_KEYS.GESTION_CADETES), zValidator('json', z.object({ nombre: z.string().min(1, 'El nombre es requerido').max(255) })), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const { nombre } = c.req.valid('json')
@@ -94,7 +96,7 @@ const repartidoresRoute = new Hono()
     return c.json({ success: true, data: { id, restauranteId, nombre: nombre.trim(), estado: 'activo' } }, 201)
   })
 
-  .put('/:id/estado', zValidator('json', z.object({ estado: z.enum(['activo', 'inactivo']) })), async (c) => {
+  .put('/:id/estado', requireModulo(MODULE_KEYS.GESTION_CADETES), zValidator('json', z.object({ estado: z.enum(['activo', 'inactivo']) })), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const repartidorId = Number(c.req.param('id'))

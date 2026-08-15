@@ -8,6 +8,7 @@ import {
   decimal,
   mysqlEnum,
   json,
+  index,
   uniqueIndex,
 } from "drizzle-orm/mysql-core";
 
@@ -645,10 +646,89 @@ export const whatsappConversacion = mysqlTable("whatsapp_conversacion", {
 });
 
 // ============================================================================
-// PLANES Y SUSCRIPCIONES
-// Modelo de negocio: cuota mensual fija en 3 planes, SIN comisión por venta.
-// El único costo variable (mensajes de WhatsApp al cliente) se cobra aparte
-// como consumible (ver saldoMensajes / recargaMensajes).
+// SUSCRIPCIÓN ÚNICA Y MÓDULOS
+//
+// El catálogo de módulos es la fuente de verdad nueva. `plan` y `planFeature`
+// permanecen más abajo sólo como compatibilidad temporal para admins antiguos;
+// no deben usarse para capacidades nuevas.
+// ============================================================================
+
+export const configuracionSuscripcion = mysqlTable("configuracion_suscripcion", {
+  id: int("id").primaryKey().autoincrement(),
+  codigo: varchar("codigo", { length: 50 }).unique().notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  descripcion: varchar("descripcion", { length: 500 }),
+  precioMensual: decimal("precio_mensual", { precision: 10, scale: 2 }).notNull(),
+  descuentoAnual: int("descuento_anual").default(20).notNull(),
+  activo: boolean("activo").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const categoriaModulo = mysqlTable("categoria_modulo", {
+  id: int("id").primaryKey().autoincrement(),
+  codigo: varchar("codigo", { length: 50 }).unique().notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  descripcion: varchar("descripcion", { length: 500 }),
+  orden: int("orden").default(0).notNull(),
+  activo: boolean("activo").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const modulo = mysqlTable("modulo", {
+  id: int("id").primaryKey().autoincrement(),
+  codigo: varchar("codigo", { length: 100 }).unique().notNull(),
+  categoriaId: int("categoria_id").references(() => categoriaModulo.id).notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  descripcion: varchar("descripcion", { length: 500 }),
+  tipo: mysqlEnum("tipo_modulo", ["incluido", "pago"]).notNull(),
+  precioMensual: decimal("precio_mensual", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  mensajesUtilityIncluidos: int("mensajes_utility_incluidos").default(0).notNull(),
+  mensajesMarketingIncluidos: int("mensajes_marketing_incluidos").default(0).notNull(),
+  estadoProducto: mysqlEnum("estado_producto", ["disponible", "beta", "proximamente"])
+    .default("disponible")
+    .notNull(),
+  activable: boolean("activable").default(true).notNull(),
+  icono: varchar("icono", { length: 100 }),
+  orden: int("orden").default(0).notNull(),
+  activo: boolean("activo").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [index("idx_modulo_categoria_orden").on(table.categoriaId, table.orden)]);
+
+export const restauranteModulo = mysqlTable(
+  "restaurante_modulo",
+  {
+    id: int("id").primaryKey().autoincrement(),
+    restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+    moduloId: int("modulo_id").references(() => modulo.id).notNull(),
+    estado: mysqlEnum("estado_restaurante_modulo", [
+      "inactivo",
+      "pendiente_pago",
+      "activo",
+      "cancelacion_programada",
+      "suspendido",
+    ]).default("inactivo").notNull(),
+    activadoAt: timestamp("activado_at"),
+    desactivadoAt: timestamp("desactivado_at"),
+    vigenteHasta: timestamp("vigente_hasta"),
+    precioMensualCongelado: decimal("precio_mensual_congelado", { precision: 10, scale: 2 }),
+    origen: mysqlEnum("origen_restaurante_modulo", ["usuario", "interno", "migracion", "trial", "legacy"])
+      .default("usuario")
+      .notNull(),
+    cancelarAlFinPeriodo: boolean("cancelar_al_fin_periodo").default(false).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_restaurante_modulo").on(table.restauranteId, table.moduloId),
+    index("idx_restaurante_modulo_estado").on(table.restauranteId, table.estado),
+  ],
+);
+
+// ============================================================================
+// COMPATIBILIDAD LEGACY DE PLANES
 // ============================================================================
 
 // Definición de cada plan comercial. Editable sin deploy (precio, mensajes
@@ -712,9 +792,13 @@ export const suscripcion = mysqlTable("suscripcion", {
     .references(() => restaurante.id)
     .notNull()
     .unique(),
+  // Compatibilidad temporal para endpoints/admins anteriores. La fuente nueva es
+  // configuracionSuscripcionId; T05 retirará la dependencia de este campo.
   planId: int("plan_id")
     .references(() => plan.id)
     .notNull(),
+  configuracionSuscripcionId: int("configuracion_suscripcion_id")
+    .references(() => configuracionSuscripcion.id),
   // Estado de la suscripción. Define qué puede hacer el local:
   //  - trial:          período de prueba; acceso completo al plan contratado.
   //  - activa:         al día; acceso completo.
@@ -750,6 +834,13 @@ export const suscripcion = mysqlTable("suscripcion", {
   avisoTrialVencimientoAt: timestamp("aviso_trial_vencimiento_at"),
   // Precio congelado al momento de contratar (por si luego cambia el precio del plan).
   precioMensual: decimal("precio_mensual", { precision: 10, scale: 2 }),
+  // Snapshots de lectura rápida; el importe autoritativo se resuelve desde los
+  // módulos activos y sus precios congelados.
+  precioBaseMensual: decimal("precio_base_mensual", { precision: 10, scale: 2 }),
+  montoModulosMensual: decimal("monto_modulos_mensual", { precision: 10, scale: 2 })
+    .default("0.00")
+    .notNull(),
+  montoTotalMensual: decimal("monto_total_mensual", { precision: 10, scale: 2 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -901,14 +992,19 @@ export const pagoSuscripcion = mysqlTable("pago_suscripcion", {
   restauranteId: int("restaurante_id")
     .references(() => restaurante.id)
     .notNull(),
-  // Plan que se está pagando (congelado al iniciar el pago, por si cambia después).
+  // Compatibilidad temporal: los pagos nuevos se describen mediante sus ítems.
   planId: int("plan_id")
     .references(() => plan.id)
     .notNull(),
+  configuracionSuscripcionId: int("configuracion_suscripcion_id")
+    .references(() => configuracionSuscripcion.id),
   // Ciclo cubierto por este pago.
   ciclo: mysqlEnum("ciclo_pago", ["mensual", "anual"]).default("mensual").notNull(),
   // Monto pagado en ARS (autoritativo del servidor, sale del precio del plan).
   monto: decimal("monto", { precision: 10, scale: 2 }).notNull(),
+  montoBase: decimal("monto_base", { precision: 10, scale: 2 }),
+  montoModulos: decimal("monto_modulos", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  montoTotal: decimal("monto_total", { precision: 10, scale: 2 }),
   // Período de cobertura que otorga este pago (se setea al confirmar).
   periodoDesde: timestamp("periodo_desde"),
   periodoHasta: timestamp("periodo_hasta"),
@@ -924,6 +1020,26 @@ export const pagoSuscripcion = mysqlTable("pago_suscripcion", {
   tokenExpiraEn: timestamp("token_expira_en"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+export const pagoSuscripcionItem = mysqlTable("pago_suscripcion_item", {
+  id: int("id").primaryKey().autoincrement(),
+  pagoSuscripcionId: int("pago_suscripcion_id")
+    .references(() => pagoSuscripcion.id, { onDelete: "cascade" })
+    .notNull(),
+  tipo: mysqlEnum("tipo_item_pago_suscripcion", ["base", "modulo"]).notNull(),
+  moduloId: int("modulo_id").references(() => modulo.id),
+  codigo: varchar("codigo", { length: 100 }).notNull(),
+  descripcion: varchar("descripcion", { length: 500 }).notNull(),
+  cantidad: int("cantidad").default(1).notNull(),
+  precioUnitario: decimal("precio_unitario", { precision: 10, scale: 2 }).notNull(),
+  monto: decimal("monto", { precision: 10, scale: 2 }).notNull(),
+  desde: timestamp("desde"),
+  hasta: timestamp("hasta"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_pago_suscripcion_item_pago").on(table.pagoSuscripcionId),
+  index("idx_pago_suscripcion_item_modulo").on(table.moduloId),
+]);
 
 // ----------- DEBAJO ESTA LA ARQUITECTURA VIEJA QUE YA NO QUIERO USAR -----------------
 export const mesa = mysqlTable("mesa", {
@@ -1146,4 +1262,3 @@ export const itemPedidoTakeaway = mysqlTable("item_pedido_takeaway", {
   agregados: json("agregados"),
   esCanjePuntos: boolean("es_canje_puntos").default(false),
 });
-

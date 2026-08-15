@@ -20,7 +20,7 @@ import {
 } from '../lib/metodos-pago'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { contarPedidosPagadosFranja } from '../lib/franjas'
-import { tieneAcceso, FEATURE_KEYS } from '../lib/planes'
+import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { estaPausadoPorSuscripcion } from '../lib/suscripciones'
 import { salirDeColaPorPedido } from '../lib/motor-recompra'
 
@@ -125,6 +125,11 @@ publicRoute.get('/restaurante/:username', async (c) => {
 
         const restauranteId = restaurante[0].id
         const r0 = restaurante[0]
+        const [mercadopagoActivo, taloActivo, descuentosActivos] = await Promise.all([
+            tieneModuloActivo(db, restauranteId, MODULE_KEYS.MERCADOPAGO),
+            tieneModuloActivo(db, restauranteId, MODULE_KEYS.TALO),
+            tieneModuloActivo(db, restauranteId, MODULE_KEYS.CODIGOS_DESCUENTO),
+        ])
         const pagoRowPerfil = rowToPagoRow({
             metodosPagoConfig: r0.metodosPagoConfig,
             cardsPaymentsEnabled: r0.cardsPaymentsEnabled,
@@ -137,6 +142,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
             taloClientSecret: r0.taloCredencialesOk ? 'x' : null,
             taloUserId: r0.taloCredencialesOk ? 'x' : null,
             transferenciaAlias: r0.transferenciaAlias,
+            mercadopagoHabilitado: mercadopagoActivo,
+            taloHabilitado: taloActivo,
         })
         const metodosPagoPublicos = buildMetodosPublicosList(pagoRowPerfil)
         const transferenciaAliasCliente = metodosPagoPublicos.some((m) => m.id === METODO_PAGO.MANUAL_TRANSFER)
@@ -148,6 +155,9 @@ publicRoute.get('/restaurante/:username', async (c) => {
             taloCredencialesOk: _taloOk,
             ...restauranteSeguro
         } = r0
+        // El toggle histórico se conserva, pero el catálogo público sólo
+        // ofrece cupones cuando también existe el entitlement explícito.
+        restauranteSeguro.codigoDescuentoEnabled = r0.codigoDescuentoEnabled && descuentosActivos
 
         // Obtener horarios de atención
         const horarios = await db
@@ -285,10 +295,12 @@ publicRoute.get('/restaurante/:username', async (c) => {
             })
         )
 
-        // ¿El local tiene los avisos automáticos al cliente (feature Intermedio+)? El cliente usa
-        // esto para decidir si muestra el botón "Enviar pedido al WhatsApp": ese botón manual es
-        // el canal del plan Básico (sin avisos automáticos), por lo que solo aparece cuando esto es false.
-        const avisosWhatsappClienteEnabled = await tieneAcceso(db, restauranteId, FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE)
+        // El cliente usa este entitlement para decidir si muestra el botón manual wa.me.
+        const avisosWhatsappClienteEnabled = await tieneModuloActivo(
+            db,
+            restauranteId,
+            MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP,
+        )
 
         // ¿El local está "pausado" por su suscripción (suspendida/cancelada)? La tienda se muestra
         // "cerrada temporalmente" y no toma pedidos nuevos (Claim Flow · Tarea 8: degradación, no
@@ -377,10 +389,12 @@ publicRoute.get('/sala/join/:token', async (c) => {
             return c.json({ success: false, message: 'Restaurante no encontrado' }, 404)
         }
 
-        // ¿El local tiene los avisos automáticos al cliente (feature Intermedio+)? El cliente usa
-        // esto para decidir si muestra el botón "Enviar pedido al WhatsApp": ese botón manual es
-        // el canal del plan Básico (sin avisos automáticos), por lo que solo aparece cuando esto es false.
-        const avisosWhatsappClienteEnabled = await tieneAcceso(db, sala[0].restauranteId!, FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE)
+        // El cliente usa este entitlement para decidir si muestra el botón manual wa.me.
+        const avisosWhatsappClienteEnabled = await tieneModuloActivo(
+            db,
+            sala[0].restauranteId!,
+            MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP,
+        )
 
         const productosRaw = await db.select({
             id: ProductoTable.id,
@@ -490,6 +504,10 @@ publicRoute.post('/descuentos/validar', zValidator('json', validarDescuentoSchem
         }
 
         if (!restauranteCfg.codigoDescuentoEnabled) {
+            return c.json({ success: false, message: 'Este local no tiene habilitados los códigos de descuento' }, 200)
+        }
+
+        if (!(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.CODIGOS_DESCUENTO))) {
             return c.json({ success: false, message: 'Este local no tiene habilitados los códigos de descuento' }, 200)
         }
 
@@ -774,6 +792,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         let montoDescuento = 0
         let codigoDescuentoIdFinal: number | null = null
         if (codigoDescuentoId) {
+            if (!(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.CODIGOS_DESCUENTO))) {
+                return c.json({ message: 'Este local no tiene habilitados los códigos de descuento', success: false }, 400)
+            }
             const [cupon] = await db.select().from(CodigoDescuentoTable).where(eq(CodigoDescuentoTable.id, codigoDescuentoId)).limit(1)
             if (!cupon || cupon.restauranteId !== restauranteId) {
                 return c.json({ message: 'Código de descuento inválido', success: false }, 400)
@@ -802,7 +823,11 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         }
 
         const rDel = resRestaurante[0]!
-        const pagoRowDel = rowToPagoRow(rDel)
+        const [mercadopagoActivoDel, taloActivoDel] = await Promise.all([
+            tieneModuloActivo(db, restauranteId, MODULE_KEYS.MERCADOPAGO),
+            tieneModuloActivo(db, restauranteId, MODULE_KEYS.TALO),
+        ])
+        const pagoRowDel = rowToPagoRow({ ...rDel, mercadopagoHabilitado: mercadopagoActivoDel, taloHabilitado: taloActivoDel })
         const resolvedDel = resolverMetodoPagoPedido(metodoPago ?? null, pagoRowDel)
         if (resolvedDel.error || !resolvedDel.metodo) {
             return c.json({ message: resolvedDel.error || 'Método de pago no disponible', success: false }, 400)
@@ -968,8 +993,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
         if (!waitToPay) {
             // Aviso automático al cliente (pago confirmado). Va por `notificarClientePagoConfirmado`,
-            // que aplica el gate de plan (avisos_whatsapp_cliente = Intermedio+): en el plan Básico el
-            // cliente NUNCA recibe este mensaje (lo manda él con el botón "Enviar pedido al WhatsApp").
+            // que aplica el gate del módulo de Avisos: sin él el cliente usa el botón manual wa.me.
             // Además resuelve las credenciales de Meta del local (marca propia) y registra el mensaje.
             if (telefono) {
                 notificarClientePagoConfirmado(c, { restauranteId, pedidoId }).catch(err => {
@@ -1189,6 +1213,9 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         let montoDescuentoTk = 0
         let codigoDescuentoIdFinalTk: number | null = null
         if (codigoDescuentoId) {
+            if (!(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.CODIGOS_DESCUENTO))) {
+                return c.json({ message: 'Este local no tiene habilitados los códigos de descuento', success: false }, 400)
+            }
             const [cupon] = await db.select().from(CodigoDescuentoTable).where(eq(CodigoDescuentoTable.id, codigoDescuentoId)).limit(1)
             if (!cupon || cupon.restauranteId !== restauranteId) {
                 return c.json({ message: 'Código de descuento inválido', success: false }, 400)
@@ -1217,7 +1244,11 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         }
 
         const rTk = resRestaurante[0]!
-        const pagoRowTk = rowToPagoRow(rTk)
+        const [mercadopagoActivoTk, taloActivoTk] = await Promise.all([
+            tieneModuloActivo(db, restauranteId, MODULE_KEYS.MERCADOPAGO),
+            tieneModuloActivo(db, restauranteId, MODULE_KEYS.TALO),
+        ])
+        const pagoRowTk = rowToPagoRow({ ...rTk, mercadopagoHabilitado: mercadopagoActivoTk, taloHabilitado: taloActivoTk })
         const resolvedTk = resolverMetodoPagoPedido(metodoPago ?? null, pagoRowTk)
         if (resolvedTk.error || !resolvedTk.metodo) {
             return c.json({ message: resolvedTk.error || 'Método de pago no disponible', success: false }, 400)
@@ -1390,8 +1421,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
 
         if (!waitToPay) {
             // Aviso automático al cliente (pago confirmado). Va por `notificarClientePagoConfirmado`,
-            // que aplica el gate de plan (avisos_whatsapp_cliente = Intermedio+): en el plan Básico el
-            // cliente NUNCA recibe este mensaje (lo manda él con el botón "Enviar pedido al WhatsApp").
+            // que aplica el gate del módulo de Avisos: sin él el cliente usa el botón manual wa.me.
             // Además resuelve las credenciales de Meta del local (marca propia) y registra el mensaje.
             if (telefono) {
                 notificarClientePagoConfirmado(c, { restauranteId, pedidoId }).catch(err => {
@@ -1875,4 +1905,3 @@ publicRoute.get('/pedido-info/:id', async (c) => {
 })
 
 export { publicRoute }
-

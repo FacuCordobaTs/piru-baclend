@@ -36,8 +36,8 @@ import {
   enrichItemsWithProductInfo,
   buildClienteContexto,
 } from '../lib/pedidos-activos'
-import { requireFeature } from '../middleware/plan'
-import { FEATURE_KEYS } from '../lib/planes'
+import { requireModulo } from '../middleware/modulo'
+import { MODULE_KEYS } from '../lib/modulos'
 import { consumirMensaje, estadoEnvioUtility, avisarSaldoBajoSiCorresponde } from '../lib/mensajes-wallet'
 
 const itemSchema = z.object({
@@ -562,8 +562,8 @@ const pedidoUnificadoRoute = new Hono()
     return c.json({ message: 'Pedido eliminado correctamente', success: true }, 200)
   })
 
-  // Asignar Rapiboy (solo delivery) — feature de plan Intermedio+
-  .post('/rapiboy/asignar', requireFeature(FEATURE_KEYS.RAPIBOY), zValidator('json', z.object({ pedidoId: z.number() })), async (c) => {
+  // Asignar Rapiboy (solo delivery) — módulo incluido opt-in.
+  .post('/rapiboy/asignar', requireModulo(MODULE_KEYS.RAPIBOY), zValidator('json', z.object({ pedidoId: z.number() })), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const { pedidoId } = c.req.valid('json')
@@ -654,8 +654,8 @@ const pedidoUnificadoRoute = new Hono()
     }
   })
 
-  // Notificar al cliente por WhatsApp (pedido listo) — feature de plan Intermedio+
-  .post('/:id/notificar-cliente', requireFeature(FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE), async (c) => {
+  // Notificar al cliente por WhatsApp (pedido listo) — módulo de Avisos.
+  .post('/:id/notificar-cliente', requireModulo(MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))
@@ -809,8 +809,8 @@ const pedidoUnificadoRoute = new Hono()
     return c.json({ message: 'Repartidor asignado correctamente', success: true }, 200)
   })
 
-  // Confirmar pedido con demora (modo confirmación manual) — envía aviso al cliente por WhatsApp (Intermedio+)
-  .post('/:id/confirmar-con-demora', requireFeature(FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE), zValidator('json', z.object({ demoraMinutos: z.number().int().min(0).max(999) })), async (c) => {
+  // Confirmar pedido con demora (modo confirmación manual) — módulo de Avisos.
+  .post('/:id/confirmar-con-demora', requireModulo(MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP), zValidator('json', z.object({ demoraMinutos: z.number().int().min(0).max(999) })), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))
@@ -912,7 +912,7 @@ const pedidoUnificadoRoute = new Hono()
 
 
   // Claim atómico de impresión
-  .put('/:id/impreso', async (c) => {
+  .put('/:id/impreso', requireModulo(MODULE_KEYS.IMPRESION_COMANDAS), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))

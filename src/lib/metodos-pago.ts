@@ -47,6 +47,9 @@ export type RestaurantePagoRow = {
   taloClientSecret: string | null
   taloUserId: string | null
   transferenciaAlias: string | null
+  /** Entitlements resueltos por el caller; `false` retira el medio del checkout público. */
+  mercadopagoHabilitado?: boolean
+  taloHabilitado?: boolean
 }
 
 export function rowToPagoRow(r: {
@@ -61,6 +64,8 @@ export function rowToPagoRow(r: {
   taloClientSecret: string | null
   taloUserId: string | null
   transferenciaAlias: string | null
+  mercadopagoHabilitado?: boolean
+  taloHabilitado?: boolean
 }): RestaurantePagoRow {
   return {
     metodosPagoConfig: r.metodosPagoConfig,
@@ -74,6 +79,8 @@ export function rowToPagoRow(r: {
     taloClientSecret: r.taloClientSecret,
     taloUserId: r.taloUserId,
     transferenciaAlias: r.transferenciaAlias,
+    mercadopagoHabilitado: r.mercadopagoHabilitado,
+    taloHabilitado: r.taloHabilitado,
   }
 }
 
@@ -93,10 +100,10 @@ function parseConfigJson(raw: unknown): Partial<MetodosPagoConfig> {
 /** Effective flags: JSON overrides with safe fallbacks from legacy columns. */
 export function resolveMetodosPagoConfig(r: RestaurantePagoRow): MetodosPagoConfig {
   const fromJson = parseConfigJson(r.metodosPagoConfig)
-  const mpOk = !!(r.mpConnected && r.mpPublicKey)
+  const mpOk = r.mercadopagoHabilitado !== false && !!(r.mpConnected && r.mpPublicKey)
   const cardsOn = r.cardsPaymentsEnabled !== false
   const cucuruAuto = !!r.cucuruConfigurado && r.cucuruEnabled !== false
-  const taloAuto = r.proveedorPago === 'talo' && !!(r.taloClientId && r.taloClientSecret && r.taloUserId)
+  const taloAuto = r.taloHabilitado !== false && r.proveedorPago === 'talo' && !!(r.taloClientId && r.taloClientSecret && r.taloUserId)
   const autoTransferAvailable = cucuruAuto || taloAuto
   const aliasOk = !!(r.transferenciaAlias && String(r.transferenciaAlias).trim())
 
@@ -284,4 +291,3 @@ export function proveedorTransferenciaDinamica(
 export function restauranteOcultaPedidosNoPagados(cfg: MetodosPagoConfig): boolean {
   return hasAnyMetodoAutomatico(enforceMetodosPublicos(cfg))
 }
-

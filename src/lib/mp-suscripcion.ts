@@ -3,7 +3,7 @@
 // El pago va a la cuenta de la PLATAFORMA (Piru): access token de plataforma y SIN marketplace_fee
 // (100% a Piru). Compartido por el checkout autenticado (routes/planes.ts → /suscribir) y el link
 // de pago público que se envía por WhatsApp (routes/pago.ts). Es un pago ÚNICO, no una suscripción
-// recurrente de MP: el webhook (external_reference `piru-plansub-{id}`) extiende la suscripción un
+// recurrente de MP: el webhook (external_reference `piru-suscripcion-{id}`) acredita la factura
 // ciclo al aprobarse.
 
 const MP_PLATFORM_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN
@@ -18,9 +18,14 @@ export function pagosSuscripcionDisponibles(): boolean {
   return Boolean(MP_PLATFORM_ACCESS_TOKEN)
 }
 
+/** Referencia canónica de una factura de suscripción compuesta. */
+export function externalReferenceSuscripcion(pagoId: number): string {
+  return `piru-suscripcion-${pagoId}`
+}
+
 /**
  * Crea la preferencia de MercadoPago para un pago de suscripción ya existente (identificado por su
- * `pagoId`, que viaja como external_reference `piru-plansub-{id}` para que el webhook lo confirme).
+ * `pagoId`, que viaja como external_reference canónica para que el webhook lo confirme).
  * Devuelve el init_point para redirigir al pago.
  */
 export async function crearPreferenciaSuscripcionMP(opts: {
@@ -29,7 +34,7 @@ export async function crearPreferenciaSuscripcionMP(opts: {
   precio: number
   backUrl: string
 }): Promise<ResultadoPreferenciaMP> {
-  const externalReference = `piru-plansub-${opts.pagoId}`
+  const externalReference = externalReferenceSuscripcion(opts.pagoId)
 
   const mpResponse = await fetch('https://api.mercadopago.com/checkout/preferences', {
     method: 'POST',

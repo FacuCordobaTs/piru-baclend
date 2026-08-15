@@ -3,7 +3,7 @@
 // al dueño) es la única autorización de ese pago único. Sirve para pagar desde el celular sin
 // loguearse. Un mismo token puede ser de DOS cosas (comparten espacio de tokens):
 //   • recarga de mensajes  → `recarga_mensajes.token`   (webhook `piru-recarga-{id}`)
-//   • cuota del plan        → `pago_suscripcion.token`   (webhook `piru-plansub-{id}`)
+//   • factura de suscripción → `pago_suscripcion.token`  (webhook `piru-suscripcion-{id}`)
 // Por ahora sólo MercadoPago como medio de pago. El efecto (acreditar saldo / activar suscripción)
 // lo aplica el webhook de MP, idéntico al checkout autenticado.
 import { Hono } from 'hono'
@@ -14,7 +14,7 @@ import {
   restaurante as RestauranteTable,
   packRecarga as PackRecargaTable,
   recargaMensajes as RecargaMensajesTable,
-  plan as PlanTable,
+  pagoSuscripcionItem as PagoSuscripcionItemTable,
 } from '../db/schema'
 import { getRecargaPorToken, setRecargaPreferencia, listarPacks, getPack } from '../lib/mensajes-wallet'
 import { crearPreferenciaRecargaMP, pagosRecargaDisponibles } from '../lib/mp-recarga'
@@ -59,7 +59,7 @@ type LinkResuelto =
       tipo: 'suscripcion'
       pago: NonNullable<Awaited<ReturnType<typeof getPagoSuscripcionPorToken>>>
       restauranteNombre: string
-      planNombre: string
+      concepto: string
       estado: EstadoLink
     }
 
@@ -90,16 +90,17 @@ async function cargarLink(db: ReturnType<typeof drizzle>, token: string): Promis
 
   const pago = await getPagoSuscripcionPorToken(db, token)
   if (pago) {
-    const [planRow] = await db
-      .select({ nombre: PlanTable.nombre })
-      .from(PlanTable)
-      .where(eq(PlanTable.id, pago.planId))
-      .limit(1)
+    const items = await db
+      .select({ tipo: PagoSuscripcionItemTable.tipo, descripcion: PagoSuscripcionItemTable.descripcion })
+      .from(PagoSuscripcionItemTable)
+      .where(eq(PagoSuscripcionItemTable.pagoSuscripcionId, pago.id))
+    const modulos = items.filter((item) => item.tipo === 'modulo').map((item) => item.descripcion)
+    const conceptoBase = items.find((item) => item.tipo === 'base')?.descripcion ?? 'Suscripción Piru'
     return {
       tipo: 'suscripcion',
       pago,
       restauranteNombre: await nombreRestaurante(db, pago.restauranteId),
-      planNombre: planRow?.nombre ?? 'tu plan',
+      concepto: modulos.length ? `${conceptoBase} + ${modulos.join(', ')}` : conceptoBase,
       estado: resolverEstado(pago.estado, pago.tokenExpiraEn),
     }
   }
@@ -124,8 +125,8 @@ pagoRoute.get('/:token', async (c) => {
           tipo: 'suscripcion',
           estado: info.estado,
           restauranteNombre: info.restauranteNombre,
-          concepto: `Plan ${info.planNombre} · ${cicloTxt}`,
-          monto: info.pago.monto,
+          concepto: `${info.concepto} · ${cicloTxt}`,
+          monto: info.pago.montoTotal ?? info.pago.monto,
         },
       }, 200)
     }
@@ -207,8 +208,8 @@ pagoRoute.post('/:token/checkout', async (c) => {
       const cicloTxt = info.pago.ciclo === 'anual' ? 'Anual' : 'Mensual'
       const pref = await crearPreferenciaSuscripcionMP({
         pagoId: info.pago.id,
-        titulo: `Piru ${info.planNombre} · ${cicloTxt}`,
-        precio: parseFloat(String(info.pago.monto)),
+        titulo: `Piru ${info.concepto} · ${cicloTxt}`,
+        precio: parseFloat(String(info.pago.montoTotal ?? info.pago.monto)),
         backUrl,
       })
       if (!pref.ok) {

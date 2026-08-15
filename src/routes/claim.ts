@@ -15,7 +15,6 @@ import { setCookie } from 'hono/cookie'
 import {
   restaurante as RestauranteTable,
   registroTelefono,
-  plan as PlanTable,
   suscripcion as SuscripcionTable,
 } from '../db/schema'
 import { and, eq, gt } from 'drizzle-orm'
@@ -31,11 +30,10 @@ import {
   computarConfigClaim,
 } from '../lib/claim'
 import { iniciarTrial, DIAS_TRIAL_DEFAULT } from '../lib/suscripciones'
-import { PLAN_CODES } from '../lib/planes'
 
 /**
  * Arranca el TRIAL de 14 días cuando el dueño reclama su tienda (Claim Flow). El reloj de la prueba
- * arranca ACÁ, en el claim: el dueño entra con acceso completo al plan Básico sin pagar por 14 días,
+ * arranca ACÁ, en el claim: el dueño entra con acceso a la suscripción base sin pagar por 14 días,
  * y recién al vencer (agotada también la gracia) cae en el paywall/pausa (→ /suscribir). Sin esto, la
  * cuenta queda `requiereSuscripcion=true` sin suscripción → accesoPanel=false → redirige de una a
  * /suscribir apenas cierra y reabre. El aviso "tu prueba está por vencer" (día ~12) lo dispara solo
@@ -53,17 +51,11 @@ async function arrancarTrialClaim(db: MySql2Database<Record<string, never>>, res
       .limit(1)
     if (subExistente) return // ya tiene suscripción (trial a mano, plan pago, etc.): no la pisamos.
 
-    const [basico] = await db
-      .select({ id: PlanTable.id })
-      .from(PlanTable)
-      .where(eq(PlanTable.codigo, PLAN_CODES.BASICO))
-      .limit(1)
-    if (!basico) {
-      console.warn(`⚠️ [Claim trial] no hay plan Básico configurado; el trial de ${restauranteId} no se inició.`)
+    const trial = await iniciarTrial(db, restauranteId, DIAS_TRIAL_DEFAULT)
+    if (!trial) {
+      console.warn(`⚠️ [Claim trial] no hay suscripción Piru configurada; el trial de ${restauranteId} no se inició.`)
       return
     }
-
-    await iniciarTrial(db, restauranteId, basico.id, DIAS_TRIAL_DEFAULT)
     // El trial habilita el panel (estado 'trial' → conAccesoAPago), pero al vencer debe caer en el
     // paywall/pausa: marcamos la cuenta como que requiere suscripción (igual que el trial interno).
     await db

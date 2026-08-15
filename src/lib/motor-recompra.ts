@@ -38,7 +38,8 @@ import {
   type ClienteCohorte,
 } from './recupero'
 import { enHorarioSilencio, horaArgentina } from './proteccion-base'
-import { getOrCreateSaldo, marketingDisponible } from './mensajes-wallet'
+import { resumenWallet } from './mensajes-wallet'
+import { MODULE_KEYS, tieneModuloActivo } from './modulos'
 import type { SegmentoCliente } from './clientes-rfm'
 
 type Db = MySql2Database<Record<string, never>>
@@ -264,6 +265,12 @@ export async function procesarColaDiaria(
   restauranteId: number,
   ahora: number = Date.now(),
 ): Promise<ResultadoGoteo> {
+  // El scheduler no atraviesa middleware HTTP: debe respetar el mismo
+  // entitlement que las acciones manuales antes de enviar marketing.
+  if (!(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MOTOR_RECOMPRA))) {
+    return goteoVacio('modulo_inactivo')
+  }
+
   const campana = await getCampanaActual(db, restauranteId)
   if (!campana) return goteoVacio('sin_campana')
   if (!esProcesable(campana.estado)) return goteoVacio('pausada')
@@ -284,8 +291,8 @@ export async function procesarColaDiaria(
   }
 
   // Saldo marketing: los mensajes de campaña SÍ se pausan en 0 (a diferencia de los utility de pedido).
-  const saldo = await getOrCreateSaldo(db, restauranteId)
-  let marketing = marketingDisponible(saldo)
+  const wallet = await resumenWallet(db, restauranteId)
+  let marketing = wallet.marketing.disponible
   if (marketing <= 0) {
     await pausarPorSaldo(db, campana, ahora)
     return { ...goteoVacio('sin_saldo'), pausadaSinSaldo: true }
@@ -624,8 +631,8 @@ export interface EstadoMotor {
 
 /** Arma la pantalla del motor: un PLAN si está apagado, o el marcador (dashboard) si está encendido. */
 export async function estadoMotor(db: Db, restauranteId: number): Promise<EstadoMotor> {
-  const saldo = await getOrCreateSaldo(db, restauranteId)
-  const saldoMarketing = marketingDisponible(saldo)
+  const wallet = await resumenWallet(db, restauranteId)
+  const saldoMarketing = wallet.marketing.disponible
   const campana = await getCampanaActual(db, restauranteId)
 
   if (!campana) {

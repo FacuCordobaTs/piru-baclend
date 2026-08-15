@@ -273,7 +273,7 @@ export interface ResultadoEnvioRecupero {
  * (producto top + foto), genera el cupón si corresponde, manda el WhatsApp de marketing con la
  * marca del local, registra el toque y descuenta el bucket marketing (best-effort).
  *
- * El gating por plan (motor_recompra = Avanzado) lo aplica el middleware de la ruta, no esta función.
+ * El gating del módulo Motor de Recompra lo aplica la ruta o el scheduler, no esta función.
  */
 export async function enviarRecuperoDormido(
   c: any,
@@ -700,7 +700,7 @@ export interface ResultadoCampana {
  * ledger y consumo del wallet que el envío individual). Persiste toda la cohorte en
  * `campana_recompra_cliente` (rol contactado/control + snapshots) para la atribución posterior.
  *
- * El gating por plan (motor_recompra = Avanzado) lo aplica el middleware de la ruta.
+ * El gating del módulo Motor de Recompra lo aplica la ruta que inicia esta operación.
  */
 export async function ejecutarCampanaRecompra(
   c: any,

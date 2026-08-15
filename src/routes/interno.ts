@@ -5,17 +5,23 @@ import { and, asc, eq } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import * as jwt from 'jsonwebtoken'
-import { restaurante as RestauranteTable, plan as PlanTable } from '../db/schema'
+import {
+  modulo as ModuloTable,
+  plan as PlanTable,
+  restaurante as RestauranteTable,
+  restauranteModulo as RestauranteModuloTable,
+  suscripcion as SuscripcionTable,
+} from '../db/schema'
 import { internoAuthMiddleware } from '../middleware/interno'
-import { resolverSuscripcion, PLAN_CODES } from '../lib/planes'
 import { resumenWallet } from '../lib/mensajes-wallet'
 import {
   resolverEstadoVigente,
-  asignarPlanManual,
   iniciarTrial,
   DIAS_TRIAL_DEFAULT,
   type CicloPago,
 } from '../lib/suscripciones'
+import { obtenerConfiguracionSuscripcion, resolverSuscripcionUnica } from '../lib/suscripcion'
+import { resolverImporteMensual, resolverModulosRestaurante } from '../lib/modulos'
 import {
   generarClaimLink,
   buildClaimUrl,
@@ -30,6 +36,14 @@ const diasHasta = (fecha: Date | string | null | undefined): number | null => {
   if (!fecha) return null
   const ms = new Date(fecha).getTime() - Date.now()
   return Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)))
+}
+
+const sumarMeses = (fecha: Date, meses: number): Date => {
+  const resultado = new Date(fecha)
+  const dia = resultado.getDate()
+  resultado.setMonth(resultado.getMonth() + meses)
+  if (resultado.getDate() < dia) resultado.setDate(0)
+  return resultado
 }
 
 // Panel interno del fundador. Auth por credencial fija en env (sin tabla de usuarios):
@@ -64,8 +78,8 @@ internoRoute.post('/login', zValidator('json', loginSchema), async (c) => {
 internoRoute.use('*', internoAuthMiddleware)
 
 /**
- * Lista de restaurantes con su plan, estado de suscripción, próximo cobro y consumo de
- * mensajes. Reusa resolverSuscripcion + resumenWallet y corre resolverEstadoVigente
+ * Lista de restaurantes con su suscripción única, módulos activos y consumo de
+ * mensajes. Conserva los aliases `plan*` para consumidores internos anteriores y corre resolverEstadoVigente
  * antes de leer (para reflejar vencimientos sin cron). Es lo que permite cerrar clientes
  * por outreach antes de tener el billing 100% automatizado.
  */
@@ -97,8 +111,11 @@ internoRoute.get('/locales', async (c) => {
         // Transición lazy de estado antes de leer (vencido → gracia → suspendida). Devuelve la
         // fila de suscripción (o null): la usamos para trialFin sin una query extra.
         const subRow = await resolverEstadoVigente(db, r.id)
-        const sus = await resolverSuscripcion(db, r.id)
-        const wallet = await resumenWallet(db, r.id)
+        const [sus, wallet, modulos] = await Promise.all([
+          resolverSuscripcionUnica(db, r.id),
+          resumenWallet(db, r.id),
+          resolverModulosRestaurante(db, r.id),
+        ])
 
         // Pipeline de ventas (prospecto → reclamada → trial → activa → pausada): derivado, no guardado.
         const pipeline = derivarPipeline({ origen: r.origen, claimedAt: r.claimedAt, estado: sus.estado })
@@ -120,6 +137,23 @@ internoRoute.get('/locales', async (c) => {
           planNombre: sus.planNombre,
           estado: sus.estado,
           sinSuscripcion: sus.sinSuscripcion,
+          suscripcion: {
+            configuracion: sus.configuracion,
+            ciclo: sus.ciclo,
+            fechaProximoCobro: sus.fechaProximoCobro,
+            precioBaseMensual: sus.precioBaseMensual,
+            montoModulosMensual: sus.montoModulosMensual,
+            montoTotalMensual: sus.montoTotalMensual,
+          },
+          modulos: modulos
+            .filter((modulo) => modulo.activoAhora)
+            .map((modulo) => ({
+              codigo: modulo.codigo,
+              tipo: modulo.tipo,
+              estado: modulo.estado,
+              origen: modulo.origen,
+              precioMensual: modulo.precioMensualCongelado ?? modulo.precioMensual,
+            })),
           // Claim flow (outbound). Campos aditivos: los admins/paneles viejos los ignoran.
           origen: r.origen,
           pipeline,
@@ -164,35 +198,33 @@ internoRoute.get('/locales', async (c) => {
   }
 })
 
-/** Catálogo de planes (para poblar el select de cambio de plan en el panel). */
-internoRoute.get('/planes', async (c) => {
+/** Configuración única que el fundador puede asignar o renovar manualmente. */
+internoRoute.get('/suscripcion', async (c) => {
   const db = drizzle(pool)
   try {
-    const planes = await db
-      .select()
-      .from(PlanTable)
-      .where(eq(PlanTable.activo, true))
-      .orderBy(asc(PlanTable.orden))
-    return c.json({ success: true, data: planes }, 200)
+    const configuracion = await obtenerConfiguracionSuscripcion(db)
+    if (!configuracion || !configuracion.activo) {
+      return c.json({ success: false, message: 'La suscripción Piru no está disponible' }, 404)
+    }
+    return c.json({ success: true, data: configuracion }, 200)
   } catch (error) {
-    console.error('Error listando planes (interno):', error)
-    return c.json({ success: false, message: 'Error al obtener los planes' }, 500)
+    console.error('Error obteniendo suscripción (interno):', error)
+    return c.json({ success: false, message: 'Error al obtener la suscripción' }, 500)
   }
 })
 
 /**
- * Alta/cambio de plan a mano, SIN pasar por MercadoPago (el punto de la tarea: dar de
- * alta por outreach). Upsert de la suscripción → activa, extiende el próximo cobro y
- * acredita el cupo utility del plan.
+ * Alta o renovación manual de la única suscripción. No crea comprobantes de pago:
+ * es una concesión explícita del fundador para operaciones de outreach. T07 agregará
+ * el checkout y los ítems auditables para el flujo comercial normal.
  */
-const cambiarPlanSchema = z.object({
-  planId: z.number().int().positive(),
+const asignarSuscripcionSchema = z.object({
   ciclo: z.enum(['mensual', 'anual']).optional(),
 })
 
 internoRoute.put(
-  '/locales/:id/plan',
-  zValidator('json', cambiarPlanSchema),
+  '/locales/:id/suscripcion',
+  zValidator('json', asignarSuscripcionSchema),
   async (c) => {
     const db = drizzle(pool)
     const restauranteId = Number(c.req.param('id'))
@@ -200,7 +232,7 @@ internoRoute.put(
       return c.json({ success: false, message: 'Local inválido' }, 400)
     }
 
-    const { planId, ciclo: cicloInput } = c.req.valid('json')
+    const { ciclo: cicloInput } = c.req.valid('json')
     const ciclo: CicloPago = cicloInput === 'anual' ? 'anual' : 'mensual'
 
     try {
@@ -213,18 +245,183 @@ internoRoute.put(
         return c.json({ success: false, message: 'Local no encontrado' }, 404)
       }
 
-      const res = await asignarPlanManual(db, restauranteId, planId, ciclo)
-      if (!res) {
-        return c.json({ success: false, message: 'Plan no encontrado' }, 404)
+      const [configuracion, planCompatibilidad, actual] = await Promise.all([
+        obtenerConfiguracionSuscripcion(db),
+        db.select({ id: PlanTable.id })
+          .from(PlanTable)
+          .where(eq(PlanTable.codigo, 'basico'))
+          .limit(1)
+          .then((rows) => rows[0] ?? null),
+        db.select().from(SuscripcionTable)
+          .where(eq(SuscripcionTable.restauranteId, restauranteId))
+          .limit(1)
+          .then((rows) => rows[0] ?? null),
+      ])
+      if (!configuracion?.activo || !planCompatibilidad) {
+        return c.json({ success: false, message: 'Falta configurar la suscripción Piru' }, 409)
       }
+
+      const ahora = new Date()
+      const meses = ciclo === 'anual' ? 12 : 1
+      const proximoActual = actual?.fechaProximoCobro ? new Date(actual.fechaProximoCobro) : null
+      const base = actual?.estado === 'activa' && actual.ciclo === ciclo && proximoActual && proximoActual > ahora
+        ? proximoActual
+        : ahora
+      const periodoHasta = sumarMeses(base, meses)
+      const precioBase = configuracion.precioMensual
+
+      if (actual) {
+        await db.update(SuscripcionTable).set({
+          planId: planCompatibilidad.id,
+          configuracionSuscripcionId: configuracion.id,
+          estado: 'activa',
+          ciclo,
+          fechaInicio: actual.fechaInicio ?? ahora,
+          trialFin: null,
+          fechaProximoCobro: periodoHasta,
+          graciaHasta: null,
+          fechaCancelacion: null,
+          precioMensual: precioBase,
+          precioBaseMensual: precioBase,
+          montoModulosMensual: '0.00',
+          montoTotalMensual: precioBase,
+          updatedAt: ahora,
+        }).where(eq(SuscripcionTable.restauranteId, restauranteId))
+      } else {
+        await db.insert(SuscripcionTable).values({
+          restauranteId,
+          planId: planCompatibilidad.id,
+          configuracionSuscripcionId: configuracion.id,
+          estado: 'activa',
+          ciclo,
+          fechaInicio: ahora,
+          fechaProximoCobro: periodoHasta,
+          precioMensual: precioBase,
+          precioBaseMensual: precioBase,
+          montoModulosMensual: '0.00',
+          montoTotalMensual: precioBase,
+        })
+      }
+
+      // Los snapshots son sólo de lectura rápida. La fuente de importes sigue
+      // siendo catálogo + entitlements, resuelta centralmente.
+      const importe = await resolverImporteMensual(db, restauranteId)
+      await db.update(SuscripcionTable).set({
+        montoModulosMensual: importe.montoModulosMensual.toFixed(2),
+        montoTotalMensual: importe.montoTotalMensual.toFixed(2),
+        updatedAt: new Date(),
+      }).where(eq(SuscripcionTable.restauranteId, restauranteId))
 
       return c.json({
         success: true,
-        data: { planId: res.planId, fechaProximoCobro: res.periodoHasta },
+        data: { configuracion, ciclo, fechaProximoCobro: periodoHasta, ...importe },
       }, 200)
     } catch (error) {
-      console.error('Error cambiando plan (interno):', error)
-      return c.json({ success: false, message: 'Error al cambiar el plan' }, 500)
+      console.error('Error asignando suscripción (interno):', error)
+      return c.json({ success: false, message: 'Error al asignar la suscripción' }, 500)
+    }
+  },
+)
+
+/** Catálogo operativo para la asignación manual desde el panel interno. */
+internoRoute.get('/modulos', async (c) => {
+  const db = drizzle(pool)
+  try {
+    const modulos = await db.select().from(ModuloTable)
+      .where(eq(ModuloTable.activo, true))
+      .orderBy(asc(ModuloTable.orden), asc(ModuloTable.id))
+    return c.json({ success: true, data: modulos }, 200)
+  } catch (error) {
+    console.error('Error obteniendo módulos (interno):', error)
+    return c.json({ success: false, message: 'Error al obtener los módulos' }, 500)
+  }
+})
+
+const asignarModuloSchema = z.object({ activo: z.boolean() })
+
+/**
+ * Asignación manual explícita. A diferencia de la API del restaurante, el
+ * fundador puede conceder un módulo pago sin checkout; queda marcado
+ * `origen='interno'` y con precio congelado para que T07 lo incluya en la
+ * factura siguiente. Nunca se asignan módulos por ausencia de suscripción.
+ */
+internoRoute.put(
+  '/locales/:id/modulos/:codigo',
+  zValidator('json', asignarModuloSchema),
+  async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = Number(c.req.param('id'))
+    const codigo = c.req.param('codigo')
+    if (!Number.isInteger(restauranteId) || restauranteId <= 0) {
+      return c.json({ success: false, message: 'Local inválido' }, 400)
+    }
+    if (!/^[a-z0-9_]{1,100}$/.test(codigo)) {
+      return c.json({ success: false, message: 'Código de módulo inválido' }, 400)
+    }
+
+    try {
+      const { activo } = c.req.valid('json')
+      const [restaurante, modulo, suscripcion] = await Promise.all([
+        db.select({ id: RestauranteTable.id }).from(RestauranteTable)
+          .where(eq(RestauranteTable.id, restauranteId)).limit(1).then((rows) => rows[0] ?? null),
+        db.select().from(ModuloTable)
+          .where(and(eq(ModuloTable.codigo, codigo), eq(ModuloTable.activo, true))).limit(1)
+          .then((rows) => rows[0] ?? null),
+        resolverSuscripcionUnica(db, restauranteId),
+      ])
+      if (!restaurante) return c.json({ success: false, message: 'Local no encontrado' }, 404)
+      if (!modulo) return c.json({ success: false, message: 'Módulo no encontrado' }, 404)
+
+      const suscripcionPermitePago = suscripcion.estado === 'activa' || suscripcion.estado === 'pago_pendiente'
+      if (activo && modulo.tipo === 'pago' && !suscripcionPermitePago) {
+        return c.json({
+          success: false,
+          message: 'Primero asigná una suscripción activa; el trial no incluye módulos pagos',
+        }, 409)
+      }
+
+      const ahora = new Date()
+      await db.insert(RestauranteModuloTable).values({
+        restauranteId,
+        moduloId: modulo.id,
+        estado: activo ? 'activo' : 'inactivo',
+        activadoAt: activo ? ahora : null,
+        desactivadoAt: activo ? null : ahora,
+        vigenteHasta: activo && modulo.tipo === 'pago' ? suscripcion.fechaProximoCobro : null,
+        precioMensualCongelado: modulo.tipo === 'pago' ? modulo.precioMensual : null,
+        origen: 'interno',
+        cancelarAlFinPeriodo: false,
+      }).onDuplicateKeyUpdate({
+        set: {
+          estado: activo ? 'activo' : 'inactivo',
+          activadoAt: activo ? ahora : null,
+          desactivadoAt: activo ? null : ahora,
+          vigenteHasta: activo && modulo.tipo === 'pago' ? suscripcion.fechaProximoCobro : null,
+          precioMensualCongelado: modulo.tipo === 'pago' ? modulo.precioMensual : null,
+          origen: 'interno',
+          cancelarAlFinPeriodo: false,
+          updatedAt: ahora,
+        },
+      })
+
+      const [modulos, importe] = await Promise.all([
+        resolverModulosRestaurante(db, restauranteId),
+        resolverImporteMensual(db, restauranteId),
+      ])
+      if (!suscripcion.sinSuscripcion) {
+        await db.update(SuscripcionTable).set({
+          montoModulosMensual: importe.montoModulosMensual.toFixed(2),
+          montoTotalMensual: importe.montoTotalMensual.toFixed(2),
+          updatedAt: new Date(),
+        }).where(eq(SuscripcionTable.restauranteId, restauranteId))
+      }
+      return c.json({
+        success: true,
+        data: modulos.find((item) => item.codigo === codigo),
+      }, 200)
+    } catch (error) {
+      console.error('Error asignando módulo (interno):', error)
+      return c.json({ success: false, message: 'Error al asignar el módulo' }, 500)
     }
   },
 )
@@ -465,12 +662,11 @@ internoRoute.post('/locales/:id/reset-claim', async (c) => {
 
 /**
  * Arranca el TRIAL de 14 días de un local. ⚠️ El reloj de la prueba arranca ACÁ (cuando el
- * fundador lo decide), no en el claim ni en el registro. Deja la cuenta con acceso completo al
- * plan sin pagar; al vencer, el motor de estados lazy la lleva a pago_pendiente → suspendida.
- * `planId` opcional (default: plan Básico); `dias` opcional (default: 14).
+ * fundador lo decide), no en el claim ni en el registro. Deja la cuenta con acceso a la
+ * suscripción base sin pagar; al vencer, el motor de estados lazy la lleva a pago_pendiente →
+ * suspendida. Los módulos pagos nunca se incluyen. `dias` es opcional (default: 14).
  */
 const trialSchema = z.object({
-  planId: z.number().int().positive().optional(),
   dias: z.number().int().positive().max(90).optional(),
 })
 
@@ -481,7 +677,7 @@ internoRoute.post('/locales/:id/trial', zValidator('json', trialSchema), async (
     return c.json({ success: false, message: 'Local inválido' }, 400)
   }
 
-  const { planId: planIdInput, dias } = c.req.valid('json')
+  const { dias } = c.req.valid('json')
 
   try {
     const [rest] = await db
@@ -493,23 +689,9 @@ internoRoute.post('/locales/:id/trial', zValidator('json', trialSchema), async (
       return c.json({ success: false, message: 'Local no encontrado' }, 404)
     }
 
-    // Resolver el plan del trial: el pasado o, por default, el Básico.
-    let planId = planIdInput
-    if (!planId) {
-      const [basico] = await db
-        .select({ id: PlanTable.id })
-        .from(PlanTable)
-        .where(eq(PlanTable.codigo, PLAN_CODES.BASICO))
-        .limit(1)
-      if (!basico) {
-        return c.json({ success: false, message: 'No hay un plan Básico configurado' }, 400)
-      }
-      planId = basico.id
-    }
-
-    const res = await iniciarTrial(db, restauranteId, planId, dias ?? DIAS_TRIAL_DEFAULT)
+    const res = await iniciarTrial(db, restauranteId, dias ?? DIAS_TRIAL_DEFAULT)
     if (!res) {
-      return c.json({ success: false, message: 'Plan no encontrado' }, 404)
+      return c.json({ success: false, message: 'Suscripción Piru no configurada' }, 409)
     }
 
     // El trial habilita el panel (estado 'trial' → conAccesoAPago), pero al vencer debe caer en el
@@ -521,7 +703,13 @@ internoRoute.post('/locales/:id/trial', zValidator('json', trialSchema), async (
 
     return c.json({
       success: true,
-      data: { estado: 'trial', planId: res.planId, trialFin: res.trialFin },
+      data: {
+        estado: 'trial',
+        configuracionSuscripcionId: res.configuracionSuscripcionId,
+        // Alias de compatibilidad para consumidores internos anteriores.
+        planId: res.planId,
+        trialFin: res.trialFin,
+      },
     }, 200)
   } catch (error) {
     console.error('Error iniciando trial (interno):', error)
@@ -569,6 +757,7 @@ internoRoute.delete('/locales/:id', async (c) => {
       ['DELETE FROM pago_subtotal WHERE pedido_id IN (SELECT id FROM pedido WHERE restaurante_id = ?)', [restauranteId]],
       ['DELETE FROM item_pedido_delivery WHERE pedido_delivery_id IN (SELECT id FROM pedido_delivery WHERE restaurante_id = ?)', [restauranteId]],
       ['DELETE FROM item_pedido_takeaway WHERE pedido_takeaway_id IN (SELECT id FROM pedido_takeaway WHERE restaurante_id = ?)', [restauranteId]],
+      ['DELETE FROM pago_suscripcion_item WHERE pago_suscripcion_id IN (SELECT id FROM pago_suscripcion WHERE restaurante_id = ?)', [restauranteId]],
       [
         'DELETE FROM pago WHERE pedido_id IN (SELECT id FROM pedido WHERE restaurante_id = ?) ' +
           'OR pedido_delivery_id IN (SELECT id FROM pedido_delivery WHERE restaurante_id = ?) ' +
@@ -614,6 +803,7 @@ internoRoute.delete('/locales/:id', async (c) => {
       'recarga_mensajes',
       'transaccion_mensajes',
       'saldo_mensajes',
+      'restaurante_modulo',
       'pago_suscripcion',
       'suscripcion',
     ]

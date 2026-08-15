@@ -13,7 +13,7 @@ import {
   packRecarga as PackRecargaTable,
   restaurante as RestauranteTable,
 } from '../db/schema'
-import { resolverSuscripcion, type SuscripcionResuelta } from './planes'
+import { resolverCuposMensajesPorModulo, type CuposMensajesPorModulo } from './modulos'
 import { sendSaldoBajoWhatsApp } from '../services/whatsapp'
 
 type Db = MySql2Database<Record<string, never>>
@@ -114,15 +114,15 @@ export function marketingDisponible(saldo: Pick<SaldoRow, 'marketingIncluidosRes
 export async function renovarCicloSiCorresponde(
   db: Db,
   restauranteId: number,
-  suscripcion: SuscripcionResuelta,
+  cupos: CuposMensajesPorModulo,
   saldo: SaldoRow,
 ): Promise<SaldoRow> {
   const ahora = new Date()
   const renuevaEn = saldo.cicloRenuevaEn ? new Date(saldo.cicloRenuevaEn) : null
   if (renuevaEn && ahora < renuevaEn) return saldo
 
-  const incluidos = suscripcion.mensajesIlimitados ? 0 : suscripcion.mensajesIncluidos
-  const marketingIncluidos = suscripcion.mensajesMarketingIncluidos
+  const incluidos = cupos.utility
+  const marketingIncluidos = cupos.marketing
 
   // Sobrante del cupo utility que se pierde.
   if (saldo.utilityIncluidosRestantes > 0) {
@@ -140,11 +140,11 @@ export async function renovarCicloSiCorresponde(
   if (incluidos > 0) {
     await registrarTransaccion(db, {
       restauranteId,
-      tipo: 'renovacion_plan',
+      tipo: 'renovacion_plan', // valor legacy conservado para auditoría histórica
       categoria: 'utility',
       cantidad: incluidos,
       saldoResultante: incluidos + saldo.utilityRecargaSaldo,
-      motivo: 'renovacion_mensual',
+      motivo: 'renovacion_suscripcion_modulos',
     })
   }
 
@@ -168,7 +168,7 @@ export async function renovarCicloSiCorresponde(
       categoria: 'marketing',
       cantidad: marketingIncluidos,
       saldoResultante: marketingIncluidos + saldo.marketingRecargaSaldo,
-      motivo: 'renovacion_mensual',
+      motivo: 'renovacion_suscripcion_modulos',
     })
   }
 
@@ -190,7 +190,7 @@ export async function renovarCicloSiCorresponde(
 }
 
 export interface ResultadoConsumo {
-  /** false sólo si el plan es ilimitado (no se descuenta nada). */
+  /** Los envíos se contabilizan siempre; se conserva por compatibilidad de respuesta. */
   descontado: boolean
   ilimitado: boolean
   categoria: CategoriaMensaje
@@ -222,35 +222,9 @@ export async function consumirMensaje(
 ): Promise<ResultadoConsumo> {
   const categoria: CategoriaMensaje = opts.categoria ?? 'utility'
   const cantidad = opts.cantidad ?? 1
-  const suscripcion = await resolverSuscripcion(db, restauranteId)
-  let saldo = await getOrCreateSaldo(db, restauranteId, { mensajesIncluidos: suscripcion.mensajesIncluidos })
-  saldo = await renovarCicloSiCorresponde(db, restauranteId, suscripcion, saldo)
-
-  const ilimitadoUtility = categoria === 'utility' && suscripcion.mensajesIlimitados
-
-  // Ilimitado (utility en plan Avanzado / cuenta pre-planes): se registra para stats/auditoría
-  // pero no se toca ningún saldo ni se dispara alerta.
-  if (ilimitadoUtility) {
-    await registrarTransaccion(db, {
-      restauranteId,
-      tipo: 'consumo',
-      categoria,
-      cantidad: -cantidad,
-      saldoResultante: null,
-      motivo: opts.motivo ?? 'consumo_ilimitado',
-      tipoMensaje: opts.tipoMensaje ?? null,
-      pedidoUnificadoId: opts.pedidoUnificadoId ?? null,
-    })
-    return {
-      descontado: false,
-      ilimitado: true,
-      categoria,
-      saldoUtilityDisponible: utilityDisponible(saldo),
-      saldoMarketingDisponible: marketingDisponible(saldo),
-      alerta: null,
-      autoRecargaSugerida: false,
-    }
-  }
+  const cupos = await resolverCuposMensajesPorModulo(db, restauranteId)
+  let saldo = await getOrCreateSaldo(db, restauranteId, { mensajesIncluidos: cupos.utility, mensajesMarketingIncluidos: cupos.marketing })
+  saldo = await renovarCicloSiCorresponde(db, restauranteId, cupos, saldo)
 
   let alerta: '80' | '95' | null = null
   const update: Partial<SaldoRow> = { updatedAt: new Date() }
@@ -267,9 +241,9 @@ export async function consumirMensaje(
     saldoResultante = nuevoIncluidos + nuevoRecarga
 
     // Alertas sobre el consumo del cupo del plan (una vez por ciclo).
-    if (suscripcion.mensajesIncluidos > 0) {
-      const consumidoCupo = suscripcion.mensajesIncluidos - nuevoIncluidos
-      const pct = consumidoCupo / suscripcion.mensajesIncluidos
+    if (cupos.utility > 0) {
+      const consumidoCupo = cupos.utility - nuevoIncluidos
+      const pct = consumidoCupo / cupos.utility
       if (pct >= UMBRAL_AVISO_95 && !saldo.aviso95Enviado) {
         alerta = '95'
         update.aviso95Enviado = true
@@ -342,25 +316,15 @@ export interface EstadoEnvioUtility {
  * consulta ANTES de enviar; si `permitido` es false, no manda el WhatsApp (el estado del
  * pedido en la web del comensal sigue funcionando igual).
  *
- * Cuentas ilimitadas / pre-planes nunca se cortan ni entran en gracia (fail-open).
+ * El permiso funcional lo aplica el gate del módulo; esta función sólo aplica
+ * el techo de deuda a un aviso que ya fue autorizado a enviar.
  */
 export async function estadoEnvioUtility(db: Db, restauranteId: number): Promise<EstadoEnvioUtility> {
-  const suscripcion = await resolverSuscripcion(db, restauranteId)
-  let saldo = await getOrCreateSaldo(db, restauranteId, { mensajesIncluidos: suscripcion.mensajesIncluidos })
-  saldo = await renovarCicloSiCorresponde(db, restauranteId, suscripcion, saldo)
+  const cupos = await resolverCuposMensajesPorModulo(db, restauranteId)
+  let saldo = await getOrCreateSaldo(db, restauranteId, { mensajesIncluidos: cupos.utility, mensajesMarketingIncluidos: cupos.marketing })
+  saldo = await renovarCicloSiCorresponde(db, restauranteId, cupos, saldo)
 
   const disponible = utilityDisponible(saldo)
-
-  if (suscripcion.mensajesIlimitados) {
-    return {
-      permitido: true,
-      disponible,
-      enGracia: false,
-      graciaAgotada: false,
-      deudaMaxima: DEUDA_MAXIMA_UTILITY,
-      ilimitado: true,
-    }
-  }
 
   // Se permite mientras la deuda no alcance el techo: el aviso Nº100 de deuda es el último
   // (disponible pasa de -99 a -100); en -100 ya no sale.
@@ -535,6 +499,63 @@ export async function acreditarCupoPlan(
     .where(eq(SaldoMensajesTable.restauranteId, restauranteId))
 }
 
+/**
+ * Acredita los cupos de módulos ya activos después de una factura aprobada.
+ * Una renovación de la base reinicia ambos buckets; un alta prorrateada sólo
+ * acredita las categorías del módulo recién activado, sin tocar el otro saldo.
+ * Las recargas nunca se modifican.
+ */
+export async function acreditarCuposPorModulos(
+  db: Db,
+  restauranteId: number,
+  opts: { reiniciarCiclo: boolean; categorias?: CategoriaMensaje[] },
+): Promise<void> {
+  const cupos = await resolverCuposMensajesPorModulo(db, restauranteId)
+  const categorias = opts.categorias ?? (['utility', 'marketing'] as CategoriaMensaje[])
+  const ahora = new Date()
+  const saldo = await getOrCreateSaldo(db, restauranteId, { mensajesIncluidos: 0 })
+  const actualizar: Partial<SaldoRow> = { updatedAt: ahora }
+
+  for (const categoria of categorias) {
+    const incluidosActuales = categoria === 'utility'
+      ? saldo.utilityIncluidosRestantes
+      : saldo.marketingIncluidosRestantes
+    const recarga = categoria === 'utility' ? saldo.utilityRecargaSaldo : saldo.marketingRecargaSaldo
+    const cupo = categoria === 'utility' ? cupos.utility : cupos.marketing
+    if (incluidosActuales > 0) {
+      await registrarTransaccion(db, {
+        restauranteId,
+        tipo: 'expiracion',
+        categoria,
+        cantidad: -incluidosActuales,
+        saldoResultante: recarga,
+        motivo: opts.reiniciarCiclo ? 'expiracion_por_renovacion_suscripcion' : 'expiracion_por_alta_modulo',
+      })
+    }
+    if (cupo > 0) {
+      await registrarTransaccion(db, {
+        restauranteId,
+        tipo: 'renovacion_plan', // enum legacy; el motivo identifica la semántica nueva
+        categoria,
+        cantidad: cupo,
+        saldoResultante: cupo + recarga,
+        motivo: opts.reiniciarCiclo ? 'acreditacion_renovacion_suscripcion_modulos' : 'acreditacion_alta_modulo',
+      })
+    }
+    if (categoria === 'utility') actualizar.utilityIncluidosRestantes = cupo
+    else actualizar.marketingIncluidosRestantes = cupo
+  }
+
+  if (opts.reiniciarCiclo) {
+    actualizar.cicloInicio = ahora
+    actualizar.cicloRenuevaEn = proximaRenovacion(ahora)
+    actualizar.aviso80Enviado = false
+    actualizar.aviso95Enviado = false
+    actualizar.avisoSaldoBajoNivel = null
+  }
+  await db.update(SaldoMensajesTable).set(actualizar).where(eq(SaldoMensajesTable.restauranteId, restauranteId))
+}
+
 // ─── Packs de recarga (producto comprable) ───────────────────────────────────
 
 /** Packs activos, ordenados. Para renderizar las opciones de recarga en la UI. */
@@ -696,20 +717,20 @@ async function registrarTransaccion(
 
 /** Resumen del wallet para la UI (saldos, % consumido del cupo, alerta y config). */
 export async function resumenWallet(db: Db, restauranteId: number) {
-  const suscripcion = await resolverSuscripcion(db, restauranteId)
+  const cupos = await resolverCuposMensajesPorModulo(db, restauranteId)
   let saldo = await getOrCreateSaldo(db, restauranteId, {
-    mensajesIncluidos: suscripcion.mensajesIncluidos,
-    mensajesMarketingIncluidos: suscripcion.mensajesMarketingIncluidos,
+    mensajesIncluidos: cupos.utility,
+    mensajesMarketingIncluidos: cupos.marketing,
   })
-  saldo = await renovarCicloSiCorresponde(db, restauranteId, suscripcion, saldo)
+  saldo = await renovarCicloSiCorresponde(db, restauranteId, cupos, saldo)
 
   const utilDisp = utilityDisponible(saldo)
-  const cupo = suscripcion.mensajesIncluidos
+  const cupo = cupos.utility
   const consumidoCupo = cupo > 0 ? cupo - saldo.utilityIncluidosRestantes : 0
   const pctConsumido = cupo > 0 ? Math.min(1, consumidoCupo / cupo) : 0
 
   let alerta: '80' | '95' | null = null
-  if (!suscripcion.mensajesIlimitados && cupo > 0) {
+  if (cupo > 0) {
     if (pctConsumido >= UMBRAL_AVISO_95) alerta = '95'
     else if (pctConsumido >= UMBRAL_AVISO_80) alerta = '80'
   }
@@ -719,10 +740,10 @@ export async function resumenWallet(db: Db, restauranteId: number) {
   // que la UI ofrezca el pago de 1 tap (POST /mensajes/auto-recarga/checkout).
   const umbralAutoRecarga = saldo.autoRecargaUmbral ?? AUTO_RECARGA_UMBRAL_DEFAULT
   const autoRecargaSugerida =
-    saldo.autoRecargaHabilitada && !suscripcion.mensajesIlimitados && utilDisp <= umbralAutoRecarga
+    saldo.autoRecargaHabilitada && utilDisp <= umbralAutoRecarga
 
   return {
-    ilimitado: suscripcion.mensajesIlimitados,
+    ilimitado: false,
     cicloRenuevaEn: saldo.cicloRenuevaEn,
     utility: {
       incluidosRestantes: saldo.utilityIncluidosRestantes,
@@ -733,19 +754,19 @@ export async function resumenWallet(db: Db, restauranteId: number) {
       pctConsumido,
       negativo: utilDisp < 0,
       // Modo gracia: saldo agotado pero los avisos siguen saliendo (deuda acotada).
-      enGracia: !suscripcion.mensajesIlimitados && utilDisp <= 0 && utilDisp > -DEUDA_MAXIMA_UTILITY,
+      enGracia: utilDisp <= 0 && utilDisp > -DEUDA_MAXIMA_UTILITY,
       // Gracia agotada: superado el techo, los avisos por WhatsApp se pausan (degradación).
-      graciaAgotada: !suscripcion.mensajesIlimitados && utilDisp <= -DEUDA_MAXIMA_UTILITY,
+      graciaAgotada: utilDisp <= -DEUDA_MAXIMA_UTILITY,
       deudaMaxima: DEUDA_MAXIMA_UTILITY,
     },
     marketing: {
       incluidosRestantes: saldo.marketingIncluidosRestantes,
       recargaSaldo: saldo.marketingRecargaSaldo,
       disponible: marketingDisponible(saldo),
-      cupoPlan: suscripcion.mensajesMarketingIncluidos,
+      cupoPlan: cupos.marketing,
       consumidoCupo:
-        suscripcion.mensajesMarketingIncluidos > 0
-          ? suscripcion.mensajesMarketingIncluidos - saldo.marketingIncluidosRestantes
+        cupos.marketing > 0
+          ? cupos.marketing - saldo.marketingIncluidosRestantes
           : 0,
       negativo: marketingDisponible(saldo) < 0,
     },
@@ -907,17 +928,15 @@ export async function setAutoRecarga(
  * recargar con saldo positivo (ver `aplicarCreditoRecarga`): así, si el dueño recarga y después
  * se vuelve a quedar sin saldo, recibe un nuevo aviso de agotado (uno por evento de agotamiento).
  * Si el envío falla por un motivo transitorio NO se marca: se reintenta en el próximo aviso.
- * Cuentas pre-planes/ilimitadas (fail-open) y locales Básico sin consumo se saltean.
+ * Locales sin cupo de Avisos ni deuda de recarga se saltean.
  */
 export async function avisarSaldoBajoSiCorresponde(db: Db, restauranteId: number): Promise<void> {
-  const suscripcion = await resolverSuscripcion(db, restauranteId)
-  if (suscripcion.mensajesIlimitados) return
-
-  let saldo = await getOrCreateSaldo(db, restauranteId, { mensajesIncluidos: suscripcion.mensajesIncluidos })
-  saldo = await renovarCicloSiCorresponde(db, restauranteId, suscripcion, saldo)
+  const cupos = await resolverCuposMensajesPorModulo(db, restauranteId)
+  let saldo = await getOrCreateSaldo(db, restauranteId, { mensajesIncluidos: cupos.utility, mensajesMarketingIncluidos: cupos.marketing })
+  saldo = await renovarCicloSiCorresponde(db, restauranteId, cupos, saldo)
 
   const utilDisp = utilityDisponible(saldo)
-  const cupo = suscripcion.mensajesIncluidos
+  const cupo = cupos.utility
 
   // Básico sin cupo y sin deuda de recarga: no hay avisos que se estén agotando, nada que avisar.
   if (cupo <= 0 && saldo.utilityRecargaSaldo === 0) return

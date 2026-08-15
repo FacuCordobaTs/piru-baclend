@@ -8,8 +8,8 @@ import {
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
-import { requireFeature } from '../middleware/plan'
-import { FEATURE_KEYS } from '../lib/planes'
+import { requireModulo } from '../middleware/modulo'
+import { MODULE_KEYS } from '../lib/modulos'
 import { eq, desc, inArray, notInArray, and } from 'drizzle-orm'
 import { computarPerfilesRFM } from '../lib/clientes-rfm'
 import {
@@ -180,9 +180,9 @@ clientesRoute.get('/list', async (c) => {
 /**
  * POST /clientes/:id/recupero — Playbook de recupero de dormidos (Motor de Recompra · 4.2).
  * Acción VOLUNTARIA del local: manda el próximo toque de la escalera de incentivos al cliente.
- * Gateado por plan (motor_recompra = Avanzado). Consume el bucket `marketing` del wallet.
+ * Gateado por el módulo Motor de Recompra. Consume el bucket `marketing` del wallet.
  */
-clientesRoute.post('/:id/recupero', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
+clientesRoute.post('/:id/recupero', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const clienteId = parseInt(c.req.param('id'), 10)
@@ -232,7 +232,7 @@ clientesRoute.post('/:id/recupero', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA),
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MOTOR DE RECOMPRA · GOTEO (piloto automático) — campaña persistente que gotea
-// al ritmo del cupo diario. Todo gateado por plan (motor_recompra = Avanzado).
+// al ritmo del cupo diario. Todo gateado por el módulo Motor de Recompra.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
@@ -240,7 +240,7 @@ clientesRoute.post('/:id/recupero', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA),
  *  - apagado → un PLAN de activación (cohorte detectada + propuesta de cupo + días que cubre el saldo).
  *  - encendido → el DASHBOARD (consumo junto a retorno: contactados, volvieron, plata recuperada).
  */
-clientesRoute.get('/recompra/estado', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
+clientesRoute.get('/recompra/estado', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
@@ -257,7 +257,7 @@ clientesRoute.get('/recompra/estado', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA
  * aparta el 10% de control, carga la cola y dispara el primer goteo (respetando cupo/silencio).
  * Body opcional: { cupoDiario }.
  */
-clientesRoute.post('/recompra/activar', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
+clientesRoute.post('/recompra/activar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
@@ -280,7 +280,7 @@ clientesRoute.post('/recompra/activar', requireFeature(FEATURE_KEYS.MOTOR_RECOMP
 })
 
 /** POST /clientes/recompra/pausar — Pausar (siempre disponible). No se pierde nada: la cola queda. */
-clientesRoute.post('/recompra/pausar', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
+clientesRoute.post('/recompra/pausar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
@@ -294,7 +294,7 @@ clientesRoute.post('/recompra/pausar', requireFeature(FEATURE_KEYS.MOTOR_RECOMPR
 })
 
 /** POST /clientes/recompra/reanudar — vuelve a gotear desde donde quedó. */
-clientesRoute.post('/recompra/reanudar', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
+clientesRoute.post('/recompra/reanudar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
@@ -308,7 +308,7 @@ clientesRoute.post('/recompra/reanudar', requireFeature(FEATURE_KEYS.MOTOR_RECOM
 })
 
 /** PUT /clientes/recompra/config — ajusta el cupo diario (acotado al tope duro de sistema). */
-clientesRoute.put('/recompra/config', requireFeature(FEATURE_KEYS.MOTOR_RECOMPRA), async (c) => {
+clientesRoute.put('/recompra/config', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {

@@ -7,7 +7,7 @@ import {
     pedidoUnificado as PedidoUnificadoTable,
     mensajeWhatsapp as MensajeWhatsappTable,
 } from '../db/schema'
-import { tieneAcceso, FEATURE_KEYS } from '../lib/planes'
+import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { avisarSaldoBajoSiCorresponde } from '../lib/mensajes-wallet'
 
 // Interfaces para tipado estricto
@@ -17,7 +17,7 @@ interface OrderItem {
 }
 
 export interface OrderNotification {
-    restauranteId: number; // Para gatear por plan (los avisos por WhatsApp son Intermedio+)
+    restauranteId: number; // Para gatear por el módulo de avisos automáticos.
     phone: string;        // El número del restaurante
     customerName: string; // {{nombre_cliente}}
     address: string;      // {{direccion_cliente}}
@@ -89,12 +89,11 @@ const formatOrderSummary = (items: OrderItem[], horarioProgramado?: string | nul
 
 export const sendOrderWhatsApp = async (c: any, data: OrderNotification, creds?: WaCredentials) => {
     // El aviso automático de pedido al local por WhatsApp (plantilla `pedido_detalle_v1`, que sale
-    // por la API de Meta y le cuesta plata a Piru) es feature de plan Intermedio+. En el plan Básico
-    // el local recibe el pedido por el botón "Enviar pedido al WhatsApp" (wa.me) que dispara el cliente
-    // desde su propio celular, gratis y sin consumir el wallet. Cuentas pre-planes: fail-open.
+    // por la API de Meta y le cuesta plata a Piru) exige el módulo de Avisos. Sin él el local
+    // recibe el pedido por el botón manual wa.me, gratis y sin consumir el wallet.
     const db = drizzle(pool);
-    if (!(await tieneAcceso(db, data.restauranteId, FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE))) {
-        console.log(`📲 [Aviso Pedido al Local] Pedido #${data.orderId} omitido (plan sin avisos automáticos por WhatsApp)`);
+    if (!(await tieneModuloActivo(db, data.restauranteId, MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP))) {
+        console.log(`📲 [Aviso Pedido al Local] Pedido #${data.orderId} omitido (módulo de avisos automáticos inactivo)`);
         return { success: false, skipped: true as const };
     }
 
@@ -447,11 +446,9 @@ export const notificarClientePagoConfirmado = async (
 ): Promise<void> => {
     const db = drizzle(pool);
 
-    // Los avisos automáticos al cliente por WhatsApp son feature de plan Intermedio+.
-    // En el plan Básico el cliente NUNCA recibe estos mensajes (los manda él mismo con
-    // el botón "Enviar pedido al WhatsApp"). Cuentas pre-planes: fail-open (tieneAcceso true).
-    if (!(await tieneAcceso(db, restauranteId, FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE))) {
-        console.log(`📲 [Notificar Cliente Pago] Pedido #${pedidoId} omitido (plan sin avisos automáticos al cliente)`);
+    // Los avisos automáticos al cliente por WhatsApp exigen el módulo de Avisos.
+    if (!(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP))) {
+        console.log(`📲 [Notificar Cliente Pago] Pedido #${pedidoId} omitido (módulo de avisos automáticos inactivo)`);
         return;
     }
 

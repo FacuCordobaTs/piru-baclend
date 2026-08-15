@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { pool } from '../db'
 import { restaurante as RestauranteTable, mesa as MesaTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, horarioRestaurante as HorarioRestauranteTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
@@ -12,7 +12,10 @@ import { configurarWebhookCliente } from '../services/cucuru'
 import { resolveMetodosPagoConfig, type MetodosPagoConfig } from '../lib/metodos-pago'
 import { contarPedidosPagadosFranja } from '../lib/franjas'
 import { requireFeature } from '../middleware/plan'
-import { FEATURE_KEYS, resolverSuscripcion, tieneAccesoAlPanel } from '../lib/planes'
+import { FEATURE_KEYS, resolverSuscripcion } from '../lib/planes'
+import { requireModulo } from '../middleware/modulo'
+import { MODULE_KEYS, tieneModuloActivo, type ModuleKey } from '../lib/modulos'
+import { resolverSuscripcionUnica, tieneAccesoAlPanelSuscripcion } from '../lib/suscripcion'
 import { resolverEstadoVigente } from '../lib/suscripciones'
 import { computarInventarioClaim } from '../lib/claim'
 
@@ -34,6 +37,10 @@ const s3Client = new S3Client({
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/jpg"]
+
+function moduloRequerido(c: Context, modulo: ModuleKey, message: string) {
+  return c.json({ success: false, moduleRequired: true, module, upgradeRequired: true, message }, 403)
+}
 
 async function saveImage(base64String: string): Promise<string> {
   const match = base64String.match(/^data:(image\/\w+);base64,/)
@@ -214,18 +221,30 @@ restauranteRoute.get('/profile', async (c) => {
     // Transición lazy de estado (venció el cobro → gracia → suspendida) antes de leer, así el
     // gate del panel usa el estado real y una cuenta recién suspendida pierde acceso.
     await resolverEstadoVigente(db, restauranteId)
-    const suscripcionResuelta = await resolverSuscripcion(db, restauranteId)
+    const [suscripcionResuelta, suscripcionLegacy] = await Promise.all([
+      resolverSuscripcionUnica(db, restauranteId),
+      // Sólo para el alias `features` de admins instalados hasta que los gates
+      // legacy se migren en T22–T23.
+      resolverSuscripcion(db, restauranteId),
+    ])
     const requiereSuscripcion = !!restaurante[0]?.requiereSuscripcion
     const suscripcion = {
       estado: suscripcionResuelta.estado,
+      planId: suscripcionResuelta.planId,
       planCodigo: suscripcionResuelta.planCodigo,
       planNombre: suscripcionResuelta.planNombre,
       conAccesoAPago: suscripcionResuelta.conAccesoAPago,
       sinSuscripcion: suscripcionResuelta.sinSuscripcion,
-      features: Array.from(suscripcionResuelta.features),
+      features: Array.from(suscripcionLegacy.features),
+      // Datos nuevos aditivos; no reemplazan los aliases `plan*` todavía.
+      suscripcionBase: suscripcionResuelta.configuracion,
+      suscripcionId: suscripcionResuelta.suscripcionId,
+      precioBaseMensual: suscripcionResuelta.precioBaseMensual,
+      montoModulosMensual: suscripcionResuelta.montoModulosMensual,
+      montoTotalMensual: suscripcionResuelta.montoTotalMensual,
       // Hard paywall: ¿puede entrar al panel? El admin lo usa para el gate (→ /suscribir).
       requiereSuscripcion,
-      accesoPanel: tieneAccesoAlPanel(requiereSuscripcion, suscripcionResuelta),
+      accesoPanel: tieneAccesoAlPanelSuscripcion(requiereSuscripcion, suscripcionResuelta),
     }
 
     return c.json({ message: 'Profile retrieved successfully', success: true, data: { restaurante, mesas, productos, suscripcion } }, 200)
@@ -909,6 +928,13 @@ restauranteRoute.put('/pasarela-pago', zValidator('json', updatePasarelaPagoSche
   const body = c.req.valid('json')
 
   try {
+    const solicitaTalo = body.proveedorPago === 'talo'
+      || typeof body.taloClientId === 'string'
+      || typeof body.taloClientSecret === 'string'
+      || typeof body.taloUserId === 'string'
+    if (solicitaTalo && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.TALO))) {
+      return moduloRequerido(c, MODULE_KEYS.TALO, 'Activá el módulo Talo para configurar esta integración')
+    }
     const updateData: { [key: string]: any } = {}
 
     if (body.proveedorPago !== undefined) updateData.proveedorPago = body.proveedorPago
@@ -965,6 +991,15 @@ restauranteRoute.put('/metodos-pago', zValidator('json', updateMetodosPagoSchema
 
     if (!current) {
       return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
+    }
+
+    if ((body.mercadopagoCheckout !== undefined || body.mercadopagoBricks !== undefined)
+      && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MERCADOPAGO))) {
+      return moduloRequerido(c, MODULE_KEYS.MERCADOPAGO, 'Activá el módulo Mercado Pago para cambiar sus métodos de cobro')
+    }
+    if (body.transferenciaAutomatica !== undefined && current.proveedorPago === 'talo'
+      && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.TALO))) {
+      return moduloRequerido(c, MODULE_KEYS.TALO, 'Activá el módulo Talo para cambiar su cobro automático')
     }
 
     const base = resolveMetodosPagoConfig(current as any)
@@ -1064,7 +1099,7 @@ const configTaloSchema = z.object({
   taloUserId: z.string().min(1),
 })
 
-restauranteRoute.post('/configurar-talo', zValidator('json', configTaloSchema), async (c) => {
+restauranteRoute.post('/configurar-talo', requireModulo(MODULE_KEYS.TALO), zValidator('json', configTaloSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
   const { taloClientId, taloClientSecret, taloUserId } = c.req.valid('json')
@@ -1090,7 +1125,7 @@ const configRapiboySchema = z.object({
   token: z.string().min(1)
 })
 
-restauranteRoute.post('/configurar-rapiboy', requireFeature(FEATURE_KEYS.RAPIBOY), zValidator('json', configRapiboySchema), async (c) => {
+restauranteRoute.post('/configurar-rapiboy', requireModulo(MODULE_KEYS.RAPIBOY), zValidator('json', configRapiboySchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
   const { token } = c.req.valid('json')
@@ -1110,7 +1145,7 @@ restauranteRoute.post('/configurar-rapiboy', requireFeature(FEATURE_KEYS.RAPIBOY
 })
 
 // Borrar Rapiboy (Token)
-restauranteRoute.post('/borrar-rapiboy', async (c) => {
+restauranteRoute.post('/borrar-rapiboy', requireModulo(MODULE_KEYS.RAPIBOY), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
 

@@ -36,8 +36,9 @@ import { repartidoresRoute } from './routes/repartidores';
 import { facturacionRoute } from './routes/facturacion'
 import { whatsappOauthRoute } from './routes/whatsapp-oauth';
 import { cartaIaRoute } from './routes/carta-ia';
-import { planesRoute } from './routes/planes';
+import { planesRoute, suscripcionRoute } from './routes/planes';
 import { mensajesRoute } from './routes/mensajes';
+import { modulosRoute } from './routes/modulos';
 import { pagoRoute } from './routes/pago';
 import { internoRoute } from './routes/interno';
 import { claimRoute } from './routes/claim';
@@ -204,7 +205,9 @@ app.basePath('/api')
   .route('/facturacion', facturacionRoute)
   .route('/whatsapp-oauth', whatsappOauthRoute)
   .route('/carta-ia', cartaIaRoute)
+  .route('/suscripcion', suscripcionRoute)
   .route('/planes', planesRoute)
+  .route('/modulos', modulosRoute)
   .route('/mensajes', mensajesRoute)
   .route('/pago', pagoRoute)
   .route('/interno', internoRoute)

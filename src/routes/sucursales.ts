@@ -1,9 +1,9 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { pool } from '../db'
 import { sucursal as SucursalTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
-import { tieneAcceso, FEATURE_KEYS } from '../lib/planes'
+import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { eq, and, count } from 'drizzle-orm'
@@ -30,6 +30,20 @@ const sucursalesRoute = new Hono()
 
 sucursalesRoute.use('*', authMiddleware)
 
+function moduloRequerido(c: Context, modulo: typeof MODULE_KEYS.MULTISUCURSAL | typeof MODULE_KEYS.RAPIBOY, message: string) {
+  return c.json(
+    {
+      success: false,
+      moduleRequired: true,
+      module: modulo,
+      // Alias temporal para admins instalados que todavía reconocen este campo.
+      upgradeRequired: true,
+      message,
+    },
+    403,
+  )
+}
+
 sucursalesRoute.get('/list', async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
@@ -53,24 +67,24 @@ sucursalesRoute.post('/create', zValidator('json', createSucursalSchema), async 
   const body = c.req.valid('json')
 
   try {
-    // "Múltiples sucursales" es feature de pago (Intermedio+): todos los planes
-    // pueden tener SU sucursal, pero crear una segunda o más requiere el plan.
+    // La suscripción base permite una sucursal. Crear una segunda o más requiere
+    // el módulo incluido opt-in, sin alterar las sucursales existentes.
     // El gate va acá (no como middleware) porque depende de cuántas ya existen.
     const [{ total }] = await db
       .select({ total: count() })
       .from(SucursalTable)
       .where(eq(SucursalTable.restauranteId, restauranteId))
 
-    if (total >= 1 && !(await tieneAcceso(db, restauranteId, FEATURE_KEYS.MULTISUCURSAL))) {
-      return c.json(
-        {
-          success: false,
-          upgradeRequired: true,
-          feature: FEATURE_KEYS.MULTISUCURSAL,
-          message: 'Tener más de una sucursal no está incluido en tu plan actual',
-        },
-        403,
-      )
+    if (total >= 1 && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MULTISUCURSAL))) {
+      return moduloRequerido(c, MODULE_KEYS.MULTISUCURSAL, 'Activá el módulo Múltiples sucursales para crear otra sucursal')
+    }
+
+    // Las credenciales de Rapiboy son configuración del módulo. Si se desactiva,
+    // se conservan para una futura reactivación; sólo puede eliminarse una
+    // credencial existente, no crearla ni modificarla.
+    if (body.rapiboyToken !== null && body.rapiboyToken !== undefined
+      && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.RAPIBOY))) {
+      return moduloRequerido(c, MODULE_KEYS.RAPIBOY, 'Activá el módulo Rapiboy para configurar sus credenciales')
     }
 
     const result = await db.insert(SucursalTable).values({
@@ -134,6 +148,11 @@ sucursalesRoute.put('/:id', zValidator('json', updateSucursalSchema), async (c) 
 
     if (!existing) {
       return c.json({ success: false, message: 'Sucursal no encontrada' }, 404)
+    }
+
+    if (body.rapiboyToken !== undefined && body.rapiboyToken !== null
+      && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.RAPIBOY))) {
+      return moduloRequerido(c, MODULE_KEYS.RAPIBOY, 'Activá el módulo Rapiboy para configurar sus credenciales')
     }
 
     await db.update(SucursalTable).set(patch).where(eq(SucursalTable.id, id))

@@ -3,8 +3,8 @@
 //
 // Un scheduler (setInterval en index.ts, patrón del Motor de Recompra) llama a `tickAvisosTrial`
 // cada ~15 min. El tick busca los trials que vencen dentro de ~2 días y todavía no recibieron el
-// aviso, y les manda por WhatsApp (número de Piru) un mensaje con el link de pago para activar el
-// plan ahí mismo. Se envía UNA SOLA VEZ por trial: `suscripcion.avisoTrialVencimientoAt` es el flag
+// aviso, y les manda por WhatsApp (número de Piru) un mensaje con el link de pago para activar la
+// suscripción base ahí mismo. Se envía UNA SOLA VEZ por trial: `suscripcion.avisoTrialVencimientoAt` es el flag
 // anti-reenvío (se marca al enviar; se resetea a null al arrancar un trial nuevo en iniciarTrial).
 //
 // NO hay cron externo: es un setInterval dentro del proceso del backend, best-effort (si falla un
@@ -15,10 +15,10 @@ import { randomUUID } from 'crypto'
 import {
   suscripcion as SuscripcionTable,
   restaurante as RestauranteTable,
-  plan as PlanTable,
   pedidoUnificado as PedidoUnificadoTable,
 } from '../db/schema'
-import { crearPagoSuscripcionPendiente, montoPorCiclo, DIAS_GRACIA } from './suscripciones'
+import { DIAS_GRACIA } from './suscripciones'
+import { crearFacturaSuscripcionPendiente } from './facturacion-suscripcion'
 import { horaArgentina } from './proteccion-base'
 import { sendTrialEndingWhatsApp } from '../services/whatsapp'
 
@@ -64,7 +64,7 @@ const fmtPrecio = (n: number) =>
  */
 async function procesarTrial(
   db: Db,
-  sub: { restauranteId: number; planId: number; trialFin: Date; fechaInicio: Date | null; precioMensual: string | null },
+  sub: { restauranteId: number; trialFin: Date; fechaInicio: Date | null },
 ): Promise<{ marcar: boolean }> {
   const [rest] = await db
     .select({ nombre: RestauranteTable.nombre, telefono: RestauranteTable.telefono })
@@ -77,24 +77,6 @@ async function procesarTrial(
     // Condición permanente (el número no va a aparecer solo): marcamos el flag para no reintentar
     // en cada tick. Si el dueño verifica su número después, ya no recibirá este aviso (aceptable).
     console.warn(`⚠️ [Trial aviso] restaurante ${sub.restauranteId} sin teléfono válido; se omite el aviso.`)
-    return { marcar: true }
-  }
-
-  const [planRow] = await db
-    .select()
-    .from(PlanTable)
-    .where(eq(PlanTable.id, sub.planId))
-    .limit(1)
-  if (!planRow) {
-    console.warn(`⚠️ [Trial aviso] plan ${sub.planId} inexistente para restaurante ${sub.restauranteId}; se omite.`)
-    return { marcar: true }
-  }
-
-  // Precio a cobrar: el congelado en la suscripción si existe, si no el vigente del plan. Mensual.
-  const precioMensual = parseFloat(String(sub.precioMensual ?? planRow.precioMensual))
-  const monto = montoPorCiclo(precioMensual, 'mensual', planRow.descuentoAnual)
-  if (monto <= 0) {
-    console.warn(`⚠️ [Trial aviso] monto <= 0 para restaurante ${sub.restauranteId}; se omite.`)
     return { marcar: true }
   }
 
@@ -119,10 +101,10 @@ async function procesarTrial(
   // el link siga sirviendo aunque el dueño lo abra tarde (no es un pago de 30 min como el on-demand).
   const token = randomUUID()
   const tokenExpiraEn = new Date(sub.trialFin.getTime() + DIAS_GRACIA * 24 * 60 * 60 * 1000)
-  await crearPagoSuscripcionPendiente(db, sub.restauranteId, {
-    planId: sub.planId,
+  const factura = await crearFacturaSuscripcionPendiente(db, sub.restauranteId, {
     ciclo: 'mensual',
-    monto,
+    // Un trial nunca arrastra módulos pagos, ni siquiera ante datos incoherentes.
+    soloBase: true,
     token,
     tokenExpiraEn,
   })
@@ -132,7 +114,7 @@ async function procesarTrial(
     nombre: rest?.nombre || 'tu local',
     fechaFin: formatearFechaFin(sub.trialFin),
     plata: fmtPlata(plataTrial),
-    precio: fmtPrecio(monto),
+    precio: fmtPrecio(factura.montoTotal),
     token,
   })
 
@@ -158,10 +140,8 @@ export async function tickAvisosTrial(db: Db, ahora: number = Date.now()): Promi
   const trials = await db
     .select({
       restauranteId: SuscripcionTable.restauranteId,
-      planId: SuscripcionTable.planId,
       trialFin: SuscripcionTable.trialFin,
       fechaInicio: SuscripcionTable.fechaInicio,
-      precioMensual: SuscripcionTable.precioMensual,
     })
     .from(SuscripcionTable)
     .where(
@@ -180,10 +160,8 @@ export async function tickAvisosTrial(db: Db, ahora: number = Date.now()): Promi
     try {
       const { marcar } = await procesarTrial(db, {
         restauranteId: sub.restauranteId,
-        planId: sub.planId,
         trialFin: new Date(sub.trialFin),
         fechaInicio: sub.fechaInicio ? new Date(sub.fechaInicio) : null,
-        precioMensual: sub.precioMensual,
       })
       if (marcar) {
         await db

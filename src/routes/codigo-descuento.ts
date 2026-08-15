@@ -6,6 +6,8 @@ import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { eq, and } from 'drizzle-orm'
+import { requireModulo } from '../middleware/modulo'
+import { MODULE_KEYS } from '../lib/modulos'
 
 const codigoDescuentoRoute = new Hono()
 
@@ -51,7 +53,7 @@ codigoDescuentoRoute.get('/', async (c) => {
 })
 
 // POST /codigo-descuento/create - Crear nuevo código
-codigoDescuentoRoute.post('/create', zValidator('json', createCodigoSchema), async (c) => {
+codigoDescuentoRoute.post('/create', requireModulo(MODULE_KEYS.CODIGOS_DESCUENTO), zValidator('json', createCodigoSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
   const body = c.req.valid('json')
@@ -97,7 +99,7 @@ codigoDescuentoRoute.post('/create', zValidator('json', createCodigoSchema), asy
 })
 
 // PUT /codigo-descuento/:id - Actualizar código existente
-codigoDescuentoRoute.put('/:id', zValidator('json', updateCodigoSchema), async (c) => {
+codigoDescuentoRoute.put('/:id', requireModulo(MODULE_KEYS.CODIGOS_DESCUENTO), zValidator('json', updateCodigoSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
   const codigoId = parseInt(c.req.param('id'), 10)
@@ -171,7 +173,7 @@ codigoDescuentoRoute.put('/:id', zValidator('json', updateCodigoSchema), async (
 })
 
 // PUT /codigo-descuento/:id/toggle - Activar/desactivar código
-codigoDescuentoRoute.put('/:id/toggle', async (c) => {
+codigoDescuentoRoute.put('/:id/toggle', requireModulo(MODULE_KEYS.CODIGOS_DESCUENTO), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
   const codigoId = parseInt(c.req.param('id'), 10)
@@ -218,7 +220,7 @@ codigoDescuentoRoute.put('/:id/toggle', async (c) => {
 })
 
 // DELETE /codigo-descuento/:id - Eliminar código
-codigoDescuentoRoute.delete('/:id', async (c) => {
+codigoDescuentoRoute.delete('/:id', requireModulo(MODULE_KEYS.CODIGOS_DESCUENTO), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
   const codigoId = parseInt(c.req.param('id'), 10)

@@ -8,14 +8,20 @@
 // gracia (pago_pendiente) y recién al agotarse la gracia se suspende — eso lo maneja
 // el motor de estados (lazy, ver resolverEstadoVigente).
 import { type MySql2Database } from 'drizzle-orm/mysql2'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import {
+  configuracionSuscripcion as ConfiguracionSuscripcionTable,
+  pagoSuscripcionItem as PagoSuscripcionItemTable,
   plan as PlanTable,
+  restauranteModulo as RestauranteModuloTable,
   suscripcion as SuscripcionTable,
   pagoSuscripcion as PagoSuscripcionTable,
 } from '../db/schema'
 import { SUSCRIPCION_ESTADOS } from './planes'
-import { acreditarCupoPlan } from './mensajes-wallet'
+import { acreditarCupoPlan, acreditarCuposPorModulos, type CategoriaMensaje } from './mensajes-wallet'
+import { SUSCRIPCION_UNICA_CODIGO } from './suscripcion'
+export { resolverEstadoPorTiempo, type EstadoSuscripcionTemporal } from './suscripcion-estado'
+import { resolverEstadoPorTiempo, type EstadoSuscripcionTemporal } from './suscripcion-estado'
 
 type Db = MySql2Database<Record<string, never>>
 
@@ -122,6 +128,8 @@ export async function confirmarPagoSuscripcion(
   restauranteId: number
   planId: number
   periodoHasta: Date | null
+  acreditoBase: boolean
+  modulosActivados: number[]
 } | null> {
   const [pago] = await db
     .select()
@@ -136,7 +144,20 @@ export async function confirmarPagoSuscripcion(
       restauranteId: pago.restauranteId,
       planId: pago.planId,
       periodoHasta: pago.periodoHasta ? new Date(pago.periodoHasta) : null,
+      acreditoBase: false,
+      modulosActivados: [],
     }
+  }
+
+  // Las facturas creadas desde T07 se resuelven exclusivamente desde los ítems
+  // congelados. La ausencia de ítems identifica un comprobante legacy que debe
+  // conservar su acreditación histórica mientras existan admins instalados.
+  const items = await db
+    .select()
+    .from(PagoSuscripcionItemTable)
+    .where(eq(PagoSuscripcionItemTable.pagoSuscripcionId, pagoId))
+  if (items.length) {
+    return confirmarFacturaCompuesta(db, pago, items, opts)
   }
 
   const ciclo = pago.ciclo as CicloPago
@@ -224,6 +245,154 @@ export async function confirmarPagoSuscripcion(
     restauranteId: pago.restauranteId,
     planId: pago.planId,
     periodoHasta,
+    acreditoBase: true,
+    modulosActivados: [],
+  }
+}
+
+/**
+ * Acredita una factura compuesta ya aprobada. La fuente de verdad son los
+ * snapshots de `pago_suscripcion_item`, nunca el catálogo actual ni el body
+ * del cliente. Un módulo pendiente sólo se vuelve activo en este punto.
+ */
+async function confirmarFacturaCompuesta(
+  db: Db,
+  pago: typeof PagoSuscripcionTable.$inferSelect,
+  items: Array<typeof PagoSuscripcionItemTable.$inferSelect>,
+  opts: { mpPaymentId: string },
+): Promise<{
+  yaProcesado: boolean
+  restauranteId: number
+  planId: number
+  periodoHasta: Date | null
+  acreditoBase: boolean
+  modulosActivados: number[]
+}> {
+  const ahora = new Date()
+  const itemBase = items.find((item) => item.tipo === 'base') ?? null
+  const itemsModulo = items.filter((item) => item.tipo === 'modulo' && item.moduloId != null)
+  const periodoHasta = itemBase?.hasta ?? itemsModulo.reduce<Date | null>((maximo, item) => {
+    const hasta = item.hasta ? new Date(item.hasta) : null
+    return hasta && (!maximo || hasta > maximo) ? hasta : maximo
+  }, null)
+
+  // Claim condicional: dos webhooks simultáneos no pueden acreditar el mismo
+  // comprobante. Si otro ya lo hizo, releemos y devolvemos idempotencia.
+  const claim = await db
+    .update(PagoSuscripcionTable)
+    .set({
+      estado: 'paid',
+      mpPaymentId: opts.mpPaymentId,
+      periodoDesde: itemBase?.desde ?? null,
+      periodoHasta,
+    })
+    .where(and(eq(PagoSuscripcionTable.id, pago.id), eq(PagoSuscripcionTable.estado, 'pending')))
+  if (Number((claim as any)[0]?.affectedRows ?? 0) === 0) {
+    return {
+      yaProcesado: true,
+      restauranteId: pago.restauranteId,
+      planId: pago.planId,
+      periodoHasta: pago.periodoHasta ? new Date(pago.periodoHasta) : periodoHasta,
+      acreditoBase: false,
+      modulosActivados: [],
+    }
+  }
+
+  if (itemBase) {
+    const [subActual] = await db
+      .select()
+      .from(SuscripcionTable)
+      .where(eq(SuscripcionTable.restauranteId, pago.restauranteId))
+      .limit(1)
+    const precioBaseMensual = String(itemBase.precioUnitario)
+    const montoModulosMensual = itemsModulo.reduce((total, item) => total + Number(item.precioUnitario), 0)
+    const montoTotalMensual = Number(precioBaseMensual) + montoModulosMensual
+    const valores = {
+      planId: pago.planId,
+      configuracionSuscripcionId: pago.configuracionSuscripcionId,
+      estado: SUSCRIPCION_ESTADOS.ACTIVA,
+      ciclo: pago.ciclo,
+      fechaProximoCobro: itemBase.hasta,
+      graciaHasta: null,
+      fechaCancelacion: null,
+      precioMensual: precioBaseMensual,
+      precioBaseMensual,
+      montoModulosMensual: montoModulosMensual.toFixed(2),
+      montoTotalMensual: montoTotalMensual.toFixed(2),
+      updatedAt: ahora,
+    }
+    if (subActual) {
+      await db.update(SuscripcionTable).set(valores).where(eq(SuscripcionTable.restauranteId, pago.restauranteId))
+    } else {
+      await db.insert(SuscripcionTable).values({
+        restauranteId: pago.restauranteId,
+        ...valores,
+        fechaInicio: itemBase.desde ?? ahora,
+      })
+    }
+  }
+
+  const modulosActivados = itemsModulo.map((item) => item.moduloId!).filter((id): id is number => id != null)
+  if (modulosActivados.length) {
+    // Sólo tocamos entitlements que pertenecen a los ítems pagados. Esto impide
+    // que una factura de un módulo habilite cualquier otro por fallback.
+    for (const item of itemsModulo) {
+      const precio = String(item.precioUnitario)
+      await db.insert(RestauranteModuloTable).values({
+        restauranteId: pago.restauranteId,
+        moduloId: item.moduloId!,
+        estado: 'activo',
+        activadoAt: ahora,
+        desactivadoAt: null,
+        vigenteHasta: item.hasta,
+        precioMensualCongelado: precio,
+        origen: 'usuario',
+        cancelarAlFinPeriodo: false,
+        updatedAt: ahora,
+      }).onDuplicateKeyUpdate({
+        set: {
+          estado: 'activo',
+          activadoAt: ahora,
+          desactivadoAt: null,
+          vigenteHasta: item.hasta,
+          precioMensualCongelado: precio,
+          origen: 'usuario',
+          cancelarAlFinPeriodo: false,
+          updatedAt: ahora,
+        },
+      })
+    }
+  }
+
+  // El cupo incluido es propiedad de los módulos activos, no del plan ni de
+  // los snapshots de la factura. Se acredita sólo después del claim de pago.
+  // Una factura de base reinicia ambos buckets; un alta prorrateada toca sólo
+  // la categoría que aporta el módulo recién activado.
+  try {
+    const categorias = Array.from(new Set(itemsModulo.flatMap((item): CategoriaMensaje[] => {
+      if (item.codigo === 'avisos_automaticos_whatsapp') return ['utility']
+      if (item.codigo === 'motor_recompra') return ['marketing']
+      return []
+    })))
+    if (itemBase || categorias.length) {
+      await acreditarCuposPorModulos(db, pago.restauranteId, {
+        reiniciarCiclo: Boolean(itemBase),
+        categorias: itemBase ? undefined : categorias,
+      })
+    }
+  } catch (err) {
+    // Igual que las recargas, el asiento de wallet es best-effort y nunca
+    // revierte una factura MP ya aprobada.
+    console.error('acreditarCuposPorModulos falló tras factura aprobada:', err)
+  }
+
+  return {
+    yaProcesado: false,
+    restauranteId: pago.restauranteId,
+    planId: pago.planId,
+    periodoHasta,
+    acreditoBase: Boolean(itemBase),
+    modulosActivados,
   }
 }
 
@@ -312,34 +481,46 @@ export async function asignarPlanManual(
 export const DIAS_TRIAL_DEFAULT = 14
 
 /**
- * Arranca el TRIAL de un local (onboarding outbound). A diferencia de asignarPlanManual (que da
- * de alta 'activa' cobrando), acá el local entra en `estado='trial'` con acceso completo al plan
- * SIN pagar, por `dias` días. ⚠️ Se llama cuando el fundador lo decide desde el panel interno,
+ * Arranca el TRIAL de un local (onboarding outbound). A diferencia de una alta paga, acá el local
+ * entra en `estado='trial'` con la suscripción base SIN pagar, por `dias` días. ⚠️ Se llama cuando
+ * el fundador lo decide desde el panel interno,
  * no en el claim ni en el registro (el reloj de los 14 días arranca acá).
  *
  * Efecto:
  *  - upsert de la suscripción → estado 'trial', trialFin = fechaProximoCobro = ahora + dias.
  *    Poner fechaProximoCobro = trialFin hace que, al vencer, `resolverEstadoVigente` transicione
  *    solo a pago_pendiente (gracia) y luego suspendida ("pausada") — sin cron.
- *  - acredita el cupo utility del plan de inmediato (best-effort).
- * Devuelve { planId, trialFin } o null si el plan no existe.
+ *  - no activa módulos ni acredita cupos: el trial incluye únicamente la base.
+ *
+ * `planId` persiste sólo como alias técnico obligatorio hasta T43. La decisión
+ * comercial y el precio se toman de `configuracion_suscripcion.codigo='piru'`.
  */
 export async function iniciarTrial(
   db: Db,
   restauranteId: number,
-  planId: number,
   dias: number = DIAS_TRIAL_DEFAULT,
-): Promise<{ planId: number; trialFin: Date } | null> {
-  const [planRow] = await db
-    .select()
-    .from(PlanTable)
-    .where(eq(PlanTable.id, planId))
-    .limit(1)
-  if (!planRow) return null
+): Promise<{ planId: number; configuracionSuscripcionId: number; trialFin: Date } | null> {
+  const [configuracion, planCompatible] = await Promise.all([
+    db
+      .select()
+      .from(ConfiguracionSuscripcionTable)
+      .where(eq(ConfiguracionSuscripcionTable.codigo, SUSCRIPCION_UNICA_CODIGO))
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
+    // `plan_id` sigue siendo NOT NULL durante la compatibilidad con admins
+    // instalados. Nunca se expone como selector ni define el trial.
+    db
+      .select({ id: PlanTable.id })
+      .from(PlanTable)
+      .where(and(eq(PlanTable.codigo, 'basico'), eq(PlanTable.activo, true)))
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
+  ])
+  if (!configuracion || !configuracion.activo || !planCompatible) return null
 
   const ahora = new Date()
   const trialFin = new Date(ahora.getTime() + dias * 24 * 60 * 60 * 1000)
-  const precioMensual = String(planRow.precioMensual)
+  const precioMensual = String(configuracion.precioMensual)
 
   const [subActual] = await db
     .select()
@@ -351,7 +532,8 @@ export async function iniciarTrial(
     await db
       .update(SuscripcionTable)
       .set({
-        planId,
+        planId: planCompatible.id,
+        configuracionSuscripcionId: configuracion.id,
         estado: SUSCRIPCION_ESTADOS.TRIAL,
         ciclo: 'mensual',
         fechaInicio: ahora,
@@ -362,34 +544,30 @@ export async function iniciarTrial(
         // Reset del flag anti-reenvío: un trial nuevo debe poder avisar su vencimiento de nuevo.
         avisoTrialVencimientoAt: null,
         precioMensual,
+        precioBaseMensual: precioMensual,
+        montoModulosMensual: '0.00',
+        montoTotalMensual: precioMensual,
         updatedAt: ahora,
       })
       .where(eq(SuscripcionTable.restauranteId, restauranteId))
   } else {
     await db.insert(SuscripcionTable).values({
       restauranteId,
-      planId,
+      planId: planCompatible.id,
+      configuracionSuscripcionId: configuracion.id,
       estado: SUSCRIPCION_ESTADOS.TRIAL,
       ciclo: 'mensual',
       fechaInicio: ahora,
       trialFin,
       fechaProximoCobro: trialFin,
       precioMensual,
+      precioBaseMensual: precioMensual,
+      montoModulosMensual: '0.00',
+      montoTotalMensual: precioMensual,
     })
   }
 
-  // Acreditar el cupo utility del plan (best-effort: el wallet nunca tumba el alta del trial).
-  try {
-    await acreditarCupoPlan(db, restauranteId, {
-      mensajesIncluidos: planRow.mensajesIncluidos ?? 0,
-      mensajesMarketingIncluidos: planRow.mensajesMarketingIncluidos ?? 0,
-      ilimitado: !!planRow.mensajesIlimitados,
-    })
-  } catch (err) {
-    console.error('acreditarCupoPlan falló tras iniciar trial:', err)
-  }
-
-  return { planId, trialFin }
+  return { planId: planCompatible.id, configuracionSuscripcionId: configuracion.id, trialFin }
 }
 
 /**
@@ -407,38 +585,20 @@ export async function resolverEstadoVigente(db: Db, restauranteId: number) {
   if (!sub) return null
 
   const ahora = new Date()
-  const estado = sub.estado as string
-  // Cancelada/suspendida no vuelven solas: sólo un pago las reactiva.
-  if (estado === SUSCRIPCION_ESTADOS.CANCELADA || estado === SUSCRIPCION_ESTADOS.SUSPENDIDA) {
-    return sub
-  }
+  const resuelto = resolverEstadoPorTiempo({
+    estado: sub.estado as EstadoSuscripcionTemporal,
+    fechaProximoCobro: sub.fechaProximoCobro,
+    graciaHasta: sub.graciaHasta,
+    fechaCancelacion: sub.fechaCancelacion,
+  }, ahora, DIAS_GRACIA)
+  if (resuelto.estado === sub.estado && resuelto.graciaHasta?.getTime() === sub.graciaHasta?.getTime()) return sub
 
-  const proximoCobro = sub.fechaProximoCobro ? new Date(sub.fechaProximoCobro) : null
-  if (!proximoCobro || ahora <= proximoCobro) return sub
-
-  // Venció el cobro. ¿Sigue en gracia o ya se agotó?
-  const graciaHasta = sub.graciaHasta ? new Date(sub.graciaHasta) : addMonthsGracia(proximoCobro)
-  if (ahora <= graciaHasta) {
-    if (estado !== SUSCRIPCION_ESTADOS.PAGO_PENDIENTE) {
-      await db
-        .update(SuscripcionTable)
-        .set({ estado: SUSCRIPCION_ESTADOS.PAGO_PENDIENTE, graciaHasta, updatedAt: ahora })
-        .where(eq(SuscripcionTable.restauranteId, restauranteId))
-      return { ...sub, estado: SUSCRIPCION_ESTADOS.PAGO_PENDIENTE, graciaHasta }
-    }
-    return sub
-  }
-
-  // Gracia agotada → suspendida (features de pago bloqueadas; pedidos en curso no se cortan).
-  await db
-    .update(SuscripcionTable)
-    .set({ estado: SUSCRIPCION_ESTADOS.SUSPENDIDA, updatedAt: ahora })
-    .where(eq(SuscripcionTable.restauranteId, restauranteId))
-  return { ...sub, estado: SUSCRIPCION_ESTADOS.SUSPENDIDA }
-}
-
-function addMonthsGracia(desde: Date): Date {
-  return new Date(desde.getTime() + DIAS_GRACIA * 24 * 60 * 60 * 1000)
+  await db.update(SuscripcionTable).set({
+    estado: resuelto.estado,
+    graciaHasta: resuelto.graciaHasta,
+    updatedAt: ahora,
+  }).where(eq(SuscripcionTable.restauranteId, restauranteId))
+  return { ...sub, estado: resuelto.estado, graciaHasta: resuelto.graciaHasta }
 }
 
 /**
@@ -467,14 +627,32 @@ export async function cancelarSuscripcion(db: Db, restauranteId: number): Promis
     .limit(1)
   if (!sub) return false
 
-  await db
-    .update(SuscripcionTable)
-    .set({
-      estado: SUSCRIPCION_ESTADOS.CANCELADA,
-      fechaCancelacion: new Date(),
-      updatedAt: new Date(),
-    })
+  const ahora = new Date()
+  const hasta = sub.fechaProximoCobro && new Date(sub.fechaProximoCobro) > ahora
+    ? new Date(sub.fechaProximoCobro)
+    : ahora
+  await db.update(SuscripcionTable).set({
+    // Si queda período pago, la baja se programa sin cortar el servicio.
+    estado: hasta > ahora ? sub.estado : SUSCRIPCION_ESTADOS.CANCELADA,
+    fechaCancelacion: hasta,
+    updatedAt: ahora,
+  }).where(eq(SuscripcionTable.restauranteId, restauranteId))
+  return true
+}
+
+/** Revierte una baja programada mientras el período vigente todavía no terminó. */
+export async function reactivarSuscripcionProgramada(db: Db, restauranteId: number): Promise<boolean> {
+  const [sub] = await db
+    .select()
+    .from(SuscripcionTable)
     .where(eq(SuscripcionTable.restauranteId, restauranteId))
+    .limit(1)
+  if (!sub?.fechaCancelacion || new Date(sub.fechaCancelacion) <= new Date()) return false
+
+  await db.update(SuscripcionTable).set({
+    fechaCancelacion: null,
+    updatedAt: new Date(),
+  }).where(eq(SuscripcionTable.restauranteId, restauranteId))
   return true
 }
 

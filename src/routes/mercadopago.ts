@@ -11,6 +11,7 @@ import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
 import { confirmarRecarga } from '../lib/mensajes-wallet'
 import { confirmarPagoSuscripcion } from '../lib/suscripciones'
+import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 
 const MP_CLIENT_ID = process.env.MP_CLIENT_ID
 const MP_CLIENT_SECRET = process.env.MP_CLIENT_SECRET
@@ -63,9 +64,12 @@ function parseRecargaMensajesId(externalReference: string): number | null {
   return m ? parseInt(m[1], 10) : null
 }
 
-/** `piru-plansub-{id}` = pago de la cuota mensual de un plan (suscripción, pago a Piru). */
+/**
+ * `piru-suscripcion-{id}` = factura compuesta de suscripción y módulos.
+ * `piru-plansub-{id}` queda reconocido para Checkout Pro creado antes de T08.
+ */
 function parsePagoSuscripcionId(externalReference: string): number | null {
-  const m = externalReference.match(/^piru-plansub-(\d+)$/)
+  const m = externalReference.match(/^piru-(?:suscripcion|plansub)-(\d+)$/)
   return m ? parseInt(m[1], 10) : null
 }
 
@@ -181,6 +185,9 @@ mercadopagoRoute.get('/callback', async (c) => {
   }
 
   try {
+    if (!(await tieneModuloActivo(db, Number(restauranteId), MODULE_KEYS.MERCADOPAGO))) {
+      return c.redirect(`${ADMIN_URL}${basePath}?mp_status=error&mp_error=module_required`)
+    }
     // Intercambiar el "code" por el "access_token"
     const response = await fetch('https://api.mercadopago.com/oauth/token', {
       method: 'POST',
@@ -241,6 +248,9 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
     if (!rows.length) return c.json({ success: false, error: 'Pedido no encontrado' }, 404)
     const pedido = rows[0]
     const restauranteId = pedido.restauranteId!
+    if (!(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MERCADOPAGO))) {
+      return c.json({ success: false, moduleRequired: true, module: MODULE_KEYS.MERCADOPAGO, upgradeRequired: true, error: 'Mercado Pago no está habilitado para este local' }, 403)
+    }
     const total = parseFloat(String(pedido.total || '0'))
 
     // 2. Obtener token MP válido
@@ -329,6 +339,9 @@ mercadopagoRoute.post('/process-brick', async (c) => {
 
     if (pedidos.length === 0) return c.json({ success: false, error: 'Pedido no encontrado' }, 404)
     const pedido = pedidos[0]
+    if (!(await tieneModuloActivo(db, pedido.restauranteId!, MODULE_KEYS.MERCADOPAGO))) {
+      return c.json({ success: false, moduleRequired: true, module: MODULE_KEYS.MERCADOPAGO, upgradeRequired: true, error: 'Mercado Pago no está habilitado para este local' }, 403)
+    }
     const tipoPedido = pedido.tipo
 
     const tokenValido = await obtenerTokenValido(pedido.restauranteId!)
@@ -635,7 +648,7 @@ mercadopagoRoute.post('/webhook', async (c) => {
       return c.json({ status: 'recarga_acreditada' })
     }
 
-    // ── Pago de la cuota mensual del plan (suscripción, pago a la cuenta de Piru) ──
+    // ── Factura de suscripción y módulos (pago a la cuenta de Piru) ──
     const pagoSuscripcionId = parsePagoSuscripcionId(externalReference)
     if (pagoSuscripcionId != null) {
       if (status !== 'approved') {
@@ -651,7 +664,7 @@ mercadopagoRoute.post('/webhook', async (c) => {
         console.log(`⏭️ [Webhook] Pago suscripción ${pagoSuscripcionId} ya estaba acreditado`)
         return c.json({ status: 'already_processed' })
       }
-      console.log(`✅ [Webhook] Suscripción activada: rest=${res.restauranteId} plan=${res.planId} hasta=${res.periodoHasta?.toISOString()}`)
+      console.log(`✅ [Webhook] Factura de suscripción acreditada: rest=${res.restauranteId} base=${res.acreditoBase} modulos=${res.modulosActivados.length} hasta=${res.periodoHasta?.toISOString()}`)
       return c.json({ status: 'suscripcion_activada' })
     }
 
@@ -1269,4 +1282,3 @@ mercadopagoRoute.post('/refresh-token', authMiddleware, async (c) => {
 })
 
 export { mercadopagoRoute }
-
