@@ -665,26 +665,37 @@ export async function confirmarRecarga(
     }
   }
 
-  await db
-    .update(RecargaMensajesTable)
-    .set({ estado: 'paid', mpPaymentId: opts.mpPaymentId })
-    .where(eq(RecargaMensajesTable.id, recargaId))
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Db
+    const claim = await txDb
+      .update(RecargaMensajesTable)
+      .set({ estado: 'paid', mpPaymentId: opts.mpPaymentId })
+      .where(and(eq(RecargaMensajesTable.id, recargaId), eq(RecargaMensajesTable.estado, 'pending')))
+    if (Number((claim as any)[0]?.affectedRows ?? 0) === 0) {
+      return {
+        yaProcesada: true,
+        restauranteId: recarga.restauranteId,
+        categoria: recarga.categoria as CategoriaMensaje,
+        cantidad: recarga.cantidad,
+        saldoDisponible: null,
+      }
+    }
 
-  const { saldoDisponible } = await aplicarCreditoRecarga(
-    db,
-    recarga.restauranteId,
-    recarga.categoria as CategoriaMensaje,
-    recarga.cantidad,
-    recargaId,
-  )
-
-  return {
-    yaProcesada: false,
-    restauranteId: recarga.restauranteId,
-    categoria: recarga.categoria as CategoriaMensaje,
-    cantidad: recarga.cantidad,
-    saldoDisponible,
-  }
+    const { saldoDisponible } = await aplicarCreditoRecarga(
+      txDb,
+      recarga.restauranteId,
+      recarga.categoria as CategoriaMensaje,
+      recarga.cantidad,
+      recargaId,
+    )
+    return {
+      yaProcesada: false,
+      restauranteId: recarga.restauranteId,
+      categoria: recarga.categoria as CategoriaMensaje,
+      cantidad: recarga.cantidad,
+      saldoDisponible,
+    }
+  })
 }
 
 /** Inserta una fila en el ledger. Uso interno del wallet. */

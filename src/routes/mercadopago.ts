@@ -655,16 +655,23 @@ mercadopagoRoute.post('/webhook', async (c) => {
         console.log(`⏭️ [Webhook] Pago suscripción ${pagoSuscripcionId}: no aprobado (status=${status})`)
         return c.json({ status: 'ignored' })
       }
-      const res = await confirmarPagoSuscripcion(db, pagoSuscripcionId, { mpPaymentId: String(paymentId) })
+      const res = await confirmarPagoSuscripcion(db, pagoSuscripcionId, {
+        mpPaymentId: String(paymentId),
+        montoPagado: Number(transactionAmount),
+      })
       if (!res) {
         console.error(`❌ [Webhook] Pago suscripción ${pagoSuscripcionId} no encontrado`)
         return c.json({ status: 'error', message: 'Pago suscripción not found' })
       }
       if (res.yaProcesado) {
+        if (res.recargaAcreditada) {
+          console.log(`✅ [Webhook] Recarga vinculada recuperada para pago suscripción ${pagoSuscripcionId}`)
+          return c.json({ status: 'recarga_vinculada_acreditada' })
+        }
         console.log(`⏭️ [Webhook] Pago suscripción ${pagoSuscripcionId} ya estaba acreditado`)
         return c.json({ status: 'already_processed' })
       }
-      console.log(`✅ [Webhook] Factura de suscripción acreditada: rest=${res.restauranteId} base=${res.acreditoBase} modulos=${res.modulosActivados.length} hasta=${res.periodoHasta?.toISOString()}`)
+      console.log(`✅ [Webhook] Factura de suscripción acreditada: rest=${res.restauranteId} base=${res.acreditoBase} modulos=${res.modulosActivados.length} recarga=${res.recargaAcreditada} hasta=${res.periodoHasta?.toISOString()}`)
       return c.json({ status: 'suscripcion_activada' })
     }
 

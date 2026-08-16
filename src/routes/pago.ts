@@ -95,12 +95,13 @@ async function cargarLink(db: ReturnType<typeof drizzle>, token: string): Promis
       .from(PagoSuscripcionItemTable)
       .where(eq(PagoSuscripcionItemTable.pagoSuscripcionId, pago.id))
     const modulos = items.filter((item) => item.tipo === 'modulo').map((item) => item.descripcion)
+    const pack = items.find((item) => item.tipo === 'pack_mensajes')?.descripcion
     const conceptoBase = items.find((item) => item.tipo === 'base')?.descripcion ?? 'Suscripción Piru'
     return {
       tipo: 'suscripcion',
       pago,
       restauranteNombre: await nombreRestaurante(db, pago.restauranteId),
-      concepto: modulos.length ? `${conceptoBase} + ${modulos.join(', ')}` : conceptoBase,
+      concepto: [conceptoBase, ...modulos, ...(pack ? [pack] : [])].join(' + '),
       estado: resolverEstado(pago.estado, pago.tokenExpiraEn),
     }
   }
@@ -216,6 +217,7 @@ pagoRoute.post('/:token/checkout', async (c) => {
         return c.json({ message: 'Error al iniciar el pago', success: false }, 502)
       }
       await setPagoSuscripcionPreferencia(db, info.pago.id, pref.preferenceId)
+      if (info.pago.recargaMensajesId) await setRecargaPreferencia(db, info.pago.recargaMensajesId, pref.preferenceId)
       return c.json({ success: true, data: { url_pago: pref.initPoint } }, 200)
     }
 

@@ -16,7 +16,7 @@ import {
   resolverSuscripcionUnica,
   tieneAccesoAlPanelSuscripcion,
 } from '../lib/suscripcion'
-import { resumenWallet } from '../lib/mensajes-wallet'
+import { resumenWallet, setRecargaPreferencia } from '../lib/mensajes-wallet'
 import {
   setPagoSuscripcionPreferencia,
   cancelarSuscripcion,
@@ -77,7 +77,7 @@ planesRoute.get('/mi-suscripcion', async (c) => {
     ])
     const wallet = await resumenWallet(db, restauranteId)
     const [restauranteRow] = await db
-      .select({ requiereSuscripcion: RestauranteTable.requiereSuscripcion })
+      .select({ requiereSuscripcion: RestauranteTable.requiereSuscripcion, telefono: RestauranteTable.telefono })
       .from(RestauranteTable)
       .where(eq(RestauranteTable.id, restauranteId))
       .limit(1)
@@ -136,6 +136,9 @@ planesRoute.get('/mi-suscripcion', async (c) => {
           // Hard paywall: ¿puede entrar al panel? El gate y la página /suscribir lo usan.
           requiereSuscripcion,
           accesoPanel: tieneAccesoAlPanelSuscripcion(requiereSuscripcion, suscripcion),
+          // Dato autenticado para elegir dónde recibir el link. Un destino
+          // alternativo usado en checkout no modifica este teléfono de cuenta.
+          telefonoPago: restauranteRow?.telefono ?? null,
           // Fechas de facturación (para mostrar próximo cobro / gracia en la UI).
           fechaProximoCobro: suscripcion.fechaProximoCobro ?? vigente?.fechaProximoCobro ?? null,
           // Fin del trial + valor generado (para el contador de valor del panel, Tarea 6).
@@ -180,12 +183,14 @@ const suscribirSchema = z.object({
   // configuración única y los módulos se resuelven exclusivamente en servidor.
   planId: z.number().int().positive().optional(),
   ciclo: z.enum(['mensual', 'anual']).optional(),
+  packId: z.number().int().positive().optional(),
+  telefonoDestino: z.string().trim().max(30).optional(),
 })
 
 const iniciarCheckoutSuscripcion = async (c: any) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { ciclo: cicloInput } = c.req.valid('json')
+  const { ciclo: cicloInput, packId } = c.req.valid('json')
   const ciclo: CicloPago = cicloInput === 'anual' ? 'anual' : 'mensual'
 
   if (!MP_PLATFORM_ACCESS_TOKEN) {
@@ -194,7 +199,7 @@ const iniciarCheckoutSuscripcion = async (c: any) => {
   }
 
   try {
-    const factura = await crearFacturaSuscripcionPendiente(db, restauranteId, { ciclo })
+    const factura = await crearFacturaSuscripcionPendiente(db, restauranteId, { ciclo, packId })
 
     // Al volver de la primera activación mostramos el catálogo de módulos como
     // siguiente paso informativo; no se activa ningún módulo por esta redirección.
@@ -212,6 +217,7 @@ const iniciarCheckoutSuscripcion = async (c: any) => {
     }
 
     await setPagoSuscripcionPreferencia(db, factura.pagoId, pref.preferenceId)
+    if (factura.recargaMensajesId) await setRecargaPreferencia(db, factura.recargaMensajesId, pref.preferenceId)
 
     return c.json({
       success: true,
@@ -222,13 +228,16 @@ const iniciarCheckoutSuscripcion = async (c: any) => {
         monto: factura.montoTotal.toFixed(2),
         montoBase: factura.montoBase.toFixed(2),
         montoModulos: factura.montoModulos.toFixed(2),
+        montoRecarga: factura.montoRecarga.toFixed(2),
         items: factura.items,
         ciclo,
       },
     }, 200)
   } catch (error) {
     console.error('Error en checkout de suscripción:', error)
-    return c.json({ message: 'Error al iniciar el pago del plan', success: false }, 500)
+    const message = error instanceof Error ? error.message : ''
+    const esSolicitudInvalida = message.includes('Pack') || message.includes('pack')
+    return c.json({ message: esSolicitudInvalida ? message : 'Error al iniciar el pago del plan', success: false }, esSolicitudInvalida ? 400 : 500)
   }
 }
 
@@ -245,7 +254,7 @@ planesRoute.post('/checkout', zValidator('json', suscribirSchema), iniciarChecko
 planesRoute.post('/pago-link-whatsapp', zValidator('json', suscribirSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { ciclo: cicloInput } = c.req.valid('json')
+  const { ciclo: cicloInput, packId, telefonoDestino } = c.req.valid('json')
   const ciclo: CicloPago = cicloInput === 'anual' ? 'anual' : 'mensual'
 
   if (!MP_PLATFORM_ACCESS_TOKEN) {
@@ -260,20 +269,22 @@ planesRoute.post('/pago-link-whatsapp', zValidator('json', suscribirSchema), asy
       .where(eq(RestauranteTable.id, restauranteId))
       .limit(1)
 
-    const telefono = (rest?.telefono || '').replace(/\D/g, '')
+    const telefono = (telefonoDestino || rest?.telefono || '').replace(/\D/g, '')
     if (!telefono || telefono.length < 8) {
       return c.json({
-        message: 'No tenés un número de WhatsApp verificado en tu cuenta para recibir el link.',
+        message: telefonoDestino ? 'Ingresá un número de WhatsApp válido, con código de área.' : 'No tenés un número de WhatsApp verificado en tu cuenta para recibir el link.',
         success: false,
       }, 400)
     }
+    if (telefono.length > 15) return c.json({ message: 'El número de WhatsApp no es válido.', success: false }, 400)
 
     const token = randomUUID()
     const tokenExpiraEn = new Date(Date.now() + PAGO_LINK_TTL_MIN * 60 * 1000)
-    const factura = await crearFacturaSuscripcionPendiente(db, restauranteId, { ciclo, token, tokenExpiraEn })
+    const factura = await crearFacturaSuscripcionPendiente(db, restauranteId, { ciclo, packId, token, tokenExpiraEn })
 
     const nombresModulos = factura.items.filter((item) => item.tipo === 'modulo').map((item) => item.descripcion)
-    const concepto = `${factura.items.find((item) => item.tipo === 'base')?.descripcion ?? 'Suscripción Piru'}${nombresModulos.length ? ` + ${nombresModulos.join(', ')}` : ''} · ${ciclo === 'anual' ? 'Anual' : 'Mensual'}`
+    const pack = factura.items.find((item) => item.tipo === 'pack_mensajes')?.descripcion
+    const concepto = `${factura.items.find((item) => item.tipo === 'base')?.descripcion ?? 'Suscripción Piru'}${nombresModulos.length ? ` + ${nombresModulos.join(', ')}` : ''}${pack ? ` + ${pack}` : ''} · ${ciclo === 'anual' ? 'Anual' : 'Mensual'}`
     const montoFmt = new Intl.NumberFormat('es-AR', {
       style: 'currency', currency: 'ARS', maximumFractionDigits: 0,
     }).format(factura.montoTotal)
@@ -284,10 +295,12 @@ planesRoute.post('/pago-link-whatsapp', zValidator('json', suscribirSchema), asy
     }
 
     const telefonoMask = telefono.length > 4 ? `••••${telefono.slice(-4)}` : telefono
-    return c.json({ success: true, data: { enviado: true, telefono: telefonoMask } }, 200)
+    return c.json({ success: true, data: { enviado: true, telefono: telefonoMask, pagoId: factura.pagoId, monto: factura.montoTotal.toFixed(2) } }, 200)
   } catch (error) {
     console.error('Error enviando link de pago del plan por WhatsApp:', error)
-    return c.json({ message: 'Error al enviar el link de pago', success: false }, 500)
+    const message = error instanceof Error ? error.message : 'Error al enviar el link de pago'
+    const esSolicitudInvalida = message.includes('Pack') || message.includes('pack')
+    return c.json({ message: esSolicitudInvalida ? message : 'Error al enviar el link de pago', success: false }, esSolicitudInvalida ? 400 : 500)
   }
 })
 

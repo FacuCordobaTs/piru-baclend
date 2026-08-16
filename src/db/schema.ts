@@ -1092,6 +1092,11 @@ export const pagoSuscripcion = mysqlTable("pago_suscripcion", {
   monto: decimal("monto", { precision: 10, scale: 2 }).notNull(),
   montoBase: decimal("monto_base", { precision: 10, scale: 2 }),
   montoModulos: decimal("monto_modulos", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  // Recarga prepaga opcional cobrada dentro de la misma preferencia de MP.
+  // La fila vinculada conserva el comprobante y acredita el wallet en el webhook.
+  montoRecarga: decimal("monto_recarga", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  recargaMensajesId: int("recarga_mensajes_id")
+    .references(() => recargaMensajes.id),
   montoTotal: decimal("monto_total", { precision: 10, scale: 2 }),
   // Período de cobertura que otorga este pago (se setea al confirmar).
   periodoDesde: timestamp("periodo_desde"),
@@ -1107,14 +1112,16 @@ export const pagoSuscripcion = mysqlTable("pago_suscripcion", {
   token: varchar("token", { length: 64 }).unique(),
   tokenExpiraEn: timestamp("token_expira_en"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+  index("idx_pago_suscripcion_recarga").on(table.recargaMensajesId),
+]);
 
 export const pagoSuscripcionItem = mysqlTable("pago_suscripcion_item", {
   id: int("id").primaryKey().autoincrement(),
   pagoSuscripcionId: int("pago_suscripcion_id")
     .references(() => pagoSuscripcion.id, { onDelete: "cascade" })
     .notNull(),
-  tipo: mysqlEnum("tipo_item_pago_suscripcion", ["base", "modulo"]).notNull(),
+  tipo: mysqlEnum("tipo_item_pago_suscripcion", ["base", "modulo", "pack_mensajes"]).notNull(),
   moduloId: int("modulo_id").references(() => modulo.id),
   codigo: varchar("codigo", { length: 100 }).notNull(),
   descripcion: varchar("descripcion", { length: 500 }).notNull(),

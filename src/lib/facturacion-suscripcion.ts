@@ -8,9 +8,11 @@ import { type MySql2Database } from 'drizzle-orm/mysql2'
 import {
   configuracionSuscripcion as ConfiguracionSuscripcionTable,
   modulo as ModuloTable,
+  packRecarga as PackRecargaTable,
   pagoSuscripcion as PagoSuscripcionTable,
   pagoSuscripcionItem as PagoSuscripcionItemTable,
   plan as PlanTable,
+  recargaMensajes as RecargaMensajesTable,
   restauranteModulo as RestauranteModuloTable,
   suscripcion as SuscripcionTable,
 } from '../db/schema'
@@ -20,14 +22,14 @@ type Db = MySql2Database<Record<string, never>>
 export type CicloFactura = 'mensual' | 'anual'
 
 export interface ItemFacturaCalculado {
-  tipo: 'base' | 'modulo'
+  tipo: 'base' | 'modulo' | 'pack_mensajes'
   moduloId: number | null
   codigo: string
   descripcion: string
   precioUnitario: number
   monto: number
-  desde: Date
-  hasta: Date
+  desde: Date | null
+  hasta: Date | null
 }
 
 type ModuloFacturable = {
@@ -104,8 +106,8 @@ export function importeProrrateado(
 export async function crearFacturaSuscripcionPendiente(
   db: Db,
   restauranteId: number,
-  opts: { ciclo: CicloFactura; soloModuloCodigo?: string; soloBase?: boolean; token?: string; tokenExpiraEn?: Date },
-): Promise<{ pagoId: number; montoBase: number; montoModulos: number; montoTotal: number; items: ItemFacturaCalculado[] }> {
+  opts: { ciclo: CicloFactura; soloModuloCodigo?: string; soloBase?: boolean; packId?: number; token?: string; tokenExpiraEn?: Date },
+): Promise<{ pagoId: number; recargaMensajesId: number | null; montoBase: number; montoModulos: number; montoRecarga: number; montoTotal: number; items: ItemFacturaCalculado[] }> {
   const [configuracion, suscripcionActual, planCompatible] = await Promise.all([
     db.select().from(ConfiguracionSuscripcionTable).where(eq(ConfiguracionSuscripcionTable.codigo, SUSCRIPCION_UNICA_CODIGO)).limit(1).then((r) => r[0]),
     db.select().from(SuscripcionTable).where(eq(SuscripcionTable.restauranteId, restauranteId)).limit(1).then((r) => r[0] ?? null),
@@ -152,21 +154,52 @@ export async function crearFacturaSuscripcionPendiente(
       : importePorCiclo(precio, ciclo, configuracion.descuentoAnual)
     items.push({ tipo: 'modulo', moduloId: modulo.id, codigo: modulo.codigo, descripcion: modulo.nombre, precioUnitario: precio, monto, desde: periodoDesde, hasta })
   }
+
+  let packSeleccionado: { id: number; cantidad: number; precio: number } | null = null
+  if (opts.packId != null) {
+    const avisosIncluidos = candidatos.some((modulo) => modulo.codigo === 'avisos_automaticos_whatsapp')
+    if (!avisosIncluidos) throw new Error('El pack sólo puede agregarse junto al módulo de Avisos automáticos')
+    const [pack] = await db.select().from(PackRecargaTable)
+      .where(and(eq(PackRecargaTable.id, opts.packId), eq(PackRecargaTable.activo, true), eq(PackRecargaTable.categoria, 'utility')))
+      .limit(1)
+    if (!pack) throw new Error('Pack de avisos no encontrado')
+    const precio = Number(pack.precio)
+    packSeleccionado = { id: pack.id, cantidad: pack.cantidad, precio }
+    items.push({
+      tipo: 'pack_mensajes', moduloId: null, codigo: `pack_utility_${pack.id}`,
+      descripcion: `${pack.nombre} · ${pack.cantidad} avisos`,
+      precioUnitario: precio, monto: precio, desde: null, hasta: null,
+    })
+  }
   if (!items.length) throw new Error('No hay conceptos para facturar')
 
   const montoBase = items.filter((i) => i.tipo === 'base').reduce((n, i) => n + i.monto, 0)
   const montoModulos = items.filter((i) => i.tipo === 'modulo').reduce((n, i) => n + i.monto, 0)
-  const montoTotal = montoBase + montoModulos
-  const insert = await db.insert(PagoSuscripcionTable).values({
-    restauranteId, planId: planCompatible.id, configuracionSuscripcionId: configuracion.id, ciclo,
-    monto: montoTotal.toFixed(2), montoBase: montoBase.toFixed(2), montoModulos: montoModulos.toFixed(2), montoTotal: montoTotal.toFixed(2),
-    token: opts.token ?? null, tokenExpiraEn: opts.tokenExpiraEn ?? null, estado: 'pending',
+  const montoRecarga = items.filter((i) => i.tipo === 'pack_mensajes').reduce((n, i) => n + i.monto, 0)
+  const montoTotal = montoBase + montoModulos + montoRecarga
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Db
+    let recargaMensajesId: number | null = null
+    if (packSeleccionado) {
+      const recargaInsert = await txDb.insert(RecargaMensajesTable).values({
+        restauranteId, categoria: 'utility', packRecargaId: packSeleccionado.id,
+        cantidad: packSeleccionado.cantidad, monto: packSeleccionado.precio.toFixed(2),
+        origen: 'manual', estado: 'pending',
+      })
+      recargaMensajesId = Number((recargaInsert as any)[0].insertId)
+    }
+    const insert = await txDb.insert(PagoSuscripcionTable).values({
+      restauranteId, planId: planCompatible.id, configuracionSuscripcionId: configuracion.id, ciclo,
+      monto: montoTotal.toFixed(2), montoBase: montoBase.toFixed(2), montoModulos: montoModulos.toFixed(2),
+      montoRecarga: montoRecarga.toFixed(2), recargaMensajesId, montoTotal: montoTotal.toFixed(2),
+      token: opts.token ?? null, tokenExpiraEn: opts.tokenExpiraEn ?? null, estado: 'pending',
+    })
+    const pagoId = Number((insert as any)[0].insertId)
+    await txDb.insert(PagoSuscripcionItemTable).values(items.map((item) => ({
+      pagoSuscripcionId: pagoId, tipo: item.tipo, moduloId: item.moduloId, codigo: item.codigo,
+      descripcion: item.descripcion, cantidad: 1, precioUnitario: item.precioUnitario.toFixed(2), monto: item.monto.toFixed(2),
+      desde: item.desde, hasta: item.hasta,
+    })))
+    return { pagoId, recargaMensajesId, montoBase, montoModulos, montoRecarga, montoTotal, items }
   })
-  const pagoId = Number((insert as any)[0].insertId)
-  await db.insert(PagoSuscripcionItemTable).values(items.map((item) => ({
-    pagoSuscripcionId: pagoId, tipo: item.tipo, moduloId: item.moduloId, codigo: item.codigo,
-    descripcion: item.descripcion, cantidad: 1, precioUnitario: item.precioUnitario.toFixed(2), monto: item.monto.toFixed(2),
-    desde: item.desde, hasta: item.hasta,
-  })))
-  return { pagoId, montoBase, montoModulos, montoTotal, items }
 }

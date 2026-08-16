@@ -18,7 +18,7 @@ import {
   pagoSuscripcion as PagoSuscripcionTable,
 } from '../db/schema'
 import { SUSCRIPCION_ESTADOS } from './planes'
-import { acreditarCupoPlan, acreditarCuposPorModulos, type CategoriaMensaje } from './mensajes-wallet'
+import { acreditarCupoPlan, acreditarCuposPorModulos, confirmarRecarga, type CategoriaMensaje } from './mensajes-wallet'
 import { SUSCRIPCION_UNICA_CODIGO } from './suscripcion'
 export { resolverEstadoPorTiempo, type EstadoSuscripcionTemporal } from './suscripcion-estado'
 import { resolverEstadoPorTiempo, type EstadoSuscripcionTemporal } from './suscripcion-estado'
@@ -122,7 +122,7 @@ export async function setPagoSuscripcionPreferencia(
 export async function confirmarPagoSuscripcion(
   db: Db,
   pagoId: number,
-  opts: { mpPaymentId: string },
+  opts: { mpPaymentId: string; montoPagado?: number },
 ): Promise<{
   yaProcesado: boolean
   restauranteId: number
@@ -130,6 +130,7 @@ export async function confirmarPagoSuscripcion(
   periodoHasta: Date | null
   acreditoBase: boolean
   modulosActivados: number[]
+  recargaAcreditada: boolean
 } | null> {
   const [pago] = await db
     .select()
@@ -138,7 +139,15 @@ export async function confirmarPagoSuscripcion(
     .limit(1)
   if (!pago) return null
 
+  const montoEsperado = Number(pago.montoTotal ?? pago.monto)
+  if (opts.montoPagado != null && (!Number.isFinite(opts.montoPagado) || Math.abs(montoEsperado - opts.montoPagado) > 0.01)) {
+    throw new Error(`Monto de suscripción inválido: esperado=${montoEsperado} recibido=${opts.montoPagado}`)
+  }
+
   if (pago.estado === 'paid') {
+    const recarga = pago.recargaMensajesId
+      ? await confirmarRecarga(db, pago.recargaMensajesId, { mpPaymentId: pago.mpPaymentId ?? opts.mpPaymentId })
+      : null
     return {
       yaProcesado: true,
       restauranteId: pago.restauranteId,
@@ -146,6 +155,7 @@ export async function confirmarPagoSuscripcion(
       periodoHasta: pago.periodoHasta ? new Date(pago.periodoHasta) : null,
       acreditoBase: false,
       modulosActivados: [],
+      recargaAcreditada: Boolean(recarga && !recarga.yaProcesada),
     }
   }
 
@@ -247,6 +257,7 @@ export async function confirmarPagoSuscripcion(
     periodoHasta,
     acreditoBase: true,
     modulosActivados: [],
+    recargaAcreditada: false,
   }
 }
 
@@ -259,7 +270,7 @@ async function confirmarFacturaCompuesta(
   db: Db,
   pago: typeof PagoSuscripcionTable.$inferSelect,
   items: Array<typeof PagoSuscripcionItemTable.$inferSelect>,
-  opts: { mpPaymentId: string },
+  opts: { mpPaymentId: string; montoPagado?: number },
 ): Promise<{
   yaProcesado: boolean
   restauranteId: number
@@ -267,6 +278,7 @@ async function confirmarFacturaCompuesta(
   periodoHasta: Date | null
   acreditoBase: boolean
   modulosActivados: number[]
+  recargaAcreditada: boolean
 }> {
   const ahora = new Date()
   const itemBase = items.find((item) => item.tipo === 'base') ?? null
@@ -295,6 +307,7 @@ async function confirmarFacturaCompuesta(
       periodoHasta: pago.periodoHasta ? new Date(pago.periodoHasta) : periodoHasta,
       acreditoBase: false,
       modulosActivados: [],
+      recargaAcreditada: false,
     }
   }
 
@@ -386,6 +399,16 @@ async function confirmarFacturaCompuesta(
     console.error('acreditarCuposPorModulos falló tras factura aprobada:', err)
   }
 
+  // La recarga vinculada usa el mismo payment_id y es idempotente. Si su
+  // asiento fallara, un reintento del webhook entra por la rama `paid` y vuelve
+  // a intentar únicamente la recarga, sin extender otra vez la suscripción.
+  let recargaAcreditada = false
+  if (pago.recargaMensajesId) {
+    const recarga = await confirmarRecarga(db, pago.recargaMensajesId, { mpPaymentId: opts.mpPaymentId })
+    if (!recarga) throw new Error(`Recarga vinculada ${pago.recargaMensajesId} no encontrada`)
+    recargaAcreditada = !recarga.yaProcesada
+  }
+
   return {
     yaProcesado: false,
     restauranteId: pago.restauranteId,
@@ -393,6 +416,7 @@ async function confirmarFacturaCompuesta(
     periodoHasta,
     acreditoBase: Boolean(itemBase),
     modulosActivados,
+    recargaAcreditada,
   }
 }
 
