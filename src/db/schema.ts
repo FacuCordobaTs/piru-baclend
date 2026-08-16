@@ -188,7 +188,10 @@ export const usuarioRestaurante = mysqlTable("usuario_restaurante", {
   restauranteId: int("restaurante_id").references(() => restaurante.id, { onDelete: "cascade" }).notNull(),
   sucursalId: int("sucursal_id").references(() => sucursal.id, { onDelete: "set null" }),
   nombre: varchar("nombre", { length: 255 }).notNull(),
-  rol: mysqlEnum("rol_usuario_restaurante", ["owner", "admin", "mozo"]).notNull(),
+  // El nombre físico es `rol` (ver add_staff_restaurante.sql). El primer
+  // schema de Drizzle usó por error el nombre del tipo enum de MySQL como si
+  // fuera una columna, haciendo fallar cualquier consulta de staff/POS.
+  rol: mysqlEnum("rol", ["owner", "admin", "mozo"]).notNull(),
   // Sólo las identidades de staff usan PIN. El owner existente sigue usando
   // su login de restaurante y nunca se copia su contraseña a esta tabla.
   pinHash: varchar("pin_hash", { length: 255 }),
