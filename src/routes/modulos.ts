@@ -194,8 +194,8 @@ modulosRoute.put('/:codigo/desactivar', zValidator('param', codigoSchema), async
           updatedAt: ahora,
         }).where(eq(RestauranteModuloTable.id, actual.id))
       } else {
-        // El entitlement bonificado sin suscripción (Alfajor) no tiene un
-        // período facturable que esperar: una baja explícita es inmediata.
+        // Sin un período de suscripción vigente no hay cobertura facturable
+        // que conservar, por lo que la baja es inmediata.
         await db.update(RestauranteModuloTable).set({
           estado: 'inactivo',
           vigenteHasta: null,

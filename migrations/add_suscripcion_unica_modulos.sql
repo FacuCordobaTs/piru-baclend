@@ -279,16 +279,22 @@ SET ps.configuracion_suscripcion_id = COALESCE(ps.configuracion_suscripcion_id, 
     ps.monto_base = COALESCE(ps.monto_base, ps.monto),
     ps.monto_total = COALESCE(ps.monto_total, ps.monto) + ps.monto_modulos;
 
--- Alfajor no hereda módulos gratuitos. Sólo recibe el entitlement explícito y
--- bonificado de Avisos; Cucuru no forma parte del catálogo ni se modifica.
+-- Alfajor no hereda módulos gratuitos. Conserva Cucuru fuera del catálogo, pero
+-- Avisos queda como módulo pago estándar para que su primer checkout facture
+-- base + Avisos igual que cualquier cuenta nueva.
 INSERT INTO `restaurante_modulo`
   (`restaurante_id`, `modulo_id`, `estado_restaurante_modulo`, `activado_at`, `precio_mensual_congelado`, `origen_restaurante_modulo`, `cancelar_al_fin_periodo`)
-SELECT r.id, m.id, 'activo', CURRENT_TIMESTAMP, 0.00, 'legacy', false
+SELECT r.id, m.id, 'activo', CURRENT_TIMESTAMP, m.precio_mensual, 'migracion', false
 FROM `restaurante` r
 JOIN `modulo` m ON m.codigo = 'avisos_automaticos_whatsapp'
 WHERE r.requiere_suscripcion = false
   AND (LOWER(COALESCE(r.username, '')) IN ('alfajor', 'alfajorconpapas') OR LOWER(COALESCE(r.nombre, '')) = 'alfajor con papas')
 ON DUPLICATE KEY UPDATE
-  `estado_restaurante_modulo` = 'activo', `precio_mensual_congelado` = 0.00,
-  `origen_restaurante_modulo` = 'legacy', `cancelar_al_fin_periodo` = false,
+  `estado_restaurante_modulo` = 'activo', `precio_mensual_congelado` = VALUES(`precio_mensual_congelado`),
+  `origen_restaurante_modulo` = 'migracion', `cancelar_al_fin_periodo` = false,
   `desactivado_at` = NULL;
+
+UPDATE `restaurante`
+SET `requiere_suscripcion` = true
+WHERE LOWER(COALESCE(`username`, '')) IN ('alfajor', 'alfajorconpapas')
+   OR LOWER(COALESCE(`nombre`, '')) = 'alfajor con papas';

@@ -46,14 +46,14 @@ function activo(modulo: typeof AVISOS, estadoSuscripcion: SuscripcionUnicaResuel
 }
 
 describe('T41 · matriz de regresión de cuentas', () => {
-  test('Alfajor grandfathered conserva panel y sólo Avisos bonificado', () => {
-    expect(tieneAccesoAlPanelSuscripcion(false, suscripcion(null))).toBe(true)
+  test('Alfajor migrado requiere suscripción y factura Avisos como cualquier cuenta nueva', () => {
+    expect(tieneAccesoAlPanelSuscripcion(true, suscripcion(null))).toBe(false)
     expect(moduloEstaActivoAhora({
       ...AVISOS,
-      origen: 'legacy',
-      precioMensualCongelado: '0.00',
+      origen: 'migracion',
+      precioMensualCongelado: '30000.00',
       estadoSuscripcion: null,
-    }, AHORA)).toBe(true)
+    }, AHORA)).toBe(false)
     expect(moduloEstaActivoAhora({
       ...AVISOS,
       tipo: 'incluido',
@@ -64,9 +64,9 @@ describe('T41 · matriz de regresión de cuentas', () => {
     }, AHORA)).toBe(false)
     expect(activo(MOTOR, null)).toBe(false)
     expect(sumarCuposMensajesDeModulos([
-      { activoAhora: true, mensajesUtilityIncluidos: 200, mensajesMarketingIncluidos: 0 },
+      { activoAhora: false, mensajesUtilityIncluidos: 200, mensajesMarketingIncluidos: 0 },
       { activoAhora: false, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 100 },
-    ])).toEqual({ utility: 200, marketing: 0 })
+    ])).toEqual({ utility: 0, marketing: 0 })
   })
 
   test('una cuenta nueva sin pagar no entra al panel ni obtiene módulos', () => {

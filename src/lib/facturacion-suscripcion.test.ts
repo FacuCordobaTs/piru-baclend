@@ -44,3 +44,8 @@ test('el checkout de fin de trial factura sólo la suscripción base', () => {
   expect(seleccionarModulosFacturables(modulos, { soloBase: true })).toEqual([])
   expect(seleccionarModulosFacturables(modulos, {})).toEqual(modulos)
 })
+
+test('un módulo activo migrado se incluye en el primer checkout', () => {
+  const modulos = [{ codigo: 'avisos_automaticos_whatsapp', estado: 'activo', origen: 'migracion' }]
+  expect(seleccionarModulosFacturables(modulos, {})).toEqual(modulos)
+})

@@ -70,14 +70,12 @@ export function moduloEstaActivoAhora(input: PoliticaModuloInput, ahora = new Da
   }
 
   // El trial trae únicamente la base: los módulos pagos no se habilitan ni aun
-  // si una fila incoherente llegara a quedar activa. La única excepción al
-  // requisito de suscripción es el entitlement legacy
-  // bonificado de Alfajor: fila explícita, activa y precio congelado en cero.
-  const esLegacyBonificado = input.origen === 'legacy'
-    && Number(input.precioMensualCongelado ?? NaN) === 0
+  // si una fila incoherente llegara a quedar activa. Los entitlements legacy
+  // no son una excepción de acceso: toda cuenta debe tener la suscripción
+  // vigente para operar un módulo pago.
   const suscripcionPermiteModuloPago = input.estadoSuscripcion !== null
     && ESTADOS_SUSCRIPCION_CON_MODULOS_PAGOS.includes(input.estadoSuscripcion as (typeof ESTADOS_SUSCRIPCION_CON_MODULOS_PAGOS)[number])
-  return esLegacyBonificado || suscripcionPermiteModuloPago
+  return suscripcionPermiteModuloPago
 }
 
 export interface ModuloResuelto {
@@ -233,7 +231,10 @@ export async function resolverImporteMensual(
 
   const modulos = await resolverModulosRestaurante(db, restauranteId)
   const modulosFacturables = modulos
-    .filter((item) => item.tipo === 'pago' && item.estado === 'activo' && item.activoAhora)
+    // Un módulo activo se factura en la próxima cuota aunque el restaurante no
+    // tenga todavía una suscripción activa. Así, el primer checkout incluye
+    // los módulos migrados y no presenta un total menor al que corresponde.
+    .filter((item) => item.tipo === 'pago' && item.estado === 'activo')
     .map((item) => ({
       codigo: item.codigo,
       montoMensual: Number(item.precioMensualCongelado ?? item.precioMensual),

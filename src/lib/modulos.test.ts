@@ -19,13 +19,13 @@ describe('matriz de acceso de módulos', () => {
     ])).toEqual({ utility: 200, marketing: 100 })
   })
 
-  test('Alfajor sólo conserva Avisos mediante su entitlement legacy explícito', () => {
+  test('un entitlement legacy no evita el requisito de suscripción', () => {
     expect(moduloEstaActivoAhora({
       ...BASE,
       origen: 'legacy',
       precioMensualCongelado: '0.00',
       estadoSuscripcion: null,
-    }, AHORA)).toBe(true)
+    }, AHORA)).toBe(false)
     expect(moduloEstaActivoAhora({ ...BASE, estadoSuscripcion: null }, AHORA)).toBe(false)
   })
 

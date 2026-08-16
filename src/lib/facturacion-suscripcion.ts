@@ -33,7 +33,6 @@ export interface ItemFacturaCalculado {
 type ModuloFacturable = {
   codigo: string
   estado: string | null
-  origen: string | null
 }
 
 /** Un trial factura exclusivamente la base, aun si existiera un entitlement incoherente. */
@@ -44,7 +43,7 @@ export function seleccionarModulosFacturables<T extends ModuloFacturable>(
   return modulos.filter((modulo) => {
     if (opts.soloBase) return false
     if (opts.soloModuloCodigo) return modulo.codigo === opts.soloModuloCodigo
-    return modulo.estado === 'activo' && modulo.origen !== 'legacy'
+    return modulo.estado === 'activo'
   })
 }
 
