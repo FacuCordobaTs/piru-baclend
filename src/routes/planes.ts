@@ -28,6 +28,7 @@ import {
 import { crearPreferenciaSuscripcionMP } from '../lib/mp-suscripcion'
 import { sendPaymentLinkWhatsApp } from '../services/whatsapp'
 import { crearFacturaSuscripcionPendiente } from '../lib/facturacion-suscripcion'
+import { resolverImporteMensual } from '../lib/modulos'
 
 /** Minutos de validez del link de pago (enviado por WhatsApp) antes de vencer. */
 const PAGO_LINK_TTL_MIN = 60
@@ -64,11 +65,15 @@ planesRoute.get('/mi-suscripcion', async (c) => {
   try {
     // Transición lazy de estado (venció el cobro → gracia → suspendida) antes de leer.
     const vigente = await resolverEstadoVigente(db, restauranteId)
-    const [suscripcion, suscripcionLegacy] = await Promise.all([
+    const [suscripcion, suscripcionLegacy, importeProximaFactura] = await Promise.all([
       resolverSuscripcionUnica(db, restauranteId),
       // Sólo rellena aliases de admins instalados hasta T43. Los módulos no se
       // derivan de este set: T22/T23 migrarán cada gate a requireModulo.
       resolverSuscripcion(db, restauranteId),
+      // Cotización autoritativa del próximo checkout: no usa el snapshot de
+      // la última factura, por lo que incluye módulos ya migrados antes del
+      // primer pago (Alfajor: base + Avisos = $50.000).
+      resolverImporteMensual(db, restauranteId),
     ])
     const wallet = await resumenWallet(db, restauranteId)
     const [restauranteRow] = await db
@@ -152,6 +157,7 @@ planesRoute.get('/mi-suscripcion', async (c) => {
           precioBaseMensual: suscripcion.precioBaseMensual,
           montoModulosMensual: suscripcion.montoModulosMensual,
           montoTotalMensual: suscripcion.montoTotalMensual,
+          cotizacionProximaFactura: importeProximaFactura,
           wallet,
         },
       },
