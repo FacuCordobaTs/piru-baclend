@@ -195,6 +195,30 @@ function esMetodoAutomatico(metodo: string | null) {
   )
 }
 
+/**
+ * La identidad de staff es trazabilidad adicional del POS, no un requisito para
+ * tomar un pedido. Durante el despliegue escalonado puede existir un backend
+ * nuevo contra una base que todavía no recibió `add_staff_restaurante.sql`.
+ * En ese caso preservamos el alta del pedido y dejamos la atribución vacía; la
+ * migración vuelve a habilitarla automáticamente en las siguientes altas.
+ */
+function faltaEsquemaStaff(error: unknown) {
+  const code = (error as { code?: string } | null)?.code
+  return code === 'ER_NO_SUCH_TABLE' || code === 'ER_BAD_FIELD_ERROR'
+}
+
+async function resolverCreadorPos(db: any, restauranteId: number) {
+  try {
+    return await asegurarOwnerStaff(db, restauranteId)
+  } catch (error) {
+    if (!faltaEsquemaStaff(error)) throw error
+    console.warn(
+      `[POS] Alta sin actor de staff para restaurante ${restauranteId}: falta aplicar add_staff_restaurante.sql`,
+    )
+    return null
+  }
+}
+
 function motivosPedidoNoEditable(pedido: any): string[] {
   const motivos: string[] = []
   if (!pedido.anotadoManualmente) motivos.push('El pedido no fue creado desde el POS')
@@ -636,7 +660,7 @@ const pedidoUnificadoRoute = new Hono()
     }
 
     const anotadoManualmente = body.anotadoManualmente === true
-    const creadorStaff = anotadoManualmente ? await asegurarOwnerStaff(db, restauranteId) : null
+    const creadorStaff = anotadoManualmente ? await resolverCreadorPos(db, restauranteId) : null
     // En el POS del local el pedido se crea ya pagado por defecto
     const pagado = body.pagado != null ? body.pagado === true : anotadoManualmente
     const metodoPago = body.metodoPago && String(body.metodoPago).trim() !== '' ? String(body.metodoPago) : null
@@ -665,7 +689,9 @@ const pedidoUnificadoRoute = new Hono()
       sucursalId: body.sucursalId ?? null,
       mesaLocalId: body.mesaLocalId ?? null,
       consumoEnLocal: body.consumoEnLocal === true,
-      creadoPorUsuarioId: creadorStaff?.id ?? null,
+      // Omitir la columna cuando la migración de staff todavía no existe. Pasar
+      // `null` la incluiría igualmente en el INSERT y rompería el pedido.
+      ...(creadorStaff ? { creadoPorUsuarioId: creadorStaff.id } : {}),
     }
 
     if (body.tipo === 'delivery') {
