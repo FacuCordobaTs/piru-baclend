@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono'
 import { pool } from '../db'
-import { restaurante as RestauranteTable, mesa as MesaTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, horarioRestaurante as HorarioRestauranteTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable } from '../db/schema'
+import { restaurante as RestauranteTable, mesa as MesaTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, horarioRestaurante as HorarioRestauranteTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, productoAgregado as ProductoAgregadoTable, agregado as AgregadoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
@@ -187,6 +187,30 @@ restauranteRoute.get('/profile', async (c) => {
             .from(VarianteProductoTable)
             .where(inArray(VarianteProductoTable.productoId, productoIds))
 
+    const [todosIngredientes, todosAgregados] = productoIds.length === 0
+      ? [[], []] as const
+      : await Promise.all([
+          db
+            .select({
+              id: IngredienteTable.id,
+              nombre: IngredienteTable.nombre,
+              productoId: ProductoIngredienteTable.productoId,
+            })
+            .from(ProductoIngredienteTable)
+            .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
+            .where(inArray(ProductoIngredienteTable.productoId, productoIds)),
+          db
+            .select({
+              id: AgregadoTable.id,
+              nombre: AgregadoTable.nombre,
+              precio: AgregadoTable.precio,
+              productoId: ProductoAgregadoTable.productoId,
+            })
+            .from(ProductoAgregadoTable)
+            .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
+            .where(inArray(ProductoAgregadoTable.productoId, productoIds)),
+        ])
+
     const variantesPorProducto = new Map<number, Array<{ id: number; nombre: string; precio: string }>>()
     for (const v of todasVariantes) {
       if (!variantesPorProducto.has(v.productoId)) {
@@ -199,7 +223,23 @@ restauranteRoute.get('/profile', async (c) => {
       })
     }
 
-    // Enriquecer productos con categoría, etiquetas y variantes
+    const ingredientesPorProducto = new Map<number, Array<{ id: number; nombre: string }>>()
+    for (const ingrediente of todosIngredientes) {
+      if (!ingredientesPorProducto.has(ingrediente.productoId)) ingredientesPorProducto.set(ingrediente.productoId, [])
+      ingredientesPorProducto.get(ingrediente.productoId)!.push({ id: ingrediente.id, nombre: ingrediente.nombre })
+    }
+
+    const agregadosPorProducto = new Map<number, Array<{ id: number; nombre: string; precio: string }>>()
+    for (const agregado of todosAgregados) {
+      if (!agregadosPorProducto.has(agregado.productoId)) agregadosPorProducto.set(agregado.productoId, [])
+      agregadosPorProducto.get(agregado.productoId)!.push({
+        id: agregado.id,
+        nombre: agregado.nombre,
+        precio: typeof agregado.precio === 'string' ? agregado.precio : String(agregado.precio),
+      })
+    }
+
+    // Enriquecer productos con categoría y sus opciones configurables del POS.
     const productos = productosRaw.map((p) => ({
       id: p.id,
       restauranteId: p.restauranteId,
@@ -215,6 +255,8 @@ restauranteRoute.get('/profile', async (c) => {
       tieneVariantes: p.tieneVariantes,
       etiquetas: etiquetasPorProducto.get(p.id) || [],
       variantes: variantesPorProducto.get(p.id) || [],
+      ingredientes: ingredientesPorProducto.get(p.id) || [],
+      agregados: agregadosPorProducto.get(p.id) || [],
     }))
 
     // Suscripción + features de pago habilitadas: la UI candadea lo que no está incluido.
