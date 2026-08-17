@@ -10,6 +10,7 @@ import {
   codigoDescuento as CodigoDescuentoTable,
   sucursal as SucursalTable,
   repartidor as RepartidorTable,
+  mesaLocal as MesaLocalTable,
 } from '../db/schema'
 import {
   rowToPagoRow,
@@ -73,6 +74,7 @@ export const PEDIDO_LIST_PROJECTION = {
   montoDescuento: PedidoUnificadoTable.montoDescuento,
   sucursalId: PedidoUnificadoTable.sucursalId,
   mesaLocalId: PedidoUnificadoTable.mesaLocalId,
+  mesaNombre: MesaLocalTable.nombre,
   consumoEnLocal: PedidoUnificadoTable.consumoEnLocal,
   creadoPorUsuarioId: PedidoUnificadoTable.creadoPorUsuarioId,
   sucursalNombre: SucursalTable.nombre,
@@ -94,7 +96,7 @@ export const PEDIDO_LIST_PROJECTION = {
 export async function buildPedidosWhere(
   db: Db,
   restauranteId: number,
-  tipo: 'delivery' | 'takeaway' | 'all' | undefined,
+  tipo: 'delivery' | 'takeaway' | 'mesa' | 'all' | undefined,
   sucursalIdParam: string | undefined,
   estado: string | undefined,
   opts?: { excludeArchived?: boolean; dia?: string },
@@ -196,6 +198,7 @@ export async function selectPedidosEnriquecidos(
     .leftJoin(CodigoDescuentoTable, eq(PedidoUnificadoTable.codigoDescuentoId, CodigoDescuentoTable.id))
     .leftJoin(SucursalTable, eq(PedidoUnificadoTable.sucursalId, SucursalTable.id))
     .leftJoin(RepartidorTable, eq(PedidoUnificadoTable.repartidorId, RepartidorTable.id))
+    .leftJoin(MesaLocalTable, eq(PedidoUnificadoTable.mesaLocalId, MesaLocalTable.id))
     .where(whereCondition)
     .orderBy(desc(PedidoUnificadoTable.createdAt))
   if (opts?.limit != null) q = q.limit(opts.limit)
@@ -325,7 +328,7 @@ export async function emitirEventoPedido(
   opts: {
     restauranteId: number
     pedidoId: number
-    tipo: 'delivery' | 'takeaway'
+    tipo: 'delivery' | 'takeaway' | 'mesa'
     sucursalId?: number | null
     event: 'upsert' | 'remove'
     reason: ReasonEventoPedido

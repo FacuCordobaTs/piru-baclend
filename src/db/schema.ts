@@ -224,8 +224,8 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
   sucursalId: int("sucursal_id").references(() => sucursal.id),
-  // T32: consumo en local conserva tipo=takeaway para admins instalados. El
-  // frontend nuevo deriva modalidad `local` cuando consumoEnLocal es true.
+  // Los pedidos de mesa usan el discriminador `mesa`. `consumoEnLocal` se
+  // conserva para compatibilidad con clientes desplegados durante la transición.
   mesaLocalId: int("mesa_local_id").references(() => mesaLocal.id, { onDelete: "set null" }),
   consumoEnLocal: boolean("consumo_en_local").default(false).notNull(),
   // Nullable: pedidos públicos, IA y el historial anterior no tienen actor de staff.
@@ -233,7 +233,7 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   clienteId: int("cliente_id").references(() => cliente.id), // Nullable si no se registró
 
   // Discriminador principal
-  tipo: mysqlEnum("tipo", ["delivery", "takeaway"]).notNull(),
+  tipo: mysqlEnum("tipo", ["delivery", "takeaway", "mesa"]).notNull(),
 
   // Datos comunes (compatible con delivery/takeaway legacy)
   estado: mysqlEnum("estado", [

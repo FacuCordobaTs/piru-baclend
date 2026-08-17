@@ -90,7 +90,7 @@ clientesRoute.get('/list', async (c) => {
         const allPedidos = pedidos.map(p => ({
             ...p,
             // Casteamos el tipo explícitamente para que coincida con lo que espera el frontend
-            tipo: p.tipo as 'delivery' | 'takeaway', 
+            tipo: p.tipo as 'delivery' | 'takeaway' | 'mesa',
             items: itemsMap[p.id] || []
         }))
 

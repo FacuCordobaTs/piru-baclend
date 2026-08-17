@@ -157,7 +157,7 @@ mozosRoute.post('/pedidos', zValidator('json', crearPedidoSchema), async (c) => 
     const total = items.reduce((sum, item) => sum + Number(item.precioUnitario) * item.cantidad, 0)
     const inserted = await tx.insert(PedidoUnificadoTable).values({
       restauranteId: principal.restauranteId, sucursalId: principal.sucursalId, mesaLocalId: body.mesaLocalId,
-      consumoEnLocal: true, tipo: 'takeaway', estado: 'pending', total: total.toFixed(2),
+      consumoEnLocal: true, tipo: 'mesa', estado: 'pending', total: total.toFixed(2),
       nombreCliente: body.nombreCliente || null, notas: body.notas || null, anotadoManualmente: true,
       pagado: false, creadoPorUsuarioId: principal.usuarioId,
     })
@@ -165,9 +165,9 @@ mozosRoute.post('/pedidos', zValidator('json', crearPedidoSchema), async (c) => 
     await tx.insert(ItemPedidoUnificadoTable).values(items.map((item) => ({ pedidoId, ...item })))
     return { pedidoId }
   })
-  if ('error' in creado) return c.json({ success: false, code: creado.error, message: creado.message }, creado.error === 'MESA_OCUPADA' ? 409 : 422)
+  if (!('pedidoId' in creado)) return c.json({ success: false, code: creado.error, message: creado.message }, creado.error === 'MESA_OCUPADA' ? 409 : 422)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, creado.pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId: creado.pedidoId, tipo: 'takeaway', sucursalId: principal.sucursalId, event: 'upsert', reason: 'created', shouldPrint: true })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId: creado.pedidoId, tipo: 'mesa', sucursalId: principal.sucursalId, event: 'upsert', reason: 'created', shouldPrint: true })
   return c.json({ success: true, data }, 201)
 })
 
@@ -181,7 +181,7 @@ mozosRoute.post('/pedidos/:id{[0-9]+}/items', zValidator('json', editarItemSchem
   }, { id: principal.usuarioId, tipo: 'staff_mozo' })
   if (resultado.error) return respuestaErrorMutacion(c, db, principal, pedidoId, resultado)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'takeaway', sucursalId: principal.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: principal.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
   return c.json({ success: true, data })
 })
 
@@ -196,7 +196,7 @@ mozosRoute.put('/pedidos/:id{[0-9]+}/items/:itemId{[0-9]+}', zValidator('json', 
   }, { id: principal.usuarioId, tipo: 'staff_mozo' })
   if (resultado.error) return respuestaErrorMutacion(c, db, principal, pedidoId, resultado)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'takeaway', sucursalId: principal.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: principal.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
   return c.json({ success: true, data })
 })
 
@@ -211,7 +211,7 @@ mozosRoute.delete('/pedidos/:id{[0-9]+}/items/:itemId{[0-9]+}', zValidator('json
   }, { id: principal.usuarioId, tipo: 'staff_mozo' })
   if (resultado.error) return respuestaErrorMutacion(c, db, principal, pedidoId, resultado)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'takeaway', sucursalId: principal.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: principal.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
   return c.json({ success: true, data })
 })
 
@@ -226,7 +226,7 @@ mozosRoute.put('/pedidos/:id{[0-9]+}', zValidator('json', editarPedidoSchema), a
   }, { id: principal.usuarioId, tipo: 'staff_mozo' })
   if (resultado.error) return respuestaErrorMutacion(c, db, principal, pedidoId, resultado)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'takeaway', sucursalId: principal.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: principal.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
   return c.json({ success: true, data })
 })
 

@@ -1,4 +1,4 @@
-// pedido-unificado.ts - Gestión unificada de pedidos delivery y takeaway
+// pedido-unificado.ts - Gestión unificada de pedidos delivery, takeaway y mesa
 import { Hono, type Context, type Next } from 'hono'
 import { pool } from '../db'
 import {
@@ -65,8 +65,7 @@ const manualFields = {
   pagado: z.boolean().optional(),
   metodoPago: z.string().optional(),
   sucursalId: z.number().int().positive().optional(),
-  // Los admins anteriores ignoran estos campos; el POS de mesas mantiene
-  // tipo=takeaway y explicita la modalidad local mediante consumoEnLocal.
+  // `consumoEnLocal` se conserva como campo aditivo para clientes anteriores.
   mesaLocalId: z.number().int().positive().optional(),
   consumoEnLocal: z.boolean().optional(),
   // Onboarding: si viene true, además de crear el pedido se envía al WhatsApp del dueño
@@ -96,7 +95,22 @@ const createTakeawaySchema = z.object({
   items: z.array(itemSchema).min(1, 'Debe agregar al menos un producto'),
 })
 
-const createSchema = z.discriminatedUnion('tipo', [createDeliverySchema, createTakeawaySchema])
+const createMesaSchema = z.object({
+  tipo: z.literal('mesa'),
+  mesaLocalId: z.number().int().positive(),
+  consumoEnLocal: z.literal(true).optional().default(true),
+  nombreCliente: z.string().optional(),
+  telefono: z.string().optional(),
+  notas: z.string().optional(),
+  anotadoManualmente: z.boolean().optional(),
+  pagado: z.boolean().optional(),
+  metodoPago: z.string().optional(),
+  sucursalId: z.number().int().positive().optional(),
+  notificarWhatsappPrueba: z.boolean().optional(),
+  items: z.array(itemSchema).min(1, 'Debe agregar al menos un producto'),
+})
+
+const createSchema = z.discriminatedUnion('tipo', [createDeliverySchema, createTakeawaySchema, createMesaSchema])
 type CreatePedidoInput = z.infer<typeof createSchema>
 
 const updateEstadoSchema = z.object({
@@ -357,14 +371,14 @@ async function responderErrorMutacion(c: any, db: any, restauranteId: number, pe
 const pedidoUnificadoRoute = new Hono()
   .use('*', authMiddleware)
 
-  // Listar pedidos (tipo=delivery|takeaway|all)
+  // Listar pedidos (tipo=delivery|takeaway|mesa|all)
   .get('/list', async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const page = Number(c.req.query('page')) || 1
     const limit = Number(c.req.query('limit')) || 20
     const estado = c.req.query('estado')
-    const tipo = c.req.query('tipo') as 'delivery' | 'takeaway' | 'all' | undefined
+    const tipo = c.req.query('tipo') as 'delivery' | 'takeaway' | 'mesa' | 'all' | undefined
     const offset = (page - 1) * limit
     const sucursalIdParam = c.req.query('sucursalId')
 
@@ -388,7 +402,7 @@ const pedidoUnificadoRoute = new Hono()
     const page = Number(c.req.query('page')) || 1
     const limit = Number(c.req.query('limit')) || 50
     const estado = c.req.query('estado')
-    const tipo = c.req.query('tipo') as 'delivery' | 'takeaway' | 'all' | undefined
+    const tipo = c.req.query('tipo') as 'delivery' | 'takeaway' | 'mesa' | 'all' | undefined
     const offset = (page - 1) * limit
     const sucursalIdParam = c.req.query('sucursalId')
 
@@ -416,7 +430,7 @@ const pedidoUnificadoRoute = new Hono()
     if (!Number.isInteger(restauranteId)) {
       return c.json({ success: false, message: 'No autenticado' }, 401)
     }
-    const tipo = c.req.query('tipo') as 'delivery' | 'takeaway' | 'all' | undefined
+    const tipo = c.req.query('tipo') as 'delivery' | 'takeaway' | 'mesa' | 'all' | undefined
     const sucursalIdParam = c.req.query('sucursalId')
 
     const whereCondition = await buildPedidosWhere(db, restauranteId, tipo, sucursalIdParam, undefined, { excludeArchived: true })
@@ -610,7 +624,7 @@ const pedidoUnificadoRoute = new Hono()
     return c.json({ success: true, data }, 200)
   })
 
-  // Crear pedido (delivery o takeaway)
+  // Crear pedido (delivery, takeaway o mesa)
   .post('/create', zValidator('json', createSchema), requirePosOPruebaOnboarding, async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
@@ -665,8 +679,11 @@ const pedidoUnificadoRoute = new Hono()
     const pagado = body.pagado != null ? body.pagado === true : anotadoManualmente
     const metodoPago = body.metodoPago && String(body.metodoPago).trim() !== '' ? String(body.metodoPago) : null
 
-    if (body.mesaLocalId != null && (body.tipo !== 'takeaway' || body.consumoEnLocal !== true)) {
-      return c.json({ message: 'Los pedidos de mesa deben ser consumo en el local', success: false }, 422)
+    if (body.tipo === 'mesa' && body.mesaLocalId == null) {
+      return c.json({ message: 'Los pedidos de mesa deben tener una mesa asignada', success: false }, 422)
+    }
+    if (body.tipo !== 'mesa' && body.mesaLocalId != null) {
+      return c.json({ message: 'Sólo los pedidos de tipo mesa pueden tener una mesa asignada', success: false }, 422)
     }
 
     let deliveryFee = 0
@@ -688,7 +705,7 @@ const pedidoUnificadoRoute = new Hono()
       metodoPago,
       sucursalId: body.sucursalId ?? null,
       mesaLocalId: body.mesaLocalId ?? null,
-      consumoEnLocal: body.consumoEnLocal === true,
+      consumoEnLocal: body.tipo === 'mesa' || body.consumoEnLocal === true,
       // Omitir la columna cuando la migración de staff todavía no existe. Pasar
       // `null` la incluiría igualmente en el INSERT y rompería el pedido.
       ...(creadorStaff ? { creadoPorUsuarioId: creadorStaff.id } : {}),
@@ -722,7 +739,7 @@ const pedidoUnificadoRoute = new Hono()
       }
       return { pedidoId }
     })
-    if ('error' in creado) {
+    if (!('pedidoId' in creado)) {
       const status = creado.error === 'MESA_OCUPADA' ? 409 : 422
       return c.json({ message: creado.message, code: creado.error, success: false }, status)
     }
@@ -1081,6 +1098,8 @@ const pedidoUnificadoRoute = new Hono()
       dispatchMessage = 'ya está en camino a tu domicilio'
     } else if (pedido.tipo === 'takeaway') {
       dispatchMessage = 'ya está listo en el mostrador para que pases a retirarlo'
+    } else if (pedido.tipo === 'mesa') {
+      dispatchMessage = 'ya está listo para servir en tu mesa'
     }
 
     if (dispatchMessage === '') {

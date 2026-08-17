@@ -1,7 +1,7 @@
 // pedido.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable, pago as PagoTable, ingrediente as IngredienteTable, pedidoUnificado as PedidoUnificadoTable, itemPedidoUnificado as ItemPedidoUnificadoTable, repartidor as RepartidorTable } from '../db/schema'
+import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable, mesaLocal as MesaLocalTable, pago as PagoTable, ingrediente as IngredienteTable, pedidoUnificado as PedidoUnificadoTable, itemPedidoUnificado as ItemPedidoUnificadoTable, repartidor as RepartidorTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { eq, desc, and, inArray, gte, lt, sql } from 'drizzle-orm'
@@ -177,9 +177,12 @@ const pedidoRoute = new Hono()
           afipCae: PedidoUnificadoTable.afipCae,
           afipNumeroComprobante: PedidoUnificadoTable.afipNumeroComprobante,
           anotadoManualmente: PedidoUnificadoTable.anotadoManualmente,
+          mesaLocalId: PedidoUnificadoTable.mesaLocalId,
+          mesaNombre: MesaLocalTable.nombre,
         })
         .from(PedidoUnificadoTable)
         .leftJoin(RepartidorTable, eq(PedidoUnificadoTable.repartidorId, RepartidorTable.id))
+        .leftJoin(MesaLocalTable, eq(PedidoUnificadoTable.mesaLocalId, MesaLocalTable.id))
         .where(and(
           eq(PedidoUnificadoTable.restauranteId, restauranteId),
           eq(PedidoUnificadoTable.pagado, true),
@@ -211,6 +214,16 @@ const pedidoRoute = new Hono()
 
       const deliveryPedidosConItems = dtPedidosConItems.filter(p => p.tipo === 'delivery')
       const takeawayPedidosConItems = dtPedidosConItems.filter(p => p.tipo === 'takeaway')
+      const mesaUnificadosConItems = dtPedidosConItems
+        .filter(p => p.tipo === 'mesa')
+        .map(p => ({
+          ...p,
+          mesaId: p.mesaLocalId,
+          nombrePedido: p.nombreCliente,
+          closedAt: p.deliveredAt,
+        }))
+      const pedidosMesaCombinados = [...mesaPedidosFinal, ...mesaUnificadosConItems]
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 
       // 4. Get available dates (distinct dates that have orders) - last 90 days
       // For mesa pedidos, use the date of the last item added, not the pedido creation date
@@ -264,7 +277,7 @@ const pedidoRoute = new Hono()
       const fechasDisponibles = Array.from(allDatesSet).sort().reverse()
 
       // 5. Calculate totals
-      const totalMesa = mesaPedidosFinal
+      const totalMesa = pedidosMesaCombinados
         .filter(p => p.estado !== 'cancelled' && p.totalItems > 0)
         .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
       const totalDelivery = deliveryPedidosConItems
@@ -317,7 +330,7 @@ const pedidoRoute = new Hono()
         })
       }
 
-      mesaPedidosFinal.filter(p => p.estado !== 'cancelled' && p.totalItems > 0).forEach(p => addToSummary(p.items))
+      pedidosMesaCombinados.filter(p => p.estado !== 'cancelled' && p.totalItems > 0).forEach(p => addToSummary(p.items))
 
       deliveryPedidosConItems.filter(p => p.estado !== 'cancelled').forEach(p => {
         addToSummary(p.items)
@@ -348,7 +361,7 @@ const pedidoRoute = new Hono()
         success: true,
         data: {
           fecha: fechaStr || `${startOfDay.getFullYear()}-${String(startOfDay.getMonth() + 1).padStart(2, '0')}-${String(startOfDay.getDate()).padStart(2, '0')}`,
-          pedidosMesa: mesaPedidosFinal,
+          pedidosMesa: pedidosMesaCombinados,
           pedidosDelivery: deliveryPedidosConItems,
           pedidosTakeaway: takeawayPedidosConItems,
           totales: {
@@ -361,10 +374,10 @@ const pedidoRoute = new Hono()
             web: totalWeb.toFixed(2),
           },
           cantidades: {
-            mesa: mesaPedidosFinal.filter(p => p.totalItems > 0).length,
+            mesa: pedidosMesaCombinados.filter(p => p.totalItems > 0).length,
             delivery: deliveryPedidosConItems.length,
             takeaway: takeawayPedidosConItems.length,
-            total: mesaPedidosFinal.filter(p => p.totalItems > 0).length + deliveryPedidosConItems.length + takeawayPedidosConItems.length,
+            total: pedidosMesaCombinados.filter(p => p.totalItems > 0).length + deliveryPedidosConItems.length + takeawayPedidosConItems.length,
             manual: cantidadManual,
             web: cantidadWeb,
           },

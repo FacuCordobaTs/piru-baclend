@@ -393,6 +393,7 @@ webhookRoute.post('/talo', async (c) => {
           nombreCliente: PedidoUnificadoTable.nombreCliente,
           direccion: PedidoUnificadoTable.direccion,
           total: PedidoUnificadoTable.total,
+          sucursalId: PedidoUnificadoTable.sucursalId,
           notificarWhatsapp: PedidoUnificadoTable.notificarWhatsapp,
           telefono: PedidoUnificadoTable.telefono,
         })

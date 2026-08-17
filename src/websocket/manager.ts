@@ -190,7 +190,7 @@ class WebSocketManager {
     payload: {
       event: 'upsert' | 'remove';
       reason: string;
-      tipo: 'delivery' | 'takeaway';
+      tipo: 'delivery' | 'takeaway' | 'mesa';
       pedidoId: number;
       sucursalId?: number | null;
       shouldPrint?: boolean;
