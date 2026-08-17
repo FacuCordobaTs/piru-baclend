@@ -21,7 +21,7 @@ import {
 } from '../db/schema'
 import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
-import { eq, desc, and, or, not, inArray, notInArray, sql } from 'drizzle-orm'
+import { eq, ne, desc, and, or, not, inArray, notInArray, sql } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { wsManager } from '../websocket/manager'
@@ -128,6 +128,21 @@ const posItemSchema = z.object({
 })
 
 const deletePosItemSchema = z.object({ version: z.number().int().positive() })
+const posPedidoSchema = z.object({
+  version: z.number().int().positive(),
+  tipo: z.enum(['delivery', 'takeaway', 'mesa']),
+  mesaLocalId: z.number().int().positive().nullable().optional(),
+  nombreCliente: z.string().trim().max(255).nullable().optional(),
+  telefono: z.string().trim().max(50).nullable().optional(),
+  notas: z.string().trim().max(500).nullable().optional(),
+  direccion: z.string().trim().max(255).nullable().optional(),
+  latitud: z.union([z.string(), z.number()]).nullable().optional(),
+  longitud: z.union([z.string(), z.number()]).nullable().optional(),
+  deliveryFee: z.union([z.string(), z.number()]).nullable().optional(),
+  metodoPago: z.string().trim().max(64).nullable().optional(),
+  pagado: z.boolean().optional(),
+  items: z.array(posItemSchema.omit({ version: true })).min(1, 'El pedido debe conservar al menos un ítem'),
+})
 const datosPosSchema = z.object({
   nombreCliente: z.string().trim().max(255).nullable().optional(),
   telefono: z.string().trim().max(50).nullable().optional(),
@@ -244,7 +259,7 @@ function motivosPedidoNoEditable(pedido: any): string[] {
   return motivos
 }
 
-export async function resolverItemPos(tx: any, restauranteId: number, input: z.infer<typeof posItemSchema>) {
+export async function resolverItemPos(tx: any, restauranteId: number, input: Omit<z.infer<typeof posItemSchema>, 'version'> & { version?: number }) {
   const [producto] = await tx.select().from(ProductoTable).where(and(
     eq(ProductoTable.id, input.productoId),
     eq(ProductoTable.restauranteId, restauranteId),
@@ -544,7 +559,7 @@ const pedidoUnificadoRoute = new Hono()
     const resultado = await ejecutarMutacionPos(db, restauranteId, pedidoId, body.version, async (tx) => {
       const item = await resolverItemPos(tx, restauranteId, body)
       if ('error' in item) return item
-      const inserted = await tx.insert(ItemPedidoUnificadoTable).values(item)
+      const inserted = await tx.insert(ItemPedidoUnificadoTable).values({ ...item, pedidoId })
       return { operacion: 'agregar_item' as const, itemPedidoId: Number(inserted[0].insertId), despues: item, reimprimeCocina: true }
     })
     if (resultado.error) return responderErrorMutacion(c, db, restauranteId, pedidoId, resultado)
@@ -617,6 +632,81 @@ const pedidoUnificadoRoute = new Hono()
       }
       await tx.update(PedidoUnificadoTable).set(cambios).where(eq(PedidoUnificadoTable.id, pedidoId))
       return { operacion: 'editar_datos_pos' as const, antes, despues: cambios, reimprimeCocina: body.notas !== undefined && body.notas !== pedido.notas }
+    })
+    if (resultado.error) return responderErrorMutacion(c, db, restauranteId, pedidoId, resultado)
+    const data = await respuestaPedidoEditable(db, restauranteId, pedidoId)
+    await emitirEventoPedido(db, { restauranteId, pedidoId, tipo: data!.tipo, sucursalId: data!.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+    return c.json({ success: true, data }, 200)
+  })
+
+  // Guarda en una sola transacción el borrador completo del POS. Este endpoint
+  // aditivo evita que una edición de varios productos quede aplicada a medias.
+  .put('/:id/pos', requireModulo(MODULE_KEYS.POS), zValidator('json', posPedidoSchema), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const pedidoId = Number(c.req.param('id'))
+    const body = c.req.valid('json')
+    const resultado = await ejecutarMutacionPos(db, restauranteId, pedidoId, body.version, async (tx, pedido, itemsAnteriores) => {
+      if (body.tipo === 'delivery' && (!body.direccion || body.direccion.trim().length < 5)) {
+        return { error: 'ITEM_INVALIDO', message: 'La dirección es requerida para delivery' }
+      }
+      if (body.tipo === 'mesa' && body.mesaLocalId == null) {
+        return { error: 'MESA_NO_DISPONIBLE', message: 'Los pedidos de mesa deben tener una mesa asignada' }
+      }
+      if (body.metodoPago && esMetodoAutomatico(body.metodoPago)) {
+        return { error: 'ITEM_INVALIDO', message: 'El POS no puede asignar un medio de pago automático' }
+      }
+
+      if (body.tipo === 'mesa') {
+        await tx.execute(sql`SELECT id FROM mesa_local WHERE id = ${body.mesaLocalId!} AND restaurante_id = ${restauranteId} FOR UPDATE`)
+        const [mesa] = await tx.select({ id: MesaLocalTable.id, sucursalId: MesaLocalTable.sucursalId, activo: MesaLocalTable.activo })
+          .from(MesaLocalTable)
+          .where(and(eq(MesaLocalTable.id, body.mesaLocalId!), eq(MesaLocalTable.restauranteId, restauranteId)))
+          .limit(1)
+        if (!mesa || !mesa.activo) return { error: 'MESA_NO_DISPONIBLE', message: 'La mesa seleccionada no está disponible' }
+        if (mesa.sucursalId != null && pedido.sucursalId != null && mesa.sucursalId !== pedido.sucursalId) {
+          return { error: 'MESA_SUCURSAL_INVALIDA', message: 'La mesa no pertenece a la sucursal del pedido' }
+        }
+        const ocupada = await tx.select({ id: PedidoUnificadoTable.id }).from(PedidoUnificadoTable).where(and(
+          eq(PedidoUnificadoTable.restauranteId, restauranteId),
+          eq(PedidoUnificadoTable.mesaLocalId, body.mesaLocalId!),
+          ne(PedidoUnificadoTable.id, pedidoId),
+          notInArray(PedidoUnificadoTable.estado, [...ESTADOS_PEDIDO_CERRADOS]),
+        )).limit(1)
+        if (ocupada.length) return { error: 'MESA_OCUPADA', message: 'Esta mesa ya tiene un pedido abierto' }
+      }
+
+      const itemsResueltos = []
+      for (const input of body.items) {
+        const item = await resolverItemPos(tx, restauranteId, input)
+        if ('error' in item) return item
+        itemsResueltos.push(item)
+      }
+
+      const cambios = {
+        tipo: body.tipo,
+        mesaLocalId: body.tipo === 'mesa' ? body.mesaLocalId! : null,
+        consumoEnLocal: body.tipo === 'mesa',
+        nombreCliente: body.nombreCliente || null,
+        telefono: body.telefono || null,
+        notas: body.notas || null,
+        metodoPago: body.metodoPago || null,
+        pagado: body.pagado ?? pedido.pagado,
+        direccion: body.tipo === 'delivery' ? body.direccion : null,
+        latitud: body.tipo === 'delivery' && body.latitud != null ? String(body.latitud) : null,
+        longitud: body.tipo === 'delivery' && body.longitud != null ? String(body.longitud) : null,
+        deliveryFee: body.tipo === 'delivery' ? (Number(body.deliveryFee) || 0).toFixed(2) : null,
+      }
+      await tx.update(PedidoUnificadoTable).set(cambios).where(eq(PedidoUnificadoTable.id, pedidoId))
+      await tx.delete(ItemPedidoUnificadoTable).where(eq(ItemPedidoUnificadoTable.pedidoId, pedidoId))
+      await tx.insert(ItemPedidoUnificadoTable).values(itemsResueltos.map((item) => ({ ...item, pedidoId })))
+
+      return {
+        operacion: 'editar_datos_pos' as const,
+        antes: { pedido: { tipo: pedido.tipo, mesaLocalId: pedido.mesaLocalId, nombreCliente: pedido.nombreCliente, telefono: pedido.telefono, notas: pedido.notas, direccion: pedido.direccion, deliveryFee: pedido.deliveryFee, metodoPago: pedido.metodoPago, pagado: pedido.pagado }, items: itemsAnteriores },
+        despues: { pedido: cambios, items: itemsResueltos },
+        reimprimeCocina: true,
+      }
     })
     if (resultado.error) return responderErrorMutacion(c, db, restauranteId, pedidoId, resultado)
     const data = await respuestaPedidoEditable(db, restauranteId, pedidoId)
