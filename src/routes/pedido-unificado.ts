@@ -326,7 +326,13 @@ export async function respuestaPedidoEditable(db: any, restauranteId: number, pe
     .where(eq(ItemPedidoUnificadoTable.pedidoId, pedidoId))
   const items = await enrichItemsWithProductInfo(db, itemsRaw)
   const motivosNoEditable = motivosPedidoNoEditable(pedido)
-  return { ...pedido, items, totalItems: items.reduce((sum, item: any) => sum + (item.cantidad || 1), 0), version: pedido.version, editable: motivosNoEditable.length === 0, motivosNoEditable }
+  let mesaNombre: string | null = null
+  if (pedido.mesaLocalId) {
+    const [mesa] = await db.select({ nombre: MesaLocalTable.nombre }).from(MesaLocalTable)
+      .where(and(eq(MesaLocalTable.id, pedido.mesaLocalId), eq(MesaLocalTable.restauranteId, restauranteId))).limit(1)
+    mesaNombre = mesa?.nombre ?? null
+  }
+  return { ...pedido, mesaNombre, items, totalItems: items.reduce((sum, item: any) => sum + (item.cantidad || 1), 0), version: pedido.version, editable: motivosNoEditable.length === 0, motivosNoEditable }
 }
 
 export async function ejecutarMutacionPos(
@@ -506,6 +512,12 @@ const pedidoUnificadoRoute = new Hono()
         .limit(1)
       sucursalNombre = suc[0]?.nombre ?? null
     }
+    let mesaNombre: string | null = null
+    if (pedido[0].mesaLocalId) {
+      const mesa = await db.select({ nombre: MesaLocalTable.nombre }).from(MesaLocalTable)
+        .where(and(eq(MesaLocalTable.id, pedido[0].mesaLocalId), eq(MesaLocalTable.restauranteId, restauranteId))).limit(1)
+      mesaNombre = mesa[0]?.nombre ?? null
+    }
 
     return c.json({
       message: 'Pedido encontrado',
@@ -513,6 +525,7 @@ const pedidoUnificadoRoute = new Hono()
       data: {
         ...pedido[0],
         sucursalNombre,
+        mesaNombre,
         items,
         totalItems: items.reduce((sum, item) => sum + (item.cantidad || 1), 0),
         version: pedido[0].version,
