@@ -9,13 +9,16 @@ import { authMiddleware } from '../middleware/auth'
 import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS } from '../lib/modulos'
 
-const posicion = z.number().int().min(0).max(100)
+// Las coordenadas no tienen un borde máximo: el lienzo del admin crece según la
+// distribución de cada restaurante. Sólo se evita guardar posiciones negativas.
+const posicionX = z.number().int().min(0)
+const posicionY = z.number().int().min(0)
 const dimension = z.number().int().min(1).max(12)
 const mesaBaseSchema = z.object({
   nombre: z.string().trim().min(1, 'El nombre es requerido').max(255),
   sucursalId: z.number().int().positive().nullable().optional(),
-  posicionX: posicion.optional(),
-  posicionY: posicion.optional(),
+  posicionX: posicionX.optional(),
+  posicionY: posicionY.optional(),
   ancho: dimension.optional(),
   alto: dimension.optional(),
   capacidad: z.number().int().min(1).max(100).optional(),
@@ -27,14 +30,11 @@ const mesaPatchSchema = mesaBaseSchema.partial()
 const layoutSchema = z.object({
   mesas: z.array(z.object({
     id: z.number().int().positive(),
-    posicionX: posicion,
-    posicionY: posicion,
+    posicionX,
+    posicionY,
     ancho: dimension,
     alto: dimension,
     orden: z.number().int().min(0).max(10_000),
-  }).superRefine((mesa, ctx) => {
-    if (mesa.posicionX + mesa.ancho > 12) ctx.addIssue({ code: 'custom', path: ['ancho'], message: 'La mesa no puede superar el ancho del grid' })
-    if (mesa.posicionY + mesa.alto > 24) ctx.addIssue({ code: 'custom', path: ['alto'], message: 'La mesa no puede superar el alto del grid' })
   })).min(1).max(200),
 })
 
@@ -67,9 +67,6 @@ mesasLocalesRoute.post('/', zValidator('json', mesaBaseSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id as number
   const body = c.req.valid('json')
-  if ((body.posicionX ?? 0) + (body.ancho ?? 1) > 12 || (body.posicionY ?? 0) + (body.alto ?? 1) > 24) {
-    return c.json({ success: false, message: 'La mesa queda fuera de los límites del grid' }, 422)
-  }
   if (!(await sucursalPerteneceAlRestaurante(db, restauranteId, body.sucursalId))) {
     return c.json({ success: false, message: 'La sucursal no pertenece a este restaurante' }, 422)
   }
@@ -107,13 +104,6 @@ mesasLocalesRoute.put('/:id{[0-9]+}', zValidator('json', mesaPatchSchema), async
   const [existente] = await db.select().from(MesaLocalTable)
     .where(and(eq(MesaLocalTable.id, id), eq(MesaLocalTable.restauranteId, restauranteId))).limit(1)
   if (!existente) return c.json({ success: false, message: 'Mesa no encontrada' }, 404)
-  const posicionX = body.posicionX ?? existente.posicionX
-  const posicionY = body.posicionY ?? existente.posicionY
-  const ancho = body.ancho ?? existente.ancho
-  const alto = body.alto ?? existente.alto
-  if (posicionX + ancho > 12 || posicionY + alto > 24) {
-    return c.json({ success: false, message: 'La mesa queda fuera de los límites del grid' }, 422)
-  }
   await db.update(MesaLocalTable).set({ ...body, updatedAt: new Date() })
     .where(and(eq(MesaLocalTable.id, id), eq(MesaLocalTable.restauranteId, restauranteId)))
   const [mesa] = await db.select().from(MesaLocalTable).where(eq(MesaLocalTable.id, id)).limit(1)
