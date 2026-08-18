@@ -106,9 +106,10 @@ mozosRoute.get('/menu', async (c) => {
     const [variantes, ingredientes, agregados] = await Promise.all([
       db.select({ id: VarianteProductoTable.id, nombre: VarianteProductoTable.nombre, precio: VarianteProductoTable.precio })
         .from(VarianteProductoTable).where(and(eq(VarianteProductoTable.productoId, producto.id), eq(VarianteProductoTable.activo, true))),
+      // `ingrediente` no tiene columna `activo`: el alta/baja se maneja en producto_ingrediente
       db.select({ id: IngredienteTable.id, nombre: IngredienteTable.nombre })
         .from(ProductoIngredienteTable).innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
-        .where(and(eq(ProductoIngredienteTable.productoId, producto.id), eq(IngredienteTable.activo, true))),
+        .where(eq(ProductoIngredienteTable.productoId, producto.id)),
       db.select({ id: AgregadoTable.id, nombre: AgregadoTable.nombre, precio: AgregadoTable.precio })
         .from(ProductoAgregadoTable).innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
         .where(and(eq(ProductoAgregadoTable.productoId, producto.id), eq(AgregadoTable.activo, true))),
