@@ -10,7 +10,10 @@ import { eq, and, count } from 'drizzle-orm'
 
 const createSucursalSchema = z.object({
   nombre: z.string().min(1, 'El nombre es requerido'),
-  direccion: z.string().max(255).optional().nullable(),
+  direccion: z.string().max(512).optional().nullable(),
+  direccionLat: z.number().min(-90).max(90).optional().nullable(),
+  direccionLng: z.number().min(-180).max(180).optional().nullable(),
+  direccionCiudad: z.string().max(255).optional().nullable(),
   whatsappEnabled: z.boolean().optional().default(false),
   whatsappNumber: z.string().max(50).optional().nullable(),
   rapiboyToken: z.string().max(512).optional().nullable(),
@@ -19,7 +22,10 @@ const createSucursalSchema = z.object({
 
 const updateSucursalSchema = z.object({
   nombre: z.string().min(1).optional(),
-  direccion: z.string().max(255).optional().nullable(),
+  direccion: z.string().max(512).optional().nullable(),
+  direccionLat: z.number().min(-90).max(90).optional().nullable(),
+  direccionLng: z.number().min(-180).max(180).optional().nullable(),
+  direccionCiudad: z.string().max(255).optional().nullable(),
   whatsappEnabled: z.boolean().optional(),
   whatsappNumber: z.string().max(50).optional().nullable(),
   rapiboyToken: z.string().max(512).optional().nullable(),
@@ -91,6 +97,9 @@ sucursalesRoute.post('/create', zValidator('json', createSucursalSchema), async 
       restauranteId,
       nombre: body.nombre,
       direccion: body.direccion ?? null,
+      direccionLat: body.direccionLat != null ? String(body.direccionLat) : null,
+      direccionLng: body.direccionLng != null ? String(body.direccionLng) : null,
+      direccionCiudad: body.direccionCiudad ?? null,
       whatsappEnabled: body.whatsappEnabled,
       whatsappNumber: body.whatsappNumber ?? null,
       rapiboyToken: body.rapiboyToken ?? null,
@@ -123,6 +132,9 @@ sucursalesRoute.put('/:id', zValidator('json', updateSucursalSchema), async (c) 
   const patch: {
     nombre?: string
     direccion?: string | null
+    direccionLat?: string | null
+    direccionLng?: string | null
+    direccionCiudad?: string | null
     whatsappEnabled?: boolean
     whatsappNumber?: string | null
     rapiboyToken?: string | null
@@ -130,6 +142,9 @@ sucursalesRoute.put('/:id', zValidator('json', updateSucursalSchema), async (c) 
   } = {}
   if (body.nombre !== undefined) patch.nombre = body.nombre
   if (body.direccion !== undefined) patch.direccion = body.direccion
+  if (body.direccionLat !== undefined) patch.direccionLat = body.direccionLat != null ? String(body.direccionLat) : null
+  if (body.direccionLng !== undefined) patch.direccionLng = body.direccionLng != null ? String(body.direccionLng) : null
+  if (body.direccionCiudad !== undefined) patch.direccionCiudad = body.direccionCiudad
   if (body.whatsappEnabled !== undefined) patch.whatsappEnabled = body.whatsappEnabled
   if (body.whatsappNumber !== undefined) patch.whatsappNumber = body.whatsappNumber
   if (body.rapiboyToken !== undefined) patch.rapiboyToken = body.rapiboyToken

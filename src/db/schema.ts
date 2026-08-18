@@ -141,7 +141,10 @@ export const sucursal = mysqlTable("sucursal", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
   nombre: varchar("nombre", { length: 255 }).notNull(),
-  direccion: varchar("direccion", { length: 255 }),
+  direccion: varchar("direccion", { length: 512 }),
+  direccionLat: decimal("direccion_lat", { precision: 10, scale: 7 }),
+  direccionLng: decimal("direccion_lng", { precision: 10, scale: 7 }),
+  direccionCiudad: varchar("direccion_ciudad", { length: 255 }),
   whatsappEnabled: boolean("whatsapp_enabled").default(false).notNull(),
   whatsappNumber: varchar("whatsapp_number", { length: 50 }),
   rapiboyToken: varchar("rapiboy_token", { length: 512 }),
@@ -316,6 +319,10 @@ export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {
   productoId: int("producto_id").notNull(), // No le ponemos fk estricta por si borran el producto, no romper el historial
   varianteId: int("variante_id"),
   varianteNombre: varchar("variante_nombre", { length: 255 }),
+  // Segunda elección opcional del producto (p. ej. tamaño + tipo de medallón).
+  // Se conserva la variante original como precio base para retrocompatibilidad.
+  varianteSecundariaId: int("variante_secundaria_id"),
+  varianteSecundariaNombre: varchar("variante_secundaria_nombre", { length: 255 }),
   cantidad: int("cantidad").default(1).notNull(),
   precioUnitario: decimal("precio_unitario", { precision: 10, scale: 2 }).notNull(),
   esCanjePuntos: boolean("es_canje_puntos").default(false),
@@ -366,6 +373,8 @@ export const varianteProducto = mysqlTable("variante_producto", {
     .notNull(),
   nombre: varchar("nombre", { length: 255 }).notNull(),
   precio: decimal("precio", { precision: 10, scale: 2 }).notNull(),
+  // 1 = variante primaria con precio absoluto; 2 = segunda elección cuyo precio es un adicional.
+  grupo: int("grupo").default(1).notNull(),
   activo: boolean("activo").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

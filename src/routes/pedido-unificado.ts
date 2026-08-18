@@ -49,6 +49,7 @@ import { asegurarOwnerStaff } from '../lib/staff'
 const itemSchema = z.object({
   productoId: z.number().int().positive(),
   varianteId: z.number().int().positive().optional(),
+  varianteSecundariaId: z.number().int().positive().optional(),
   cantidad: z.number().int().positive().default(1),
   ingredientesExcluidos: z.array(z.number().int().positive()).optional(),
   agregados: z.array(z.object({
@@ -120,6 +121,7 @@ const updateEstadoSchema = z.object({
 const posItemSchema = z.object({
   productoId: z.number().int().positive(),
   varianteId: z.number().int().positive().nullable().optional(),
+  varianteSecundariaId: z.number().int().positive().nullable().optional(),
   cantidad: z.number().int().positive(),
   ingredientesExcluidos: z.array(z.number().int().positive()).default([]),
   // Sólo el id del agregado es confiable; nombre y precio se resuelven en servidor.
@@ -275,6 +277,16 @@ export async function resolverItemPos(tx: any, restauranteId: number, input: Omi
     )).limit(1)
     if (!variante) return { error: 'ITEM_INVALIDO', message: 'La variante no pertenece al producto' } as const
   }
+  let varianteSecundaria: any = null
+  if (input.varianteSecundariaId) {
+    ;[varianteSecundaria] = await tx.select().from(VarianteProductoTable).where(and(
+      eq(VarianteProductoTable.id, input.varianteSecundariaId),
+      eq(VarianteProductoTable.productoId, producto.id),
+      eq(VarianteProductoTable.grupo, 2),
+      eq(VarianteProductoTable.activo, true),
+    )).limit(1)
+    if (!varianteSecundaria) return { error: 'ITEM_INVALIDO', message: 'La segunda variante no pertenece al producto' } as const
+  }
 
   const ingredienteIds = [...new Set(input.ingredientesExcluidos)]
   if (ingredienteIds.length) {
@@ -297,12 +309,14 @@ export async function resolverItemPos(tx: any, restauranteId: number, input: Omi
     agregados = input.agregados.map(({ id }) => byId.get(id)!)
   }
 
-  const precioBase = Number(variante ? variante.precio : producto.precio)
+  const precioBase = Number(variante ? variante.precio : producto.precio) + Number(varianteSecundaria?.precio ?? 0)
   const precioUnitario = precioBase + agregados.reduce((sum, ag) => sum + Number(ag.precio), 0)
   return {
     productoId: producto.id,
     varianteId: variante?.id ?? null,
     varianteNombre: variante?.nombre ?? null,
+    varianteSecundariaId: varianteSecundaria?.id ?? null,
+    varianteSecundariaNombre: varianteSecundaria?.nombre ?? null,
     cantidad: input.cantidad,
     precioUnitario: precioUnitario.toFixed(2),
     ingredientesExcluidos: ingredienteIds.length ? ingredienteIds : null,
@@ -318,6 +332,7 @@ export async function respuestaPedidoEditable(db: any, restauranteId: number, pe
   const itemsRaw = await db.select({
     id: ItemPedidoUnificadoTable.id, productoId: ItemPedidoUnificadoTable.productoId,
     varianteId: ItemPedidoUnificadoTable.varianteId, varianteNombre: ItemPedidoUnificadoTable.varianteNombre,
+    varianteSecundariaId: ItemPedidoUnificadoTable.varianteSecundariaId, varianteSecundariaNombre: ItemPedidoUnificadoTable.varianteSecundariaNombre,
     cantidad: ItemPedidoUnificadoTable.cantidad, precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
     nombreProducto: ProductoTable.nombre, imagenUrl: ProductoTable.imagenUrl,
     ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos, agregados: ItemPedidoUnificadoTable.agregados,
@@ -489,6 +504,8 @@ const pedidoUnificadoRoute = new Hono()
         productoId: ItemPedidoUnificadoTable.productoId,
         varianteId: ItemPedidoUnificadoTable.varianteId,
         varianteNombre: ItemPedidoUnificadoTable.varianteNombre,
+        varianteSecundariaId: ItemPedidoUnificadoTable.varianteSecundariaId,
+        varianteSecundariaNombre: ItemPedidoUnificadoTable.varianteSecundariaNombre,
         cantidad: ItemPedidoUnificadoTable.cantidad,
         precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
         nombreProducto: ProductoTable.nombre,
@@ -750,10 +767,16 @@ const pedidoUnificadoRoute = new Hono()
     const productosMap = new Map(productos.map((p) => [p.id, p]))
 
     const uniqueVariantesIds = [...new Set(items.map((i) => i.varianteId).filter(Boolean))] as number[]
+    const uniqueVariantesSecundariasIds = [...new Set(items.map((i) => i.varianteSecundariaId).filter(Boolean))] as number[]
     let variantesMap = new Map();
     if (uniqueVariantesIds.length > 0) {
       const variantesRaw = await db.select().from(VarianteProductoTable).where(inArray(VarianteProductoTable.id, uniqueVariantesIds));
       variantesMap = new Map(variantesRaw.map(v => [v.id, v]));
+    }
+    let variantesSecundariasMap = new Map();
+    if (uniqueVariantesSecundariasIds.length > 0) {
+      const rows = await db.select().from(VarianteProductoTable).where(inArray(VarianteProductoTable.id, uniqueVariantesSecundariasIds));
+      variantesSecundariasMap = new Map(rows.filter(v => v.grupo === 2).map(v => [v.id, v]));
     }
 
     // precioUnitario incluye los agregados (consistente con el flujo público)
@@ -762,6 +785,9 @@ const pedidoUnificadoRoute = new Hono()
       let precio = parseFloat(producto.precio)
       if (item.varianteId && variantesMap.has(item.varianteId)) {
         precio = parseFloat(variantesMap.get(item.varianteId).precio)
+      }
+      if (item.varianteSecundariaId && variantesSecundariasMap.has(item.varianteSecundariaId)) {
+        precio += parseFloat(variantesSecundariasMap.get(item.varianteSecundariaId).precio)
       }
       if (item.agregados?.length) {
         for (const ag of item.agregados) {
@@ -834,6 +860,8 @@ const pedidoUnificadoRoute = new Hono()
           productoId: item.productoId,
           varianteId: item.varianteId || null,
           varianteNombre: item.varianteId && variantesMap.has(item.varianteId) ? variantesMap.get(item.varianteId).nombre : null,
+          varianteSecundariaId: item.varianteSecundariaId || null,
+          varianteSecundariaNombre: item.varianteSecundariaId && variantesSecundariasMap.has(item.varianteSecundariaId) ? variantesSecundariasMap.get(item.varianteSecundariaId).nombre : null,
           cantidad: item.cantidad,
           precioUnitario: computeItemPrecio(item).toFixed(2),
           ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,

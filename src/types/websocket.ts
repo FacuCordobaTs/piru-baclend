@@ -18,6 +18,8 @@ export interface ItemPedidoWS {
   agregados?: Array<{ id: number, nombre: string, precio: string }>;
   varianteId?: number;
   varianteNombre?: string;
+  varianteSecundariaId?: number;
+  varianteSecundariaNombre?: string;
   postConfirmacion?: boolean;
   estado?: string;
 }

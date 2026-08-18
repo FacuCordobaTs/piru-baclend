@@ -213,6 +213,8 @@ export async function selectPedidosEnriquecidos(
           productoId: ItemPedidoUnificadoTable.productoId,
           varianteId: ItemPedidoUnificadoTable.varianteId,
           varianteNombre: ItemPedidoUnificadoTable.varianteNombre,
+          varianteSecundariaId: ItemPedidoUnificadoTable.varianteSecundariaId,
+          varianteSecundariaNombre: ItemPedidoUnificadoTable.varianteSecundariaNombre,
           cantidad: ItemPedidoUnificadoTable.cantidad,
           precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
           nombreProducto: ProductoTable.nombre,

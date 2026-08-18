@@ -180,6 +180,11 @@ const createProductSchema = z.object({
     nombre: z.string().min(1).max(255),
     precio: z.number().min(0),
   })).optional(),
+  variantesSecundarias: z.array(z.object({
+    id: z.number().optional(),
+    nombre: z.string().min(1).max(255),
+    precio: z.number().min(0),
+  })).optional(),
 });
 
 const updateProductSchema = z.object({
@@ -199,6 +204,11 @@ const updateProductSchema = z.object({
   descuentoFechaInicio: z.string().optional().nullable(),
   descuentoFechaFin: z.string().optional().nullable(),
   variantes: z.array(z.object({
+    id: z.number().optional(),
+    nombre: z.string().min(1).max(255),
+    precio: z.number().min(0),
+  })).optional(),
+  variantesSecundarias: z.array(z.object({
     id: z.number().optional(),
     nombre: z.string().min(1).max(255),
     precio: z.number().min(0),
@@ -275,6 +285,7 @@ const productoRoute = new Hono()
               id: VarianteProductoTable.id,
               nombre: VarianteProductoTable.nombre,
               precio: VarianteProductoTable.precio,
+              grupo: VarianteProductoTable.grupo,
             })
             .from(VarianteProductoTable)
             .where(eq(VarianteProductoTable.productoId, p.id)),
@@ -286,7 +297,8 @@ const productoRoute = new Hono()
           ingredientes: ingredientes,
           agregados: agregadosList,
           etiquetas: etiquetas,
-          variantes: variantes,
+          variantes: variantes.filter(v => v.grupo === 1),
+          variantesSecundarias: variantes.filter(v => v.grupo === 2),
         }
       })
     )
@@ -301,7 +313,7 @@ const productoRoute = new Hono()
   .post('/create', zValidator('json', createProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes } = c.req.valid('json')
+    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId) {
@@ -340,7 +352,7 @@ const productoRoute = new Hono()
       newImageUrl = await saveImage(image);
     }
 
-    const tieneVariantes = variantes && variantes.length > 0;
+    const tieneVariantes = !!(variantes && variantes.length > 0);
 
     const product = await db.insert(ProductoTable).values({
       nombre,
@@ -364,7 +376,13 @@ const productoRoute = new Hono()
           productoId,
           nombre: v.nombre,
           precio: v.precio.toString(),
+          grupo: 1,
         }))
+      )
+    }
+    if (variantesSecundarias?.length) {
+      await db.insert(VarianteProductoTable).values(
+        variantesSecundarias.map(v => ({ productoId, nombre: v.nombre, precio: v.precio.toString(), grupo: 2 }))
       )
     }
 
@@ -476,7 +494,7 @@ const productoRoute = new Hono()
   .put('/update', zValidator('json', updateProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes } = c.req.valid('json')
+    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId !== undefined) {
@@ -550,11 +568,12 @@ const productoRoute = new Hono()
         await db.delete(VarianteProductoTable)
           .where(and(
             eq(VarianteProductoTable.productoId, id),
+            eq(VarianteProductoTable.grupo, 1),
             notInArray(VarianteProductoTable.id, variantesIdsNuevas)
           ));
       } else {
         await db.delete(VarianteProductoTable)
-          .where(eq(VarianteProductoTable.productoId, id));
+          .where(and(eq(VarianteProductoTable.productoId, id), eq(VarianteProductoTable.grupo, 1)));
       }
 
       // 2. Insertar o actualizar variantes
@@ -564,7 +583,8 @@ const productoRoute = new Hono()
           await db.update(VarianteProductoTable)
             .set({ 
               nombre: variante.nombre, 
-              precio: variante.precio.toString() 
+              precio: variante.precio.toString(),
+              grupo: 1,
             })
             .where(and(
               eq(VarianteProductoTable.id, variante.id),
@@ -576,7 +596,30 @@ const productoRoute = new Hono()
             productoId: id,
             nombre: variante.nombre,
             precio: variante.precio.toString(),
+            grupo: 1,
           });
+        }
+      }
+    }
+
+    // El segundo grupo se administra por separado para que `variantes` conserve su
+    // significado histórico en clientes viejos.
+    if (variantesSecundarias !== undefined) {
+      const ids = variantesSecundarias.filter(v => v.id).map(v => v.id!)
+      if (ids.length) {
+        await db.delete(VarianteProductoTable).where(and(
+          eq(VarianteProductoTable.productoId, id), eq(VarianteProductoTable.grupo, 2),
+          notInArray(VarianteProductoTable.id, ids),
+        ))
+      } else {
+        await db.delete(VarianteProductoTable).where(and(eq(VarianteProductoTable.productoId, id), eq(VarianteProductoTable.grupo, 2)))
+      }
+      for (const variante of variantesSecundarias) {
+        if (variante.id) {
+          await db.update(VarianteProductoTable).set({ nombre: variante.nombre, precio: variante.precio.toString(), grupo: 2 })
+            .where(and(eq(VarianteProductoTable.id, variante.id), eq(VarianteProductoTable.productoId, id), eq(VarianteProductoTable.grupo, 2)))
+        } else {
+          await db.insert(VarianteProductoTable).values({ productoId: id, nombre: variante.nombre, precio: variante.precio.toString(), grupo: 2 })
         }
       }
     }
@@ -785,6 +828,7 @@ const productoRoute = new Hono()
               id: VarianteProductoTable.id,
               nombre: VarianteProductoTable.nombre,
               precio: VarianteProductoTable.precio,
+              grupo: VarianteProductoTable.grupo,
             })
             .from(VarianteProductoTable)
             .where(eq(VarianteProductoTable.productoId, p.id)),
@@ -796,7 +840,8 @@ const productoRoute = new Hono()
           ingredientes,
           agregados: agregadosList,
           etiquetas,
-          variantes,
+          variantes: variantes.filter(v => v.grupo === 1),
+          variantesSecundarias: variantes.filter(v => v.grupo === 2),
         }
       })
     )

@@ -16,6 +16,7 @@ import {
   notificacion as NotificacionTable,
   pagoSubtotal as PagoSubtotalTable,
   codigoDescuento as CodigoDescuentoTable,
+  sucursal as SucursalTable,
 } from '../db/schema';
 import { MesaSession, WebSocketMessage, ItemPedidoWS, AdminSession, AdminNotification, AdminNotificationType, CheckoutDeliveryData } from '../types/websocket';
 import { asignarAliasAPedido } from '../services/cucuru';
@@ -37,6 +38,7 @@ export interface SalaOrderCacheEntry {
   direccion?: string
   nombreCliente?: string
   telefono?: string
+  whatsappDestino?: string | null
 }
 
 class WebSocketManager {
@@ -611,7 +613,8 @@ class WebSocketManager {
       }
 
       const baseNombre = producto[0]?.nombre || item.nombreProducto || 'Producto';
-      const nombreProducto = item.varianteNombre ? `${baseNombre} - ${item.varianteNombre}` : baseNombre;
+      const nombresVariantes = [item.varianteNombre, item.varianteSecundariaNombre].filter(Boolean).join(' · ')
+      const nombreProducto = nombresVariantes ? `${baseNombre} - ${nombresVariantes}` : baseNombre;
 
       const newItem: ItemPedidoWS = {
         id: this.salaItemIdCounter++,
@@ -626,6 +629,8 @@ class WebSocketManager {
         agregados: item.agregados || [],
         varianteId: item.varianteId,
         varianteNombre: item.varianteNombre,
+        varianteSecundariaId: item.varianteSecundariaId,
+        varianteSecundariaNombre: item.varianteSecundariaNombre,
         postConfirmacion: false,
         estado: 'pending',
       };
@@ -1448,7 +1453,24 @@ class WebSocketManager {
         `${checkoutData.nombre} - $${total.toFixed(2)}`,
         pedidoUnificadoId
       ));
-      this.broadcastAdminUpdate(sala[0].restauranteId!, checkoutData.tipoPedido);
+      this.broadcastAdminUpdate(sala[0].restauranteId!, checkoutData.tipoPedido, {
+        sucursalId: checkoutData.sucursalId ?? null,
+      });
+
+      let whatsappDestino: string | null = null;
+      if (checkoutData.sucursalId != null) {
+        const [sucursalPedido] = await this.db.select({
+          whatsappEnabled: SucursalTable.whatsappEnabled,
+          whatsappNumber: SucursalTable.whatsappNumber,
+        }).from(SucursalTable).where(and(
+          eq(SucursalTable.id, checkoutData.sucursalId),
+          eq(SucursalTable.restauranteId, sala[0].restauranteId!),
+          eq(SucursalTable.activo, true),
+        )).limit(1);
+        if (sucursalPedido?.whatsappEnabled && sucursalPedido.whatsappNumber) {
+          whatsappDestino = sucursalPedido.whatsappNumber;
+        }
+      }
 
       // Categoría por producto para agrupar el mensaje de WhatsApp del cliente al local.
       const categoriaPorProducto = new Map<number, string | null>();
@@ -1490,6 +1512,7 @@ class WebSocketManager {
         telefono: checkoutData.telefono,
         montoDescuento: montoDescuento > 0 ? montoDescuento.toFixed(2) : undefined,
         metodoPago: checkoutData.metodoPago || 'transferencia',
+        whatsappDestino,
       };
 
       this.salaOrderCache.set(sala[0].token, payload);
