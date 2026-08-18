@@ -123,6 +123,7 @@ const updateProfileSchema = z.object({
   transferenciaAlias: z.string().optional(),
   colorPrimario: z.string().optional(),
   colorSecundario: z.string().optional(),
+  usarColorUnico: z.boolean().optional(),
   disenoAlternativo: z.boolean().optional(),
 })
 
@@ -332,7 +333,7 @@ restauranteRoute.post('/complete-profile', zValidator('json', completeProfileSch
 restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre, direccion, direccionTexto, direccionLat, direccionLng, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, comprobantesWhatsapp, transferenciaAlias, colorPrimario, colorSecundario, disenoAlternativo } = c.req.valid('json')
+  const { nombre, direccion, direccionTexto, direccionLat, direccionLng, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, comprobantesWhatsapp, transferenciaAlias, colorPrimario, colorSecundario, usarColorUnico, disenoAlternativo } = c.req.valid('json')
 
   try {
     // Obtener datos actuales del restaurante
@@ -374,6 +375,7 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
     if (transferenciaAlias !== undefined) updateData.transferenciaAlias = transferenciaAlias
     if (colorPrimario !== undefined) updateData.colorPrimario = colorPrimario
     if (colorSecundario !== undefined) updateData.colorSecundario = colorSecundario
+    if (usarColorUnico !== undefined) updateData.usarColorUnico = usarColorUnico
     if (disenoAlternativo !== undefined) updateData.disenoAlternativo = disenoAlternativo
     if (username !== undefined) {
       if (!username || username.trim() === '') {

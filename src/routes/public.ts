@@ -137,6 +137,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             taloCredencialesOk: sql<boolean>`(${RestauranteTable.taloClientId} IS NOT NULL AND ${RestauranteTable.taloClientSecret} IS NOT NULL AND ${RestauranteTable.taloUserId} IS NOT NULL)`.as('taloCredencialesOk'),
             colorPrimario: RestauranteTable.colorPrimario,
             colorSecundario: RestauranteTable.colorSecundario,
+            usarColorUnico: RestauranteTable.usarColorUnico,
             disenoAlternativo: RestauranteTable.disenoAlternativo,
             orderGroupEnabled: RestauranteTable.orderGroupEnabled,
             codigoDescuentoEnabled: RestauranteTable.codigoDescuentoEnabled,
@@ -416,6 +417,7 @@ publicRoute.get('/sala/join/:token', async (c) => {
             mpConnected: RestauranteTable.mpConnected,
             colorPrimario: RestauranteTable.colorPrimario,
             colorSecundario: RestauranteTable.colorSecundario,
+            usarColorUnico: RestauranteTable.usarColorUnico,
             direccion: RestauranteTable.direccion,
             username: RestauranteTable.username,
             transferenciaAlias: RestauranteTable.transferenciaAlias,
@@ -1930,6 +1932,7 @@ publicRoute.get('/pedido-info/:id', async (c) => {
             mpPublicKey: RestauranteTable.mpPublicKey,
             colorPrimario: RestauranteTable.colorPrimario,
             colorSecundario: RestauranteTable.colorSecundario,
+            usarColorUnico: RestauranteTable.usarColorUnico,
             comprobantesWhatsapp: RestauranteTable.comprobantesWhatsapp,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, pedido.restauranteId)).limit(1)
 

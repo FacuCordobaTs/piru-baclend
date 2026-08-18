@@ -64,6 +64,9 @@ export const restaurante = mysqlTable("restaurante", {
 
   colorPrimario: varchar("color_primario", { length: 50 }),
   colorSecundario: varchar("color_secundario", { length: 50 }),
+  // Si está activo, colorPrimario se usa sólo como acento (botones/detalles),
+  // sin reemplazar la paleta neutra de fondos y textos de la tienda.
+  usarColorUnico: boolean("usar_color_unico").default(false).notNull(),
   // Diseño de las cartas de producto. El glassmorphism quedó discontinuado: las cartas
   // usan siempre el diseño sólido (no-glass). La columna se mantiene por retrocompat con
   // clientes viejos, pero el frontend la ignora y el backend siempre responde `true`.
