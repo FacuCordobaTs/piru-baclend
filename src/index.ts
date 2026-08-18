@@ -104,6 +104,8 @@ app.use('*', cors({
     'http://tauri.localhost',   // Variación posible
     'https://alfajor.pages.dev',
     'https://alfajorconpapas.com',
+    'https://che-milanesa.pages.dev',
+    'https://che-milanesa.com',
     'https://panther-d5w.pages.dev',
     'https://burgersdelsur.pages.dev',
     'https://burgersdelsur.com',
