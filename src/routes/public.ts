@@ -94,6 +94,22 @@ async function whatsappPropioDeSucursal(
     return sucursal?.whatsappEnabled && sucursal.whatsappNumber ? sucursal.whatsappNumber : null
 }
 
+async function aliasTransferenciaDeSucursal(
+    db: any,
+    restauranteId: number,
+    sucursalId: number | null,
+): Promise<string | null> {
+    if (sucursalId == null) return null
+    const [sucursal] = await db.select({
+        transferenciaAlias: SucursalTable.transferenciaAlias,
+    }).from(SucursalTable).where(and(
+        eq(SucursalTable.id, sucursalId),
+        eq(SucursalTable.restauranteId, restauranteId),
+        eq(SucursalTable.activo, true),
+    )).limit(1)
+    return sucursal?.transferenciaAlias?.trim() || null
+}
+
 publicRoute.get('/restaurante/:username', async (c) => {
     const db = drizzle(pool)
     const username = c.req.param('username')
@@ -228,6 +244,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
                 direccionLat: SucursalTable.direccionLat,
                 direccionLng: SucursalTable.direccionLng,
                 direccionCiudad: SucursalTable.direccionCiudad,
+                transferenciaAlias: SucursalTable.transferenciaAlias,
             })
             .from(SucursalTable)
             .where(and(
@@ -1101,6 +1118,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 // Campo aditivo para clientes nuevos. Los bundles viejos siguen
                 // usando el WhatsApp general del restaurante.
                 whatsappDestino: await whatsappPropioDeSucursal(db, restauranteId, pedidoSucursalId),
+                transferenciaAliasDestino: await aliasTransferenciaDeSucursal(db, restauranteId, pedidoSucursalId),
                 horarioProgramado: horarioProgramado || null,
             }
         }, 201)
@@ -1561,6 +1579,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 cvuDinamico: cuentaCucuru?.accountNumber || cuentaTalo?.cvu || null,
                 sucursalId: pedidoSucursalIdTk,
                 whatsappDestino: await whatsappPropioDeSucursal(db, restauranteId, pedidoSucursalIdTk),
+                transferenciaAliasDestino: await aliasTransferenciaDeSucursal(db, restauranteId, pedidoSucursalIdTk),
                 horarioProgramado: horarioProgramado || null,
             }
         }, 201)

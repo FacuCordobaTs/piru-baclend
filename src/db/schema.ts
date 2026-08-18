@@ -145,6 +145,7 @@ export const sucursal = mysqlTable("sucursal", {
   direccionLat: decimal("direccion_lat", { precision: 10, scale: 7 }),
   direccionLng: decimal("direccion_lng", { precision: 10, scale: 7 }),
   direccionCiudad: varchar("direccion_ciudad", { length: 255 }),
+  transferenciaAlias: varchar("transferencia_alias", { length: 255 }),
   whatsappEnabled: boolean("whatsapp_enabled").default(false).notNull(),
   whatsappNumber: varchar("whatsapp_number", { length: 50 }),
   rapiboyToken: varchar("rapiboy_token", { length: 512 }),

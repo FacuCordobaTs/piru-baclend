@@ -14,6 +14,7 @@ const createSucursalSchema = z.object({
   direccionLat: z.number().min(-90).max(90).optional().nullable(),
   direccionLng: z.number().min(-180).max(180).optional().nullable(),
   direccionCiudad: z.string().max(255).optional().nullable(),
+  transferenciaAlias: z.string().max(255).optional().nullable(),
   whatsappEnabled: z.boolean().optional().default(false),
   whatsappNumber: z.string().max(50).optional().nullable(),
   rapiboyToken: z.string().max(512).optional().nullable(),
@@ -26,6 +27,7 @@ const updateSucursalSchema = z.object({
   direccionLat: z.number().min(-90).max(90).optional().nullable(),
   direccionLng: z.number().min(-180).max(180).optional().nullable(),
   direccionCiudad: z.string().max(255).optional().nullable(),
+  transferenciaAlias: z.string().max(255).optional().nullable(),
   whatsappEnabled: z.boolean().optional(),
   whatsappNumber: z.string().max(50).optional().nullable(),
   rapiboyToken: z.string().max(512).optional().nullable(),
@@ -100,6 +102,7 @@ sucursalesRoute.post('/create', zValidator('json', createSucursalSchema), async 
       direccionLat: body.direccionLat != null ? String(body.direccionLat) : null,
       direccionLng: body.direccionLng != null ? String(body.direccionLng) : null,
       direccionCiudad: body.direccionCiudad ?? null,
+      transferenciaAlias: body.transferenciaAlias?.trim() || null,
       whatsappEnabled: body.whatsappEnabled,
       whatsappNumber: body.whatsappNumber ?? null,
       rapiboyToken: body.rapiboyToken?.trim() || null,
@@ -135,6 +138,7 @@ sucursalesRoute.put('/:id', zValidator('json', updateSucursalSchema), async (c) 
     direccionLat?: string | null
     direccionLng?: string | null
     direccionCiudad?: string | null
+    transferenciaAlias?: string | null
     whatsappEnabled?: boolean
     whatsappNumber?: string | null
     rapiboyToken?: string | null
@@ -145,6 +149,7 @@ sucursalesRoute.put('/:id', zValidator('json', updateSucursalSchema), async (c) 
   if (body.direccionLat !== undefined) patch.direccionLat = body.direccionLat != null ? String(body.direccionLat) : null
   if (body.direccionLng !== undefined) patch.direccionLng = body.direccionLng != null ? String(body.direccionLng) : null
   if (body.direccionCiudad !== undefined) patch.direccionCiudad = body.direccionCiudad
+  if (body.transferenciaAlias !== undefined) patch.transferenciaAlias = body.transferenciaAlias?.trim() || null
   if (body.whatsappEnabled !== undefined) patch.whatsappEnabled = body.whatsappEnabled
   if (body.whatsappNumber !== undefined) patch.whatsappNumber = body.whatsappNumber
   if (body.rapiboyToken !== undefined) patch.rapiboyToken = body.rapiboyToken?.trim() || null

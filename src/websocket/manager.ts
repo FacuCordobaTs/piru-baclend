@@ -39,6 +39,7 @@ export interface SalaOrderCacheEntry {
   nombreCliente?: string
   telefono?: string
   whatsappDestino?: string | null
+  transferenciaAliasDestino?: string | null
 }
 
 class WebSocketManager {
@@ -1466,10 +1467,12 @@ class WebSocketManager {
       });
 
       let whatsappDestino: string | null = null;
+      let transferenciaAliasDestino: string | null = null;
       if (checkoutData.sucursalId != null) {
         const [sucursalPedido] = await this.db.select({
           whatsappEnabled: SucursalTable.whatsappEnabled,
           whatsappNumber: SucursalTable.whatsappNumber,
+          transferenciaAlias: SucursalTable.transferenciaAlias,
         }).from(SucursalTable).where(and(
           eq(SucursalTable.id, checkoutData.sucursalId),
           eq(SucursalTable.restauranteId, sala[0].restauranteId!),
@@ -1478,6 +1481,7 @@ class WebSocketManager {
         if (sucursalPedido?.whatsappEnabled && sucursalPedido.whatsappNumber) {
           whatsappDestino = sucursalPedido.whatsappNumber;
         }
+        transferenciaAliasDestino = sucursalPedido?.transferenciaAlias?.trim() || null;
       }
 
       // Categoría por producto para agrupar el mensaje de WhatsApp del cliente al local.
@@ -1521,6 +1525,7 @@ class WebSocketManager {
         montoDescuento: montoDescuento > 0 ? montoDescuento.toFixed(2) : undefined,
         metodoPago: checkoutData.metodoPago || 'transferencia',
         whatsappDestino,
+        transferenciaAliasDestino,
       };
 
       this.salaOrderCache.set(sala[0].token, payload);
