@@ -88,15 +88,16 @@ class WebSocketManager {
     }
   }
 
-  addMozoConnection(restauranteId: number, sucursalId: number, ws: any) {
-    const key = `${restauranteId}:${sucursalId}`
+  addMozoConnection(restauranteId: number, sucursalId: number | null, ws: any) {
+    // Los mozos sin sucursal operan sobre todo el restaurante: se registran bajo `*`.
+    const key = `${restauranteId}:${sucursalId ?? '*'}`
     const connections = this.mozoSessions.get(key) ?? new Set<any>()
     connections.add(ws)
     this.mozoSessions.set(key, connections)
   }
 
-  removeMozoConnection(restauranteId: number, sucursalId: number, ws: any) {
-    const key = `${restauranteId}:${sucursalId}`
+  removeMozoConnection(restauranteId: number, sucursalId: number | null, ws: any) {
+    const key = `${restauranteId}:${sucursalId ?? '*'}`
     const connections = this.mozoSessions.get(key)
     if (!connections) return
     connections.delete(ws)
@@ -104,15 +105,21 @@ class WebSocketManager {
   }
 
   broadcastMozoOrderEvent(restauranteId: number, sucursalId: number | null | undefined, payload: any) {
-    if (sucursalId == null) return
-    const connections = this.mozoSessions.get(`${restauranteId}:${sucursalId}`)
-    if (!connections) return
+    // Evento de sucursal: a los mozos de esa sucursal + a los que operan sobre todo
+    // el restaurante (clave `*`). Evento sin sucursal: solo a los de `*`.
+    const keys = sucursalId == null
+      ? [`${restauranteId}:*`]
+      : [`${restauranteId}:${sucursalId}`, `${restauranteId}:*`]
     const message = JSON.stringify({ type: 'MOZO_PEDIDO_EVENT', payload })
-    connections.forEach((client) => {
-      if (client.readyState === 1) {
-        try { client.send(message) } catch (error) { console.error('Error enviando MOZO_PEDIDO_EVENT:', error) }
-      }
-    })
+    for (const key of keys) {
+      const connections = this.mozoSessions.get(key)
+      if (!connections) continue
+      connections.forEach((client) => {
+        if (client.readyState === 1) {
+          try { client.send(message) } catch (error) { console.error('Error enviando MOZO_PEDIDO_EVENT:', error) }
+        }
+      })
+    }
   }
 
   // Enviar notificación a todos los admins de un restaurante y guardar en BD

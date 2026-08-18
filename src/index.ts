@@ -339,19 +339,20 @@ app.get(
     const token = c.req.query('token')
     const principal = token ? await resolverSesionStaff(drizzle(pool), token) : null
     const db = drizzle(pool)
-    const modulosActivos = principal?.sucursalId ? await Promise.all([
+    // La sucursal no es obligatoria: sin ella el mozo opera sobre todo el restaurante.
+    const modulosActivos = principal ? await Promise.all([
       tieneModuloActivo(db, principal.restauranteId, MODULE_KEYS.POS),
       tieneModuloActivo(db, principal.restauranteId, MODULE_KEYS.MESAS),
     ]) : [false, false]
-    if (!principal?.sucursalId || !modulosActivos.every(Boolean)) {
+    if (!principal || !modulosActivos.every(Boolean)) {
       return {
-        async onOpen(_event: any, ws: any) { ws.close(1008, 'Sesión de staff inválida o sin sucursal asignada') },
+        async onOpen(_event: any, ws: any) { ws.close(1008, 'Sesión de staff inválida o módulos POS/Mesas inactivos') },
         async onMessage() {}, async onClose() {}, async onError() {},
       }
     }
     return {
       async onOpen(_event: any, ws: any) {
-        wsManager.addMozoConnection(principal.restauranteId, principal.sucursalId!, ws)
+        wsManager.addMozoConnection(principal.restauranteId, principal.sucursalId, ws)
         ws.send(JSON.stringify({ type: 'MOZO_READY', payload: { sucursalId: principal.sucursalId } }))
       },
       async onMessage(event: any, ws: any) {
@@ -360,7 +361,7 @@ app.get(
           if (data.type === 'PING') ws.send(JSON.stringify({ type: 'PONG' }))
         } catch { /* mensajes inválidos no alteran el canal */ }
       },
-      async onClose(_event: any, ws: any) { wsManager.removeMozoConnection(principal.restauranteId, principal.sucursalId!, ws) },
+      async onClose(_event: any, ws: any) { wsManager.removeMozoConnection(principal.restauranteId, principal.sucursalId, ws) },
       async onError(event: any) { console.error('❌ Mozo WebSocket error:', event) },
     }
   }),

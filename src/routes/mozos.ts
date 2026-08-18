@@ -53,10 +53,12 @@ function staff(c: any) {
   return (c as StaffContext).staff
 }
 
-/** La app de mozos nunca opera globalmente: una sucursal es obligatoria. */
+/**
+ * La app de mozos opera sobre la sucursal del principal; si no tiene una
+ * asignada, sobre todo el restaurante.
+ */
 async function requireMozoScope(c: any, next: any) {
   const principal = staff(c)
-  if (!principal?.sucursalId) return c.json({ success: false, code: 'SUCURSAL_REQUERIDA', message: 'Este usuario de staff no tiene una sucursal asignada' }, 403)
   const db = drizzle(pool)
   const [pos, mesas] = await Promise.all([
     tieneModuloActivo(db, principal.restauranteId, MODULE_KEYS.POS),
@@ -66,12 +68,14 @@ async function requireMozoScope(c: any, next: any) {
   await next()
 }
 
-async function pedidoDeLaSucursal(db: any, principal: ReturnType<typeof staff>, pedidoId: number) {
-  const [pedido] = await db.select().from(PedidoUnificadoTable).where(and(
+/** Un pedido del restaurante; si el mozo tiene sucursal, restringido a ella. */
+async function pedidoEnAlcance(db: any, principal: ReturnType<typeof staff>, pedidoId: number) {
+  const condiciones = [
     eq(PedidoUnificadoTable.id, pedidoId),
     eq(PedidoUnificadoTable.restauranteId, principal.restauranteId),
-    eq(PedidoUnificadoTable.sucursalId, principal.sucursalId!),
-  )).limit(1)
+  ]
+  if (principal.sucursalId != null) condiciones.push(eq(PedidoUnificadoTable.sucursalId, principal.sucursalId))
+  const [pedido] = await db.select().from(PedidoUnificadoTable).where(and(...condiciones)).limit(1)
   return pedido ?? null
 }
 
@@ -117,16 +121,18 @@ mozosRoute.get('/menu', async (c) => {
   return c.json({ success: true, data: payload }, 200, { ETag: etag, 'Cache-Control': 'private, max-age=300, must-revalidate' })
 })
 
-/** Resumen mínimo para el grid táctil, limitado a la sucursal del principal. */
+/** Resumen mínimo para el grid táctil, limitado a la sucursal del principal (o a todo el restaurante si no tiene una). */
 mozosRoute.get('/mesas', async (c) => {
   const db = drizzle(pool)
   const principal = staff(c)
-  const mesas = await db.select().from(MesaLocalTable).where(and(
-    eq(MesaLocalTable.restauranteId, principal.restauranteId), eq(MesaLocalTable.sucursalId, principal.sucursalId!), eq(MesaLocalTable.activo, true),
-  )).orderBy(asc(MesaLocalTable.orden), asc(MesaLocalTable.id))
+  const condMesas = [eq(MesaLocalTable.restauranteId, principal.restauranteId), eq(MesaLocalTable.activo, true)]
+  if (principal.sucursalId != null) condMesas.push(eq(MesaLocalTable.sucursalId, principal.sucursalId))
+  const mesas = await db.select().from(MesaLocalTable).where(and(...condMesas)).orderBy(asc(MesaLocalTable.orden), asc(MesaLocalTable.id))
   const ids = mesas.map((mesa) => mesa.id)
+  const condAbiertos = [eq(PedidoUnificadoTable.restauranteId, principal.restauranteId), inArray(PedidoUnificadoTable.mesaLocalId, ids), notInArray(PedidoUnificadoTable.estado, [...ESTADOS_CERRADOS])]
+  if (principal.sucursalId != null) condAbiertos.push(eq(PedidoUnificadoTable.sucursalId, principal.sucursalId))
   const abiertos = ids.length ? await db.select({ id: PedidoUnificadoTable.id, mesaLocalId: PedidoUnificadoTable.mesaLocalId, estado: PedidoUnificadoTable.estado, total: PedidoUnificadoTable.total, version: PedidoUnificadoTable.version, updatedAt: PedidoUnificadoTable.updatedAt })
-    .from(PedidoUnificadoTable).where(and(eq(PedidoUnificadoTable.restauranteId, principal.restauranteId), eq(PedidoUnificadoTable.sucursalId, principal.sucursalId!), inArray(PedidoUnificadoTable.mesaLocalId, ids), notInArray(PedidoUnificadoTable.estado, [...ESTADOS_CERRADOS]))) : []
+    .from(PedidoUnificadoTable).where(and(...condAbiertos)) : []
   const porMesa = new Map(abiertos.map((pedido) => [pedido.mesaLocalId, pedido]))
   return c.json({ success: true, data: mesas.map((mesa) => ({ ...mesa, pedido: porMesa.get(mesa.id) ?? null })) })
 })
@@ -135,7 +141,8 @@ mozosRoute.get('/pedidos/:id{[0-9]+}', async (c) => {
   const db = drizzle(pool)
   const principal = staff(c)
   const pedidoId = Number(c.req.param('id'))
-  if (!(await pedidoDeLaSucursal(db, principal, pedidoId))) return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
+  const enAlcance = await pedidoEnAlcance(db, principal, pedidoId)
+  if (!enAlcance) return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
   return c.json({ success: true, data: await respuestaPedidoEditable(db, principal.restauranteId, pedidoId) })
 })
 
@@ -146,8 +153,10 @@ mozosRoute.post('/pedidos', zValidator('json', crearPedidoSchema), async (c) => 
   const creado = await db.transaction(async (tx: any) => {
     const reserva = await reservarMesaLocal(tx, principal.restauranteId, body.mesaLocalId, principal.sucursalId)
     if ('error' in reserva) return reserva
-    // Una mesa sin sucursal nunca es visible por este endpoint, aunque pertenezca al local.
-    if (reserva.mesa.sucursalId !== principal.sucursalId) return { error: 'MESA_SUCURSAL_INVALIDA' as const, message: 'La mesa no pertenece a tu sucursal' }
+    // Con sucursal asignada, la mesa debe ser de esa sucursal. Sin sucursal, el mozo
+    // opera sobre cualquier mesa del restaurante y el pedido hereda la de la mesa.
+    if (principal.sucursalId != null && reserva.mesa.sucursalId !== principal.sucursalId) return { error: 'MESA_SUCURSAL_INVALIDA' as const, message: 'La mesa no pertenece a tu sucursal' }
+    const sucursalPedido = reserva.mesa.sucursalId ?? principal.sucursalId ?? null
     const items: any[] = []
     for (const entrada of body.items) {
       const item = await resolverItemPos(tx, principal.restauranteId, { ...entrada, version: 1 })
@@ -156,24 +165,25 @@ mozosRoute.post('/pedidos', zValidator('json', crearPedidoSchema), async (c) => 
     }
     const total = items.reduce((sum, item) => sum + Number(item.precioUnitario) * item.cantidad, 0)
     const inserted = await tx.insert(PedidoUnificadoTable).values({
-      restauranteId: principal.restauranteId, sucursalId: principal.sucursalId, mesaLocalId: body.mesaLocalId,
+      restauranteId: principal.restauranteId, sucursalId: sucursalPedido, mesaLocalId: body.mesaLocalId,
       consumoEnLocal: true, tipo: 'mesa', estado: 'pending', total: total.toFixed(2),
       nombreCliente: body.nombreCliente || null, notas: body.notas || null, anotadoManualmente: true,
       pagado: false, creadoPorUsuarioId: principal.usuarioId,
     })
     const pedidoId = Number(inserted[0].insertId)
     await tx.insert(ItemPedidoUnificadoTable).values(items.map((item) => ({ pedidoId, ...item })))
-    return { pedidoId }
+    return { pedidoId, sucursalId: sucursalPedido }
   })
   if (!('pedidoId' in creado)) return c.json({ success: false, code: creado.error, message: creado.message }, creado.error === 'MESA_OCUPADA' ? 409 : 422)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, creado.pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId: creado.pedidoId, tipo: 'mesa', sucursalId: principal.sucursalId, event: 'upsert', reason: 'created', shouldPrint: true })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId: creado.pedidoId, tipo: 'mesa', sucursalId: creado.sucursalId, event: 'upsert', reason: 'created', shouldPrint: true })
   return c.json({ success: true, data }, 201)
 })
 
 mozosRoute.post('/pedidos/:id{[0-9]+}/items', zValidator('json', editarItemSchema), async (c) => {
   const db = drizzle(pool); const principal = staff(c); const pedidoId = Number(c.req.param('id')); const body = c.req.valid('json')
-  if (!(await pedidoDeLaSucursal(db, principal, pedidoId))) return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
+  const enAlcance = await pedidoEnAlcance(db, principal, pedidoId)
+  if (!enAlcance) return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
   const resultado = await ejecutarMutacionPos(db, principal.restauranteId, pedidoId, body.version, async (tx) => {
     const item = await resolverItemPos(tx, principal.restauranteId, body); if ('error' in item) return item
     const inserted = await tx.insert(ItemPedidoUnificadoTable).values({ pedidoId, ...item })
@@ -181,13 +191,14 @@ mozosRoute.post('/pedidos/:id{[0-9]+}/items', zValidator('json', editarItemSchem
   }, { id: principal.usuarioId, tipo: 'staff_mozo' })
   if (resultado.error) return respuestaErrorMutacion(c, db, principal, pedidoId, resultado)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: principal.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: enAlcance.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
   return c.json({ success: true, data })
 })
 
 mozosRoute.put('/pedidos/:id{[0-9]+}/items/:itemId{[0-9]+}', zValidator('json', editarItemSchema), async (c) => {
   const db = drizzle(pool); const principal = staff(c); const pedidoId = Number(c.req.param('id')); const itemId = Number(c.req.param('itemId')); const body = c.req.valid('json')
-  if (!(await pedidoDeLaSucursal(db, principal, pedidoId))) return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
+  const enAlcance = await pedidoEnAlcance(db, principal, pedidoId)
+  if (!enAlcance) return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
   const resultado = await ejecutarMutacionPos(db, principal.restauranteId, pedidoId, body.version, async (tx, _pedido, items) => {
     const antes = items.find((item: any) => item.id === itemId); if (!antes) return { error: 'ITEM_NO_ENCONTRADO', message: 'El ítem no pertenece al pedido' }
     const item = await resolverItemPos(tx, principal.restauranteId, body); if ('error' in item) return item
@@ -196,13 +207,14 @@ mozosRoute.put('/pedidos/:id{[0-9]+}/items/:itemId{[0-9]+}', zValidator('json', 
   }, { id: principal.usuarioId, tipo: 'staff_mozo' })
   if (resultado.error) return respuestaErrorMutacion(c, db, principal, pedidoId, resultado)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: principal.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: enAlcance.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
   return c.json({ success: true, data })
 })
 
 mozosRoute.delete('/pedidos/:id{[0-9]+}/items/:itemId{[0-9]+}', zValidator('json', eliminarItemSchema), async (c) => {
   const db = drizzle(pool); const principal = staff(c); const pedidoId = Number(c.req.param('id')); const itemId = Number(c.req.param('itemId')); const { version } = c.req.valid('json')
-  if (!(await pedidoDeLaSucursal(db, principal, pedidoId))) return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
+  const enAlcance = await pedidoEnAlcance(db, principal, pedidoId)
+  if (!enAlcance) return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
   const resultado = await ejecutarMutacionPos(db, principal.restauranteId, pedidoId, version, async (tx, _pedido, items) => {
     const antes = items.find((item: any) => item.id === itemId); if (!antes) return { error: 'ITEM_NO_ENCONTRADO', message: 'El ítem no pertenece al pedido' }
     if (items.length <= 1) return { error: 'PEDIDO_SIN_ITEMS', message: 'El pedido debe conservar al menos un ítem' }
@@ -211,13 +223,14 @@ mozosRoute.delete('/pedidos/:id{[0-9]+}/items/:itemId{[0-9]+}', zValidator('json
   }, { id: principal.usuarioId, tipo: 'staff_mozo' })
   if (resultado.error) return respuestaErrorMutacion(c, db, principal, pedidoId, resultado)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: principal.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: enAlcance.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
   return c.json({ success: true, data })
 })
 
 mozosRoute.put('/pedidos/:id{[0-9]+}', zValidator('json', editarPedidoSchema), async (c) => {
   const db = drizzle(pool); const principal = staff(c); const pedidoId = Number(c.req.param('id')); const body = c.req.valid('json')
-  if (!(await pedidoDeLaSucursal(db, principal, pedidoId))) return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
+  const enAlcance = await pedidoEnAlcance(db, principal, pedidoId)
+  if (!enAlcance) return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
   const resultado = await ejecutarMutacionPos(db, principal.restauranteId, pedidoId, body.version, async (tx, pedido) => {
     const antes = { nombreCliente: pedido.nombreCliente, notas: pedido.notas }
     const despues: any = {}; if (body.nombreCliente !== undefined) despues.nombreCliente = body.nombreCliente || null; if (body.notas !== undefined) despues.notas = body.notas || null
@@ -226,7 +239,7 @@ mozosRoute.put('/pedidos/:id{[0-9]+}', zValidator('json', editarPedidoSchema), a
   }, { id: principal.usuarioId, tipo: 'staff_mozo' })
   if (resultado.error) return respuestaErrorMutacion(c, db, principal, pedidoId, resultado)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: principal.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: enAlcance.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
   return c.json({ success: true, data })
 })
 
