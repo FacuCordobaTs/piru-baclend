@@ -88,7 +88,7 @@ sucursalesRoute.post('/create', zValidator('json', createSucursalSchema), async 
     // Las credenciales de Rapiboy son configuración del módulo. Si se desactiva,
     // se conservan para una futura reactivación; sólo puede eliminarse una
     // credencial existente, no crearla ni modificarla.
-    if (body.rapiboyToken !== null && body.rapiboyToken !== undefined
+    if (body.rapiboyToken?.trim()
       && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.RAPIBOY))) {
       return moduloRequerido(c, MODULE_KEYS.RAPIBOY, 'Activá el módulo Rapiboy para configurar sus credenciales')
     }
@@ -102,7 +102,7 @@ sucursalesRoute.post('/create', zValidator('json', createSucursalSchema), async 
       direccionCiudad: body.direccionCiudad ?? null,
       whatsappEnabled: body.whatsappEnabled,
       whatsappNumber: body.whatsappNumber ?? null,
-      rapiboyToken: body.rapiboyToken ?? null,
+      rapiboyToken: body.rapiboyToken?.trim() || null,
       activo: body.activo,
     })
 
@@ -147,7 +147,7 @@ sucursalesRoute.put('/:id', zValidator('json', updateSucursalSchema), async (c) 
   if (body.direccionCiudad !== undefined) patch.direccionCiudad = body.direccionCiudad
   if (body.whatsappEnabled !== undefined) patch.whatsappEnabled = body.whatsappEnabled
   if (body.whatsappNumber !== undefined) patch.whatsappNumber = body.whatsappNumber
-  if (body.rapiboyToken !== undefined) patch.rapiboyToken = body.rapiboyToken
+  if (body.rapiboyToken !== undefined) patch.rapiboyToken = body.rapiboyToken?.trim() || null
   if (body.activo !== undefined) patch.activo = body.activo
 
   if (Object.keys(patch).length === 0) {
@@ -165,7 +165,7 @@ sucursalesRoute.put('/:id', zValidator('json', updateSucursalSchema), async (c) 
       return c.json({ success: false, message: 'Sucursal no encontrada' }, 404)
     }
 
-    if (body.rapiboyToken !== undefined && body.rapiboyToken !== null
+    if (body.rapiboyToken?.trim()
       && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.RAPIBOY))) {
       return moduloRequerido(c, MODULE_KEYS.RAPIBOY, 'Activá el módulo Rapiboy para configurar sus credenciales')
     }
