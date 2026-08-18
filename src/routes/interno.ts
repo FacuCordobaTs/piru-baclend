@@ -90,6 +90,7 @@ internoRoute.get('/locales', async (c) => {
       .select({
         id: RestauranteTable.id,
         nombre: RestauranteTable.nombre,
+        username: RestauranteTable.username,
         email: RestauranteTable.email,
         telefono: RestauranteTable.telefono,
         telefonoVerificado: RestauranteTable.telefonoVerificado,
@@ -127,6 +128,7 @@ internoRoute.get('/locales', async (c) => {
         return {
           id: r.id,
           nombre: r.nombre,
+          username: r.username,
           email: r.email,
           telefono: r.telefono,
           // Identidad de login por WhatsApp: sólo cuenta si está verificado. Liberar el número =
