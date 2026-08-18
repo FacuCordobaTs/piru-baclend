@@ -97,6 +97,7 @@ app.use('*', cors({
     'https://interno.piru.app',      // panel interno del fundador (Cloudflare Pages)
     'https://piru-interno.pages.dev', // preview/deploy por defecto de Cloudflare Pages
     'https://my.piru.app',
+    'https://mozos.piru.app',
     'https://www.piru.app',
     // 👇 AGREGA ESTOS PARA TAURI DESKTOP 👇
     'tauri://localhost',        // Protocolo estándar de Tauri en Windows/Linux (antiguo/custom)
