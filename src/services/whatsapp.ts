@@ -9,6 +9,7 @@ import {
 } from '../db/schema'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { avisarSaldoBajoSiCorresponde } from '../lib/mensajes-wallet'
+import { isMetodoManualVerificable } from '../lib/metodos-pago'
 
 // Interfaces para tipado estricto
 interface OrderItem {
@@ -439,6 +440,10 @@ export const sendVerificationCodeWhatsApp = async (c: any, data: VerificationCod
  * del restaurante (los clientes lo mandan siempre en true) y depende de la versión del build del
  * cliente, así que exigirlo generaba falsos negativos. La fuente de verdad es el restaurante.
  * Se auto-abastece de la DB para que el call site solo pase los IDs. Idempotente ante fallos.
+ *
+ * Efectivo / transferencia manual se cobran contra entrega: el pago NO llegó cuando se crea el
+ * pedido, así que el "recibimos tu pago" sería falso y NO se envía ningún aviso. Queda pendiente
+ * una plantilla dedicada ("pedido recibido, pagás al retirar") para esos métodos.
  */
 export const notificarClientePagoConfirmado = async (
     c: any,
@@ -468,6 +473,7 @@ export const notificarClientePagoConfirmado = async (
             total: PedidoUnificadoTable.total,
             demoraMinutos: PedidoUnificadoTable.demoraMinutos,
             horarioProgramado: PedidoUnificadoTable.horarioProgramado,
+            metodoPago: PedidoUnificadoTable.metodoPago,
             nombreRestaurante: RestauranteTable.nombre,
             notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
             modoConfirmacionManual: RestauranteTable.modoConfirmacionManual,
@@ -480,6 +486,15 @@ export const notificarClientePagoConfirmado = async (
         .limit(1);
 
     if (!row) return;
+
+    // Efectivo / transferencia manual se cobran contra entrega: el pago no está acreditado en
+    // este momento, así que el aviso "recibimos tu pago" sería falso. Se omite el envío (la
+    // plantilla dedicada para estos métodos se crea en otra iteración).
+    if (isMetodoManualVerificable(row.metodoPago)) {
+        console.log(`📲 [Notificar Cliente Pago] Pedido #${pedidoId} omitido (${row.metodoPago}: pago contra entrega, sin aviso de pago confirmado)`);
+        return;
+    }
+
     if (!row.notificarClientesWhatsapp || !row.telefono || row.modoConfirmacionManual) {
         console.log(`📲 [Notificar Cliente Pago] Pedido #${pedidoId} omitido (notificarClientesWhatsapp=${row.notificarClientesWhatsapp}, telefono=${!!row.telefono}, modoManual=${row.modoConfirmacionManual})`);
         return;

@@ -26,7 +26,7 @@ import { geocodificarYValidarZona } from './geocoding'
 import { asignarAliasAPedido } from './cucuru'
 import { wsManager } from '../websocket/manager'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
-import { rowToPagoRow, resolverMetodoPagoPedido, proveedorTransferenciaDinamica } from '../lib/metodos-pago'
+import { rowToPagoRow, resolverMetodoPagoPedido, proveedorTransferenciaDinamica, isMetodoManualVerificable } from '../lib/metodos-pago'
 
 const WHATSAPP_IA_ENABLED = false
 
@@ -1113,7 +1113,8 @@ async function crearPedidoYObtenerPago(
     metodoPago: resolved.metodo,
     estado: 'pending',
     total: total.toFixed(2),
-    pagado: false,
+    // Efectivo / transferencia manual nacen pagados: no hay webhook que los acredite.
+    pagado: isMetodoManualVerificable(resolved.metodo),
     grupal: false,
     creadoPorIa: true,
   })

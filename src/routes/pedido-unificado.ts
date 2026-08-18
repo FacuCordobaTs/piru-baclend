@@ -31,6 +31,7 @@ import {
   restauranteOcultaPedidosNoPagados,
   resolveMetodosPagoConfig,
   buildMetodosPublicosList,
+  isMetodoManualVerificable,
   METODOS_PAGO_AUTOMATICOS_EN_PEDIDO,
   METODOS_PAGO_MANUAL_VERIFICABLE_EN_PEDIDO,
 } from '../lib/metodos-pago'
@@ -813,9 +814,10 @@ const pedidoUnificadoRoute = new Hono()
 
     const anotadoManualmente = body.anotadoManualmente === true
     const creadorStaff = anotadoManualmente ? await resolverCreadorPos(db, restauranteId) : null
-    // En el POS del local el pedido se crea ya pagado por defecto
-    const pagado = body.pagado != null ? body.pagado === true : anotadoManualmente
     const metodoPago = body.metodoPago && String(body.metodoPago).trim() !== '' ? String(body.metodoPago) : null
+    // En el POS del local el pedido se crea ya pagado por defecto; los métodos manuales
+    // (efectivo / transferencia manual) también nacen pagados: no hay webhook que los acredite.
+    const pagado = body.pagado != null ? body.pagado === true : (anotadoManualmente || isMetodoManualVerificable(metodoPago))
 
     if (body.tipo === 'mesa' && body.mesaLocalId == null) {
       return c.json({ message: 'Los pedidos de mesa deben tener una mesa asignada', success: false }, 422)

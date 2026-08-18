@@ -15,6 +15,7 @@ import {
   resolverMetodoPagoPedido,
   debeEsperarWebhookParaNotificar,
   proveedorTransferenciaDinamica,
+  isMetodoManualVerificable,
   METODO_PAGO,
   rowToPagoRow,
 } from '../lib/metodos-pago'
@@ -920,6 +921,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             telefono: telefono || null,
             notas: notas || null,
             metodoPago: metodoPagoEfectivoDelivery,
+            // Efectivo / transferencia manual se cobran contra entrega: el pedido nace
+            // pagado (no hay webhook que lo acredite ni botón de cobrar en el panel).
+            pagado: isMetodoManualVerificable(metodoPagoEfectivoDelivery),
             estado: 'pending',
             total: total.toFixed(2),
             codigoDescuentoId: codigoDescuentoIdFinal,
@@ -1392,6 +1396,9 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             telefono: telefono || null,
             notas: notas || null,
             metodoPago: metodoPagoEfectivo,
+            // Efectivo / transferencia manual se cobran contra entrega: el pedido nace
+            // pagado (no hay webhook que lo acredite ni botón de cobrar en el panel).
+            pagado: isMetodoManualVerificable(metodoPagoEfectivo),
             estado: 'pending',
             total: total.toFixed(2),
             codigoDescuentoId: codigoDescuentoIdFinalTk,
@@ -1602,7 +1609,7 @@ publicRoute.put('/delivery/:id/metodo-pago', zValidator('json', setMetodoPagoSch
 
     try {
         const result = await db.update(PedidoUnificadoTable)
-            .set({ metodoPago })
+            .set({ metodoPago, ...(isMetodoManualVerificable(metodoPago) ? { pagado: true } : {}) })
             .where(and(eq(PedidoUnificadoTable.id, id), eq(PedidoUnificadoTable.tipo, 'delivery')))
 
         if (result[0].affectedRows === 0) {
@@ -1638,7 +1645,7 @@ publicRoute.put('/takeaway/:id/metodo-pago', zValidator('json', setMetodoPagoSch
 
     try {
         const result = await db.update(PedidoUnificadoTable)
-            .set({ metodoPago })
+            .set({ metodoPago, ...(isMetodoManualVerificable(metodoPago) ? { pagado: true } : {}) })
             .where(and(eq(PedidoUnificadoTable.id, id), eq(PedidoUnificadoTable.tipo, 'takeaway')))
 
         if (result[0].affectedRows === 0) {

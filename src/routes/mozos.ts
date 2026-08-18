@@ -169,7 +169,9 @@ mozosRoute.post('/pedidos', zValidator('json', crearPedidoSchema), async (c) => 
       restauranteId: principal.restauranteId, sucursalId: sucursalPedido, mesaLocalId: body.mesaLocalId,
       consumoEnLocal: true, tipo: 'mesa', estado: 'pending', total: total.toFixed(2),
       nombreCliente: body.nombreCliente || null, notas: body.notas || null, anotadoManualmente: true,
-      pagado: false, creadoPorUsuarioId: principal.usuarioId,
+      // Igual que el POS: los pedidos tomados por el mozo nacen pagados (efectivo por
+      // defecto), así la comanda se imprime apenas llega y la caja lo contabiliza.
+      pagado: true, metodoPago: 'cash', creadoPorUsuarioId: principal.usuarioId,
     })
     const pedidoId = Number(inserted[0].insertId)
     await tx.insert(ItemPedidoUnificadoTable).values(items.map((item) => ({ pedidoId, ...item })))
