@@ -680,6 +680,11 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             const rows = await db.select().from(VarianteProductoTable).where(inArray(VarianteProductoTable.id, uniqueVariantesSecundariasIds));
             variantesSecundariasMap = new Map(rows.filter(v => v.grupo === 2).map(v => [v.id, v]));
         }
+        const opcionesRequeridas = await db.select({ productoId: VarianteProductoTable.productoId, grupo: VarianteProductoTable.grupo })
+            .from(VarianteProductoTable)
+            .where(and(inArray(VarianteProductoTable.productoId, uniqueProductosIds), eq(VarianteProductoTable.activo, true)))
+        const requierenPrimaria = new Set(opcionesRequeridas.filter(v => v.grupo === 1).map(v => v.productoId))
+        const requierenSecundaria = new Set(opcionesRequeridas.filter(v => v.grupo === 2).map(v => v.productoId))
 
         let total = 0
         let puntosGanados = 0;
@@ -687,6 +692,12 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
 
         for (const item of items) {
             const row = productosMap.get(item.productoId)!
+            if (requierenPrimaria.has(item.productoId) && !item.varianteId) {
+                return c.json({ message: 'Debés elegir una variante del producto', success: false }, 400)
+            }
+            if (requierenSecundaria.has(item.productoId) && !item.varianteSecundariaId) {
+                return c.json({ message: 'Debés elegir la segunda variante del producto', success: false }, 400)
+            }
             if (item.varianteId && variantesMap.get(item.varianteId)?.productoId !== item.productoId) {
                 return c.json({ message: 'La variante no pertenece al producto', success: false }, 400)
             }
@@ -1174,6 +1185,11 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             const rows = await db.select().from(VarianteProductoTable).where(inArray(VarianteProductoTable.id, uniqueVariantesSecundariasIds));
             variantesSecundariasMap = new Map(rows.filter(v => v.grupo === 2).map(v => [v.id, v]));
         }
+        const opcionesRequeridas = await db.select({ productoId: VarianteProductoTable.productoId, grupo: VarianteProductoTable.grupo })
+            .from(VarianteProductoTable)
+            .where(and(inArray(VarianteProductoTable.productoId, uniqueProductosIds), eq(VarianteProductoTable.activo, true)))
+        const requierenPrimaria = new Set(opcionesRequeridas.filter(v => v.grupo === 1).map(v => v.productoId))
+        const requierenSecundaria = new Set(opcionesRequeridas.filter(v => v.grupo === 2).map(v => v.productoId))
 
         let total = 0
         let puntosGanados = 0;
@@ -1181,6 +1197,12 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
 
         for (const item of items) {
             const row = productosMap.get(item.productoId)!
+            if (requierenPrimaria.has(item.productoId) && !item.varianteId) {
+                return c.json({ message: 'Debés elegir una variante del producto', success: false }, 400)
+            }
+            if (requierenSecundaria.has(item.productoId) && !item.varianteSecundariaId) {
+                return c.json({ message: 'Debés elegir la segunda variante del producto', success: false }, 400)
+            }
             if (item.varianteId && variantesMap.get(item.varianteId)?.productoId !== item.productoId) {
                 return c.json({ message: 'La variante no pertenece al producto', success: false }, 400)
             }

@@ -273,6 +273,7 @@ export async function resolverItemPos(tx: any, restauranteId: number, input: Omi
     ;[variante] = await tx.select().from(VarianteProductoTable).where(and(
       eq(VarianteProductoTable.id, input.varianteId),
       eq(VarianteProductoTable.productoId, producto.id),
+      eq(VarianteProductoTable.grupo, 1),
       eq(VarianteProductoTable.activo, true),
     )).limit(1)
     if (!variante) return { error: 'ITEM_INVALIDO', message: 'La variante no pertenece al producto' } as const
@@ -771,12 +772,20 @@ const pedidoUnificadoRoute = new Hono()
     let variantesMap = new Map();
     if (uniqueVariantesIds.length > 0) {
       const variantesRaw = await db.select().from(VarianteProductoTable).where(inArray(VarianteProductoTable.id, uniqueVariantesIds));
-      variantesMap = new Map(variantesRaw.map(v => [v.id, v]));
+      variantesMap = new Map(variantesRaw.filter(v => v.grupo === 1).map(v => [v.id, v]));
     }
     let variantesSecundariasMap = new Map();
     if (uniqueVariantesSecundariasIds.length > 0) {
       const rows = await db.select().from(VarianteProductoTable).where(inArray(VarianteProductoTable.id, uniqueVariantesSecundariasIds));
       variantesSecundariasMap = new Map(rows.filter(v => v.grupo === 2).map(v => [v.id, v]));
+    }
+    for (const item of items) {
+      if (item.varianteId && variantesMap.get(item.varianteId)?.productoId !== item.productoId) {
+        return c.json({ message: 'La variante no pertenece al producto', success: false }, 400)
+      }
+      if (item.varianteSecundariaId && variantesSecundariasMap.get(item.varianteSecundariaId)?.productoId !== item.productoId) {
+        return c.json({ message: 'La segunda variante no pertenece al producto', success: false }, 400)
+      }
     }
 
     // precioUnitario incluye los agregados (consistente con el flujo público)

@@ -44,6 +44,8 @@ interface ItemDraft {
   precio: number          // precio unitario ya calculado (con variante si aplica)
   varianteId?: number
   varianteNombre?: string
+  varianteSecundariaId?: number
+  varianteSecundariaNombre?: string
   agregados?: { id: number; nombre: string; precio: string }[]
   notas?: string
 }
@@ -115,14 +117,17 @@ async function obtenerMenuParaPrompt(db: any, restauranteId: number): Promise<st
         .where(eq(ProductoAgregadoTable.productoId, p.id))
 
       const variantes = await db
-        .select({ id: VarianteProductoTable.id, nombre: VarianteProductoTable.nombre, precio: VarianteProductoTable.precio })
+        .select({ id: VarianteProductoTable.id, nombre: VarianteProductoTable.nombre, precio: VarianteProductoTable.precio, grupo: VarianteProductoTable.grupo })
         .from(VarianteProductoTable)
         .where(eq(VarianteProductoTable.productoId, p.id))
 
       let linea = `- [ID:${p.id}] ${p.nombre} — $${p.precio}`
       if (p.descripcion) linea += ` (${p.descripcion})`
       if (ingredientes.length > 0) linea += ` | Ingredientes: ${ingredientes.map((i: any) => i.nombre).join(', ')}`
-      if (variantes.length > 0) linea += ` | Variantes: ${variantes.map((v: any) => `${v.nombre} $${v.precio} [VID:${v.id}]`).join(', ')}`
+      const primarias = variantes.filter((v: any) => v.grupo === 1)
+      const secundarias = variantes.filter((v: any) => v.grupo === 2)
+      if (primarias.length > 0) linea += ` | Variantes: ${primarias.map((v: any) => `${v.nombre} $${v.precio} [VID:${v.id}]`).join(', ')}`
+      if (secundarias.length > 0) linea += ` | Segunda elección: ${secundarias.map((v: any) => `${v.nombre} +$${v.precio} [VSID:${v.id}]`).join(', ')}`
       if (agregados.length > 0) linea += ` | Extras: ${agregados.map((a: any) => `${a.nombre} +$${a.precio} [AID:${a.id}]`).join(', ')}`
       lineas.push(linea)
     }
@@ -173,7 +178,7 @@ async function construirMensajeCarta(db: any, restauranteId: number): Promise<st
         .where(eq(ProductoIngredienteTable.productoId, p.id))
 
       const variantes = await db
-        .select({ nombre: VarianteProductoTable.nombre, precio: VarianteProductoTable.precio })
+        .select({ nombre: VarianteProductoTable.nombre, precio: VarianteProductoTable.precio, grupo: VarianteProductoTable.grupo })
         .from(VarianteProductoTable)
         .where(eq(VarianteProductoTable.productoId, p.id))
 
@@ -183,14 +188,17 @@ async function construirMensajeCarta(db: any, restauranteId: number): Promise<st
         .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
         .where(eq(ProductoAgregadoTable.productoId, p.id))
 
-      const precioBase = variantes.length > 0
-        ? `desde $${Math.min(...variantes.map((v: any) => parseFloat(v.precio))).toFixed(0)}`
+      const variantesPrimarias = variantes.filter((v: any) => v.grupo === 1)
+      const variantesSecundarias = variantes.filter((v: any) => v.grupo === 2)
+      const precioBase = variantesPrimarias.length > 0
+        ? `desde $${Math.min(...variantesPrimarias.map((v: any) => parseFloat(v.precio))).toFixed(0)}`
         : `$${p.precio}`
 
       lineas.push(`${p.nombre} — ${precioBase}`)
       if (p.descripcion) lineas.push(p.descripcion)
       if (ingredientes.length > 0) lineas.push(`Ingredientes: ${ingredientes.map((i: any) => i.nombre).join(', ')}`)
-      if (variantes.length > 0) lineas.push(`Variantes: ${variantes.map((v: any) => `${v.nombre} $${v.precio}`).join(' | ')}`)
+      if (variantesPrimarias.length > 0) lineas.push(`Variantes: ${variantesPrimarias.map((v: any) => `${v.nombre} $${v.precio}`).join(' | ')}`)
+      if (variantesSecundarias.length > 0) lineas.push(`Segunda elección: ${variantesSecundarias.map((v: any) => `${v.nombre} +$${v.precio}`).join(' | ')}`)
       if (agregados.length > 0) lineas.push(`Extras: ${agregados.map((a: any) => `${a.nombre} +$${a.precio}`).join(' | ')}`)
     }
   }
@@ -363,7 +371,7 @@ ${menu}
 INSTRUCCIONES TÉCNICAS PARA CREAR EL PEDIDO:
 Cuando el cliente confirme los items y estés listo para proceder al pago, tu respuesta DEBE incluir un bloque JSON al final con este formato exacto (después de tu mensaje al cliente):
 
-PEDIDO_JSON:{"tipo":"delivery"|"takeaway","direccion":"...solo si es delivery...","nombreCliente":"...si lo dijo...","items":[{"productoId":123,"nombre":"...","cantidad":1,"varianteId":456,"agregados":[{"id":1,"nombre":"...","precio":"500.00"}]}]}
+PEDIDO_JSON:{"tipo":"delivery"|"takeaway","direccion":"...solo si es delivery...","nombreCliente":"...si lo dijo...","items":[{"productoId":123,"nombre":"...","cantidad":1,"varianteId":456,"varianteSecundariaId":789,"agregados":[{"id":1,"nombre":"...","precio":"500.00"}]}]}
 
 Este bloque es solo para el sistema, el cliente no lo ve. Solo incluirlo cuando el cliente haya confirmado todo y esté listo para pagar.
 
@@ -452,6 +460,7 @@ async function buscarUltimosPedidosCliente(db: any, restauranteId: number, telef
         nombre: ProductoTable.nombre,
         cantidad: ItemPedidoUnificadoTable.cantidad,
         varianteNombre: ItemPedidoUnificadoTable.varianteNombre,
+        varianteSecundariaNombre: ItemPedidoUnificadoTable.varianteSecundariaNombre,
         precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
         agregados: ItemPedidoUnificadoTable.agregados,
       })
@@ -476,7 +485,9 @@ async function buscarUltimosPedidosCliente(db: any, restauranteId: number, telef
       items: items.map((item: any) => ({
         nombre: item.nombre ?? 'Producto eliminado',
         cantidad: item.cantidad,
-        ...(item.varianteNombre ? { variante: item.varianteNombre } : {}),
+        ...((item.varianteNombre || item.varianteSecundariaNombre)
+          ? { variante: [item.varianteNombre, item.varianteSecundariaNombre].filter(Boolean).join(' · ') }
+          : {}),
         ...(item.agregados?.length ? { extras: item.agregados.map((a: any) => a.nombre) } : {}),
       })),
     }
@@ -895,7 +906,7 @@ async function procesarMensajeIAInterno(params: ProcesarMensajeParams): Promise<
         tipo: 'delivery' | 'takeaway'
         direccion?: string
         nombreCliente?: string
-        items: { productoId: number; nombre: string; cantidad: number; varianteId?: number; agregados?: { id: number; nombre: string; precio: string }[] }[]
+        items: { productoId: number; nombre: string; cantidad: number; varianteId?: number; varianteSecundariaId?: number; agregados?: { id: number; nombre: string; precio: string }[] }[]
       }
       pedidoDraft = {
         tipo: pedidoData.tipo,
@@ -908,6 +919,7 @@ async function procesarMensajeIAInterno(params: ProcesarMensajeParams): Promise<
           cantidad: i.cantidad,
           precio: 0, // se recalcula al crear el pedido
           varianteId: i.varianteId,
+          varianteSecundariaId: i.varianteSecundariaId,
           agregados: i.agregados,
         })),
       }
@@ -1011,6 +1023,7 @@ async function crearPedidoYObtenerPago(
   const productosMap = new Map(productosRaw.map((p: any) => [p.id, p]))
 
   const varianteIds = draft.items.map(i => i.varianteId).filter(Boolean) as number[]
+  const varianteSecundariaIds = draft.items.map(i => i.varianteSecundariaId).filter(Boolean) as number[]
   let variantesMap = new Map()
   if (varianteIds.length > 0) {
     const variantesRaw = await db
@@ -1018,6 +1031,11 @@ async function crearPedidoYObtenerPago(
       .from(VarianteProductoTable)
       .where(inArray(VarianteProductoTable.id, varianteIds))
     variantesMap = new Map(variantesRaw.map((v: any) => [v.id, v]))
+  }
+  let variantesSecundariasMap = new Map()
+  if (varianteSecundariaIds.length > 0) {
+    const rows = await db.select().from(VarianteProductoTable).where(inArray(VarianteProductoTable.id, varianteSecundariaIds))
+    variantesSecundariasMap = new Map(rows.filter((v: any) => v.grupo === 2).map((v: any) => [v.id, v]))
   }
 
   // Calcular total
@@ -1028,6 +1046,9 @@ async function crearPedidoYObtenerPago(
     let precio = parseFloat(prod.precio)
     if (item.varianteId && variantesMap.has(item.varianteId)) {
       precio = parseFloat(variantesMap.get(item.varianteId).precio)
+    }
+    if (item.varianteSecundariaId && variantesSecundariasMap.has(item.varianteSecundariaId)) {
+      precio += parseFloat(variantesSecundariasMap.get(item.varianteSecundariaId).precio)
     }
     if (item.agregados?.length) {
       for (const ag of item.agregados) precio += parseFloat(ag.precio)
@@ -1107,6 +1128,10 @@ async function crearPedidoYObtenerPago(
       varianteId: item.varianteId ?? null,
       varianteNombre: item.varianteId && variantesMap.has(item.varianteId)
         ? variantesMap.get(item.varianteId).nombre
+        : null,
+      varianteSecundariaId: item.varianteSecundariaId ?? null,
+      varianteSecundariaNombre: item.varianteSecundariaId && variantesSecundariasMap.has(item.varianteSecundariaId)
+        ? variantesSecundariasMap.get(item.varianteSecundariaId).nombre
         : null,
       cantidad: item.cantidad,
       precioUnitario: item.precio.toFixed(2),

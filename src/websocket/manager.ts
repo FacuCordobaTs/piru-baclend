@@ -1339,6 +1339,10 @@ class WebSocketManager {
         ingredientesExcluidos: i.ingredientesExcluidos || null,
         agregados: i.agregados || null,
         nombreProducto: i.nombreProducto || 'Producto',
+        varianteId: i.varianteId || null,
+        varianteNombre: i.varianteNombre || null,
+        varianteSecundariaId: i.varianteSecundariaId || null,
+        varianteSecundariaNombre: i.varianteSecundariaNombre || null,
       }));
 
       if (items.length === 0) {
@@ -1425,6 +1429,10 @@ class WebSocketManager {
         await this.db.insert(ItemPedidoUnificadoTable).values({
           pedidoId: pedidoUnificadoId,
           productoId: item.productoId,
+          varianteId: item.varianteId,
+          varianteNombre: item.varianteNombre,
+          varianteSecundariaId: item.varianteSecundariaId,
+          varianteSecundariaNombre: item.varianteSecundariaNombre,
           cantidad: item.cantidad,
           precioUnitario: item.precioUnitario,
           ingredientesExcluidos: item.ingredientesExcluidos,
