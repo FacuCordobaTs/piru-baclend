@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { producto as ProductoTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, itemPedido as ItemPedidoTable, etiqueta as EtiquetaTable, productoPuntos as ProductoPuntosTable, productoAgregado as ProductoAgregadoTable, agregado as AgregadoTable, varianteProducto as VarianteProductoTable } from '../db/schema'
+import { producto as ProductoTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, itemPedido as ItemPedidoTable, itemPedidoUnificado as ItemPedidoUnificadoTable, itemPedidoDelivery as ItemPedidoDeliveryTable, itemPedidoTakeaway as ItemPedidoTakeawayTable, etiqueta as EtiquetaTable, productoPuntos as ProductoPuntosTable, productoAgregado as ProductoAgregadoTable, agregado as AgregadoTable, varianteProducto as VarianteProductoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
@@ -1019,6 +1019,77 @@ const productoRoute = new Hono()
     )
 
     return c.json({ message: 'Orden actualizado correctamente', success: true, updated: productoIds.length }, 200)
+  })
+
+  // Eliminar varios productos a la vez. Sigue la misma lógica que el borrado
+  // individual: los productos con pedidos asociados (historial) no se eliminan
+  // y se devuelven en `bloqueados` para que el admin los desactive en su lugar.
+  .delete('/bulk-delete', zValidator('json', z.object({
+    productoIds: z.array(z.number().int().positive()).min(1),
+  })), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const { productoIds } = c.req.valid('json')
+
+    // Validar que todos los productos pertenecen al restaurante
+    const productos = await db
+      .select({
+        id: ProductoTable.id,
+        nombre: ProductoTable.nombre,
+        imagenUrl: ProductoTable.imagenUrl,
+      })
+      .from(ProductoTable)
+      .where(and(
+        inArray(ProductoTable.id, productoIds),
+        eq(ProductoTable.restauranteId, restauranteId)
+      ))
+
+    if (productos.length === 0) {
+      return c.json({ message: 'Productos no encontrados', success: false }, 404)
+    }
+
+    // Verificar items de pedido asociados en todas las tablas de pedidos
+    const [items, itemsUnificados, itemsDelivery, itemsTakeaway] = await Promise.all([
+      db.select({ productoId: ItemPedidoTable.productoId }).from(ItemPedidoTable).where(inArray(ItemPedidoTable.productoId, productoIds)),
+      db.select({ productoId: ItemPedidoUnificadoTable.productoId }).from(ItemPedidoUnificadoTable).where(inArray(ItemPedidoUnificadoTable.productoId, productoIds)),
+      db.select({ productoId: ItemPedidoDeliveryTable.productoId }).from(ItemPedidoDeliveryTable).where(inArray(ItemPedidoDeliveryTable.productoId, productoIds)),
+      db.select({ productoId: ItemPedidoTakeawayTable.productoId }).from(ItemPedidoTakeawayTable).where(inArray(ItemPedidoTakeawayTable.productoId, productoIds)),
+    ])
+
+    const idsConPedidos = new Set([
+      ...items.map(i => i.productoId),
+      ...itemsUnificados.map(i => i.productoId),
+      ...itemsDelivery.map(i => i.productoId),
+      ...itemsTakeaway.map(i => i.productoId),
+    ])
+
+    const bloqueados = productos.filter(p => idsConPedidos.has(p.id))
+    const aEliminar = productos.filter(p => !idsConPedidos.has(p.id))
+
+    if (aEliminar.length > 0) {
+      // Borrar imágenes de R2 (deleteImage ya maneja errores internamente)
+      await Promise.all(
+        aEliminar.map(p => p.imagenUrl ? deleteImage(p.imagenUrl) : Promise.resolve())
+      )
+
+      const ids = aEliminar.map(p => p.id)
+      // Limpiar relaciones. Las variantes se borran solas por FK con cascade.
+      await db.delete(EtiquetaTable).where(inArray(EtiquetaTable.productoId, ids))
+      await db.delete(ProductoIngredienteTable).where(inArray(ProductoIngredienteTable.productoId, ids))
+      await db.delete(ProductoAgregadoTable).where(inArray(ProductoAgregadoTable.productoId, ids))
+      await db.delete(ProductoPuntosTable).where(inArray(ProductoPuntosTable.productoId, ids))
+      await db.delete(ProductoTable).where(and(
+        inArray(ProductoTable.id, ids),
+        eq(ProductoTable.restauranteId, restauranteId)
+      ))
+    }
+
+    return c.json({
+      message: `${aEliminar.length} producto(s) eliminado(s)`,
+      success: true,
+      eliminados: aEliminar.length,
+      bloqueados: bloqueados.map(p => p.nombre),
+    }, 200)
   })
 
   .delete('/delete/:id', async (c) => {
