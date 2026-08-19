@@ -108,6 +108,8 @@ app.use('*', cors({
     'https://che-milanesa.pages.dev',
     'https://che-milanesa.com',
     'https://panther-d5w.pages.dev',
+    'https://pantherburger.com',
+    'https://www.pantherburger.com',
     'https://burgersdelsur.pages.dev',
     'https://burgersdelsur.com',
     'https://www.burgersdelsur.com'
