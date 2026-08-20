@@ -169,6 +169,11 @@ const createProductSchema = z.object({
   categoriaId: z.number().optional(),
   ingredienteIds: z.array(z.number().int().positive()).optional(),
   agregadoIds: z.array(z.number().int().positive()).optional(),
+  agregadoIdsSecundarios: z.array(z.number().int().positive()).optional(),
+  tituloVariantesPrimarias: z.string().trim().min(1).max(120).optional(),
+  tituloVariantesSecundarias: z.string().trim().min(1).max(120).optional(),
+  tituloExtrasPrimarios: z.string().trim().min(1).max(120).optional(),
+  tituloExtrasSecundarios: z.string().trim().min(1).max(120).optional(),
   etiquetas: z.array(z.string().min(1).max(100)).optional(),
   puntosGanados: z.number().int().min(0).optional().default(0),
   puntosNecesarios: z.number().int().min(0).optional().default(0),
@@ -196,6 +201,11 @@ const updateProductSchema = z.object({
   categoriaId: z.number().optional(),
   ingredienteIds: z.array(z.number().int().positive()).optional(),
   agregadoIds: z.array(z.number().int().positive()).optional(),
+  agregadoIdsSecundarios: z.array(z.number().int().positive()).optional(),
+  tituloVariantesPrimarias: z.string().trim().min(1).max(120).optional(),
+  tituloVariantesSecundarias: z.string().trim().min(1).max(120).optional(),
+  tituloExtrasPrimarios: z.string().trim().min(1).max(120).optional(),
+  tituloExtrasSecundarios: z.string().trim().min(1).max(120).optional(),
   activo: z.boolean().optional(),
   etiquetas: z.array(z.string().min(1).max(100)).optional(),
   puntosGanados: z.number().int().min(0).optional(),
@@ -237,6 +247,10 @@ const productoRoute = new Hono()
         descuento: ProductoTable.descuento,
         descuentoFechaInicio: ProductoTable.descuentoFechaInicio,
         descuentoFechaFin: ProductoTable.descuentoFechaFin,
+        tituloVariantesPrimarias: ProductoTable.tituloVariantesPrimarias,
+        tituloVariantesSecundarias: ProductoTable.tituloVariantesSecundarias,
+        tituloExtrasPrimarios: ProductoTable.tituloExtrasPrimarios,
+        tituloExtrasSecundarios: ProductoTable.tituloExtrasSecundarios,
         orden: ProductoTable.orden,
         createdAt: ProductoTable.createdAt,
         categoria: {
@@ -270,6 +284,7 @@ const productoRoute = new Hono()
               id: AgregadoTable.id,
               nombre: AgregadoTable.nombre,
               precio: AgregadoTable.precio,
+              grupo: ProductoAgregadoTable.grupo,
             })
             .from(ProductoAgregadoTable)
             .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
@@ -298,6 +313,8 @@ const productoRoute = new Hono()
           categoriaEsBebida: p.categoria?.esBebida ?? false,
           ingredientes: ingredientes,
           agregados: agregadosList,
+          agregadosPrimarios: agregadosList.filter(a => a.grupo === 1),
+          agregadosSecundarios: agregadosList.filter(a => a.grupo === 2),
           etiquetas: etiquetas,
           variantes: variantes.filter(v => v.grupo === 1),
           variantesSecundarias: variantes.filter(v => v.grupo === 2),
@@ -315,7 +332,7 @@ const productoRoute = new Hono()
   .post('/create', zValidator('json', createProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias } = c.req.valid('json')
+    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId) {
@@ -367,6 +384,10 @@ const productoRoute = new Hono()
       descuentoFechaInicio: descuentoFechaInicio ? new Date(descuentoFechaInicio) : null,
       descuentoFechaFin: descuentoFechaFin ? new Date(descuentoFechaFin) : null,
       tieneVariantes: tieneVariantes,
+      tituloVariantesPrimarias,
+      tituloVariantesSecundarias,
+      tituloExtrasPrimarios,
+      tituloExtrasSecundarios,
     })
 
     const productoId = Number(product[0].insertId)
@@ -413,14 +434,15 @@ const productoRoute = new Hono()
     }
 
     // Asociar agregados si se proporcionaron
-    if (agregadoIds && agregadoIds.length > 0) {
+    const todosAgregadoIds = Array.from(new Set([...(agregadoIds ?? []), ...(agregadoIdsSecundarios ?? [])]))
+    if (todosAgregadoIds.length > 0) {
       const agregados = await db
         .select()
         .from(AgregadoTable)
         .where(eq(AgregadoTable.restauranteId, restauranteId))
 
       const agregadosValidos = agregados
-        .filter(agr => agregadoIds.includes(agr.id))
+        .filter(agr => todosAgregadoIds.includes(agr.id))
         .map(agr => agr.id)
 
       if (agregadosValidos.length > 0) {
@@ -428,6 +450,7 @@ const productoRoute = new Hono()
           agregadosValidos.map(agregadoId => ({
             productoId,
             agregadoId,
+            grupo: agregadoIdsSecundarios?.includes(agregadoId) ? 2 : 1,
           }))
         )
       }
@@ -496,7 +519,7 @@ const productoRoute = new Hono()
   .put('/update', zValidator('json', updateProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias } = c.req.valid('json')
+    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId !== undefined) {
@@ -549,6 +572,10 @@ const productoRoute = new Hono()
     if (descuento !== undefined) updateData.descuento = descuento;
     if (descuentoFechaInicio !== undefined) updateData.descuentoFechaInicio = descuentoFechaInicio ? new Date(descuentoFechaInicio) : null;
     if (descuentoFechaFin !== undefined) updateData.descuentoFechaFin = descuentoFechaFin ? new Date(descuentoFechaFin) : null;
+    if (tituloVariantesPrimarias !== undefined) updateData.tituloVariantesPrimarias = tituloVariantesPrimarias;
+    if (tituloVariantesSecundarias !== undefined) updateData.tituloVariantesSecundarias = tituloVariantesSecundarias;
+    if (tituloExtrasPrimarios !== undefined) updateData.tituloExtrasPrimarios = tituloExtrasPrimarios;
+    if (tituloExtrasSecundarios !== undefined) updateData.tituloExtrasSecundarios = tituloExtrasSecundarios;
 
     // Si se enviaron variantes, actualizar el flag
     if (variantes !== undefined) {
@@ -659,19 +686,31 @@ const productoRoute = new Hono()
     }
 
     // Actualizar agregados si se proporcionaron
-    if (agregadoIds !== undefined) {
+    if (agregadoIds !== undefined || agregadoIdsSecundarios !== undefined) {
+      // Un admin anterior sólo envía `agregadoIds`. En ese caso conservamos el
+      // grupo existente para no degradar silenciosamente extras secundarios.
+      const gruposExistentes = agregadoIdsSecundarios === undefined
+        ? await db.select({ agregadoId: ProductoAgregadoTable.agregadoId, grupo: ProductoAgregadoTable.grupo })
+            .from(ProductoAgregadoTable)
+            .where(eq(ProductoAgregadoTable.productoId, id))
+        : []
       await db
         .delete(ProductoAgregadoTable)
         .where(eq(ProductoAgregadoTable.productoId, id))
 
-      if (agregadoIds.length > 0) {
+      const primarios = agregadoIds ?? []
+      const secundarios = agregadoIdsSecundarios ?? gruposExistentes
+        .filter(relacion => relacion.grupo === 2 && primarios.includes(relacion.agregadoId))
+        .map(relacion => relacion.agregadoId)
+      const todosAgregadoIds = Array.from(new Set([...primarios, ...secundarios]))
+      if (todosAgregadoIds.length > 0) {
         const agregados = await db
           .select()
           .from(AgregadoTable)
           .where(eq(AgregadoTable.restauranteId, restauranteId))
 
         const agregadosValidos = agregados
-          .filter(agr => agregadoIds.includes(agr.id))
+          .filter(agr => todosAgregadoIds.includes(agr.id))
           .map(agr => agr.id)
 
         if (agregadosValidos.length > 0) {
@@ -679,6 +718,7 @@ const productoRoute = new Hono()
             agregadosValidos.map(agregadoId => ({
               productoId: id,
               agregadoId,
+              grupo: secundarios.includes(agregadoId) ? 2 : 1,
             }))
           )
         }
@@ -785,6 +825,10 @@ const productoRoute = new Hono()
         activo: ProductoTable.activo,
         imagenUrl: ProductoTable.imagenUrl,
         descuento: ProductoTable.descuento,
+        tituloVariantesPrimarias: ProductoTable.tituloVariantesPrimarias,
+        tituloVariantesSecundarias: ProductoTable.tituloVariantesSecundarias,
+        tituloExtrasPrimarios: ProductoTable.tituloExtrasPrimarios,
+        tituloExtrasSecundarios: ProductoTable.tituloExtrasSecundarios,
         createdAt: ProductoTable.createdAt,
         categoria: {
           id: CategoriaTable.id,
@@ -815,6 +859,7 @@ const productoRoute = new Hono()
               id: AgregadoTable.id,
               nombre: AgregadoTable.nombre,
               precio: AgregadoTable.precio,
+              grupo: ProductoAgregadoTable.grupo,
             })
             .from(ProductoAgregadoTable)
             .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
@@ -843,6 +888,8 @@ const productoRoute = new Hono()
           categoriaEsBebida: p.categoria?.esBebida ?? false,
           ingredientes,
           agregados: agregadosList,
+          agregadosPrimarios: agregadosList.filter(a => a.grupo === 1),
+          agregadosSecundarios: agregadosList.filter(a => a.grupo === 2),
           etiquetas,
           variantes: variantes.filter(v => v.grupo === 1),
           variantesSecundarias: variantes.filter(v => v.grupo === 2),

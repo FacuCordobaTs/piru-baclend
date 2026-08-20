@@ -292,6 +292,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
                             id: AgregadoTable.id,
                             nombre: AgregadoTable.nombre,
                             precio: AgregadoTable.precio,
+                            grupo: ProductoAgregadoTable.grupo,
                         })
                         .from(ProductoAgregadoTable)
                         .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
@@ -324,6 +325,10 @@ publicRoute.get('/restaurante/:username', async (c) => {
                     imagenUrl: p.imagenUrl,
                     descuento: descuentoEfectivo,
                     descuentoFechaFin: fechaFinEfectiva,
+                    tituloVariantesPrimarias: p.tituloVariantesPrimarias,
+                    tituloVariantesSecundarias: p.tituloVariantesSecundarias,
+                    tituloExtrasPrimarios: p.tituloExtrasPrimarios,
+                    tituloExtrasSecundarios: p.tituloExtrasSecundarios,
                     createdAt: p.createdAt,
                     categoria: p.categoriaId ? categoriasMap.get(p.categoriaId)?.nombre ?? null : null,
                     categoriaOrden: p.categoriaId ? categoriasMap.get(p.categoriaId)?.orden ?? null : null,
@@ -331,6 +336,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
                     puntosGanados: puntos?.puntosGanados ?? null,
                     ingredientes,
                     agregados,
+                    agregadosPrimarios: agregados.filter(a => a.grupo === 1),
+                    agregadosSecundarios: agregados.filter(a => a.grupo === 2),
                     variantes: variantes.filter(v => v.grupo === 1),
                     variantesSecundarias: variantes.filter(v => v.grupo === 2),
                 }
@@ -448,6 +455,10 @@ publicRoute.get('/sala/join/:token', async (c) => {
             categoriaId: ProductoTable.categoriaId,
             categoria: CategoriaTable.nombre,
             categoriaOrden: CategoriaTable.orden,
+            tituloVariantesPrimarias: ProductoTable.tituloVariantesPrimarias,
+            tituloVariantesSecundarias: ProductoTable.tituloVariantesSecundarias,
+            tituloExtrasPrimarios: ProductoTable.tituloExtrasPrimarios,
+            tituloExtrasSecundarios: ProductoTable.tituloExtrasSecundarios,
         })
             .from(ProductoTable)
             .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
@@ -464,7 +475,7 @@ publicRoute.get('/sala/join/:token', async (c) => {
                         .from(ProductoIngredienteTable)
                         .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
                         .where(eq(ProductoIngredienteTable.productoId, p.id)),
-                    db.select({ id: AgregadoTable.id, nombre: AgregadoTable.nombre, precio: AgregadoTable.precio })
+                    db.select({ id: AgregadoTable.id, nombre: AgregadoTable.nombre, precio: AgregadoTable.precio, grupo: ProductoAgregadoTable.grupo })
                         .from(ProductoAgregadoTable)
                         .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
                         .where(and(
@@ -479,6 +490,8 @@ publicRoute.get('/sala/join/:token', async (c) => {
                     ...p,
                     ingredientes,
                     agregados,
+                    agregadosPrimarios: agregados.filter(a => a.grupo === 1),
+                    agregadosSecundarios: agregados.filter(a => a.grupo === 2),
                     variantes: variantes.filter(v => v.grupo === 1),
                     variantesSecundarias: variantes.filter(v => v.grupo === 2),
                 }

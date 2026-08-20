@@ -365,6 +365,12 @@ export const producto = mysqlTable("producto", {
   descuentoFechaInicio: timestamp("descuento_fecha_inicio"),
   descuentoFechaFin: timestamp("descuento_fecha_fin"),
   tieneVariantes: boolean("tiene_variantes").default(false).notNull(),
+  // Textos configurables de cada paso del personalizador. Los defaults preservan
+  // exactamente el copy que consumen las versiones anteriores de la tienda.
+  tituloVariantesPrimarias: varchar("titulo_variantes_primarias", { length: 120 }).default("Elegí una opción").notNull(),
+  tituloVariantesSecundarias: varchar("titulo_variantes_secundarias", { length: 120 }).default("Elegí también una segunda opción").notNull(),
+  tituloExtrasPrimarios: varchar("titulo_extras_primarios", { length: 120 }).default("Extras").notNull(),
+  tituloExtrasSecundarios: varchar("titulo_extras_secundarios", { length: 120 }).default("Extras").notNull(),
   // Orden manual de aparición dentro de su categoría (menor = primero). Configurable por el restaurante (drag & drop).
   orden: int("orden").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -458,10 +464,13 @@ export const productoAgregado = mysqlTable(
     agregadoId: int("agregado_id")
       .references(() => agregado.id)
       .notNull(),
+    // 1 = extras primarios; 2 = extras secundarios (se muestran después).
+    grupo: int("grupo").default(1).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
     uniqueIndex("uq_producto_agregado").on(table.productoId, table.agregadoId),
+    index("idx_producto_agregado_grupo").on(table.productoId, table.grupo),
   ],
 );
 

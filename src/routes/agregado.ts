@@ -166,6 +166,7 @@ const agregadoRoute = new Hono()
                 id: AgregadoTable.id,
                 nombre: AgregadoTable.nombre,
                 precio: AgregadoTable.precio,
+                grupo: ProductoAgregadoTable.grupo,
             })
             .from(ProductoAgregadoTable)
             .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
@@ -180,12 +181,13 @@ const agregadoRoute = new Hono()
 
     // Asociar agregados a un producto (usado en dashboard pero también se maneja en producto.ts directamente muchas veces, lo dejamos por si acaso)
     .post('/producto/:productoId', zValidator('json', z.object({
-        agregadoIds: z.array(z.number().int().positive())
+        agregadoIds: z.array(z.number().int().positive()),
+        agregadoIdsSecundarios: z.array(z.number().int().positive()).optional(),
     })), async (c) => {
         const db = drizzle(pool)
         const restauranteId = (c as any).user.id
         const productoId = Number(c.req.param('productoId'))
-        const { agregadoIds } = c.req.valid('json')
+        const { agregadoIds, agregadoIdsSecundarios } = c.req.valid('json')
 
         // Verificar que el producto pertenece al restaurante
         const { producto: ProductoTable } = await import('../db/schema')
@@ -202,17 +204,27 @@ const agregadoRoute = new Hono()
             return c.json({ message: 'Producto no encontrado', success: false }, 404)
         }
 
+        const gruposExistentes = agregadoIdsSecundarios === undefined
+            ? await db.select({ agregadoId: ProductoAgregadoTable.agregadoId, grupo: ProductoAgregadoTable.grupo })
+                .from(ProductoAgregadoTable)
+                .where(eq(ProductoAgregadoTable.productoId, productoId))
+            : []
+        const secundarios = agregadoIdsSecundarios ?? gruposExistentes
+            .filter(relacion => relacion.grupo === 2 && agregadoIds.includes(relacion.agregadoId))
+            .map(relacion => relacion.agregadoId)
+        const todosAgregadoIds = Array.from(new Set([...agregadoIds, ...secundarios]))
+
         // Verificar que todos los agregados pertenecen al restaurante
-        if (agregadoIds.length > 0) {
+        if (todosAgregadoIds.length > 0) {
             const agregados = await db
                 .select()
                 .from(AgregadoTable)
                 .where(and(
-                    inArray(AgregadoTable.id, agregadoIds),
+                    inArray(AgregadoTable.id, todosAgregadoIds),
                     eq(AgregadoTable.restauranteId, restauranteId)
                 ))
 
-            if (agregados.length !== agregadoIds.length) {
+            if (agregados.length !== todosAgregadoIds.length) {
                 return c.json({
                     message: 'Algunos agregados no pertenecen al restaurante',
                     success: false
@@ -226,11 +238,12 @@ const agregadoRoute = new Hono()
             .where(eq(ProductoAgregadoTable.productoId, productoId))
 
         // Crear nuevas relaciones
-        if (agregadoIds.length > 0) {
+        if (todosAgregadoIds.length > 0) {
             await db.insert(ProductoAgregadoTable).values(
-                agregadoIds.map(agregadoId => ({
+                todosAgregadoIds.map(agregadoId => ({
                     productoId,
                     agregadoId,
+                    grupo: secundarios.includes(agregadoId) ? 2 : 1,
                 }))
             )
         }
