@@ -152,6 +152,10 @@ restauranteRoute.get('/profile', async (c) => {
         categoriaEsBebida: CategoriaTable.esBebida,
         descuento: ProductoTable.descuento,
         tieneVariantes: ProductoTable.tieneVariantes,
+        tituloVariantesPrimarias: ProductoTable.tituloVariantesPrimarias,
+        tituloVariantesSecundarias: ProductoTable.tituloVariantesSecundarias,
+        tituloExtrasPrimarios: ProductoTable.tituloExtrasPrimarios,
+        tituloExtrasSecundarios: ProductoTable.tituloExtrasSecundarios,
       })
       .from(ProductoTable)
       .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
@@ -186,6 +190,7 @@ restauranteRoute.get('/profile', async (c) => {
               nombre: VarianteProductoTable.nombre,
               precio: VarianteProductoTable.precio,
               productoId: VarianteProductoTable.productoId,
+              grupo: VarianteProductoTable.grupo,
             })
             .from(VarianteProductoTable)
             .where(inArray(VarianteProductoTable.productoId, productoIds))
@@ -208,13 +213,14 @@ restauranteRoute.get('/profile', async (c) => {
               nombre: AgregadoTable.nombre,
               precio: AgregadoTable.precio,
               productoId: ProductoAgregadoTable.productoId,
+              grupo: ProductoAgregadoTable.grupo,
             })
             .from(ProductoAgregadoTable)
             .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
             .where(inArray(ProductoAgregadoTable.productoId, productoIds)),
         ])
 
-    const variantesPorProducto = new Map<number, Array<{ id: number; nombre: string; precio: string }>>()
+    const variantesPorProducto = new Map<number, Array<{ id: number; nombre: string; precio: string; grupo: number }>>()
     for (const v of todasVariantes) {
       if (!variantesPorProducto.has(v.productoId)) {
         variantesPorProducto.set(v.productoId, [])
@@ -223,6 +229,7 @@ restauranteRoute.get('/profile', async (c) => {
         id: v.id,
         nombre: v.nombre,
         precio: typeof v.precio === 'string' ? v.precio : String(v.precio),
+        grupo: v.grupo,
       })
     }
 
@@ -232,13 +239,14 @@ restauranteRoute.get('/profile', async (c) => {
       ingredientesPorProducto.get(ingrediente.productoId)!.push({ id: ingrediente.id, nombre: ingrediente.nombre })
     }
 
-    const agregadosPorProducto = new Map<number, Array<{ id: number; nombre: string; precio: string }>>()
+    const agregadosPorProducto = new Map<number, Array<{ id: number; nombre: string; precio: string; grupo: number }>>()
     for (const agregado of todosAgregados) {
       if (!agregadosPorProducto.has(agregado.productoId)) agregadosPorProducto.set(agregado.productoId, [])
       agregadosPorProducto.get(agregado.productoId)!.push({
         id: agregado.id,
         nombre: agregado.nombre,
         precio: typeof agregado.precio === 'string' ? agregado.precio : String(agregado.precio),
+        grupo: agregado.grupo,
       })
     }
 
@@ -258,10 +266,17 @@ restauranteRoute.get('/profile', async (c) => {
       categoriaEsBebida: p.categoriaEsBebida ?? false,
       descuento: p.descuento,
       tieneVariantes: p.tieneVariantes,
+      tituloVariantesPrimarias: p.tituloVariantesPrimarias,
+      tituloVariantesSecundarias: p.tituloVariantesSecundarias,
+      tituloExtrasPrimarios: p.tituloExtrasPrimarios,
+      tituloExtrasSecundarios: p.tituloExtrasSecundarios,
       etiquetas: etiquetasPorProducto.get(p.id) || [],
-      variantes: variantesPorProducto.get(p.id) || [],
+      variantes: (variantesPorProducto.get(p.id) || []).filter(v => v.grupo === 1),
+      variantesSecundarias: (variantesPorProducto.get(p.id) || []).filter(v => v.grupo === 2),
       ingredientes: ingredientesPorProducto.get(p.id) || [],
       agregados: agregadosPorProducto.get(p.id) || [],
+      agregadosPrimarios: (agregadosPorProducto.get(p.id) || []).filter(a => a.grupo === 1),
+      agregadosSecundarios: (agregadosPorProducto.get(p.id) || []).filter(a => a.grupo === 2),
     }))
 
     // Suscripción + features de pago habilitadas: la UI candadea lo que no está incluido.
