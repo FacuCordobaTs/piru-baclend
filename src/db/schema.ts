@@ -390,7 +390,9 @@ export const categoria = mysqlTable("categoria", {
   // Orden manual de aparición en la carta (menor = primero).
   orden: int("orden").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+  index("idx_categoria_restaurante_orden").on(table.restauranteId, table.orden, table.id),
+]);
 
 // Sala: equivalente a mesa para pedidos grupales (link in bio, sin QR físico)
 export const sala = mysqlTable("sala", {
