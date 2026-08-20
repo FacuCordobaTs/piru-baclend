@@ -242,6 +242,7 @@ const productoRoute = new Hono()
         categoria: {
           id: CategoriaTable.id,
           nombre: CategoriaTable.nombre,
+          esBebida: CategoriaTable.esBebida,
         },
         puntosGanados: ProductoPuntosTable.puntosGanados,
         puntosNecesarios: ProductoPuntosTable.puntosNecesarios
@@ -294,6 +295,7 @@ const productoRoute = new Hono()
         return {
           ...p,
           categoria: p.categoria?.nombre || null,
+          categoriaEsBebida: p.categoria?.esBebida ?? false,
           ingredientes: ingredientes,
           agregados: agregadosList,
           etiquetas: etiquetas,
@@ -787,6 +789,7 @@ const productoRoute = new Hono()
         categoria: {
           id: CategoriaTable.id,
           nombre: CategoriaTable.nombre,
+          esBebida: CategoriaTable.esBebida,
         }
       })
       .from(ProductoTable)
@@ -837,6 +840,7 @@ const productoRoute = new Hono()
         return {
           ...p,
           categoria: p.categoria?.nombre || null,
+          categoriaEsBebida: p.categoria?.esBebida ?? false,
           ingredientes,
           agregados: agregadosList,
           etiquetas,

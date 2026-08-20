@@ -149,6 +149,7 @@ restauranteRoute.get('/profile', async (c) => {
         createdAt: ProductoTable.createdAt,
         categoriaNombre: CategoriaTable.nombre,
         categoriaOrden: CategoriaTable.orden,
+        categoriaEsBebida: CategoriaTable.esBebida,
         descuento: ProductoTable.descuento,
         tieneVariantes: ProductoTable.tieneVariantes,
       })
@@ -254,6 +255,7 @@ restauranteRoute.get('/profile', async (c) => {
       createdAt: p.createdAt,
       categoria: p.categoriaNombre || null,
       categoriaOrden: p.categoriaOrden ?? null,
+      categoriaEsBebida: p.categoriaEsBebida ?? false,
       descuento: p.descuento,
       tieneVariantes: p.tieneVariantes,
       etiquetas: etiquetasPorProducto.get(p.id) || [],

@@ -9,11 +9,13 @@ import { eq, and, inArray, sql } from 'drizzle-orm'
 
 const createCategoriaSchema = z.object({
   nombre: z.string().min(1).max(255),
+  esBebida: z.boolean().optional().default(false),
 });
 
 const updateCategoriaSchema = z.object({
   id: z.number(),
   nombre: z.string().min(1).max(255).optional(),
+  esBebida: z.boolean().optional(),
 });
 
 const categoriaRoute = new Hono()
@@ -41,7 +43,7 @@ const categoriaRoute = new Hono()
 .post('/create', zValidator('json', createCategoriaSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre } = c.req.valid('json')
+  const { nombre, esBebida } = c.req.valid('json')
 
   // Verificar si ya existe una categoría con el mismo nombre para este restaurante
   const categoriaExistente = await db
@@ -69,6 +71,7 @@ const categoriaRoute = new Hono()
 
   const categoria = await db.insert(CategoriaTable).values({
     nombre,
+    esBebida,
     restauranteId,
     orden: Number(ultimoOrden?.valor ?? -1) + 1,
   })
@@ -83,9 +86,9 @@ const categoriaRoute = new Hono()
 .put('/update', zValidator('json', updateCategoriaSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { id, nombre } = c.req.valid('json')
+  const { id, nombre, esBebida } = c.req.valid('json')
 
-  if (!nombre) {
+  if (nombre === undefined && esBebida === undefined) {
     return c.json({ 
       message: 'No se proporcionaron datos para actualizar', 
       success: false 
@@ -93,27 +96,33 @@ const categoriaRoute = new Hono()
   }
 
   // Verificar si ya existe otra categoría con el mismo nombre para este restaurante
-  const categoriaExistente = await db
-    .select()
-    .from(CategoriaTable)
-    .where(
-      and(
-        eq(CategoriaTable.restauranteId, restauranteId),
-        eq(CategoriaTable.nombre, nombre)
+  if (nombre !== undefined) {
+    const categoriaExistente = await db
+      .select()
+      .from(CategoriaTable)
+      .where(
+        and(
+          eq(CategoriaTable.restauranteId, restauranteId),
+          eq(CategoriaTable.nombre, nombre)
+        )
       )
-    )
-    .limit(1)
+      .limit(1)
 
-  if (categoriaExistente.length > 0 && categoriaExistente[0].id !== id) {
-    return c.json({ 
-      message: 'Ya existe una categoría con ese nombre', 
-      success: false 
-    }, 400)
+    if (categoriaExistente.length > 0 && categoriaExistente[0].id !== id) {
+      return c.json({
+        message: 'Ya existe una categoría con ese nombre',
+        success: false
+      }, 400)
+    }
   }
+
+  const updateData: { nombre?: string; esBebida?: boolean } = {}
+  if (nombre !== undefined) updateData.nombre = nombre
+  if (esBebida !== undefined) updateData.esBebida = esBebida
 
   const categoria = await db
     .update(CategoriaTable)
-    .set({ nombre })
+    .set(updateData)
     .where(and(eq(CategoriaTable.id, id), eq(CategoriaTable.restauranteId, restauranteId)))
 
   return c.json({ 

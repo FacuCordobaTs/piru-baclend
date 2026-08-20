@@ -387,6 +387,8 @@ export const categoria = mysqlTable("categoria", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id),
   nombre: varchar("nombre", { length: 255 }).notNull(),
+  // Las bebidas se destacan visualmente en las comandas de cocina.
+  esBebida: boolean("es_bebida").default(false).notNull(),
   // Orden manual de aparición en la carta (menor = primero).
   orden: int("orden").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
