@@ -262,14 +262,14 @@ publicRoute.get('/restaurante/:username', async (c) => {
             .orderBy(ProductoTable.orden, ProductoTable.id)
 
         // Categorías y puntos en consultas separadas
-        const categoriasMap = new Map<number, string>()
+        const categoriasMap = new Map<number, { nombre: string; orden: number }>()
         const puntosMap = new Map<number, { puntosNecesarios: string | null; puntosGanados: string | null }>()
         if (productosRaw.length > 0) {
             const catIds = [...new Set(productosRaw.map((p) => p.categoriaId).filter(Boolean))] as number[]
             const prodIds = productosRaw.map((p) => p.id)
             if (catIds.length > 0) {
-                const categorias = await db.select({ id: CategoriaTable.id, nombre: CategoriaTable.nombre }).from(CategoriaTable).where(inArray(CategoriaTable.id, catIds))
-                for (const c of categorias) categoriasMap.set(c.id, c.nombre)
+                const categorias = await db.select({ id: CategoriaTable.id, nombre: CategoriaTable.nombre, orden: CategoriaTable.orden }).from(CategoriaTable).where(inArray(CategoriaTable.id, catIds))
+                for (const c of categorias) categoriasMap.set(c.id, { nombre: c.nombre, orden: c.orden })
             }
             const puntosRows = await db.select().from(ProductoPuntosTable).where(inArray(ProductoPuntosTable.productoId, prodIds))
             for (const pp of puntosRows) puntosMap.set(pp.productoId, { puntosNecesarios: pp.puntosNecesarios.toString(), puntosGanados: pp.puntosGanados.toString() })
@@ -325,7 +325,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
                     descuento: descuentoEfectivo,
                     descuentoFechaFin: fechaFinEfectiva,
                     createdAt: p.createdAt,
-                    categoria: p.categoriaId ? categoriasMap.get(p.categoriaId) ?? null : null,
+                    categoria: p.categoriaId ? categoriasMap.get(p.categoriaId)?.nombre ?? null : null,
+                    categoriaOrden: p.categoriaId ? categoriasMap.get(p.categoriaId)?.orden ?? null : null,
                     puntosNecesarios: puntos?.puntosNecesarios ?? null,
                     puntosGanados: puntos?.puntosGanados ?? null,
                     ingredientes,
@@ -446,6 +447,7 @@ publicRoute.get('/sala/join/:token', async (c) => {
             imagenUrl: ProductoTable.imagenUrl,
             categoriaId: ProductoTable.categoriaId,
             categoria: CategoriaTable.nombre,
+            categoriaOrden: CategoriaTable.orden,
         })
             .from(ProductoTable)
             .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))

@@ -5,7 +5,7 @@ import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, inArray, sql } from 'drizzle-orm'
 
 const createCategoriaSchema = z.object({
   nombre: z.string().min(1).max(255),
@@ -29,7 +29,7 @@ const categoriaRoute = new Hono()
     .select()
     .from(CategoriaTable)
     .where(eq(CategoriaTable.restauranteId, restauranteId))
-    .orderBy(CategoriaTable.nombre)
+    .orderBy(CategoriaTable.orden, CategoriaTable.nombre, CategoriaTable.id)
   
   return c.json({ 
     message: 'Categorías obtenidas correctamente', 
@@ -62,9 +62,15 @@ const categoriaRoute = new Hono()
     }, 400)
   }
 
+  const [ultimoOrden] = await db
+    .select({ valor: sql<number>`coalesce(max(${CategoriaTable.orden}), -1)` })
+    .from(CategoriaTable)
+    .where(eq(CategoriaTable.restauranteId, restauranteId))
+
   const categoria = await db.insert(CategoriaTable).values({
     nombre,
     restauranteId,
+    orden: Number(ultimoOrden?.valor ?? -1) + 1,
   })
   
   return c.json({ 
@@ -114,6 +120,49 @@ const categoriaRoute = new Hono()
     message: 'Categoría actualizada correctamente', 
     success: true, 
     data: categoria 
+  }, 200)
+})
+
+// Reordenar categorías: recibe todos los IDs en el orden en que deben mostrarse.
+.put('/reorder', zValidator('json', z.object({
+  categoriaIds: z.array(z.number().int().positive()).min(1),
+})), async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const { categoriaIds } = c.req.valid('json')
+
+  const categoriasPropias = await db
+    .select({ id: CategoriaTable.id })
+    .from(CategoriaTable)
+    .where(and(
+      eq(CategoriaTable.restauranteId, restauranteId),
+      inArray(CategoriaTable.id, categoriaIds),
+    ))
+
+  if (categoriasPropias.length !== categoriaIds.length) {
+    return c.json({
+      message: 'Algunas categorías no pertenecen al restaurante o están repetidas',
+      success: false,
+    }, 400)
+  }
+
+  await db.transaction(async (tx) => {
+    for (let orden = 0; orden < categoriaIds.length; orden += 1) {
+      const id = categoriaIds[orden]
+      await tx
+        .update(CategoriaTable)
+        .set({ orden })
+        .where(and(
+          eq(CategoriaTable.id, id),
+          eq(CategoriaTable.restauranteId, restauranteId),
+        ))
+    }
+  })
+
+  return c.json({
+    message: 'Orden de categorías actualizado correctamente',
+    success: true,
+    updated: categoriaIds.length,
   }, 200)
 })
 

@@ -148,6 +148,7 @@ restauranteRoute.get('/profile', async (c) => {
         imagenUrl: ProductoTable.imagenUrl,
         createdAt: ProductoTable.createdAt,
         categoriaNombre: CategoriaTable.nombre,
+        categoriaOrden: CategoriaTable.orden,
         descuento: ProductoTable.descuento,
         tieneVariantes: ProductoTable.tieneVariantes,
       })
@@ -252,6 +253,7 @@ restauranteRoute.get('/profile', async (c) => {
       imagenUrl: p.imagenUrl,
       createdAt: p.createdAt,
       categoria: p.categoriaNombre || null,
+      categoriaOrden: p.categoriaOrden ?? null,
       descuento: p.descuento,
       tieneVariantes: p.tieneVariantes,
       etiquetas: etiquetasPorProducto.get(p.id) || [],
