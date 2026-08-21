@@ -849,6 +849,25 @@ export const restauranteModulo = mysqlTable(
   ],
 );
 
+// Intervalos operativos definidos por el restaurante. Los pedidos se relacionan
+// por su created_at dentro de [aperturaAt, cierreAt), lo que mantiene intactos
+// los pedidos y clientes anteriores al despliegue del módulo.
+export const turnoCaja = mysqlTable("turno_caja", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id, { onDelete: "cascade" }).notNull(),
+  aperturaAt: timestamp("apertura_at").notNull(),
+  cierreAt: timestamp("cierre_at"),
+  // true sólo para el turno actual; NULL para históricos. El índice unique
+  // aprovecha que MySQL permite múltiples NULL y evita dos turnos abiertos.
+  abierto: boolean("abierto").default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_turno_caja_restaurante_apertura").on(table.restauranteId, table.aperturaAt),
+  index("idx_turno_caja_restaurante_cierre").on(table.restauranteId, table.cierreAt),
+  uniqueIndex("uq_turno_caja_un_abierto").on(table.restauranteId, table.abierto),
+]);
+
 // ============================================================================
 // COMPATIBILIDAD LEGACY DE PLANES
 // ============================================================================

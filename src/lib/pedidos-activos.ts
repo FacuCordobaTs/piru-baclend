@@ -99,7 +99,7 @@ export async function buildPedidosWhere(
   tipo: 'delivery' | 'takeaway' | 'mesa' | 'all' | undefined,
   sucursalIdParam: string | undefined,
   estado: string | undefined,
-  opts?: { excludeArchived?: boolean; dia?: string },
+  opts?: { excludeArchived?: boolean; dia?: string; desde?: Date; hasta?: Date },
 ) {
   const restaurante = await db
     .select({
@@ -178,6 +178,8 @@ export async function buildPedidosWhere(
       sql`DATE(${PedidoUnificadoTable.createdAt}) = ${opts.dia}`,
     )
   }
+  if (opts?.desde) whereCondition = and(whereCondition, sql`${PedidoUnificadoTable.createdAt} >= ${opts.desde}`)
+  if (opts?.hasta) whereCondition = and(whereCondition, sql`${PedidoUnificadoTable.createdAt} < ${opts.hasta}`)
   if (sucursalIdParam !== undefined && sucursalIdParam !== '') {
     const sid = Number(sucursalIdParam)
     if (!Number.isNaN(sid) && sid > 0) {

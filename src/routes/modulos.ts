@@ -18,6 +18,7 @@ import { resolverModulosRestaurante } from '../lib/modulos'
 import { crearFacturaSuscripcionPendiente } from '../lib/facturacion-suscripcion'
 import { crearPreferenciaSuscripcionMP, pagosSuscripcionDisponibles } from '../lib/mp-suscripcion'
 import { sendPaymentLinkWhatsApp } from '../services/whatsapp'
+import { asegurarTurnoAbierto, finalizarTurnoAlDesactivar } from '../lib/turnos-caja'
 
 const PAGO_LINK_TTL_MIN = 60
 
@@ -148,6 +149,8 @@ modulosRoute.put('/:codigo/activar', zValidator('param', codigoSchema), async (c
       },
     })
 
+    if (codigo === 'cierre_turno_manual') await asegurarTurnoAbierto(db, restauranteId)
+
     const modulos = await resolverModulosRestaurante(db, restauranteId)
     const data = modulos.find((item) => item.codigo === codigo)
     return c.json({ success: true, idempotent: false, data })
@@ -223,6 +226,7 @@ modulosRoute.put('/:codigo/desactivar', zValidator('param', codigoSchema), async
         cancelarAlFinPeriodo: false,
       }).where(and(eq(RestauranteModuloTable.restauranteId, restauranteId), eq(RestauranteModuloTable.moduloId, modulo.id)))
     }
+    if (codigo === 'cierre_turno_manual') await finalizarTurnoAlDesactivar(db, restauranteId)
 
     const modulos = await resolverModulosRestaurante(db, restauranteId)
     const data = modulos.find((item) => item.codigo === codigo)

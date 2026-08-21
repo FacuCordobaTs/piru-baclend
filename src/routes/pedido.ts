@@ -8,6 +8,8 @@ import { eq, desc, and, inArray, gte, lt, sql } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
+import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
+import { listarTurnos, obtenerTurno } from '../lib/turnos-caja'
 
 // Schemas de validación
 const createManualSchema = z.object({
@@ -50,6 +52,7 @@ const pedidoRoute = new Hono()
     const rawId = (c as any).user?.id
     const restauranteId = Number(rawId)
     const fechaStr = c.req.query('fecha') // YYYY-MM-DD format
+    const turnoId = Number(c.req.query('turnoId'))
 
     console.log(`📊 Cierre de turno - rawId: ${rawId}, restauranteId: ${restauranteId}, type: ${typeof rawId}, fecha: ${fechaStr || 'hoy'}`)
 
@@ -62,7 +65,17 @@ const pedidoRoute = new Hono()
     let startOfDay: Date
     let endOfDay: Date
 
-    if (fechaStr) {
+    let turnoSeleccionado: Awaited<ReturnType<typeof obtenerTurno>> = null
+    if (Number.isInteger(turnoId) && turnoId > 0
+      && await tieneModuloActivo(db, restauranteId, MODULE_KEYS.CIERRE_TURNO_MANUAL)) {
+      turnoSeleccionado = await obtenerTurno(db, restauranteId, turnoId)
+      if (!turnoSeleccionado) return c.json({ message: 'Turno no encontrado', success: false }, 404)
+    }
+
+    if (turnoSeleccionado) {
+      startOfDay = new Date(turnoSeleccionado.aperturaAt)
+      endOfDay = turnoSeleccionado.cierreAt ? new Date(turnoSeleccionado.cierreAt) : new Date()
+    } else if (fechaStr) {
       // Validate YYYY-MM-DD format
       const dateMatch = fechaStr.match(/^(\d{4})-(\d{2})-(\d{2})$/)
       if (!dateMatch) {
@@ -275,6 +288,9 @@ const pedidoRoute = new Hono()
           if (d.fecha) allDatesSet.add(d.fecha.toString().split('T')[0])
         })
       const fechasDisponibles = Array.from(allDatesSet).sort().reverse()
+      const turnosDisponibles = turnoSeleccionado
+        ? await listarTurnos(db, restauranteId)
+        : []
 
       // 5. Calculate totals
       const totalMesa = pedidosMesaCombinados
@@ -383,6 +399,9 @@ const pedidoRoute = new Hono()
           },
           productosVendidos,
           fechasDisponibles,
+          modoManual: Boolean(turnoSeleccionado),
+          turno: turnoSeleccionado ? { ...turnoSeleccionado, abierto: turnoSeleccionado.cierreAt == null } : null,
+          turnosDisponibles,
         }
       }, 200)
     } catch (error) {

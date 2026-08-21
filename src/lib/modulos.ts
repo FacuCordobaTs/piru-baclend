@@ -31,6 +31,7 @@ export const MODULE_KEYS = {
   MULTISUCURSAL: 'multisucursal',
   AVISOS_AUTOMATICOS_WHATSAPP: 'avisos_automaticos_whatsapp',
   MOTOR_RECOMPRA: 'motor_recompra',
+  CIERRE_TURNO_MANUAL: 'cierre_turno_manual',
 } as const
 
 export type ModuleKey = (typeof MODULE_KEYS)[keyof typeof MODULE_KEYS]

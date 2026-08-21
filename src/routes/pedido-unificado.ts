@@ -43,9 +43,10 @@ import {
   buildClienteContexto,
 } from '../lib/pedidos-activos'
 import { requireModulo } from '../middleware/modulo'
-import { MODULE_KEYS } from '../lib/modulos'
+import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { consumirMensaje, estadoEnvioUtility, avisarSaldoBajoSiCorresponde } from '../lib/mensajes-wallet'
 import { asegurarOwnerStaff } from '../lib/staff'
+import { asegurarTurnoAbierto, cerrarTurnoActual, listarTurnos, obtenerTurno } from '../lib/turnos-caja'
 
 const itemSchema = z.object({
   productoId: z.number().int().positive(),
@@ -409,6 +410,25 @@ async function responderErrorMutacion(c: any, db: any, restauranteId: number, pe
 const pedidoUnificadoRoute = new Hono()
   .use('*', authMiddleware)
 
+  // Estado operativo del cierre manual. Si el módulo está apagado no crea
+  // turnos y el admin continúa usando los días calendario de siempre.
+  .get('/turnos', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = Number((c as any).user.id)
+    const habilitado = await tieneModuloActivo(db, restauranteId, MODULE_KEYS.CIERRE_TURNO_MANUAL)
+    if (!habilitado) return c.json({ success: true, data: { habilitado: false, actual: null, turnos: [] } })
+    const actual = await asegurarTurnoAbierto(db, restauranteId)
+    const turnos = await listarTurnos(db, restauranteId)
+    return c.json({ success: true, data: { habilitado: true, actual, turnos } })
+  })
+
+  .post('/turnos/cerrar', requireModulo(MODULE_KEYS.CIERRE_TURNO_MANUAL), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = Number((c as any).user.id)
+    const data = await cerrarTurnoActual(db, restauranteId)
+    return c.json({ success: true, message: 'Turno cerrado', data })
+  })
+
   // Listar pedidos (tipo=delivery|takeaway|mesa|all)
   .get('/list', async (c) => {
     const db = drizzle(pool)
@@ -444,12 +464,20 @@ const pedidoUnificadoRoute = new Hono()
     const offset = (page - 1) * limit
     const sucursalIdParam = c.req.query('sucursalId')
 
+    const turnoId = Number(c.req.query('turnoId'))
+    let turno: Awaited<ReturnType<typeof obtenerTurno>> = null
+    if (Number.isInteger(turnoId) && turnoId > 0
+      && await tieneModuloActivo(db, restauranteId, MODULE_KEYS.CIERRE_TURNO_MANUAL)) {
+      turno = await obtenerTurno(db, restauranteId, turnoId)
+      if (!turno) return c.json({ success: false, message: 'Turno no encontrado' }, 404)
+    }
     const diaParam = c.req.query('dia')
     const dia = diaParam && /^\d{4}-\d{2}-\d{2}$/.test(diaParam)
       ? diaParam
       : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' })
 
-    const whereCondition = await buildPedidosWhere(db, restauranteId, tipo, sucursalIdParam, estado, { dia })
+    const whereCondition = await buildPedidosWhere(db, restauranteId, tipo, sucursalIdParam, estado,
+      turno ? { desde: turno.aperturaAt, ...(turno.cierreAt ? { hasta: turno.cierreAt } : {}) } : { dia })
     const pedidosConItems = await selectPedidosEnriquecidos(db, whereCondition, { limit, offset })
 
     return c.json({
@@ -457,6 +485,7 @@ const pedidoUnificadoRoute = new Hono()
       success: true,
       data: pedidosConItems,
       dia,
+      turno: turno ? { ...turno, abierto: turno.cierreAt == null } : null,
       pagination: { page, limit, hasMore: pedidosConItems.length === limit },
     }, 200)
   })
