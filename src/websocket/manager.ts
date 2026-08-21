@@ -1328,7 +1328,7 @@ class WebSocketManager {
       return;
     }
 
-    if (checkoutData.tipoPedido === 'delivery' && (!checkoutData.direccion?.trim() || checkoutData.lat == null || checkoutData.lng == null)) {
+    if (checkoutData.tipoPedido === 'delivery' && !checkoutData.direccion?.trim()) {
       console.error('❌ [confirmarPedidoSala] Delivery sin dirección válida');
       this.broadcast(mesaId, {
         type: 'ERROR',
@@ -1370,10 +1370,19 @@ class WebSocketManager {
         cucuruApiKey: RestauranteTable.cucuruApiKey,
         cucuruCollectorId: RestauranteTable.cucuruCollectorId,
         cucuruConfigurado: RestauranteTable.cucuruConfigurado,
+        direccionSoloTexto: RestauranteTable.direccionSoloTexto,
       }).from(RestauranteTable).where(eq(RestauranteTable.id, sala[0].restauranteId!)).limit(1);
 
       if (!restaurante[0]) {
         this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'Restaurante no encontrado.' } });
+        return;
+      }
+
+      if (checkoutData.tipoPedido === 'delivery' && !restaurante[0].direccionSoloTexto && (checkoutData.lat == null || checkoutData.lng == null)) {
+        this.broadcast(mesaId, {
+          type: 'ERROR',
+          payload: { message: 'Falta dirección de entrega válida.' }
+        });
         return;
       }
 

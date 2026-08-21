@@ -1118,21 +1118,24 @@ const productoRoute = new Hono()
     const aEliminar = productos.filter(p => !idsConPedidos.has(p.id))
 
     if (aEliminar.length > 0) {
-      // Borrar imágenes de R2 (deleteImage ya maneja errores internamente)
+      const ids = aEliminar.map(p => p.id)
+      await db.transaction(async (tx) => {
+        // Limpiar relaciones. Las variantes se borran solas por FK con cascade.
+        await tx.delete(EtiquetaTable).where(inArray(EtiquetaTable.productoId, ids))
+        await tx.delete(ProductoIngredienteTable).where(inArray(ProductoIngredienteTable.productoId, ids))
+        await tx.delete(ProductoAgregadoTable).where(inArray(ProductoAgregadoTable.productoId, ids))
+        await tx.delete(ProductoPuntosTable).where(inArray(ProductoPuntosTable.productoId, ids))
+        await tx.delete(ProductoTable).where(and(
+          inArray(ProductoTable.id, ids),
+          eq(ProductoTable.restauranteId, restauranteId)
+        ))
+      })
+
+      // La imagen se elimina sólo después de confirmar el borrado en DB. Así un
+      // fallo de integridad no deja un producto existente con la imagen rota.
       await Promise.all(
         aEliminar.map(p => p.imagenUrl ? deleteImage(p.imagenUrl) : Promise.resolve())
       )
-
-      const ids = aEliminar.map(p => p.id)
-      // Limpiar relaciones. Las variantes se borran solas por FK con cascade.
-      await db.delete(EtiquetaTable).where(inArray(EtiquetaTable.productoId, ids))
-      await db.delete(ProductoIngredienteTable).where(inArray(ProductoIngredienteTable.productoId, ids))
-      await db.delete(ProductoAgregadoTable).where(inArray(ProductoAgregadoTable.productoId, ids))
-      await db.delete(ProductoPuntosTable).where(inArray(ProductoPuntosTable.productoId, ids))
-      await db.delete(ProductoTable).where(and(
-        inArray(ProductoTable.id, ids),
-        eq(ProductoTable.restauranteId, restauranteId)
-      ))
     }
 
     return c.json({
@@ -1153,30 +1156,37 @@ const productoRoute = new Hono()
       return c.json({ message: 'Producto no encontrado', success: false }, 404)
     }
 
-    // Verificar si hay items de pedido asociados
-    const itemsAsociados = await db.select().from(ItemPedidoTable).where(eq(ItemPedidoTable.productoId, id)).limit(1)
+    // Mantener la misma protección de historial que el borrado masivo. Aunque
+    // algunas tablas actuales no tengan FK, el producto no debe desaparecer si
+    // fue usado por cualquier tipo de pedido.
+    const [items, itemsUnificados, itemsDelivery, itemsTakeaway] = await Promise.all([
+      db.select({ id: ItemPedidoTable.id }).from(ItemPedidoTable).where(eq(ItemPedidoTable.productoId, id)).limit(1),
+      db.select({ id: ItemPedidoUnificadoTable.id }).from(ItemPedidoUnificadoTable).where(eq(ItemPedidoUnificadoTable.productoId, id)).limit(1),
+      db.select({ id: ItemPedidoDeliveryTable.id }).from(ItemPedidoDeliveryTable).where(eq(ItemPedidoDeliveryTable.productoId, id)).limit(1),
+      db.select({ id: ItemPedidoTakeawayTable.id }).from(ItemPedidoTakeawayTable).where(eq(ItemPedidoTakeawayTable.productoId, id)).limit(1),
+    ])
 
-    if (itemsAsociados && itemsAsociados.length > 0) {
+    if (items.length > 0 || itemsUnificados.length > 0 || itemsDelivery.length > 0 || itemsTakeaway.length > 0) {
       return c.json({
         message: 'No se puede eliminar el producto porque tiene pedidos asociados. Desactívalo en su lugar.',
         success: false
       }, 400)
     }
 
+    await db.transaction(async (tx) => {
+      await tx.delete(EtiquetaTable).where(eq(EtiquetaTable.productoId, id))
+      await tx.delete(ProductoIngredienteTable).where(eq(ProductoIngredienteTable.productoId, id))
+      await tx.delete(ProductoAgregadoTable).where(eq(ProductoAgregadoTable.productoId, id))
+      // Esta relación no tiene ON DELETE CASCADE. Omitirla era la causa de
+      // ER_ROW_IS_REFERENCED_2 al borrar individualmente un producto con puntos.
+      await tx.delete(ProductoPuntosTable).where(eq(ProductoPuntosTable.productoId, id))
+      await tx.delete(ProductoTable).where(and(eq(ProductoTable.id, id), eq(ProductoTable.restauranteId, restauranteId)))
+    })
+
     if (product[0].imagenUrl) {
-      await deleteImage(product[0].imagenUrl);
+      await deleteImage(product[0].imagenUrl)
     }
 
-    // Eliminar etiquetas del producto
-    await db.delete(EtiquetaTable).where(eq(EtiquetaTable.productoId, id))
-
-    // Eliminar relaciones de ingredientes del producto
-    await db.delete(ProductoIngredienteTable).where(eq(ProductoIngredienteTable.productoId, id))
-
-    // Eliminar relaciones de agregados del producto
-    await db.delete(ProductoAgregadoTable).where(eq(ProductoAgregadoTable.productoId, id))
-
-    await db.delete(ProductoTable).where(and(eq(ProductoTable.id, id), eq(ProductoTable.restauranteId, restauranteId)))
     return c.json({ message: 'Producto eliminado correctamente', success: true, data: product }, 200)
   })
 

@@ -143,6 +143,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             orderGroupEnabled: RestauranteTable.orderGroupEnabled,
             codigoDescuentoEnabled: RestauranteTable.codigoDescuentoEnabled,
             deliveryEnabled: RestauranteTable.deliveryEnabled,
+            direccionSoloTexto: RestauranteTable.direccionSoloTexto,
             takeawayEnabled: RestauranteTable.takeawayEnabled,
             comprobantesWhatsapp: RestauranteTable.comprobantesWhatsapp,
             notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
@@ -671,10 +672,16 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
     const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado, grupal } = c.req.valid('json')
 
     try {
-        const [deliveryCheck] = await db.select({ deliveryEnabled: RestauranteTable.deliveryEnabled })
+        const [deliveryCheck] = await db.select({
+            deliveryEnabled: RestauranteTable.deliveryEnabled,
+            direccionSoloTexto: RestauranteTable.direccionSoloTexto,
+        })
             .from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
         if (deliveryCheck && deliveryCheck.deliveryEnabled === false) {
             return c.json({ message: 'El delivery no está disponible en este momento', success: false }, 400)
+        }
+        if (deliveryCheck && !deliveryCheck.direccionSoloTexto && (lat === undefined || lng === undefined)) {
+            return c.json({ message: 'Seleccioná una dirección válida de Google Maps', success: false }, 400)
         }
 
         // Local pausado por suscripción (Claim Flow · Tarea 8): la tienda está "cerrada

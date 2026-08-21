@@ -75,6 +75,9 @@ export const restaurante = mysqlTable("restaurante", {
 
   orderGroupEnabled: boolean("order_group_enabled").default(true).notNull(),
   deliveryEnabled: boolean("delivery_enabled").default(true).notNull(),
+  // Por defecto el checkout valida la ubicación con Google Maps. Algunos locales
+  // prefieren recibir la dirección escrita y resolver la zona manualmente.
+  direccionSoloTexto: boolean("direccion_solo_texto").default(false).notNull(),
   takeawayEnabled: boolean("takeaway_enabled").default(true).notNull(),
   // Rapiboy - integración logística delivery
   rapiboyToken: varchar("rapiboy_token", { length: 512 }),

@@ -112,6 +112,7 @@ const updateProfileSchema = z.object({
   direccionTexto: z.string().max(512).nullable().optional(),
   direccionLat: z.number().nullable().optional(),
   direccionLng: z.number().nullable().optional(),
+  direccionSoloTexto: z.boolean().optional(),
   telefono: z.string().min(1).optional(),
   image: z.string().min(10).optional(), // Base64 de la imagen dark
   imageLight: z.string().min(10).optional(), // Base64 de la imagen light
@@ -352,7 +353,7 @@ restauranteRoute.post('/complete-profile', zValidator('json', completeProfileSch
 restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre, direccion, direccionTexto, direccionLat, direccionLng, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, comprobantesWhatsapp, transferenciaAlias, colorPrimario, colorSecundario, usarColorUnico, disenoAlternativo } = c.req.valid('json')
+  const { nombre, direccion, direccionTexto, direccionLat, direccionLng, direccionSoloTexto, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, comprobantesWhatsapp, transferenciaAlias, colorPrimario, colorSecundario, usarColorUnico, disenoAlternativo } = c.req.valid('json')
 
   try {
     // Obtener datos actuales del restaurante
@@ -373,6 +374,7 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
     if (direccionTexto !== undefined) updateData.direccionTexto = direccionTexto
     if (direccionLat !== undefined) updateData.direccionLat = direccionLat !== null ? String(direccionLat) : null
     if (direccionLng !== undefined) updateData.direccionLng = direccionLng !== null ? String(direccionLng) : null
+    if (direccionSoloTexto !== undefined) updateData.direccionSoloTexto = direccionSoloTexto
     if (deliveryFee !== undefined) updateData.deliveryFee = deliveryFee
     if (whatsappEnabled !== undefined) updateData.whatsappEnabled = whatsappEnabled
 
