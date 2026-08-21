@@ -16,6 +16,7 @@ export interface ItemPedidoWS {
   ingredientesExcluidos?: number[];
   ingredientesExcluidosNombres?: string[];
   agregados?: Array<{ id: number, nombre: string, precio: string }>;
+  nota?: string | null;
   varianteId?: number;
   varianteNombre?: string;
   varianteSecundariaId?: number;

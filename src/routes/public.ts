@@ -330,6 +330,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
                     tituloVariantesSecundarias: p.tituloVariantesSecundarias,
                     tituloExtrasPrimarios: p.tituloExtrasPrimarios,
                     tituloExtrasSecundarios: p.tituloExtrasSecundarios,
+                    permiteNota: p.permiteNota,
+                    tituloNota: p.tituloNota,
                     createdAt: p.createdAt,
                     categoria: p.categoriaId ? categoriasMap.get(p.categoriaId)?.nombre ?? null : null,
                     categoriaOrden: p.categoriaId ? categoriasMap.get(p.categoriaId)?.orden ?? null : null,
@@ -460,6 +462,8 @@ publicRoute.get('/sala/join/:token', async (c) => {
             tituloVariantesSecundarias: ProductoTable.tituloVariantesSecundarias,
             tituloExtrasPrimarios: ProductoTable.tituloExtrasPrimarios,
             tituloExtrasSecundarios: ProductoTable.tituloExtrasSecundarios,
+            permiteNota: ProductoTable.permiteNota,
+            tituloNota: ProductoTable.tituloNota,
         })
             .from(ProductoTable)
             .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
@@ -664,6 +668,7 @@ const createDeliverySchema = z.object({
         })).optional(),
         esCanjePuntos: z.boolean().optional().default(false),
         clienteNombre: z.string().optional(),
+        nota: z.string().trim().max(500).optional(),
     })).min(1)
 })
 
@@ -996,6 +1001,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 precioUnitario,
                 ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
                 agregados: item.agregados?.length ? item.agregados : null,
+                nota: row.producto.permiteNota ? (item.nota?.trim() || null) : null,
                 esCanjePuntos: item.esCanjePuntos || false,
                 clienteNombre: item.clienteNombre || null,
             })
@@ -1180,6 +1186,7 @@ const createTakeawaySchema = z.object({
         })).optional(),
         esCanjePuntos: z.boolean().optional().default(false),
         clienteNombre: z.string().optional(),
+        nota: z.string().trim().max(500).optional(),
     })).min(1)
 })
 
@@ -1470,6 +1477,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 precioUnitario,
                 ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
                 agregados: item.agregados?.length ? item.agregados : null,
+                nota: row.producto.permiteNota ? (item.nota?.trim() || null) : null,
                 esCanjePuntos: item.esCanjePuntos || false,
                 clienteNombre: item.clienteNombre || null,
             })
@@ -1843,6 +1851,7 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
                         varianteSecundariaNombre: ItemPedidoUnificadoTable.varianteSecundariaNombre,
                         ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos,
                         agregados: ItemPedidoUnificadoTable.agregados,
+                        nota: ItemPedidoUnificadoTable.nota,
                         esCanjePuntos: ItemPedidoUnificadoTable.esCanjePuntos,
                         productoNombre: ProductoTable.nombre,
                     })
@@ -1921,6 +1930,7 @@ publicRoute.get('/pedido-info/:id', async (c) => {
                 varianteSecundariaNombre: ItemPedidoUnificadoTable.varianteSecundariaNombre,
                 ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos,
                 agregados: ItemPedidoUnificadoTable.agregados,
+                nota: ItemPedidoUnificadoTable.nota,
                 esCanjePuntos: ItemPedidoUnificadoTable.esCanjePuntos,
                 nombreProducto: ProductoTable.nombre,
             })
@@ -2048,6 +2058,7 @@ publicRoute.get('/pedido-info/:id', async (c) => {
                         ingredientesExcluidos: i.ingredientesExcluidos,
                         ingredientesExcluidosNombres,
                         agregados: i.agregados,
+                        nota: i.nota,
                         esCanjePuntos: i.esCanjePuntos,
                     }
                 }),

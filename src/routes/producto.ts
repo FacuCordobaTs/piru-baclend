@@ -174,6 +174,8 @@ const createProductSchema = z.object({
   tituloVariantesSecundarias: z.string().trim().min(1).max(120).optional(),
   tituloExtrasPrimarios: z.string().trim().min(1).max(120).optional(),
   tituloExtrasSecundarios: z.string().trim().min(1).max(120).optional(),
+  permiteNota: z.boolean().optional().default(false),
+  tituloNota: z.string().trim().min(1).max(120).optional(),
   etiquetas: z.array(z.string().min(1).max(100)).optional(),
   puntosGanados: z.number().int().min(0).optional().default(0),
   puntosNecesarios: z.number().int().min(0).optional().default(0),
@@ -206,6 +208,8 @@ const updateProductSchema = z.object({
   tituloVariantesSecundarias: z.string().trim().min(1).max(120).optional(),
   tituloExtrasPrimarios: z.string().trim().min(1).max(120).optional(),
   tituloExtrasSecundarios: z.string().trim().min(1).max(120).optional(),
+  permiteNota: z.boolean().optional(),
+  tituloNota: z.string().trim().min(1).max(120).optional(),
   activo: z.boolean().optional(),
   etiquetas: z.array(z.string().min(1).max(100)).optional(),
   puntosGanados: z.number().int().min(0).optional(),
@@ -251,6 +255,8 @@ const productoRoute = new Hono()
         tituloVariantesSecundarias: ProductoTable.tituloVariantesSecundarias,
         tituloExtrasPrimarios: ProductoTable.tituloExtrasPrimarios,
         tituloExtrasSecundarios: ProductoTable.tituloExtrasSecundarios,
+        permiteNota: ProductoTable.permiteNota,
+        tituloNota: ProductoTable.tituloNota,
         orden: ProductoTable.orden,
         createdAt: ProductoTable.createdAt,
         categoria: {
@@ -332,7 +338,7 @@ const productoRoute = new Hono()
   .post('/create', zValidator('json', createProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios } = c.req.valid('json')
+    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId) {
@@ -388,6 +394,8 @@ const productoRoute = new Hono()
       tituloVariantesSecundarias,
       tituloExtrasPrimarios,
       tituloExtrasSecundarios,
+      permiteNota,
+      tituloNota,
     })
 
     const productoId = Number(product[0].insertId)
@@ -519,7 +527,7 @@ const productoRoute = new Hono()
   .put('/update', zValidator('json', updateProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios } = c.req.valid('json')
+    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota } = c.req.valid('json')
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId !== undefined) {
@@ -576,6 +584,8 @@ const productoRoute = new Hono()
     if (tituloVariantesSecundarias !== undefined) updateData.tituloVariantesSecundarias = tituloVariantesSecundarias;
     if (tituloExtrasPrimarios !== undefined) updateData.tituloExtrasPrimarios = tituloExtrasPrimarios;
     if (tituloExtrasSecundarios !== undefined) updateData.tituloExtrasSecundarios = tituloExtrasSecundarios;
+    if (permiteNota !== undefined) updateData.permiteNota = permiteNota;
+    if (tituloNota !== undefined) updateData.tituloNota = tituloNota;
 
     // Si se enviaron variantes, actualizar el flag
     if (variantes !== undefined) {
@@ -829,6 +839,8 @@ const productoRoute = new Hono()
         tituloVariantesSecundarias: ProductoTable.tituloVariantesSecundarias,
         tituloExtrasPrimarios: ProductoTable.tituloExtrasPrimarios,
         tituloExtrasSecundarios: ProductoTable.tituloExtrasSecundarios,
+        permiteNota: ProductoTable.permiteNota,
+        tituloNota: ProductoTable.tituloNota,
         createdAt: ProductoTable.createdAt,
         categoria: {
           id: CategoriaTable.id,

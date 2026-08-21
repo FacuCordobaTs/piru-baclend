@@ -223,6 +223,7 @@ export async function selectPedidosEnriquecidos(
           imagenUrl: ProductoTable.imagenUrl,
           ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos,
           agregados: ItemPedidoUnificadoTable.agregados,
+          nota: ItemPedidoUnificadoTable.nota,
           clienteNombre: ItemPedidoUnificadoTable.clienteNombre,
         })
         .from(ItemPedidoUnificadoTable)

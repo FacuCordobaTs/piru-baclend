@@ -335,6 +335,8 @@ export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {
   esCanjePuntos: boolean("es_canje_puntos").default(false),
   ingredientesExcluidos: json("ingredientes_excluidos"),
   agregados: json("agregados"),
+  // Aclaración escrita por el cliente para este producto en particular.
+  nota: varchar("nota", { length: 500 }),
   // Nombre del cliente que agregó este item (solo relevante en pedidos grupales)
   clienteNombre: varchar("cliente_nombre", { length: 255 }),
 });
@@ -374,6 +376,8 @@ export const producto = mysqlTable("producto", {
   tituloVariantesSecundarias: varchar("titulo_variantes_secundarias", { length: 120 }).default("Elegí también una segunda opción").notNull(),
   tituloExtrasPrimarios: varchar("titulo_extras_primarios", { length: 120 }).default("Extras").notNull(),
   tituloExtrasSecundarios: varchar("titulo_extras_secundarios", { length: 120 }).default("Extras").notNull(),
+  permiteNota: boolean("permite_nota").default(false).notNull(),
+  tituloNota: varchar("titulo_nota", { length: 120 }).default("¿Querés aclarar algo?").notNull(),
   // Orden manual de aparición dentro de su categoría (menor = primero). Configurable por el restaurante (drag & drop).
   orden: int("orden").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

@@ -604,7 +604,7 @@ class WebSocketManager {
 
       // Obtener nombre e imagen del producto
       const producto = await this.db
-        .select({ nombre: ProductoTable.nombre, imagenUrl: ProductoTable.imagenUrl })
+        .select({ nombre: ProductoTable.nombre, imagenUrl: ProductoTable.imagenUrl, permiteNota: ProductoTable.permiteNota })
         .from(ProductoTable)
         .where(eq(ProductoTable.id, item.productoId))
         .limit(1);
@@ -635,6 +635,7 @@ class WebSocketManager {
         ingredientesExcluidos: item.ingredientesExcluidos || [],
         ingredientesExcluidosNombres,
         agregados: item.agregados || [],
+        nota: producto[0]?.permiteNota ? (item.nota?.trim().slice(0, 500) || null) : null,
         varianteId: item.varianteId,
         varianteNombre: item.varianteNombre,
         varianteSecundariaId: item.varianteSecundariaId,
@@ -1345,12 +1346,14 @@ class WebSocketManager {
         cantidad: i.cantidad || 1,
         precioUnitario: i.precioUnitario,
         ingredientesExcluidos: i.ingredientesExcluidos || null,
+        ingredientesExcluidosNombres: i.ingredientesExcluidosNombres || [],
         agregados: i.agregados || null,
         nombreProducto: i.nombreProducto || 'Producto',
         varianteId: i.varianteId || null,
         varianteNombre: i.varianteNombre || null,
         varianteSecundariaId: i.varianteSecundariaId || null,
         varianteSecundariaNombre: i.varianteSecundariaNombre || null,
+        nota: i.nota?.trim() || null,
       }));
 
       if (items.length === 0) {
@@ -1454,6 +1457,7 @@ class WebSocketManager {
           precioUnitario: item.precioUnitario,
           ingredientesExcluidos: item.ingredientesExcluidos,
           agregados: item.agregados,
+          nota: item.nota,
           esCanjePuntos: false,
           clienteNombre: item.clienteNombre || null,
         });
@@ -1521,6 +1525,11 @@ class WebSocketManager {
         nombre: i.nombreProducto,
         nombreProducto: i.nombreProducto,
         clienteNombre: i.clienteNombre,
+        ingredientesExcluidosNombres: i.ingredientesExcluidosNombres,
+        agregados: i.agregados,
+        varianteNombre: i.varianteNombre,
+        varianteSecundariaNombre: i.varianteSecundariaNombre,
+        nota: i.nota,
       }));
 
       const payload = {

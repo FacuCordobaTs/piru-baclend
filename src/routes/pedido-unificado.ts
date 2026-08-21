@@ -59,6 +59,7 @@ const itemSchema = z.object({
     nombre: z.string(),
     precio: z.union([z.string(), z.number()]),
   })).optional(),
+  nota: z.string().trim().max(500).optional(),
 })
 
 // Campos comunes para pedidos anotados manualmente desde el POS del local
@@ -128,6 +129,7 @@ const posItemSchema = z.object({
   ingredientesExcluidos: z.array(z.number().int().positive()).default([]),
   // Sólo el id del agregado es confiable; nombre y precio se resuelven en servidor.
   agregados: z.array(z.object({ id: z.number().int().positive() })).default([]),
+  nota: z.string().trim().max(500).nullable().optional(),
   version: z.number().int().positive(),
 })
 
@@ -324,6 +326,7 @@ export async function resolverItemPos(tx: any, restauranteId: number, input: Omi
     precioUnitario: precioUnitario.toFixed(2),
     ingredientesExcluidos: ingredienteIds.length ? ingredienteIds : null,
     agregados: agregados.length ? agregados : null,
+    nota: input.nota?.trim() || null,
   } as const
 }
 
@@ -339,6 +342,7 @@ export async function respuestaPedidoEditable(db: any, restauranteId: number, pe
     cantidad: ItemPedidoUnificadoTable.cantidad, precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
     nombreProducto: ProductoTable.nombre, imagenUrl: ProductoTable.imagenUrl,
     ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos, agregados: ItemPedidoUnificadoTable.agregados,
+    nota: ItemPedidoUnificadoTable.nota,
     clienteNombre: ItemPedidoUnificadoTable.clienteNombre,
   }).from(ItemPedidoUnificadoTable).leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
     .where(eq(ItemPedidoUnificadoTable.pedidoId, pedidoId))
@@ -543,6 +547,7 @@ const pedidoUnificadoRoute = new Hono()
         imagenUrl: ProductoTable.imagenUrl,
         ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos,
         agregados: ItemPedidoUnificadoTable.agregados,
+        nota: ItemPedidoUnificadoTable.nota,
         clienteNombre: ItemPedidoUnificadoTable.clienteNombre,
       })
       .from(ItemPedidoUnificadoTable)
@@ -906,6 +911,7 @@ const pedidoUnificadoRoute = new Hono()
           precioUnitario: computeItemPrecio(item).toFixed(2),
           ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
           agregados: item.agregados?.length ? item.agregados : null,
+          nota: item.nota?.trim() || null,
         })
       }
       return { pedidoId }
