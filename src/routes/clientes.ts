@@ -12,6 +12,7 @@ import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS } from '../lib/modulos'
 import { eq, desc, inArray, notInArray, and } from 'drizzle-orm'
 import { computarPerfilesRFM } from '../lib/clientes-rfm'
+import { deduplicarPedidosHistorial } from '../lib/clientes-historial'
 import {
     cargarToquesPorCliente, estadoRecupero, enviarRecuperoDormido,
 } from '../lib/recupero'
@@ -44,7 +45,7 @@ clientesRoute.get('/list', async (c) => {
         }).from(PedidoUnificadoTable)
             .where(and(
                 eq(PedidoUnificadoTable.restauranteId, restauranteId),
-                // Los pedidos cancelados no cuentan para RFM ni para el historial de recompra.
+                // Los pedidos por WhatsApp pueden ser válidos aunque no tengan pago online.
                 notInArray(PedidoUnificadoTable.estado, ['cancelled']),
             ))
 
@@ -96,7 +97,9 @@ clientesRoute.get('/list', async (c) => {
 
         // 7. Calcular métricas base + agrupar pedidos por cliente
         const base = clientes.map(cliente => {
-            const clientPedidos = allPedidos.filter(p => p.clienteId === cliente.id)
+            const clientPedidos = deduplicarPedidosHistorial(
+                allPedidos.filter(p => p.clienteId === cliente.id),
+            )
             const cantidadPedidos = clientPedidos.length
             const totalGastado = clientPedidos.reduce((acc, current) => acc + parseFloat(current.total || '0'), 0)
 
@@ -124,7 +127,7 @@ clientesRoute.get('/list', async (c) => {
                 ultimoPedidoAt,
                 primerPedidoAt,
                 productosTop,
-                pedidos: clientPedidos.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+                pedidos: clientPedidos,
             }
         })
 

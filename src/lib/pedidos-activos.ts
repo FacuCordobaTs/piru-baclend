@@ -165,7 +165,10 @@ export async function buildPedidosWhere(
     whereCondition = and(whereCondition, eq(PedidoUnificadoTable.estado, estado as any))
   }
   if (opts?.excludeArchived) {
-    whereCondition = and(whereCondition, notInArray(PedidoUnificadoTable.estado, ['archived']))
+    // “Activos” también excluye cierres que conservan el pedido para historial.
+    // De lo contrario, pedidos delivered/cancelled consumen el límite del
+    // endpoint y pueden ocultar una mesa realmente abierta de un día anterior.
+    whereCondition = and(whereCondition, notInArray(PedidoUnificadoTable.estado, ['archived', 'cancelled', 'delivered']))
   }
   // Filtro por día calendario AR. La conexión MySQL corre en horario AR (-03:00),
   // así que el servidor ya evalúa DATE(createdAt) en hora local argentina: el día

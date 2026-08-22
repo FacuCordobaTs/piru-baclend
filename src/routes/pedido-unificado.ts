@@ -1139,6 +1139,15 @@ const pedidoUnificadoRoute = new Hono()
       .delete(PedidoUnificadoTable)
       .where(eq(PedidoUnificadoTable.id, pedidoId))
 
+    await emitirEventoPedido(db, {
+      restauranteId,
+      pedidoId,
+      tipo: pedido[0].tipo,
+      sucursalId: pedido[0].sucursalId,
+      event: 'remove',
+      reason: 'deleted',
+    })
+
     return c.json({ message: 'Pedido eliminado correctamente', success: true }, 200)
   })
 
