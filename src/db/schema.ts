@@ -192,7 +192,8 @@ export const repartidor = mysqlTable("repartidor", {
 });
 
 // Identidades operativas del restaurante. No reutilizan la contraseña ni el
-// JWT del dueño: los mozos ingresan con un PIN propio y una sesión revocable.
+// JWT del dueño: los mozos usan OTP y una sesion revocable. PIN/codigo quedan
+// como columnas de compatibilidad para PWAs instaladas antes de este flujo.
 export const usuarioRestaurante = mysqlTable("usuario_restaurante", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id, { onDelete: "cascade" }).notNull(),
@@ -202,10 +203,12 @@ export const usuarioRestaurante = mysqlTable("usuario_restaurante", {
   // schema de Drizzle usó por error el nombre del tipo enum de MySQL como si
   // fuera una columna, haciendo fallar cualquier consulta de staff/POS.
   rol: mysqlEnum("rol", ["owner", "admin", "mozo"]).notNull(),
-  // Sólo las identidades de staff usan PIN. El owner existente sigue usando
-  // su login de restaurante y nunca se copia su contraseña a esta tabla.
+  // Credenciales del login legacy; el owner nunca copia aqui su contraseña.
   pinHash: varchar("pin_hash", { length: 255 }),
   codigoAcceso: varchar("codigo_acceso", { length: 64 }).unique(),
+  // Identificador corto y humano dentro del local. El login nuevo de mozos usa
+  // este numero + un OTP enviado al WhatsApp verificado del restaurante.
+  numeroMozo: int("numero_mozo"),
   activo: boolean("activo").default(true).notNull(),
   intentosPinFallidos: int("intentos_pin_fallidos").default(0).notNull(),
   bloqueadoHasta: timestamp("bloqueado_hasta"),
@@ -215,6 +218,7 @@ export const usuarioRestaurante = mysqlTable("usuario_restaurante", {
 }, (table) => [
   index("idx_usuario_restaurante_restaurante_activo").on(table.restauranteId, table.activo),
   index("idx_usuario_restaurante_sucursal_activo").on(table.sucursalId, table.activo),
+  uniqueIndex("uq_usuario_restaurante_numero_mozo").on(table.restauranteId, table.numeroMozo),
 ]);
 
 // El JWT de staff contiene el id de esta sesión; persistir su hash permite
@@ -228,6 +232,22 @@ export const sesionStaff = mysqlTable("sesion_staff", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("idx_sesion_staff_usuario_activa").on(table.usuarioRestauranteId, table.revocadaAt, table.expiraAt),
+]);
+
+// OTP exclusivo para la app de mozos. Esta tabla separada evita que un codigo
+// solicitado para staff pueda consumirse en el login de la cuenta dueña.
+export const verificacionStaff = mysqlTable("verificacion_staff", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  usuarioRestauranteId: int("usuario_restaurante_id").references(() => usuarioRestaurante.id, { onDelete: "cascade" }).notNull(),
+  telefono: varchar("telefono", { length: 50 }).notNull(),
+  codigoHash: varchar("codigo_hash", { length: 255 }).notNull(),
+  intentos: int("intentos").default(0).notNull(),
+  verificado: boolean("verificado").default(false).notNull(),
+  expiraEn: timestamp("expira_en").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_verificacion_staff_telefono_fecha").on(table.telefono, table.createdAt),
+  index("idx_verificacion_staff_usuario_fecha").on(table.usuarioRestauranteId, table.createdAt),
 ]);
 
 export const pedidoUnificado = mysqlTable("pedido_unificado", {
