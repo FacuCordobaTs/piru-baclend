@@ -237,7 +237,9 @@ mozosRoute.delete('/pedidos/:id{[0-9]+}/items/:itemId{[0-9]+}', zValidator('json
     const antes = items.find((item: any) => item.id === itemId); if (!antes) return { error: 'ITEM_NO_ENCONTRADO', message: 'El ítem no pertenece al pedido' }
     if (items.length <= 1) return { error: 'PEDIDO_SIN_ITEMS', message: 'El pedido debe conservar al menos un ítem' }
     await tx.delete(ItemPedidoUnificadoTable).where(and(eq(ItemPedidoUnificadoTable.id, itemId), eq(ItemPedidoUnificadoTable.pedidoId, pedidoId)))
-    return { operacion: 'eliminar_item' as const, itemPedidoId: itemId, antes, reimprimeCocina: true }
+    // El ítem ya no existe cuando se asienta la auditoría. La trazabilidad queda
+    // completa en `antes`; conservar su FK haría fallar toda la transacción.
+    return { operacion: 'eliminar_item' as const, itemPedidoId: null, antes, reimprimeCocina: true }
   }, { id: principal.usuarioId, tipo: 'staff_mozo' })
   if (resultado.error) return respuestaErrorMutacion(c, db, principal, pedidoId, resultado)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, pedidoId)
