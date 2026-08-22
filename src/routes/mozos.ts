@@ -31,9 +31,11 @@ const ESTADOS_CERRADOS = ['archived', 'cancelled', 'delivered'] as const
 const itemSchema = z.object({
   productoId: z.number().int().positive(),
   varianteId: z.number().int().positive().nullable().optional(),
+  varianteSecundariaId: z.number().int().positive().nullable().optional(),
   cantidad: z.number().int().positive(),
   ingredientesExcluidos: z.array(z.number().int().positive()).default([]),
   agregados: z.array(z.object({ id: z.number().int().positive() })).default([]),
+  nota: z.string().trim().max(500).nullable().optional(),
 })
 const crearPedidoSchema = z.object({
   mesaLocalId: z.number().int().positive(),
@@ -98,23 +100,36 @@ mozosRoute.get('/menu', async (c) => {
     id: ProductoTable.id, categoriaId: ProductoTable.categoriaId, nombre: ProductoTable.nombre,
     descripcion: ProductoTable.descripcion, precio: ProductoTable.precio, imagenUrl: ProductoTable.imagenUrl,
     descuento: ProductoTable.descuento, tieneVariantes: ProductoTable.tieneVariantes, orden: ProductoTable.orden,
+    tituloVariantesPrimarias: ProductoTable.tituloVariantesPrimarias,
+    tituloVariantesSecundarias: ProductoTable.tituloVariantesSecundarias,
+    tituloExtrasPrimarios: ProductoTable.tituloExtrasPrimarios,
+    tituloExtrasSecundarios: ProductoTable.tituloExtrasSecundarios,
+    permiteNota: ProductoTable.permiteNota, tituloNota: ProductoTable.tituloNota,
   }).from(ProductoTable).where(and(eq(ProductoTable.restauranteId, principal.restauranteId), eq(ProductoTable.activo, true)))
     .orderBy(asc(ProductoTable.orden), asc(ProductoTable.id))
   const categorias = await db.select({ id: CategoriaTable.id, nombre: CategoriaTable.nombre })
     .from(CategoriaTable).where(eq(CategoriaTable.restauranteId, principal.restauranteId)).orderBy(asc(CategoriaTable.nombre))
   const data = await Promise.all(productos.map(async (producto) => {
     const [variantes, ingredientes, agregados] = await Promise.all([
-      db.select({ id: VarianteProductoTable.id, nombre: VarianteProductoTable.nombre, precio: VarianteProductoTable.precio })
+      db.select({ id: VarianteProductoTable.id, nombre: VarianteProductoTable.nombre, precio: VarianteProductoTable.precio, grupo: VarianteProductoTable.grupo })
         .from(VarianteProductoTable).where(and(eq(VarianteProductoTable.productoId, producto.id), eq(VarianteProductoTable.activo, true))),
       // `ingrediente` no tiene columna `activo`: el alta/baja se maneja en producto_ingrediente
       db.select({ id: IngredienteTable.id, nombre: IngredienteTable.nombre })
         .from(ProductoIngredienteTable).innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
         .where(eq(ProductoIngredienteTable.productoId, producto.id)),
-      db.select({ id: AgregadoTable.id, nombre: AgregadoTable.nombre, precio: AgregadoTable.precio })
+      db.select({ id: AgregadoTable.id, nombre: AgregadoTable.nombre, precio: AgregadoTable.precio, grupo: ProductoAgregadoTable.grupo })
         .from(ProductoAgregadoTable).innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
         .where(and(eq(ProductoAgregadoTable.productoId, producto.id), eq(AgregadoTable.activo, true))),
     ])
-    return { ...producto, variantes, ingredientes, agregados }
+    return {
+      ...producto,
+      variantes: variantes.filter((variante) => variante.grupo === 1),
+      variantesSecundarias: variantes.filter((variante) => variante.grupo === 2),
+      ingredientes,
+      agregados,
+      agregadosPrimarios: agregados.filter((agregado) => agregado.grupo === 1),
+      agregadosSecundarios: agregados.filter((agregado) => agregado.grupo === 2),
+    }
   }))
   const payload = { categorias, productos: data }
   const etag = `"${createHash('sha256').update(JSON.stringify(payload)).digest('base64url')}"`
