@@ -8,7 +8,7 @@ import {
     mensajeWhatsapp as MensajeWhatsappTable,
 } from '../db/schema'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
-import { avisarSaldoBajoSiCorresponde } from '../lib/mensajes-wallet'
+import { avisarSaldoBajoSiCorresponde, consumirMensaje } from '../lib/mensajes-wallet'
 import { isMetodoManualVerificable } from '../lib/metodos-pago'
 
 // Interfaces para tipado estricto
@@ -519,6 +519,20 @@ export const notificarClientePagoConfirmado = async (
             telefono: row.telefono,
             tipo: 'pedido_confirmado',
         }).catch((err) => console.error('❌ [Notificar Cliente Pago] Error registrando mensaje:', err));
+
+        // Descontar del wallet del restaurante sólo después de que Meta confirme el envío.
+        // La contabilidad es best-effort: un fallo del wallet no invalida el aviso ya enviado.
+        try {
+            await consumirMensaje(db, restauranteId, {
+                categoria: 'utility',
+                tipoMensaje: 'pedido_confirmado',
+                motivo: 'aviso_pedido_confirmado',
+                pedidoUnificadoId: pedidoId,
+            });
+        } catch (e) {
+            console.error('⚠️ [Wallet] Error descontando mensaje (pago confirmado automático):', e);
+        }
+
         console.log(`📲 [Notificar Cliente Pago] ✅ Cliente ${row.telefono} notificado (pedido #${pedidoId})`);
     } else {
         console.error(`📲 [Notificar Cliente Pago] ❌ Error enviando a ${row.telefono} (pedido #${pedidoId}):`, result.error);
