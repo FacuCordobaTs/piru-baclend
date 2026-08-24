@@ -20,7 +20,7 @@ import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS } from '../lib/modulos'
-import { eq, desc, inArray, and } from 'drizzle-orm'
+import { eq, desc, inArray, notInArray, and } from 'drizzle-orm'
 import { computarPerfilesRFM } from '../lib/clientes-rfm'
 import { deduplicarPedidosHistorial } from '../lib/clientes-historial'
 import {
@@ -62,6 +62,7 @@ clientesRoute.use('*', authMiddleware)
 clientesRoute.get('/list', async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
+    const soloDespachados = c.req.query('soloDespachados') === 'true'
 
     try {
         // 1. Traer todos los clientes del restaurante
@@ -69,8 +70,9 @@ clientesRoute.get('/list', async (c) => {
             .where(eq(ClienteTable.restauranteId, restauranteId))
             .orderBy(desc(ClienteTable.createdAt))
 
-        // 2. La Base de clientes se construye únicamente con ventas completadas.
-        // En el Dashboard, "Despachar" lleva el pedido al estado `archived`.
+        // La pantalla actual de Clientes solicita sólo ventas completadas. El
+        // default anterior se conserva para admins instalados que todavía no
+        // envían el query param. En el Dashboard, "Despachar" lleva a `archived`.
         const pedidos = await db.select({
             id: PedidoUnificadoTable.id,
             clienteId: PedidoUnificadoTable.clienteId,
@@ -80,7 +82,9 @@ clientesRoute.get('/list', async (c) => {
         }).from(PedidoUnificadoTable)
             .where(and(
                 eq(PedidoUnificadoTable.restauranteId, restauranteId),
-                eq(PedidoUnificadoTable.estado, 'archived'),
+                soloDespachados
+                    ? eq(PedidoUnificadoTable.estado, 'archived')
+                    : notInArray(PedidoUnificadoTable.estado, ['cancelled']),
             ))
 
         // 3. Traer todos los items de esos pedidos
@@ -131,10 +135,10 @@ clientesRoute.get('/list', async (c) => {
 
         // 7. Mostrar sólo clientes con al menos un pedido despachado y calcular
         // todas sus métricas a partir de ese mismo historial.
-        const clientesConPedidosDespachados = clientes.filter(cliente =>
-            allPedidos.some(pedido => pedido.clienteId === cliente.id),
-        )
-        const base = clientesConPedidosDespachados.map(cliente => {
+        const clientesParaRespuesta = soloDespachados
+            ? clientes.filter(cliente => allPedidos.some(pedido => pedido.clienteId === cliente.id))
+            : clientes
+        const base = clientesParaRespuesta.map(cliente => {
             const clientPedidos = deduplicarPedidosHistorial(
                 allPedidos.filter(p => p.clienteId === cliente.id),
             )
@@ -183,7 +187,7 @@ clientesRoute.get('/list', async (c) => {
         const toquesPorCliente = await cargarToquesPorCliente(
             db,
             restauranteId,
-            clientesConPedidosDespachados.map(cl => cl.id),
+            clientesParaRespuesta.map(cl => cl.id),
         )
 
         const clientesConMetricas = base.map((b, i) => {
