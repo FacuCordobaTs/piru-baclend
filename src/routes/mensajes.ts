@@ -196,7 +196,10 @@ mensajesRoute.get('/packs', async (c) => {
  * MercadoPago (pago a la cuenta de Piru). Devuelve el init_point para redirigir.
  * El precio SIEMPRE sale del pack en la DB (nunca del cliente).
  */
-const checkoutSchema = z.object({ packId: z.number().int().positive() })
+const checkoutSchema = z.object({
+  packId: z.number().int().positive(),
+  telefonoDestino: z.string().trim().max(30).optional(),
+})
 
 mensajesRoute.post('/recarga/checkout', zValidator('json', checkoutSchema), async (c) => {
   const db = drizzle(pool)
@@ -266,7 +269,7 @@ mensajesRoute.post('/pago-qr', zValidator('json', checkoutSchema), async (c) => 
 mensajesRoute.post('/pago-link-whatsapp', zValidator('json', checkoutSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { packId } = c.req.valid('json')
+  const { packId, telefonoDestino } = c.req.valid('json')
 
   if (!MP_PLATFORM_ACCESS_TOKEN) {
     console.error('❌ [Pago link WhatsApp] Falta MP_ACCESS_TOKEN para cobrar recargas')
@@ -285,10 +288,12 @@ mensajesRoute.post('/pago-link-whatsapp', zValidator('json', checkoutSchema), as
       .where(eq(RestauranteTable.id, restauranteId))
       .limit(1)
 
-    const telefono = (rest?.telefono || '').replace(/\D/g, '')
+    const telefono = (telefonoDestino || rest?.telefono || '').replace(/\D/g, '')
     if (!telefono || telefono.length < 8) {
       return c.json({
-        message: 'No tenés un número de WhatsApp verificado en tu cuenta para recibir el link.',
+        message: telefonoDestino
+          ? 'Ingresá un número de WhatsApp válido, con código de área.'
+          : 'No tenés un número de WhatsApp verificado en tu cuenta para recibir el link.',
         success: false,
       }, 400)
     }

@@ -47,6 +47,7 @@ import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { consumirMensaje, estadoEnvioUtility, avisarSaldoBajoSiCorresponde } from '../lib/mensajes-wallet'
 import { asegurarOwnerStaff } from '../lib/staff'
 import { asegurarTurnoAbierto, cerrarTurnoActual, listarTurnos, obtenerTurno } from '../lib/turnos-caja'
+import { cantidadImpresaTrasEdicion, cantidadesPendientes, mismaConfiguracionItem } from '../lib/comanda-impresion'
 
 const itemSchema = z.object({
   productoId: z.number().int().positive(),
@@ -122,6 +123,9 @@ const updateEstadoSchema = z.object({
 })
 
 const posItemSchema = z.object({
+  // Aditivo: admins nuevos conservan la identidad de la fila al guardar el
+  // borrador completo. Los instalados anteriores pueden seguir omitiéndolo.
+  id: z.number().int().positive().optional(),
   productoId: z.number().int().positive(),
   varianteId: z.number().int().positive().nullable().optional(),
   varianteSecundariaId: z.number().int().positive().nullable().optional(),
@@ -339,7 +343,8 @@ export async function respuestaPedidoEditable(db: any, restauranteId: number, pe
     id: ItemPedidoUnificadoTable.id, productoId: ItemPedidoUnificadoTable.productoId,
     varianteId: ItemPedidoUnificadoTable.varianteId, varianteNombre: ItemPedidoUnificadoTable.varianteNombre,
     varianteSecundariaId: ItemPedidoUnificadoTable.varianteSecundariaId, varianteSecundariaNombre: ItemPedidoUnificadoTable.varianteSecundariaNombre,
-    cantidad: ItemPedidoUnificadoTable.cantidad, precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
+    cantidad: ItemPedidoUnificadoTable.cantidad, cantidadImpresa: ItemPedidoUnificadoTable.cantidadImpresa,
+    precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
     nombreProducto: ProductoTable.nombre, imagenUrl: ProductoTable.imagenUrl,
     ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos, agregados: ItemPedidoUnificadoTable.agregados,
     nota: ItemPedidoUnificadoTable.nota,
@@ -505,13 +510,44 @@ const pedidoUnificadoRoute = new Hono()
     const sucursalIdParam = c.req.query('sucursalId')
 
     const whereCondition = await buildPedidosWhere(db, restauranteId, tipo, sucursalIdParam, undefined, { excludeArchived: true })
-    const pedidos = await selectPedidosEnriquecidos(db, whereCondition, { limit: 100 })
+    // Las mesas no pueden quedar falsamente libres porque el límite operativo
+    // haya recortado pedidos abiertos antiguos. El orden sigue siendo reciente primero.
+    const pedidos = await selectPedidosEnriquecidos(db, whereCondition, { limit: tipo === 'mesa' ? 500 : 100 })
 
     return c.json({
       message: 'Pedidos activos recuperados',
       success: true,
       data: pedidos,
     }, 200)
+  })
+
+  // Historial operativo de una mesa para el día o turno elegido.
+  .get('/mesa/:mesaId/historial', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = Number((c as any).user.id)
+    const mesaId = Number(c.req.param('mesaId'))
+    if (!Number.isInteger(mesaId) || mesaId <= 0) return c.json({ success: false, message: 'Mesa inválida' }, 400)
+    const [mesa] = await db.select({ id: MesaLocalTable.id, nombre: MesaLocalTable.nombre })
+      .from(MesaLocalTable)
+      .where(and(eq(MesaLocalTable.id, mesaId), eq(MesaLocalTable.restauranteId, restauranteId)))
+      .limit(1)
+    if (!mesa) return c.json({ success: false, message: 'Mesa no encontrada' }, 404)
+
+    const turnoId = Number(c.req.query('turnoId'))
+    let turno: Awaited<ReturnType<typeof obtenerTurno>> = null
+    if (Number.isInteger(turnoId) && turnoId > 0
+      && await tieneModuloActivo(db, restauranteId, MODULE_KEYS.CIERRE_TURNO_MANUAL)) {
+      turno = await obtenerTurno(db, restauranteId, turnoId)
+      if (!turno) return c.json({ success: false, message: 'Turno no encontrado' }, 404)
+    }
+    const diaParam = c.req.query('dia')
+    const dia = diaParam && /^\d{4}-\d{2}-\d{2}$/.test(diaParam)
+      ? diaParam
+      : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' })
+    const base = await buildPedidosWhere(db, restauranteId, 'mesa', undefined, undefined,
+      turno ? { desde: turno.aperturaAt, ...(turno.cierreAt ? { hasta: turno.cierreAt } : {}) } : { dia })
+    const pedidos = await selectPedidosEnriquecidos(db, and(base, eq(PedidoUnificadoTable.mesaLocalId, mesaId)), { limit: 200 })
+    return c.json({ success: true, data: pedidos, mesa, dia, turno: turno ? { ...turno, abierto: turno.cierreAt == null } : null })
   })
 
   // Obtener un pedido por ID
@@ -542,6 +578,7 @@ const pedidoUnificadoRoute = new Hono()
         varianteSecundariaId: ItemPedidoUnificadoTable.varianteSecundariaId,
         varianteSecundariaNombre: ItemPedidoUnificadoTable.varianteSecundariaNombre,
         cantidad: ItemPedidoUnificadoTable.cantidad,
+        cantidadImpresa: ItemPedidoUnificadoTable.cantidadImpresa,
         precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
         nombreProducto: ProductoTable.nombre,
         imagenUrl: ProductoTable.imagenUrl,
@@ -742,11 +779,11 @@ const pedidoUnificadoRoute = new Hono()
         if (ocupada.length) return { error: 'MESA_OCUPADA', message: 'Esta mesa ya tiene un pedido abierto' }
       }
 
-      const itemsResueltos = []
+      const itemsResueltos: Array<{ inputId?: number; item: any }> = []
       for (const input of body.items) {
         const item = await resolverItemPos(tx, restauranteId, input)
         if ('error' in item) return item
-        itemsResueltos.push(item)
+        itemsResueltos.push({ inputId: input.id, item })
       }
 
       const cambios = {
@@ -764,13 +801,38 @@ const pedidoUnificadoRoute = new Hono()
         deliveryFee: body.tipo === 'delivery' ? (Number(body.deliveryFee) || 0).toFixed(2) : null,
       }
       await tx.update(PedidoUnificadoTable).set(cambios).where(eq(PedidoUnificadoTable.id, pedidoId))
-      await tx.delete(ItemPedidoUnificadoTable).where(eq(ItemPedidoUnificadoTable.pedidoId, pedidoId))
-      await tx.insert(ItemPedidoUnificadoTable).values(itemsResueltos.map((item) => ({ ...item, pedidoId })))
+
+      // Reconciliar filas en lugar de borrar/recrear toda la comanda. Además de
+      // evitar desapariciones visuales, conserva cuánto de cada fila ya salió
+      // en cocina. Un admin viejo sin `id` sigue funcionando: se empareja por
+      // contenido antes de crear una fila nueva.
+      const disponibles = new Map(itemsAnteriores.map((item: any) => [item.id, item]))
+      for (const resuelto of itemsResueltos) {
+        let anterior = resuelto.inputId ? disponibles.get(resuelto.inputId) : undefined
+        if (!anterior) {
+          anterior = [...disponibles.values()].find((candidate: any) => mismaConfiguracionItem(candidate, resuelto.item))
+        }
+        if (!anterior) {
+          await tx.insert(ItemPedidoUnificadoTable).values({ ...resuelto.item, pedidoId, cantidadImpresa: 0 })
+          continue
+        }
+        disponibles.delete(anterior.id)
+        const cantidadImpresa = cantidadImpresaTrasEdicion(anterior, resuelto.item)
+        await tx.update(ItemPedidoUnificadoTable)
+          .set({ ...resuelto.item, cantidadImpresa })
+          .where(and(eq(ItemPedidoUnificadoTable.id, anterior.id), eq(ItemPedidoUnificadoTable.pedidoId, pedidoId)))
+      }
+      if (disponibles.size > 0) {
+        await tx.delete(ItemPedidoUnificadoTable).where(and(
+          eq(ItemPedidoUnificadoTable.pedidoId, pedidoId),
+          inArray(ItemPedidoUnificadoTable.id, [...disponibles.keys()]),
+        ))
+      }
 
       return {
         operacion: 'editar_datos_pos' as const,
         antes: { pedido: { tipo: pedido.tipo, mesaLocalId: pedido.mesaLocalId, nombreCliente: pedido.nombreCliente, telefono: pedido.telefono, notas: pedido.notas, direccion: pedido.direccion, deliveryFee: pedido.deliveryFee, metodoPago: pedido.metodoPago, pagado: pedido.pagado }, items: itemsAnteriores },
-        despues: { pedido: cambios, items: itemsResueltos },
+        despues: { pedido: cambios, items: itemsResueltos.map(({ item }) => item) },
         reimprimeCocina: true,
       }
     })
@@ -1507,21 +1569,39 @@ const pedidoUnificadoRoute = new Hono()
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))
+    const claim = await db.transaction(async (tx: any) => {
+      await tx.execute(sql`SELECT id FROM pedido_unificado WHERE id = ${pedidoId} AND restaurante_id = ${restauranteId} FOR UPDATE`)
+      const [pedido] = await tx.select({ id: PedidoUnificadoTable.id, impreso: PedidoUnificadoTable.impreso })
+        .from(PedidoUnificadoTable)
+        .where(and(eq(PedidoUnificadoTable.id, pedidoId), eq(PedidoUnificadoTable.restauranteId, restauranteId)))
+        .limit(1)
+      if (!pedido) return { claimed: false, printFull: false, pendingItems: [] as Array<{ id: number; cantidad: number }> }
 
-    const result = await db.execute(sql`
-      UPDATE ${PedidoUnificadoTable}
-      SET impreso = 1
-      WHERE id = ${pedidoId} AND restaurante_id = ${restauranteId} AND impreso = 0
-    `)
+      const items = await tx.select({
+        id: ItemPedidoUnificadoTable.id,
+        cantidad: ItemPedidoUnificadoTable.cantidad,
+        cantidadImpresa: ItemPedidoUnificadoTable.cantidadImpresa,
+      }).from(ItemPedidoUnificadoTable).where(eq(ItemPedidoUnificadoTable.pedidoId, pedidoId))
+      const pendingItems = cantidadesPendientes(items)
+      if (pedido.impreso && pendingItems.length === 0) return { claimed: false, printFull: false, pendingItems }
 
-    // Dependiendo del driver MySQL (mysql2), rows affected está en la respuesta
-    const affectedRows = (result as any)?.[0]?.affectedRows ?? 0
+      await tx.update(PedidoUnificadoTable).set({ impreso: true }).where(eq(PedidoUnificadoTable.id, pedidoId))
+      for (const item of items) {
+        await tx.update(ItemPedidoUnificadoTable)
+          .set({ cantidadImpresa: item.cantidad })
+          .where(and(eq(ItemPedidoUnificadoTable.id, item.id), eq(ItemPedidoUnificadoTable.pedidoId, pedidoId)))
+      }
+      return { claimed: true, printFull: !pedido.impreso && pendingItems.length === 0, pendingItems }
+    })
 
-    if (affectedRows > 0) {
-      return c.json({ message: 'Claim de impresión exitoso', success: true, claimed: true }, 200)
-    } else {
-      return c.json({ message: 'Pedido ya impreso o no encontrado', success: true, claimed: false }, 200)
-    }
+    return c.json({
+      message: claim.claimed ? 'Claim de impresión exitoso' : 'Pedido ya impreso o no encontrado',
+      success: true,
+      claimed: claim.claimed,
+      printFull: claim.printFull,
+      // Campo aditivo: los admins nuevos imprimen sólo el delta de cada fila.
+      pendingItems: claim.pendingItems,
+    }, 200)
   })
 
 export { pedidoUnificadoRoute }

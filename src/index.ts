@@ -115,7 +115,7 @@ app.use('*', cors({
     'https://www.burgersdelsur.com'
   ],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'Upgrade-Insecure-Requests'], // Agregué Upgrade-Insecure-Requests por si acaso
+  allowHeaders: ['Content-Type', 'Authorization', 'Upgrade-Insecure-Requests', 'Idempotency-Key'],
   credentials: true,
 }))
 

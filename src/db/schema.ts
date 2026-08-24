@@ -351,6 +351,9 @@ export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {
   varianteSecundariaId: int("variante_secundaria_id"),
   varianteSecundariaNombre: varchar("variante_secundaria_nombre", { length: 255 }),
   cantidad: int("cantidad").default(1).notNull(),
+  // Cantidad de esta fila que ya fue enviada a cocina. Permite imprimir sólo
+  // las unidades agregadas después de abrir una mesa, incluso tras un reload.
+  cantidadImpresa: int("cantidad_impresa").default(0).notNull(),
   precioUnitario: decimal("precio_unitario", { precision: 10, scale: 2 }).notNull(),
   esCanjePuntos: boolean("es_canje_puntos").default(false),
   ingredientesExcluidos: json("ingredientes_excluidos"),

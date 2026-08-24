@@ -78,6 +78,57 @@ async function validarHorarioProgramadoObligatorio(
 
 const publicRoute = new Hono()
 
+// Los navegadores móviles pueden repetir un POST cuando cambia la app al abrir
+// WhatsApp o cuando la conexión entrega tarde la respuesta. Una misma clave de
+// intento comparte la respuesta en curso (y la conserva brevemente), de modo
+// que el alta pública se ejecuta una sola vez incluso si llegan dos requests.
+const PEDIDO_IDEMPOTENCY_TTL_MS = 30 * 60 * 1000
+const pedidosPublicosEnCurso = new Map<string, Promise<Response>>()
+
+const protegerAltaPedidoPublico = async (c: any, next: () => Promise<void>) => {
+  const requestId = c.req.header('Idempotency-Key')?.trim()
+  if (!requestId || !/^[A-Za-z0-9_-]{16,100}$/.test(requestId)) {
+    await next()
+    return
+  }
+
+  const key = `${c.req.path}:${requestId}`
+  const existente = pedidosPublicosEnCurso.get(key)
+  if (existente) {
+    c.res = (await existente).clone()
+    return
+  }
+
+  let resolver!: (response: Response) => void
+  const respuestaCompartida = new Promise<Response>((resolve) => { resolver = resolve })
+  pedidosPublicosEnCurso.set(key, respuestaCompartida)
+
+  try {
+    await next()
+    const response = c.res as Response
+    resolver(response.clone())
+
+    if (response.ok) {
+      setTimeout(() => pedidosPublicosEnCurso.delete(key), PEDIDO_IDEMPOTENCY_TTL_MS)
+    } else {
+      pedidosPublicosEnCurso.delete(key)
+    }
+  } catch (error) {
+    resolver(new Response(JSON.stringify({
+      success: false,
+      message: 'Error al crear el pedido',
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    pedidosPublicosEnCurso.delete(key)
+    throw error
+  }
+}
+
+publicRoute.use('/delivery/create', protegerAltaPedidoPublico)
+publicRoute.use('/takeaway/create', protegerAltaPedidoPublico)
+
 async function whatsappPropioDeSucursal(
     db: any,
     restauranteId: number,

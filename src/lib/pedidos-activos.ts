@@ -158,7 +158,14 @@ export async function buildPedidosWhere(
     )
     whereCondition = and(
       whereCondition,
-      or(eq(PedidoUnificadoTable.pagado, true), not(ocultarPedidoImpagoOperaciones ?? sql`FALSE`)),
+      // Una mesa abierta es operación del local y debe seguir visible aunque
+      // todavía no esté cobrada. Las reglas de checkout público no la ocultan.
+      or(
+        eq(PedidoUnificadoTable.tipo, 'mesa'),
+        eq(PedidoUnificadoTable.consumoEnLocal, true),
+        eq(PedidoUnificadoTable.pagado, true),
+        not(ocultarPedidoImpagoOperaciones ?? sql`FALSE`),
+      ),
     )
   }
   if (estado) {
@@ -221,6 +228,7 @@ export async function selectPedidosEnriquecidos(
           varianteSecundariaId: ItemPedidoUnificadoTable.varianteSecundariaId,
           varianteSecundariaNombre: ItemPedidoUnificadoTable.varianteSecundariaNombre,
           cantidad: ItemPedidoUnificadoTable.cantidad,
+          cantidadImpresa: ItemPedidoUnificadoTable.cantidadImpresa,
           precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
           nombreProducto: ProductoTable.nombre,
           imagenUrl: ProductoTable.imagenUrl,

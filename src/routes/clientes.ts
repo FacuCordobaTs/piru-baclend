@@ -4,7 +4,17 @@ import {
     cliente as ClienteTable,
     pedidoUnificado as PedidoUnificadoTable,
     itemPedidoUnificado as ItemPedidoUnificadoTable,
-    producto as ProductoTable
+    producto as ProductoTable,
+    mensajeWhatsapp as MensajeWhatsappTable,
+    whatsappConversacion as WhatsappConversacionTable,
+    pago as PagoTable,
+    recuperoCliente as RecuperoClienteTable,
+    campanaRecompraCliente as CampanaRecompraClienteTable,
+    colaRecompra as ColaRecompraTable,
+    pedidoDelivery as PedidoDeliveryTable,
+    itemPedidoDelivery as ItemPedidoDeliveryTable,
+    pedidoTakeaway as PedidoTakeawayTable,
+    itemPedidoTakeaway as ItemPedidoTakeawayTable,
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
@@ -20,8 +30,32 @@ import {
     estadoMotor, activarMotor, pausarMotorManual, reanudarMotor, setCupoDiario,
     registrarContactoManual, CUPO_DIARIO_MIN, CUPO_DIARIO_MAX,
 } from '../lib/motor-recompra'
+import { emitirEventoPedido } from '../lib/pedidos-activos'
 
 const clientesRoute = new Hono()
+
+async function borrarPedidosUnificados(tx: any, restauranteId: number, pedidoIds: number[]) {
+    if (pedidoIds.length === 0) return
+
+    // `pago` y el ledger de mensajes no tienen FK estricta. El comprobante de pago
+    // sí corresponde borrarlo; el ledger se conserva como auditoría financiera.
+    await tx.delete(PagoTable).where(inArray(PagoTable.pedidoUnificadoId, pedidoIds))
+    await tx.delete(ItemPedidoUnificadoTable).where(inArray(ItemPedidoUnificadoTable.pedidoId, pedidoIds))
+    await tx.delete(MensajeWhatsappTable).where(and(
+        eq(MensajeWhatsappTable.restauranteId, restauranteId),
+        inArray(MensajeWhatsappTable.pedidoUnificadoId, pedidoIds),
+    ))
+    await tx.update(WhatsappConversacionTable)
+        .set({ pedidoUnificadoId: null })
+        .where(and(
+            eq(WhatsappConversacionTable.restauranteId, restauranteId),
+            inArray(WhatsappConversacionTable.pedidoUnificadoId, pedidoIds),
+        ))
+    await tx.delete(PedidoUnificadoTable).where(and(
+        eq(PedidoUnificadoTable.restauranteId, restauranteId),
+        inArray(PedidoUnificadoTable.id, pedidoIds),
+    ))
+}
 
 clientesRoute.use('*', authMiddleware)
 
@@ -177,6 +211,149 @@ clientesRoute.get('/list', async (c) => {
     } catch (error) {
         console.error('Error fetching clientes:', error)
         return c.json({ message: 'Error interno del servidor', success: false }, 500)
+    }
+})
+
+// Borra un pedido desde el historial del cliente. Ambos identificadores y el
+// restaurante forman parte del filtro para impedir accesos cruzados entre tenants.
+clientesRoute.delete('/:id/pedidos/:pedidoId', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const clienteId = Number(c.req.param('id'))
+    const pedidoId = Number(c.req.param('pedidoId'))
+
+    if (!Number.isInteger(clienteId) || clienteId <= 0 || !Number.isInteger(pedidoId) || pedidoId <= 0) {
+        return c.json({ success: false, message: 'ID inválido' }, 400)
+    }
+
+    try {
+        const [pedido] = await db.select({
+            id: PedidoUnificadoTable.id,
+            tipo: PedidoUnificadoTable.tipo,
+            sucursalId: PedidoUnificadoTable.sucursalId,
+        }).from(PedidoUnificadoTable).where(and(
+            eq(PedidoUnificadoTable.id, pedidoId),
+            eq(PedidoUnificadoTable.clienteId, clienteId),
+            eq(PedidoUnificadoTable.restauranteId, restauranteId),
+        )).limit(1)
+
+        if (!pedido) return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
+
+        await db.transaction(async (tx) => {
+            await borrarPedidosUnificados(tx, restauranteId, [pedidoId])
+        })
+
+        await emitirEventoPedido(db, {
+            restauranteId,
+            pedidoId,
+            tipo: pedido.tipo,
+            sucursalId: pedido.sucursalId,
+            event: 'remove',
+            reason: 'deleted',
+        })
+
+        return c.json({ success: true, message: 'Pedido eliminado correctamente' }, 200)
+    } catch (error) {
+        console.error('Error eliminando pedido del cliente:', error)
+        return c.json({ success: false, message: 'No se pudo eliminar el pedido' }, 500)
+    }
+})
+
+// Elimina el perfil y todo su historial. También limpia las tablas legacy y las
+// referencias del Motor de Recompra para que ninguna FK deje el borrado a medias.
+clientesRoute.delete('/:id', async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const clienteId = Number(c.req.param('id'))
+
+    if (!Number.isInteger(clienteId) || clienteId <= 0) {
+        return c.json({ success: false, message: 'ID inválido' }, 400)
+    }
+
+    try {
+        const [cliente] = await db.select({ id: ClienteTable.id })
+            .from(ClienteTable)
+            .where(and(eq(ClienteTable.id, clienteId), eq(ClienteTable.restauranteId, restauranteId)))
+            .limit(1)
+
+        if (!cliente) return c.json({ success: false, message: 'Cliente no encontrado' }, 404)
+
+        const resultado = await db.transaction(async (tx) => {
+            const pedidos = await tx.select({
+                id: PedidoUnificadoTable.id,
+                tipo: PedidoUnificadoTable.tipo,
+                sucursalId: PedidoUnificadoTable.sucursalId,
+            })
+                .from(PedidoUnificadoTable)
+                .where(and(
+                    eq(PedidoUnificadoTable.clienteId, clienteId),
+                    eq(PedidoUnificadoTable.restauranteId, restauranteId),
+                ))
+            await borrarPedidosUnificados(tx, restauranteId, pedidos.map((p: { id: number }) => p.id))
+
+            const delivery = await tx.select({ id: PedidoDeliveryTable.id })
+                .from(PedidoDeliveryTable)
+                .where(and(eq(PedidoDeliveryTable.clienteId, clienteId), eq(PedidoDeliveryTable.restauranteId, restauranteId)))
+            const deliveryIds = delivery.map((p: { id: number }) => p.id)
+            if (deliveryIds.length > 0) {
+                await tx.delete(PagoTable).where(inArray(PagoTable.pedidoDeliveryId, deliveryIds))
+                await tx.delete(ItemPedidoDeliveryTable).where(inArray(ItemPedidoDeliveryTable.pedidoDeliveryId, deliveryIds))
+                await tx.delete(PedidoDeliveryTable).where(inArray(PedidoDeliveryTable.id, deliveryIds))
+            }
+
+            const takeaway = await tx.select({ id: PedidoTakeawayTable.id })
+                .from(PedidoTakeawayTable)
+                .where(and(eq(PedidoTakeawayTable.clienteId, clienteId), eq(PedidoTakeawayTable.restauranteId, restauranteId)))
+            const takeawayIds = takeaway.map((p: { id: number }) => p.id)
+            if (takeawayIds.length > 0) {
+                await tx.delete(PagoTable).where(inArray(PagoTable.pedidoTakeawayId, takeawayIds))
+                await tx.delete(ItemPedidoTakeawayTable).where(inArray(ItemPedidoTakeawayTable.pedidoTakeawayId, takeawayIds))
+                await tx.delete(PedidoTakeawayTable).where(inArray(PedidoTakeawayTable.id, takeawayIds))
+            }
+
+            await tx.delete(ColaRecompraTable).where(and(
+                eq(ColaRecompraTable.clienteId, clienteId),
+                eq(ColaRecompraTable.restauranteId, restauranteId),
+            ))
+            await tx.delete(CampanaRecompraClienteTable).where(and(
+                eq(CampanaRecompraClienteTable.clienteId, clienteId),
+                eq(CampanaRecompraClienteTable.restauranteId, restauranteId),
+            ))
+            await tx.delete(RecuperoClienteTable).where(and(
+                eq(RecuperoClienteTable.clienteId, clienteId),
+                eq(RecuperoClienteTable.restauranteId, restauranteId),
+            ))
+            await tx.delete(ClienteTable).where(and(
+                eq(ClienteTable.id, clienteId),
+                eq(ClienteTable.restauranteId, restauranteId),
+            ))
+
+            return {
+                pedidosUnificados: pedidos,
+                pedidosEliminados: pedidos.length + deliveryIds.length + takeawayIds.length,
+            }
+        })
+
+        // Mantiene sincronizados los dashboards que estén abiertos en otras terminales.
+        for (const pedido of resultado.pedidosUnificados) {
+            await emitirEventoPedido(db, {
+                restauranteId,
+                pedidoId: pedido.id,
+                tipo: pedido.tipo,
+                sucursalId: pedido.sucursalId,
+                event: 'remove',
+                reason: 'deleted',
+            })
+        }
+
+        return c.json({
+            success: true,
+            message: 'Cliente y sus pedidos eliminados correctamente',
+            data: { pedidosEliminados: resultado.pedidosEliminados },
+        }, 200)
+    } catch (error) {
+        console.error('Error eliminando cliente:', error)
+        return c.json({ success: false, message: 'No se pudo eliminar el cliente y sus pedidos' }, 500)
     }
 })
 
