@@ -14,6 +14,12 @@ const createMesaSchema = z.object({
   nombre: z.string().max(255),
 })
 
+function isDiscountActive(descuento: number | null, inicio: Date | null, fin: Date | null): boolean {
+  if (!descuento || descuento <= 0) return false
+  const now = Date.now()
+  return (!inicio || inicio.getTime() <= now) && (!fin || fin.getTime() >= now)
+}
+
 const mesaRoute = new Hono()
 
 
@@ -84,6 +90,14 @@ const mesaRoute = new Hono()
         activo: ProductoTable.activo,
         imagenUrl: ProductoTable.imagenUrl,
         descuento: ProductoTable.descuento,
+        descuentoFechaInicio: ProductoTable.descuentoFechaInicio,
+        descuentoFechaFin: ProductoTable.descuentoFechaFin,
+        tituloVariantesPrimarias: ProductoTable.tituloVariantesPrimarias,
+        tituloVariantesSecundarias: ProductoTable.tituloVariantesSecundarias,
+        tituloExtrasPrimarios: ProductoTable.tituloExtrasPrimarios,
+        tituloExtrasSecundarios: ProductoTable.tituloExtrasSecundarios,
+        permiteNota: ProductoTable.permiteNota,
+        tituloNota: ProductoTable.tituloNota,
         createdAt: ProductoTable.createdAt,
         categoria: {
           id: CategoriaTable.id,
@@ -111,26 +125,37 @@ const mesaRoute = new Hono()
               id: AgregadoTable.id,
               nombre: AgregadoTable.nombre,
               precio: AgregadoTable.precio,
+              grupo: ProductoAgregadoTable.grupo,
             })
             .from(ProductoAgregadoTable)
             .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
-            .where(eq(ProductoAgregadoTable.productoId, p.id)),
+            .where(and(
+              eq(ProductoAgregadoTable.productoId, p.id),
+              eq(AgregadoTable.activo, true),
+            )),
           db
             .select({
               id: VarianteProductoTable.id,
               nombre: VarianteProductoTable.nombre,
               precio: VarianteProductoTable.precio,
+              grupo: VarianteProductoTable.grupo,
             })
             .from(VarianteProductoTable)
             .where(eq(VarianteProductoTable.productoId, p.id)),
         ]);
 
+        const descuentoActivo = isDiscountActive(p.descuento, p.descuentoFechaInicio, p.descuentoFechaFin)
         return {
           ...p,
+          descuento: descuentoActivo ? (p.descuento ?? 0) : 0,
+          descuentoFechaFin: descuentoActivo ? p.descuentoFechaFin : null,
           categoria: p.categoria?.nombre || null,
           ingredientes: ingredientes,
           agregados: agregados,
-          variantes: variantes,
+          agregadosPrimarios: agregados.filter(a => a.grupo === 1),
+          agregadosSecundarios: agregados.filter(a => a.grupo === 2),
+          variantes: variantes.filter(v => v.grupo === 1),
+          variantesSecundarias: variantes.filter(v => v.grupo === 2),
         }
       })
     )

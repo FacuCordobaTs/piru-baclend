@@ -228,7 +228,11 @@ const pedidoRoute = new Hono()
       const deliveryPedidosConItems = dtPedidosConItems.filter(p => p.tipo === 'delivery')
       const takeawayPedidosConItems = dtPedidosConItems.filter(p => p.tipo === 'takeaway')
       const mesaUnificadosConItems = dtPedidosConItems
-        .filter(p => p.tipo === 'mesa')
+        // En el flujo vigente de mesas, "Despachar" archiva la comanda. Una
+        // mesa cobrada pero todavía abierta no es una venta cerrada del turno y
+        // no debe contaminar ninguna estadística de Caja. El filtro se aplica
+        // sólo a `mesa`; delivery y takeaway conservan exactamente su lógica.
+        .filter(p => p.tipo === 'mesa' && p.estado === 'archived')
         .map(p => ({
           ...p,
           mesaId: p.mesaLocalId,
@@ -304,7 +308,9 @@ const pedidoRoute = new Hono()
         .reduce((sum, p) => sum + parseFloat(p.total || '0'), 0)
 
       // Diferenciar pedidos anotados manualmente (POS local, sin comisión) de los tomados por la web
-      const dtNoCancelados = dtPedidosConItems.filter(p => p.estado !== 'cancelled')
+      const dtNoCancelados = dtPedidosConItems.filter(p =>
+        p.estado !== 'cancelled' && (p.tipo !== 'mesa' || p.estado === 'archived')
+      )
       const esManual = (p: { anotadoManualmente?: boolean | null }) => p.anotadoManualmente === true
       const totalManual = dtNoCancelados
         .filter(esManual)

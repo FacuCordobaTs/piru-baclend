@@ -1389,7 +1389,14 @@ class WebSocketManager {
         return;
       }
 
-      let total = parseFloat(checkoutData.total || '0');
+      // `checkoutData.total` es una instantánea visual y puede quedar vieja si el grupo
+      // modifica el carrito. Además ya incluía el cupón del frontend, por lo que usarla
+      // aquí hacía posible descontar dos veces. El total final parte de los ítems vigentes.
+      const subtotalItems = items.reduce(
+        (sum, item) => sum + parseFloat(item.precioUnitario || '0') * item.cantidad,
+        0,
+      );
+      let total = subtotalItems + (checkoutData.tipoPedido === 'delivery' ? checkoutData.deliveryFee : 0);
       let cuentaCucuru: { alias: string; accountNumber: string } | null = null;
       let montoDescuento = 0;
       let codigoDescuentoIdFinal: number | null = null;
