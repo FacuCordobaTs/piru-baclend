@@ -20,7 +20,7 @@ import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS } from '../lib/modulos'
-import { eq, desc, inArray, notInArray, and } from 'drizzle-orm'
+import { eq, desc, inArray, and } from 'drizzle-orm'
 import { computarPerfilesRFM } from '../lib/clientes-rfm'
 import { deduplicarPedidosHistorial } from '../lib/clientes-historial'
 import {
@@ -69,7 +69,8 @@ clientesRoute.get('/list', async (c) => {
             .where(eq(ClienteTable.restauranteId, restauranteId))
             .orderBy(desc(ClienteTable.createdAt))
 
-        // 2. Traer todos los pedidos unificados del restaurante
+        // 2. La Base de clientes se construye únicamente con ventas completadas.
+        // En el Dashboard, "Despachar" lleva el pedido al estado `archived`.
         const pedidos = await db.select({
             id: PedidoUnificadoTable.id,
             clienteId: PedidoUnificadoTable.clienteId,
@@ -79,8 +80,7 @@ clientesRoute.get('/list', async (c) => {
         }).from(PedidoUnificadoTable)
             .where(and(
                 eq(PedidoUnificadoTable.restauranteId, restauranteId),
-                // Los pedidos por WhatsApp pueden ser válidos aunque no tengan pago online.
-                notInArray(PedidoUnificadoTable.estado, ['cancelled']),
+                eq(PedidoUnificadoTable.estado, 'archived'),
             ))
 
         // 3. Traer todos los items de esos pedidos
@@ -129,8 +129,12 @@ clientesRoute.get('/list', async (c) => {
             items: itemsMap[p.id] || []
         }))
 
-        // 7. Calcular métricas base + agrupar pedidos por cliente
-        const base = clientes.map(cliente => {
+        // 7. Mostrar sólo clientes con al menos un pedido despachado y calcular
+        // todas sus métricas a partir de ese mismo historial.
+        const clientesConPedidosDespachados = clientes.filter(cliente =>
+            allPedidos.some(pedido => pedido.clienteId === cliente.id),
+        )
+        const base = clientesConPedidosDespachados.map(cliente => {
             const clientPedidos = deduplicarPedidosHistorial(
                 allPedidos.filter(p => p.clienteId === cliente.id),
             )
@@ -176,7 +180,11 @@ clientesRoute.get('/list', async (c) => {
         )
 
         // Estado de la escalera de recupero por cliente (Motor de Recompra · 4.2). Un fetch para todos.
-        const toquesPorCliente = await cargarToquesPorCliente(db, restauranteId, clientes.map(cl => cl.id))
+        const toquesPorCliente = await cargarToquesPorCliente(
+            db,
+            restauranteId,
+            clientesConPedidosDespachados.map(cl => cl.id),
+        )
 
         const clientesConMetricas = base.map((b, i) => {
             const perfil = perfiles[i]
