@@ -173,9 +173,21 @@ export interface ConfigClaim {
     precio: string
     descripcion: string | null
     imagenUrl: string | null
+    tituloVariantesPrimarias: string
+    tituloVariantesSecundarias: string
+    tituloExtrasPrimarios: string
+    tituloExtrasSecundarios: string
+    permiteNota: boolean
+    tituloNota: string
+    /** Alias legacy: conserva todas las variantes para clientes anteriores. */
     variantes: Array<{ nombre: string; precio: number }>
+    variantesPrimarias: Array<{ nombre: string; precio: number }>
+    variantesSecundarias: Array<{ nombre: string; precio: number }>
     ingredientes: string[]
+    /** Alias legacy: conserva todos los extras para clientes anteriores. */
     extras: Array<{ nombre: string; precio: number }>
+    extrasPrimarios: Array<{ nombre: string; precio: number }>
+    extrasSecundarios: Array<{ nombre: string; precio: number }>
   }>
 }
 
@@ -224,6 +236,12 @@ export async function computarConfigClaim(db: Db, restauranteId: number): Promis
         precio: ProductoTable.precio,
         descripcion: ProductoTable.descripcion,
         imagenUrl: ProductoTable.imagenUrl,
+        tituloVariantesPrimarias: ProductoTable.tituloVariantesPrimarias,
+        tituloVariantesSecundarias: ProductoTable.tituloVariantesSecundarias,
+        tituloExtrasPrimarios: ProductoTable.tituloExtrasPrimarios,
+        tituloExtrasSecundarios: ProductoTable.tituloExtrasSecundarios,
+        permiteNota: ProductoTable.permiteNota,
+        tituloNota: ProductoTable.tituloNota,
       })
       .from(ProductoTable)
       .where(eq(ProductoTable.restauranteId, restauranteId)),
@@ -235,7 +253,7 @@ export async function computarConfigClaim(db: Db, restauranteId: number): Promis
   const [variantes, ingredientesRows, extras] = productoIds.length
     ? await Promise.all([
         db
-          .select({ productoId: VarianteProductoTable.productoId, nombre: VarianteProductoTable.nombre, precio: VarianteProductoTable.precio })
+          .select({ productoId: VarianteProductoTable.productoId, nombre: VarianteProductoTable.nombre, precio: VarianteProductoTable.precio, grupo: VarianteProductoTable.grupo })
           .from(VarianteProductoTable)
           .where(and(inArray(VarianteProductoTable.productoId, productoIds), eq(VarianteProductoTable.activo, true))),
         db
@@ -244,7 +262,7 @@ export async function computarConfigClaim(db: Db, restauranteId: number): Promis
           .innerJoin(IngredienteTable, eq(ProductoIngredienteTable.ingredienteId, IngredienteTable.id))
           .where(inArray(ProductoIngredienteTable.productoId, productoIds)),
         db
-          .select({ productoId: ProductoAgregadoTable.productoId, nombre: AgregadoTable.nombre, precio: AgregadoTable.precio })
+          .select({ productoId: ProductoAgregadoTable.productoId, nombre: AgregadoTable.nombre, precio: AgregadoTable.precio, grupo: ProductoAgregadoTable.grupo })
           .from(ProductoAgregadoTable)
           .innerJoin(AgregadoTable, eq(ProductoAgregadoTable.agregadoId, AgregadoTable.id))
           .where(and(inArray(ProductoAgregadoTable.productoId, productoIds), eq(AgregadoTable.activo, true))),
@@ -252,10 +270,17 @@ export async function computarConfigClaim(db: Db, restauranteId: number): Promis
     : [[], [], []]
 
   const variantesPorProd = new Map<number, Array<{ nombre: string; precio: number }>>()
+  const variantesPrimariasPorProd = new Map<number, Array<{ nombre: string; precio: number }>>()
+  const variantesSecundariasPorProd = new Map<number, Array<{ nombre: string; precio: number }>>()
   for (const v of variantes) {
-    const arr = variantesPorProd.get(v.productoId) ?? []
-    arr.push({ nombre: v.nombre, precio: Number(v.precio) })
-    variantesPorProd.set(v.productoId, arr)
+    const opcion = { nombre: v.nombre, precio: Number(v.precio) }
+    const todas = variantesPorProd.get(v.productoId) ?? []
+    todas.push(opcion)
+    variantesPorProd.set(v.productoId, todas)
+    const porGrupo = v.grupo === 2 ? variantesSecundariasPorProd : variantesPrimariasPorProd
+    const agrupadas = porGrupo.get(v.productoId) ?? []
+    agrupadas.push(opcion)
+    porGrupo.set(v.productoId, agrupadas)
   }
   const ingredientesPorProd = new Map<number, string[]>()
   for (const ing of ingredientesRows) {
@@ -264,10 +289,17 @@ export async function computarConfigClaim(db: Db, restauranteId: number): Promis
     ingredientesPorProd.set(ing.productoId, arr)
   }
   const extrasPorProd = new Map<number, Array<{ nombre: string; precio: number }>>()
+  const extrasPrimariosPorProd = new Map<number, Array<{ nombre: string; precio: number }>>()
+  const extrasSecundariosPorProd = new Map<number, Array<{ nombre: string; precio: number }>>()
   for (const ex of extras) {
-    const arr = extrasPorProd.get(ex.productoId) ?? []
-    arr.push({ nombre: ex.nombre, precio: Number(ex.precio) })
-    extrasPorProd.set(ex.productoId, arr)
+    const opcion = { nombre: ex.nombre, precio: Number(ex.precio) }
+    const todos = extrasPorProd.get(ex.productoId) ?? []
+    todos.push(opcion)
+    extrasPorProd.set(ex.productoId, todos)
+    const porGrupo = ex.grupo === 2 ? extrasSecundariosPorProd : extrasPrimariosPorProd
+    const agrupados = porGrupo.get(ex.productoId) ?? []
+    agrupados.push(opcion)
+    porGrupo.set(ex.productoId, agrupados)
   }
 
   const cfg = rest
@@ -306,9 +338,19 @@ export async function computarConfigClaim(db: Db, restauranteId: number): Promis
       precio: String(p.precio),
       descripcion: p.descripcion ?? null,
       imagenUrl: p.imagenUrl ?? null,
+      tituloVariantesPrimarias: p.tituloVariantesPrimarias,
+      tituloVariantesSecundarias: p.tituloVariantesSecundarias,
+      tituloExtrasPrimarios: p.tituloExtrasPrimarios,
+      tituloExtrasSecundarios: p.tituloExtrasSecundarios,
+      permiteNota: p.permiteNota,
+      tituloNota: p.tituloNota,
       variantes: variantesPorProd.get(p.id) ?? [],
+      variantesPrimarias: variantesPrimariasPorProd.get(p.id) ?? [],
+      variantesSecundarias: variantesSecundariasPorProd.get(p.id) ?? [],
       ingredientes: ingredientesPorProd.get(p.id) ?? [],
       extras: extrasPorProd.get(p.id) ?? [],
+      extrasPrimarios: extrasPrimariosPorProd.get(p.id) ?? [],
+      extrasSecundarios: extrasSecundariosPorProd.get(p.id) ?? [],
     })),
   }
 }
