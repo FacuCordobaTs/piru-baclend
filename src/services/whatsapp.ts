@@ -877,7 +877,7 @@ export interface TrialEndingData {
 }
 
 /**
- * Aviso "tu prueba está por vencer" (día ~12 del trial de 14) al DUEÑO del local, con el link para
+ * Aviso "tu prueba está por vencer" (día ~3 del trial de 5) al DUEÑO del local, con el link para
  * pagar ahí mismo. Mensaje de PLATAFORMA: sale del número de Piru (`WHATSAPP_PHONE_ID`), no del
  * número del local, porque es Piru quien le cobra la cuota. Por eso NO recibe `creds`.
  *

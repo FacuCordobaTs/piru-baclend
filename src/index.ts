@@ -788,7 +788,7 @@ setInterval(() => {
   })
 }, MOTOR_TICK_MS)
 
-// ── Claim Flow · aviso "tu prueba está por vencer" (día ~12) ─────────────────
+// ── Claim Flow · aviso "tu prueba está por vencer" (día ~3) ──────────────────
 // Tick cada 15 min: busca trials que vencen en ~2 días y aún no avisados, y les manda por WhatsApp
 // (número de Piru) el aviso con el link de pago para activar el plan. Una sola vez por trial (flag
 // `suscripcion.avisoTrialVencimientoAt`). Best-effort: si falla, se reintenta en el próximo tick.

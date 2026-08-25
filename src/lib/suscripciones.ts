@@ -501,14 +501,14 @@ export async function asignarPlanManual(
   return { planId, periodoHasta }
 }
 
-/** Duración por defecto del trial outbound (2 fines de semana completos — ver ROADMAP_CLAIM_FLOW). */
-export const DIAS_TRIAL_DEFAULT = 14
+/** Duración comercial por defecto del trial outbound. */
+export const DIAS_TRIAL_DEFAULT = 5
 
 /**
  * Arranca el TRIAL de un local (onboarding outbound). A diferencia de una alta paga, acá el local
  * entra en `estado='trial'` con la suscripción base SIN pagar, por `dias` días. ⚠️ Se llama cuando
  * el fundador lo decide desde el panel interno,
- * no en el claim ni en el registro (el reloj de los 14 días arranca acá).
+ * no en el claim ni en el registro (el reloj de los 5 días arranca acá).
  *
  * Efecto:
  *  - upsert de la suscripción → estado 'trial', trialFin = fechaProximoCobro = ahora + dias.

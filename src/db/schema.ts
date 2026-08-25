@@ -996,7 +996,7 @@ export const suscripcion = mysqlTable("suscripcion", {
   graciaHasta: timestamp("gracia_hasta"),
   // Fecha de baja voluntaria.
   fechaCancelacion: timestamp("fecha_cancelacion"),
-  // Cuándo se envió el aviso "tu prueba está por vencer" (día ~12) por WhatsApp. Sirve de flag
+  // Cuándo se envió el aviso "tu prueba está por vencer" (día ~3) por WhatsApp. Sirve de flag
   // anti-reenvío del scheduler: mientras no sea null, el aviso ya salió y no se repite en cada tick.
   // Se resetea a null al arrancar un trial nuevo (iniciarTrial) para que un re-trial vuelva a avisar.
   avisoTrialVencimientoAt: timestamp("aviso_trial_vencimiento_at"),

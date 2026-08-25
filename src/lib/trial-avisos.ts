@@ -1,5 +1,5 @@
 // src/lib/trial-avisos.ts
-// Aviso "tu prueba está por vencer" (día ~12 del trial de 14) del Claim Flow. Ver docs/ROADMAP_CLAIM_FLOW.md (Tarea 7).
+// Aviso "tu prueba está por vencer" (día ~3 del trial de 5) del Claim Flow. Ver docs/ROADMAP_CLAIM_FLOW.md (Tarea 7).
 //
 // Un scheduler (setInterval en index.ts, patrón del Motor de Recompra) llama a `tickAvisosTrial`
 // cada ~15 min. El tick busca los trials que vencen dentro de ~2 días y todavía no recibieron el
@@ -24,7 +24,7 @@ import { sendTrialEndingWhatsApp } from '../services/whatsapp'
 
 type Db = MySql2Database<Record<string, never>>
 
-/** Cuántos días antes del fin del trial se manda el aviso (día ~12 de un trial de 14). */
+/** Cuántos días antes del fin del trial se manda el aviso (día ~3 de un trial de 5). */
 export const TRIAL_AVISO_ANTES_DIAS = 2
 
 /** Franja horaria (Argentina, UTC-3) en la que es aceptable mandar el aviso de pago. */

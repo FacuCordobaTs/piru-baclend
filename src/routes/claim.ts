@@ -32,11 +32,11 @@ import {
 import { iniciarTrial, DIAS_TRIAL_DEFAULT } from '../lib/suscripciones'
 
 /**
- * Arranca el TRIAL de 14 días cuando el dueño reclama su tienda (Claim Flow). El reloj de la prueba
- * arranca ACÁ, en el claim: el dueño entra con acceso a la suscripción base sin pagar por 14 días,
+ * Arranca el TRIAL de 5 días cuando el dueño reclama su tienda (Claim Flow). El reloj de la prueba
+ * arranca ACÁ, en el claim: el dueño entra con acceso a la suscripción base sin pagar por 5 días,
  * y recién al vencer (agotada también la gracia) cae en el paywall/pausa (→ /suscribir). Sin esto, la
  * cuenta queda `requiereSuscripcion=true` sin suscripción → accesoPanel=false → redirige de una a
- * /suscribir apenas cierra y reabre. El aviso "tu prueba está por vencer" (día ~12) lo dispara solo
+ * /suscribir apenas cierra y reabre. El aviso "tu prueba está por vencer" (día ~3) lo dispara solo
  * `tickAvisosTrial` a partir del `estado='trial'` que dejamos acá.
  *
  * Idempotente: si la cuenta YA tiene una suscripción (p. ej. el fundador le arrancó el trial a mano
@@ -301,7 +301,7 @@ claimRoute.post('/:token/verify', zValidator('json', verifySchema), async (c) =>
       .set({ claimedAt: new Date(), telefonoVerificado: true, telefono: reg.telefono })
       .where(eq(RestauranteTable.id, rest.id))
 
-    // Arrancamos el trial de 14 días recién ahora (el reloj corre desde que el dueño reclama). Sin
+    // Arrancamos el trial de 5 días recién ahora (el reloj corre desde que el dueño reclama). Sin
     // esto el local queda con requiereSuscripcion pero sin suscripción → redirige de una a /suscribir.
     await arrancarTrialClaim(db, rest.id)
 

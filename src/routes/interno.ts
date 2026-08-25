@@ -663,10 +663,10 @@ internoRoute.post('/locales/:id/reset-claim', async (c) => {
 })
 
 /**
- * Arranca el TRIAL de 14 días de un local. ⚠️ El reloj de la prueba arranca ACÁ (cuando el
+ * Arranca el TRIAL de 5 días de un local. ⚠️ El reloj de la prueba arranca ACÁ (cuando el
  * fundador lo decide), no en el claim ni en el registro. Deja la cuenta con acceso a la
  * suscripción base sin pagar; al vencer, el motor de estados lazy la lleva a pago_pendiente →
- * suspendida. Los módulos pagos nunca se incluyen. `dias` es opcional (default: 14).
+ * suspendida. Los módulos pagos nunca se incluyen. `dias` es opcional (default: 5).
  */
 const trialSchema = z.object({
   dias: z.number().int().positive().max(90).optional(),
