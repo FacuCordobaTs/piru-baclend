@@ -72,7 +72,7 @@ planesRoute.get('/mi-suscripcion', async (c) => {
       resolverSuscripcion(db, restauranteId),
       // Cotización autoritativa del próximo checkout: no usa el snapshot de
       // la última factura, por lo que incluye módulos ya migrados antes del
-      // primer pago (Alfajor: base + Avisos = $50.000).
+      // primer pago (Alfajor: base + Avisos = $70.000).
       resolverImporteMensual(db, restauranteId),
     ])
     const wallet = await resumenWallet(db, restauranteId)

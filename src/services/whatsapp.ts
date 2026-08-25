@@ -872,7 +872,7 @@ export interface TrialEndingData {
     nombre: string;   // {{1}} — nombre del dueño/local, ej: "Milanesas del Centro"
     fechaFin: string; // {{2}} — fecha de fin del trial, ej: "viernes 8/8"
     plata: string;    // {{3}} — plata en pedidos generada en el trial, ej: "$612.000"
-    precio: string;   // {{4}} — precio del plan sin símbolo, ej: "20.000"
+    precio: string;   // {{4}} — precio del plan sin símbolo, ej: "40.000"
     token: string;    // sufijo dinámico del botón URL → /pago/:token (la página pública de pago)
 }
 
@@ -901,7 +901,7 @@ export interface TrialEndingData {
  *
  *     El ORDEN es el contrato (lo respeta el `body.parameters` de abajo):
  *       {{1}} nombre del dueño/local · {{2}} fecha de fin · {{3}} plata en pedidos · {{4}} precio del plan
- *     Muestras: {{1}}=Milanesas del Centro · {{2}}=viernes 8/8 · {{3}}=$612.000 · {{4}}=20.000
+ *     Muestras: {{1}}=Milanesas del Centro · {{2}}=viernes 8/8 · {{3}}=$612.000 · {{4}}=40.000
  *   • Botón:         Uno solo, tipo "Visitar sitio web" → URL DINÁMICA.
  *                    Base EXACTA: https://admin.piru.app/pago/    Variable {{1}}: el token (uuid).
  *                    ⚠️ La base tiene que coincidir con ADMIN_URL del backend; en el envío sólo

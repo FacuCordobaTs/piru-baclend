@@ -52,7 +52,7 @@ function formatearFechaFin(fecha: Date): string {
 const fmtPlata = (n: number) =>
   new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n)
 
-/** Precio sin símbolo (para la plantilla, que ya trae "$" fijo: "${{4}}/mes"). Ej: "20.000". */
+/** Precio sin símbolo (para la plantilla, que ya trae "$" fijo: "${{4}}/mes"). Ej: "40.000". */
 const fmtPrecio = (n: number) =>
   new Intl.NumberFormat('es-AR', { maximumFractionDigits: 0 }).format(n)
 
