@@ -639,6 +639,30 @@ export const mensajeWhatsapp = mysqlTable("mensaje_whatsapp", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Claim durable de idempotencia para los envíos automáticos a clientes. Se separa
+// del historial porque el claim debe existir ANTES de llamar a Meta: de ese modo
+// dos webhooks concurrentes no pueden enviar dos veces el mismo aviso.
+export const envioWhatsappIdempotencia = mysqlTable("envio_whatsapp_idempotencia", {
+  id: int("id").primaryKey().autoincrement(),
+  pedidoUnificadoId: int("pedido_unificado_id")
+    .references(() => pedidoUnificado.id)
+    .notNull(),
+  restauranteId: int("restaurante_id")
+    .references(() => restaurante.id)
+    .notNull(),
+  tipo: varchar("tipo", { length: 50 }).notNull(),
+  estado: mysqlEnum("estado", ["procesando", "enviado", "fallido"])
+    .default("procesando")
+    .notNull(),
+  metaMessageId: varchar("meta_message_id", { length: 255 }),
+  error: varchar("error", { length: 1000 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_envio_whatsapp_pedido_tipo").on(table.pedidoUnificadoId, table.tipo),
+  index("idx_envio_whatsapp_restaurante_fecha").on(table.restauranteId, table.createdAt),
+]);
+
 // Motor de Recompra · playbook de recupero de dormidos (tarea 4.2).
 // Un registro por cada "toque" de recupero enviado a un cliente. Sostiene la
 // escalera de incentivos (nivel 1 sin descuento → 2 con 10% → 3 con 20% + vencimiento):

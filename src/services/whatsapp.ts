@@ -1,11 +1,12 @@
 import { env } from 'hono/adapter'
 import { drizzle } from 'drizzle-orm/mysql2'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { pool } from '../db'
 import {
     restaurante as RestauranteTable,
     pedidoUnificado as PedidoUnificadoTable,
     mensajeWhatsapp as MensajeWhatsappTable,
+    envioWhatsappIdempotencia as EnvioWhatsappIdempotenciaTable,
 } from '../db/schema'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { avisarSaldoBajoSiCorresponde, consumirMensaje } from '../lib/mensajes-wallet'
@@ -502,6 +503,28 @@ export const notificarClientePagoConfirmado = async (
 
     const creds = resolverCredsRestaurante(row);
 
+    // Claim ANTES de llamar a Meta. Mercado Pago puede entregar el mismo evento más de una
+    // vez y hoy existen dos entradas de webhook compatibles; también pueden competir entre
+    // sí. El UNIQUE(pedido, tipo) convierte todas esas llamadas en un único envío efectivo.
+    // El claim se conserva incluso si la llamada falla: ante un timeout no podemos saber si
+    // Meta aceptó el mensaje, por lo que reintentarlo automáticamente rompería el contrato
+    // at-most-once y podría volver a duplicar el aviso al cliente.
+    try {
+        await db.insert(EnvioWhatsappIdempotenciaTable).values({
+            pedidoUnificadoId: pedidoId,
+            restauranteId,
+            tipo: 'pedido_confirmado',
+            estado: 'procesando',
+        });
+    } catch (error) {
+        const dbError = error as { code?: string; cause?: { code?: string } };
+        if (dbError.code === 'ER_DUP_ENTRY' || dbError.cause?.code === 'ER_DUP_ENTRY') {
+            console.log(`📲 [Notificar Cliente Pago] Pedido #${pedidoId} omitido (aviso ya reclamado/enviado)`);
+            return;
+        }
+        throw error;
+    }
+
     const result = await sendClientPaymentConfirmedWhatsApp(c, {
         phone: row.telefono,
         customerName: row.nombreCliente || 'Cliente',
@@ -513,6 +536,19 @@ export const notificarClientePagoConfirmado = async (
     }, creds);
 
     if (result.success) {
+        await db.update(EnvioWhatsappIdempotenciaTable)
+            .set({
+                estado: 'enviado',
+                metaMessageId: result.id ?? null,
+                error: null,
+                updatedAt: new Date(),
+            })
+            .where(and(
+                eq(EnvioWhatsappIdempotenciaTable.pedidoUnificadoId, pedidoId),
+                eq(EnvioWhatsappIdempotenciaTable.tipo, 'pedido_confirmado'),
+            ))
+            .catch((err) => console.error('❌ [Notificar Cliente Pago] Error completando claim idempotente:', err));
+
         await db.insert(MensajeWhatsappTable).values({
             pedidoUnificadoId: pedidoId,
             restauranteId,
@@ -535,6 +571,21 @@ export const notificarClientePagoConfirmado = async (
 
         console.log(`📲 [Notificar Cliente Pago] ✅ Cliente ${row.telefono} notificado (pedido #${pedidoId})`);
     } else {
+        const errorDetalle = (() => {
+            try {
+                return JSON.stringify(result.error).slice(0, 1000);
+            } catch {
+                return String(result.error).slice(0, 1000);
+            }
+        })();
+        await db.update(EnvioWhatsappIdempotenciaTable)
+            .set({ estado: 'fallido', error: errorDetalle, updatedAt: new Date() })
+            .where(and(
+                eq(EnvioWhatsappIdempotenciaTable.pedidoUnificadoId, pedidoId),
+                eq(EnvioWhatsappIdempotenciaTable.tipo, 'pedido_confirmado'),
+            ))
+            .catch((err) => console.error('❌ [Notificar Cliente Pago] Error registrando claim fallido:', err));
+
         console.error(`📲 [Notificar Cliente Pago] ❌ Error enviando a ${row.telefono} (pedido #${pedidoId}):`, result.error);
     }
 };
