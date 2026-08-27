@@ -1859,15 +1859,13 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
     const db = drizzle(pool)
     const restauranteId = parseInt(c.req.param('id'), 10)
     const telefono = c.req.param('telefono')
-    const requestedLimit = parseInt(c.req.query('limit') || '', 10)
-    const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 20) : null
 
     if (isNaN(restauranteId) || !telefono) {
         return c.json({ success: false, message: 'Parámetros inválidos' }, 400)
     }
 
     try {
-        const pedidosQuery = db
+        const pedidosDT = await db
             .select({
                 id: PedidoUnificadoTable.id,
                 tipo: PedidoUnificadoTable.tipo,
@@ -1892,7 +1890,6 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
                 eq(PedidoUnificadoTable.pagado, true)
             ))
             .orderBy(desc(PedidoUnificadoTable.createdAt))
-        const pedidosDT = limit ? await pedidosQuery.limit(limit) : await pedidosQuery
 
         const pedidosConItems = await Promise.all(
             pedidosDT.map(async (p) => {
