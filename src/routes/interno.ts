@@ -529,6 +529,70 @@ internoRoute.put(
  */
 const telefonoVerificadoSchema = z.object({ verificado: z.boolean() })
 
+// El teléfono de identidad se guarda igual que en auth/claim: sólo dígitos en formato
+// internacional. El panel interno es una vía administrativa, por lo que si la cuenta ya estaba
+// verificada conserva ese estado; antes de cambiarlo se protege la unicidad del login.
+const telefonoSchema = z.object({
+  telefono: z.string().trim().min(8).max(30),
+})
+
+internoRoute.put(
+  '/locales/:id/telefono',
+  zValidator('json', telefonoSchema),
+  async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = Number(c.req.param('id'))
+    if (!Number.isInteger(restauranteId) || restauranteId <= 0) {
+      return c.json({ success: false, message: 'Local inválido' }, 400)
+    }
+
+    const telefono = c.req.valid('json').telefono.replace(/\D/g, '')
+    if (telefono.length < 8 || telefono.length > 20) {
+      return c.json({ success: false, message: 'Ingresá un número internacional válido (8 a 20 dígitos)' }, 400)
+    }
+
+    try {
+      const [rest] = await db
+        .select({ id: RestauranteTable.id, telefonoVerificado: RestauranteTable.telefonoVerificado })
+        .from(RestauranteTable)
+        .where(eq(RestauranteTable.id, restauranteId))
+        .limit(1)
+      if (!rest) {
+        return c.json({ success: false, message: 'Local no encontrado' }, 404)
+      }
+
+      // Una cuenta verificada puede iniciar sesión con su teléfono. No permitir que la edición
+      // administrativa vuelva ambigua esa identidad. Las cuentas liberadas sí pueden repetirlo.
+      if (rest.telefonoVerificado) {
+        const [otra] = await db
+          .select({ id: RestauranteTable.id })
+          .from(RestauranteTable)
+          .where(and(
+            eq(RestauranteTable.telefono, telefono),
+            eq(RestauranteTable.telefonoVerificado, true),
+          ))
+          .limit(1)
+        if (otra && otra.id !== restauranteId) {
+          return c.json({ success: false, message: 'Otra cuenta ya tiene ese número verificado. Liberala primero.' }, 409)
+        }
+      }
+
+      await db
+        .update(RestauranteTable)
+        .set({ telefono })
+        .where(eq(RestauranteTable.id, restauranteId))
+
+      return c.json({
+        success: true,
+        data: { telefono, telefonoVerificado: rest.telefonoVerificado },
+      }, 200)
+    } catch (error) {
+      console.error('Error cambiando teléfono del local (interno):', error)
+      return c.json({ success: false, message: 'Error al actualizar el número' }, 500)
+    }
+  },
+)
+
 internoRoute.put(
   '/locales/:id/telefono-verificado',
   zValidator('json', telefonoVerificadoSchema),
