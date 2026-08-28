@@ -193,7 +193,23 @@ export async function buildPedidosWhere(
   if (sucursalIdParam !== undefined && sucursalIdParam !== '') {
     const sid = Number(sucursalIdParam)
     if (!Number.isNaN(sid) && sid > 0) {
-      whereCondition = and(whereCondition, eq(PedidoUnificadoTable.sucursalId, sid))
+      // Admins ya instalados pueden conservar en localStorage una sucursal que
+      // fue eliminada o desactivada. Aplicar ese id obsoleto deja la operación
+      // completa en blanco, aunque los pedidos actuales tengan sucursal_id NULL.
+      // Sólo respetamos el filtro cuando todavía identifica una sucursal activa
+      // del restaurante autenticado; de lo contrario devolvemos todas.
+      const [sucursalActiva] = await db
+        .select({ id: SucursalTable.id })
+        .from(SucursalTable)
+        .where(and(
+          eq(SucursalTable.id, sid),
+          eq(SucursalTable.restauranteId, restauranteId),
+          eq(SucursalTable.activo, true),
+        ))
+        .limit(1)
+      if (sucursalActiva) {
+        whereCondition = and(whereCondition, eq(PedidoUnificadoTable.sucursalId, sid))
+      }
     }
   }
   return whereCondition
