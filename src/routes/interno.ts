@@ -50,6 +50,8 @@ const sumarMeses = (fecha: Date, meses: number): Date => {
 // POST /interno/login compara contra INTERNO_PASSWORD y emite un JWT propio firmado con
 // INTERNO_JWT_SECRET (scope 'interno', ~12 h). El resto de las rutas exige ese token.
 const INTERNO_TOKEN_TTL = '12h'
+const ACCESO_TEMPORAL_TTL_SEGUNDOS = 15 * 60
+const ADMIN_URL = (process.env.ADMIN_URL || 'https://admin.piru.app').replace(/\/$/, '')
 
 const internoRoute = new Hono()
 
@@ -76,6 +78,46 @@ internoRoute.post('/login', zValidator('json', loginSchema), async (c) => {
 
 // A partir de acá, todo exige el token interno.
 internoRoute.use('*', internoAuthMiddleware)
+
+/**
+ * Emite una sesión corta para entrar al admin de un local desde el panel interno.
+ * No toca la contraseña ni la sesión del dueño. El JWT viaja en el fragmento de URL
+ * para que no termine en access logs y el admin lo elimina apenas lo consume.
+ */
+internoRoute.post('/locales/:id/acceso-temporal', async (c) => {
+  const restauranteId = Number(c.req.param('id'))
+  if (!Number.isInteger(restauranteId) || restauranteId <= 0) {
+    return c.json({ success: false, message: 'ID de local inválido' }, 400)
+  }
+
+  const db = drizzle(pool)
+  const [local] = await db
+    .select({ id: RestauranteTable.id, nombre: RestauranteTable.nombre })
+    .from(RestauranteTable)
+    .where(eq(RestauranteTable.id, restauranteId))
+    .limit(1)
+
+  if (!local) {
+    return c.json({ success: false, message: 'Local no encontrado' }, 404)
+  }
+
+  const token = jwt.sign(
+    { id: local.id, scope: 'restaurante', accesoTemporalInterno: true },
+    process.env.JWT_SECRET!,
+    { expiresIn: ACCESO_TEMPORAL_TTL_SEGUNDOS },
+  )
+  const expira = new Date(Date.now() + ACCESO_TEMPORAL_TTL_SEGUNDOS * 1000).toISOString()
+
+  console.info(`[Interno] Acceso temporal emitido para restaurante ${local.id} (${local.nombre || 'sin nombre'}), expira ${expira}`)
+
+  return c.json({
+    success: true,
+    data: {
+      url: `${ADMIN_URL}/acceso-interno#token=${encodeURIComponent(token)}`,
+      expira,
+    },
+  }, 200)
+})
 
 /**
  * Lista de restaurantes con su suscripción única, módulos activos y consumo de
