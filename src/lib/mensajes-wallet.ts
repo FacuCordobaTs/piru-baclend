@@ -67,6 +67,8 @@ function proximaRenovacion(desde: Date = new Date()): Date {
 
 type SaldoRow = typeof SaldoMensajesTable.$inferSelect
 
+type MovimientoReserva = typeof TransaccionMensajesTable.$inferSelect
+
 /** Devuelve (creándola si hace falta) la fila de saldo del restaurante. */
 export async function getOrCreateSaldo(
   db: Db,
@@ -101,9 +103,155 @@ export function utilityDisponible(saldo: Pick<SaldoRow, 'utilityIncluidosRestant
   return saldo.utilityIncluidosRestantes + saldo.utilityRecargaSaldo
 }
 
-/** Saldo marketing disponible = cupo del plan restante + saldo de recargas (puede ser negativo). */
+/** Saldo marketing disponible = cupo del plan restante + saldo de recargas. Las reservas Growth nunca lo vuelven negativo. */
 export function marketingDisponible(saldo: Pick<SaldoRow, 'marketingIncluidosRestantes' | 'marketingRecargaSaldo'>): number {
   return saldo.marketingIncluidosRestantes + saldo.marketingRecargaSaldo
+}
+
+export type EstadoReservaMarketing = 'reservada' | 'confirmada' | 'compensada' | 'sin_saldo'
+
+export interface ResultadoReservaMarketing {
+  estado: EstadoReservaMarketing
+  idempotente: boolean
+  saldoMarketingDisponible: number
+}
+
+function validarOperacionMarketing(operacionId: string) {
+  if (!operacionId || operacionId.length > 128) {
+    throw new Error('operacionId de reserva marketing inválido')
+  }
+}
+
+async function bloquearSaldoMarketing(tx: Db, restauranteId: number): Promise<SaldoRow> {
+  // La fila única por restaurante es el mutex de las reservas. El lock evita que
+  // dos envíos con saldo 1 pasen ambos el chequeo antes de descontar.
+  await (tx as any).execute(sql`SELECT id FROM saldo_mensajes WHERE restaurante_id = ${restauranteId} FOR UPDATE`)
+  const [saldo] = await tx
+    .select()
+    .from(SaldoMensajesTable)
+    .where(eq(SaldoMensajesTable.restauranteId, restauranteId))
+    .limit(1)
+  if (!saldo) throw new Error('Saldo de mensajes inexistente después de bloquearlo')
+  return saldo
+}
+
+async function buscarOperacionMarketing(tx: Db, restauranteId: number, operacionId: string): Promise<MovimientoReserva | null> {
+  const [movimiento] = await tx
+    .select()
+    .from(TransaccionMensajesTable)
+    .where(and(
+      eq(TransaccionMensajesTable.restauranteId, restauranteId),
+      eq(TransaccionMensajesTable.operacionId, operacionId),
+    ))
+    .limit(1)
+  return movimiento ?? null
+}
+
+/**
+ * Reserva un único crédito de marketing antes de un envío pago. A diferencia de
+ * `consumirMensaje`, nunca crea deuda: con saldo 0 no modifica ni wallet ni ledger.
+ * `operacionId` debe ser estable por intento lógico de entrega.
+ */
+export async function reservarCreditoMarketing(
+  db: Db,
+  restauranteId: number,
+  operacionId: string,
+  motivo = 'reserva_marketing_growth',
+): Promise<ResultadoReservaMarketing> {
+  validarOperacionMarketing(operacionId)
+  await getOrCreateSaldo(db, restauranteId)
+
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Db
+    const saldo = await bloquearSaldoMarketing(txDb, restauranteId)
+    const existente = await buscarOperacionMarketing(txDb, restauranteId, operacionId)
+    if (existente) {
+      const estado: EstadoReservaMarketing = existente.tipo === 'consumo'
+        ? 'confirmada'
+        : existente.tipo === 'compensacion'
+          ? 'compensada'
+          : 'reservada'
+      return { estado, idempotente: true, saldoMarketingDisponible: marketingDisponible(saldo) }
+    }
+
+    if (marketingDisponible(saldo) < 1) {
+      return { estado: 'sin_saldo', idempotente: false, saldoMarketingDisponible: marketingDisponible(saldo) }
+    }
+
+    const desdeIncluidos = saldo.marketingIncluidosRestantes > 0
+    const siguiente = {
+      marketingIncluidosRestantes: saldo.marketingIncluidosRestantes - (desdeIncluidos ? 1 : 0),
+      marketingRecargaSaldo: saldo.marketingRecargaSaldo - (desdeIncluidos ? 0 : 1),
+    }
+    const saldoResultante = marketingDisponible(siguiente)
+    await txDb.update(SaldoMensajesTable).set({ ...siguiente, updatedAt: new Date() })
+      .where(eq(SaldoMensajesTable.restauranteId, restauranteId))
+    await registrarTransaccion(txDb, {
+      restauranteId,
+      tipo: 'reserva',
+      categoria: 'marketing',
+      cantidad: -1,
+      saldoResultante,
+      motivo,
+      operacionId,
+      reservaOrigen: desdeIncluidos ? 'incluido' : 'recarga',
+    })
+    return { estado: 'reservada', idempotente: false, saldoMarketingDisponible: saldoResultante }
+  })
+}
+
+/** Confirma una reserva una vez que el proveedor aceptó el envío; no vuelve a debitar. */
+export async function confirmarReservaCreditoMarketing(
+  db: Db,
+  restauranteId: number,
+  operacionId: string,
+): Promise<ResultadoReservaMarketing> {
+  validarOperacionMarketing(operacionId)
+  await getOrCreateSaldo(db, restauranteId)
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Db
+    const saldo = await bloquearSaldoMarketing(txDb, restauranteId)
+    const movimiento = await buscarOperacionMarketing(txDb, restauranteId, operacionId)
+    if (!movimiento) throw new Error('Reserva marketing no encontrada')
+    if (movimiento.tipo === 'consumo') return { estado: 'confirmada', idempotente: true, saldoMarketingDisponible: marketingDisponible(saldo) }
+    if (movimiento.tipo === 'compensacion') throw new Error('No se puede confirmar una reserva marketing compensada')
+    if (movimiento.tipo !== 'reserva') throw new Error('Operación marketing inválida')
+
+    await txDb.update(TransaccionMensajesTable)
+      .set({ tipo: 'consumo', motivo: 'consumo_marketing_confirmado' })
+      .where(eq(TransaccionMensajesTable.id, movimiento.id))
+    return { estado: 'confirmada', idempotente: false, saldoMarketingDisponible: marketingDisponible(saldo) }
+  })
+}
+
+/** Devuelve exactamente el bucket retenido cuando el proveedor falló; es idempotente. */
+export async function compensarReservaCreditoMarketing(
+  db: Db,
+  restauranteId: number,
+  operacionId: string,
+): Promise<ResultadoReservaMarketing> {
+  validarOperacionMarketing(operacionId)
+  await getOrCreateSaldo(db, restauranteId)
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Db
+    const saldo = await bloquearSaldoMarketing(txDb, restauranteId)
+    const movimiento = await buscarOperacionMarketing(txDb, restauranteId, operacionId)
+    if (!movimiento) throw new Error('Reserva marketing no encontrada')
+    if (movimiento.tipo === 'compensacion') return { estado: 'compensada', idempotente: true, saldoMarketingDisponible: marketingDisponible(saldo) }
+    if (movimiento.tipo === 'consumo') throw new Error('No se puede compensar una reserva marketing confirmada')
+    if (movimiento.tipo !== 'reserva' || !movimiento.reservaOrigen) throw new Error('Reserva marketing inválida')
+
+    const siguiente = movimiento.reservaOrigen === 'incluido'
+      ? { marketingIncluidosRestantes: saldo.marketingIncluidosRestantes + 1 }
+      : { marketingRecargaSaldo: saldo.marketingRecargaSaldo + 1 }
+    const saldoResultante = marketingDisponible({ ...saldo, ...siguiente })
+    await txDb.update(SaldoMensajesTable).set({ ...siguiente, updatedAt: new Date() })
+      .where(eq(SaldoMensajesTable.restauranteId, restauranteId))
+    await txDb.update(TransaccionMensajesTable)
+      .set({ tipo: 'compensacion', cantidad: 1, saldoResultante, motivo: 'compensacion_reserva_marketing' })
+      .where(eq(TransaccionMensajesTable.id, movimiento.id))
+    return { estado: 'compensada', idempotente: false, saldoMarketingDisponible: saldoResultante }
+  })
 }
 
 /**
@@ -703,7 +851,7 @@ async function registrarTransaccion(
   db: Db,
   mov: {
     restauranteId: number
-    tipo: 'consumo' | 'recarga' | 'renovacion_plan' | 'expiracion' | 'ajuste'
+    tipo: 'consumo' | 'recarga' | 'renovacion_plan' | 'expiracion' | 'ajuste' | 'reserva' | 'compensacion'
     categoria: CategoriaMensaje
     cantidad: number
     saldoResultante: number | null
@@ -711,6 +859,8 @@ async function registrarTransaccion(
     tipoMensaje?: string | null
     pedidoUnificadoId?: number | null
     recargaMensajesId?: number | null
+    operacionId?: string | null
+    reservaOrigen?: 'incluido' | 'recarga' | null
   },
 ): Promise<void> {
   await db.insert(TransaccionMensajesTable).values({
@@ -723,6 +873,8 @@ async function registrarTransaccion(
     tipoMensaje: mov.tipoMensaje ?? null,
     pedidoUnificadoId: mov.pedidoUnificadoId ?? null,
     recargaMensajesId: mov.recargaMensajesId ?? null,
+    operacionId: mov.operacionId ?? null,
+    reservaOrigen: mov.reservaOrigen ?? null,
   })
 }
 

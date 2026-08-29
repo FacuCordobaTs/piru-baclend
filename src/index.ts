@@ -45,6 +45,7 @@ import { internoRoute } from './routes/interno';
 import { claimRoute } from './routes/claim';
 import { staffLoginRoute, staffRoute } from './routes/staff';
 import { mozosRoute } from './routes/mozos';
+import { marketingCampanasRoute, marketingPublicRoute } from './routes/marketing';
 import { resolverSesionStaff } from './lib/staff';
 import { MODULE_KEYS, tieneModuloActivo } from './lib/modulos';
 import { tickMotorRecompra } from './lib/motor-recompra';
@@ -202,6 +203,8 @@ app.basePath('/api')
   .route('/mp', mercadopagoRoute)
   .route('/notificacion', notificacionRoute)
   .route('/public', publicRoute)
+  .route('/public', marketingPublicRoute)
+  .route('/marketing', marketingCampanasRoute)
   .route('/public/claim', claimRoute)
   .route('/clientes', clientesRoute)
   .route('/webhook', webhookRoute)

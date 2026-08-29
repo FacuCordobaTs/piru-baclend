@@ -16,10 +16,12 @@ import {
   notificacion as NotificacionTable,
   pagoSubtotal as PagoSubtotalTable,
   codigoDescuento as CodigoDescuentoTable,
+  cliente as ClienteTable,
   sucursal as SucursalTable,
 } from '../db/schema';
 import { MesaSession, WebSocketMessage, ItemPedidoWS, AdminSession, AdminNotification, AdminNotificationType, CheckoutDeliveryData } from '../types/websocket';
 import { asignarAliasAPedido } from '../services/cucuru';
+import { atribuirPedidoMarketingBestEffort } from '../lib/marketing-atribucion';
 
 // Definir tipo para estado de item
 type ItemEstado = 'pending' | 'preparing' | 'delivered' | 'served' | 'cancelled';
@@ -1389,6 +1391,26 @@ class WebSocketManager {
         return;
       }
 
+      // Sala confirma un checkout real (delivery/takeaway), por lo que también
+      // consolida el cliente igual que los endpoints públicos. El token de
+      // receta nunca decide quién es: la identidad sale de estos datos.
+      let clienteId: number | null = null;
+      const [clienteExistente] = await this.db.select({ id: ClienteTable.id }).from(ClienteTable).where(and(
+        eq(ClienteTable.restauranteId, sala[0].restauranteId!),
+        eq(ClienteTable.telefono, checkoutData.telefono),
+      )).limit(1);
+      if (clienteExistente) {
+        clienteId = clienteExistente.id;
+      } else {
+        const nuevoCliente = await this.db.insert(ClienteTable).values({
+          restauranteId: sala[0].restauranteId!,
+          nombre: checkoutData.nombre,
+          telefono: checkoutData.telefono,
+          direccion: checkoutData.tipoPedido === 'delivery' ? checkoutData.direccion : null,
+        });
+        clienteId = Number(nuevoCliente[0].insertId);
+      }
+
       // `checkoutData.total` es una instantánea visual y puede quedar vieja si el grupo
       // modifica el carrito. Además ya incluía el cupón del frontend, por lo que usarla
       // aquí hacía posible descontar dos veces. El total final parte de los ítems vigentes.
@@ -1432,6 +1454,7 @@ class WebSocketManager {
       // Crear pedidoUnificado (reemplaza PedidoDeliveryTable / PedidoTakeawayTable)
       const nuevoPedido = await this.db.insert(PedidoUnificadoTable).values({
         restauranteId: sala[0].restauranteId!,
+        clienteId,
         tipo: checkoutData.tipoPedido,
         nombreCliente: checkoutData.nombre,
         telefono: checkoutData.telefono,
@@ -1451,6 +1474,16 @@ class WebSocketManager {
       });
 
       const pedidoUnificadoId = Number(nuevoPedido[0].insertId);
+
+      atribuirPedidoMarketingBestEffort(this.db, {
+        restauranteId: sala[0].restauranteId!,
+        pedidoUnificadoId,
+        clienteId,
+        visitorId: checkoutData.visitorId,
+        sesionUuid: checkoutData.sesionUuid,
+        campaniaSlug: checkoutData.campaniaSlug,
+        recetaToken: checkoutData.recetaToken,
+      });
 
       for (const item of items) {
         await this.db.insert(ItemPedidoUnificadoTable).values({

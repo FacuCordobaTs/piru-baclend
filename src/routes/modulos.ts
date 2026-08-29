@@ -14,7 +14,7 @@ import {
   suscripcion as SuscripcionTable,
 } from '../db/schema'
 import { authMiddleware } from '../middleware/auth'
-import { resolverModulosRestaurante } from '../lib/modulos'
+import { resolverModulosRestaurante, resolverRepresentacionCanonicaCrecimiento } from '../lib/modulos'
 import { crearFacturaSuscripcionPendiente } from '../lib/facturacion-suscripcion'
 import { crearPreferenciaSuscripcionMP, pagosSuscripcionDisponibles } from '../lib/mp-suscripcion'
 import { sendPaymentLinkWhatsApp } from '../services/whatsapp'
@@ -45,11 +45,11 @@ modulosRoute.get('/catalogo', async (c) => {
       .from(CategoriaModuloTable)
       .where(eq(CategoriaModuloTable.activo, true))
       .orderBy(asc(CategoriaModuloTable.orden), asc(CategoriaModuloTable.id))
-    const modulos = await db
+    const modulos = resolverRepresentacionCanonicaCrecimiento(await db
       .select()
       .from(ModuloTable)
       .where(eq(ModuloTable.activo, true))
-      .orderBy(asc(ModuloTable.orden), asc(ModuloTable.id))
+      .orderBy(asc(ModuloTable.orden), asc(ModuloTable.id)))
 
     return c.json({
       success: true,
@@ -78,7 +78,9 @@ modulosRoute.get('/mis-modulos', async (c) => {
       resolverModulosRestaurante(db, restauranteId),
     ])
 
-    const visibles = resueltos.filter((modulo) => modulo.activoCatalogo)
+    const visibles = resolverRepresentacionCanonicaCrecimiento(
+      resueltos.filter((modulo) => modulo.activoCatalogo),
+    )
     return c.json({
       success: true,
       data: categorias.map((categoria) => ({
@@ -245,6 +247,7 @@ modulosRoute.post('/:codigo/reactivar', zValidator('param', codigoSchema), async
   try {
     const modulo = await buscarModuloActivo(db, codigo)
     if (!modulo) return c.json({ success: false, message: 'Módulo no encontrado' }, 404)
+    if (!modulo.activable) return c.json({ success: false, message: 'Este módulo ya no admite nuevas activaciones' }, 409)
     if (modulo.tipo !== 'pago') return c.json({ success: false, message: 'Este módulo está incluido en tu suscripción' }, 409)
     if (!pagosSuscripcionDisponibles()) return c.json({ success: false, message: 'Pagos no disponibles temporalmente' }, 503)
     const [actual] = await db.select().from(RestauranteModuloTable)
@@ -293,6 +296,7 @@ modulosRoute.post('/:codigo/checkout', zValidator('param', codigoSchema), zValid
   try {
     const modulo = await buscarModuloActivo(db, codigo)
     if (!modulo) return c.json({ success: false, message: 'Módulo no encontrado' }, 404)
+    if (!modulo.activable) return c.json({ success: false, message: 'Este módulo ya no admite nuevas activaciones' }, 409)
     if (modulo.tipo !== 'pago') return c.json({ success: false, message: 'Este módulo está incluido en tu suscripción' }, 409)
     const [actual] = await db.select({ estado: RestauranteModuloTable.estado })
       .from(RestauranteModuloTable)
@@ -334,6 +338,7 @@ modulosRoute.post('/:codigo/pago-link-whatsapp', zValidator('param', codigoSchem
   try {
     const modulo = await buscarModuloActivo(db, codigo)
     if (!modulo) return c.json({ success: false, message: 'Módulo no encontrado' }, 404)
+    if (!modulo.activable) return c.json({ success: false, message: 'Este módulo ya no admite nuevas activaciones' }, 409)
     if (modulo.tipo !== 'pago') return c.json({ success: false, message: 'Este módulo está incluido en tu suscripción' }, 409)
 
     const [actual, restaurante] = await Promise.all([

@@ -10,7 +10,10 @@ import {
   json,
   index,
   uniqueIndex,
+  check,
+  foreignKey,
 } from "drizzle-orm/mysql-core";
+import { sql } from "drizzle-orm";
 
 export const restaurante = mysqlTable("restaurante", {
   id: int("id").primaryKey().autoincrement(),
@@ -404,7 +407,10 @@ export const producto = mysqlTable("producto", {
   // Orden manual de aparición dentro de su categoría (menor = primero). Configurable por el restaurante (drag & drop).
   orden: int("orden").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+  // Permite que las entidades Growth referencien producto junto con su tenant.
+  uniqueIndex("uq_producto_restaurante_id").on(table.restauranteId, table.id),
+]);
 
 export const varianteProducto = mysqlTable("variante_producto", {
   id: int("id").primaryKey().autoincrement(),
@@ -542,7 +548,9 @@ export const cliente = mysqlTable("cliente", {
   marketingOptOut: boolean("marketing_opt_out").default(false).notNull(),
   marketingOptOutAt: timestamp("marketing_opt_out_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+  uniqueIndex("uq_cliente_restaurante_id").on(table.restauranteId, table.id),
+]);
 
 // Verificación de registro por WhatsApp (onboarding self-serve por código OTP).
 // Cada fila es una "sesión de espera de código" única, identificada por un UUID.
@@ -582,8 +590,236 @@ export const codigoDescuento = mysqlTable(
   },
   (table) => [
     uniqueIndex("uq_restaurante_codigo").on(table.restauranteId, table.codigo),
+    uniqueIndex("uq_codigo_descuento_restaurante_id").on(table.restauranteId, table.id),
   ]
 );
+
+// Crecimiento · campañas y Smart Links. Los enlaces personalizados viven en
+// `marketing_enlace` (T06); esta tabla contiene la definición durable de la
+// campaña y sus parámetros de adquisición/recompra.
+export const marketingCampana = mysqlTable("marketing_campana", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  // Estable después de publicar: editar el nombre nunca regenera el slug.
+  slug: varchar("slug", { length: 191 }).notNull(),
+  tipo: mysqlEnum("tipo", ["adquisicion", "recompra"]).notNull(),
+  recetaCodigo: varchar("receta_codigo", { length: 64 }),
+  estado: mysqlEnum("estado", ["borrador", "activa", "inactiva"])
+    .default("borrador")
+    .notNull(),
+  destinoTipo: mysqlEnum("destino_tipo", ["tienda", "producto", "carrito"])
+    .default("tienda")
+    .notNull(),
+  productoId: int("producto_id").references(() => producto.id, { onDelete: "set null" }),
+  carritoRep: varchar("carrito_rep", { length: 2048 }),
+  codigoDescuentoId: int("codigo_descuento_id").references(() => codigoDescuento.id, { onDelete: "set null" }),
+  utmSource: varchar("utm_source", { length: 255 }),
+  utmMedium: varchar("utm_medium", { length: 255 }),
+  utmCampaign: varchar("utm_campaign", { length: 255 }),
+  utmTerm: varchar("utm_term", { length: 255 }),
+  utmContent: varchar("utm_content", { length: 255 }),
+  inversionManual: decimal("inversion_manual", { precision: 14, scale: 2 })
+    .default("0.00")
+    .notNull(),
+  usaGrupoControl: boolean("usa_grupo_control").default(false).notNull(),
+  activadaAt: timestamp("activada_at"),
+  desactivadaAt: timestamp("desactivada_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_marketing_campana_restaurante_slug").on(table.restauranteId, table.slug),
+  uniqueIndex("uq_marketing_campana_restaurante_id").on(table.restauranteId, table.id),
+  index("idx_marketing_campana_restaurante_estado").on(table.restauranteId, table.estado, table.createdAt),
+  index("idx_marketing_campana_producto").on(table.productoId),
+  index("idx_marketing_campana_codigo_descuento").on(table.codigoDescuentoId),
+  check("chk_marketing_campana_inversion", sql`${table.inversionManual} >= 0`),
+]);
+
+// Una sesión de storefront dura 30 minutos desde la última actividad (la
+// política se implementa en T07). Se guardan first/last touch por separado para
+// que el modelo de atribución sea explícito y no dependa del orden de eventos.
+export const marketingSesion = mysqlTable("marketing_sesion", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  sesionUuid: varchar("sesion_uuid", { length: 64 }).notNull(),
+  visitorId: varchar("visitor_id", { length: 64 }).notNull(),
+  firstTouchTipo: mysqlEnum("first_touch_tipo", ["directo", "campana", "receta"])
+    .default("directo")
+    .notNull(),
+  firstTouchCampanaId: int("first_touch_campana_id").references(() => marketingCampana.id),
+  firstTouchRecetaCodigo: varchar("first_touch_receta_codigo", { length: 64 }),
+  firstTouchAt: timestamp("first_touch_at").notNull(),
+  lastTouchTipo: mysqlEnum("last_touch_tipo", ["directo", "campana", "receta"])
+    .default("directo")
+    .notNull(),
+  lastTouchCampanaId: int("last_touch_campana_id").references(() => marketingCampana.id),
+  lastTouchRecetaCodigo: varchar("last_touch_receta_codigo", { length: 64 }),
+  lastTouchAt: timestamp("last_touch_at").notNull(),
+  expiraAt: timestamp("expira_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_marketing_sesion_restaurante_uuid").on(table.restauranteId, table.sesionUuid),
+  index("idx_marketing_sesion_restaurante_visitor").on(table.restauranteId, table.visitorId, table.lastTouchAt),
+  index("idx_marketing_sesion_restaurante_expira").on(table.restauranteId, table.expiraAt),
+  index("idx_marketing_sesion_first_campana").on(table.firstTouchCampanaId),
+  index("idx_marketing_sesion_last_campana").on(table.lastTouchCampanaId),
+  check("chk_marketing_sesion_touch", sql`${table.lastTouchAt} >= ${table.firstTouchAt}`),
+  check("chk_marketing_sesion_expira", sql`${table.expiraAt} >= ${table.lastTouchAt}`),
+]);
+
+// Eventos analíticos recibidos desde storefront. `evento_uuid` es generado por
+// el cliente y su unicidad por restaurante vuelve seguros los reintentos/batches.
+export const marketingEvento = mysqlTable("marketing_evento", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  marketingSesionId: int("marketing_sesion_id").references(() => marketingSesion.id).notNull(),
+  eventoUuid: varchar("evento_uuid", { length: 64 }).notNull(),
+  tipo: mysqlEnum("tipo", [
+    "session_start",
+    "product_view",
+    "add_to_cart",
+    "checkout_start",
+    "purchase",
+  ]).notNull(),
+  productoId: int("producto_id").references(() => producto.id, { onDelete: "set null" }),
+  pedidoUnificadoId: int("pedido_unificado_id").references(() => pedidoUnificado.id, { onDelete: "set null" }),
+  cantidad: int("cantidad"),
+  valor: decimal("valor", { precision: 14, scale: 2 }),
+  metadata: json("metadata"),
+  ocurridoAt: timestamp("ocurrido_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_marketing_evento_restaurante_uuid").on(table.restauranteId, table.eventoUuid),
+  index("idx_marketing_evento_sesion_fecha").on(table.marketingSesionId, table.ocurridoAt),
+  index("idx_marketing_evento_restaurante_tipo_fecha").on(table.restauranteId, table.tipo, table.ocurridoAt),
+  index("idx_marketing_evento_pedido").on(table.pedidoUnificadoId),
+  index("idx_marketing_evento_producto").on(table.productoId),
+  check("chk_marketing_evento_cantidad", sql`${table.cantidad} IS NULL OR ${table.cantidad} > 0`),
+  check("chk_marketing_evento_valor", sql`${table.valor} IS NULL OR ${table.valor} >= 0`),
+]);
+
+// Atribución auditable y separada del pedido operativo. Los importes son
+// snapshots: los reportes pueden conciliar qué se atribuyó aunque luego cambie
+// el pedido. Un pedido sólo puede atribuirse una vez dentro de cada tenant.
+export const pedidoMarketingAtribucion = mysqlTable("pedido_marketing_atribucion", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  pedidoUnificadoId: int("pedido_unificado_id").references(() => pedidoUnificado.id).notNull(),
+  marketingSesionId: int("marketing_sesion_id").references(() => marketingSesion.id).notNull(),
+  campanaId: int("campana_id").references(() => marketingCampana.id),
+  origen: mysqlEnum("origen", ["campana", "receta"]).notNull(),
+  recetaCodigo: varchar("receta_codigo", { length: 64 }),
+  modelo: mysqlEnum("modelo", ["first_touch", "last_touch"])
+    .default("last_touch")
+    .notNull(),
+  revenueAtribuido: decimal("revenue_atribuido", { precision: 14, scale: 2 })
+    .default("0.00")
+    .notNull(),
+  descuentoAtribuido: decimal("descuento_atribuido", { precision: 14, scale: 2 })
+    .default("0.00")
+    .notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_pedido_marketing_atrib_rest_pedido").on(table.restauranteId, table.pedidoUnificadoId),
+  index("idx_pedido_marketing_atrib_sesion").on(table.marketingSesionId),
+  index("idx_pedido_marketing_atrib_campana_fecha").on(table.restauranteId, table.campanaId, table.createdAt),
+  check("chk_pedido_marketing_atrib_revenue", sql`${table.revenueAtribuido} >= 0`),
+  check("chk_pedido_marketing_atrib_descuento", sql`${table.descuentoAtribuido} >= 0`),
+]);
+
+// Acción comercial durable. El token público nunca se persiste: sólo queda su
+// SHA-256, globalmente único. Las FKs compuestas impiden relacionar por error
+// una campaña, cliente, producto o cupón perteneciente a otro restaurante.
+export const marketingEnlace = mysqlTable("marketing_enlace", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  campanaId: int("campana_id"),
+  clienteId: int("cliente_id"),
+  recetaCodigo: varchar("receta_codigo", { length: 64 }),
+  tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+  idempotenciaClave: varchar("idempotencia_clave", { length: 128 }).notNull(),
+  destinoTipo: mysqlEnum("destino_tipo", ["tienda", "producto", "carrito"])
+    .default("tienda")
+    .notNull(),
+  productoId: int("producto_id"),
+  carritoRep: varchar("carrito_rep", { length: 2048 }),
+  codigoDescuentoId: int("codigo_descuento_id"),
+  textoSugerido: varchar("texto_sugerido", { length: 4096 }),
+  expiraAt: timestamp("expira_at"),
+  activo: boolean("activo").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_marketing_enlace_token_hash").on(table.tokenHash),
+  uniqueIndex("uq_marketing_enlace_rest_idempotencia").on(table.restauranteId, table.idempotenciaClave),
+  uniqueIndex("uq_marketing_enlace_restaurante_id").on(table.restauranteId, table.id),
+  index("idx_marketing_enlace_rest_campana").on(table.restauranteId, table.campanaId, table.createdAt),
+  index("idx_marketing_enlace_rest_cliente").on(table.restauranteId, table.clienteId, table.createdAt),
+  index("idx_marketing_enlace_rest_vigencia").on(table.restauranteId, table.activo, table.expiraAt),
+  foreignKey({
+    name: "fk_marketing_enlace_campana_tenant",
+    columns: [table.restauranteId, table.campanaId],
+    foreignColumns: [marketingCampana.restauranteId, marketingCampana.id],
+  }),
+  foreignKey({
+    name: "fk_marketing_enlace_cliente_tenant",
+    columns: [table.restauranteId, table.clienteId],
+    foreignColumns: [cliente.restauranteId, cliente.id],
+  }),
+  foreignKey({
+    name: "fk_marketing_enlace_producto_tenant",
+    columns: [table.restauranteId, table.productoId],
+    foreignColumns: [producto.restauranteId, producto.id],
+  }),
+  foreignKey({
+    name: "fk_marketing_enlace_descuento_tenant",
+    columns: [table.restauranteId, table.codigoDescuentoId],
+    foreignColumns: [codigoDescuento.restauranteId, codigoDescuento.id],
+  }),
+  check("chk_marketing_enlace_expira", sql`${table.expiraAt} IS NULL OR ${table.expiraAt} >= ${table.createdAt}`),
+]);
+
+// Ledger de preparación y entrega. `copiado` y `wa_me` sólo pueden registrar
+// preparación/apertura; la semántica de transición se implementará en T14/T16.
+export const marketingContacto = mysqlTable("marketing_contacto", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  enlaceId: int("enlace_id").notNull(),
+  clienteId: int("cliente_id"),
+  canal: mysqlEnum("canal", ["copiado", "wa_me", "piru_whatsapp", "otro"]).notNull(),
+  estado: mysqlEnum("estado", ["preparado", "abierto", "reservado", "enviado", "fallido", "revertido"])
+    .default("preparado")
+    .notNull(),
+  idempotenciaClave: varchar("idempotencia_clave", { length: 128 }).notNull(),
+  proveedor: varchar("proveedor", { length: 64 }),
+  proveedorMessageId: varchar("proveedor_message_id", { length: 255 }),
+  costoMensajes: decimal("costo_mensajes", { precision: 14, scale: 2 })
+    .default("0.00")
+    .notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  enviadoAt: timestamp("enviado_at"),
+}, (table) => [
+  uniqueIndex("uq_marketing_contacto_rest_idempotencia").on(table.restauranteId, table.idempotenciaClave),
+  uniqueIndex("uq_marketing_contacto_proveedor_mensaje").on(table.proveedor, table.proveedorMessageId),
+  index("idx_marketing_contacto_rest_enlace").on(table.restauranteId, table.enlaceId, table.canal, table.estado),
+  index("idx_marketing_contacto_rest_cliente").on(table.restauranteId, table.clienteId, table.createdAt),
+  index("idx_marketing_contacto_rest_estado").on(table.restauranteId, table.estado, table.createdAt),
+  foreignKey({
+    name: "fk_marketing_contacto_enlace_tenant",
+    columns: [table.restauranteId, table.enlaceId],
+    foreignColumns: [marketingEnlace.restauranteId, marketingEnlace.id],
+  }),
+  foreignKey({
+    name: "fk_marketing_contacto_cliente_tenant",
+    columns: [table.restauranteId, table.clienteId],
+    foreignColumns: [cliente.restauranteId, cliente.id],
+  }),
+  check("chk_marketing_contacto_costo", sql`${table.costoMensajes} >= 0`),
+  check("chk_marketing_contacto_enviado", sql`${table.enviadoAt} IS NULL OR ${table.enviadoAt} >= ${table.createdAt}`),
+]);
 
 // Horarios de atención del restaurante (múltiples turnos por día)
 export const horarioRestaurante = mysqlTable("horario_restaurante", {
@@ -1068,7 +1304,8 @@ export const saldoMensajes = mysqlTable("saldo_mensajes", {
   // MARKETING — cupo del plan para ESTE ciclo (Avanzado: 100). Se acredita al inicio del
   // ciclo y el SOBRANTE SE PIERDE en la renovación (mismo criterio que utility).
   marketingIncluidosRestantes: int("marketing_incluidos_restantes").default(0).notNull(),
-  // MARKETING — saldo de packs de recarga prepagos. SE ACUMULA. Puede ser NEGATIVO.
+  // MARKETING — saldo de packs de recarga prepagos. SE ACUMULA. Las reservas
+  // de Growth nunca lo llevan a negativo.
   marketingRecargaSaldo: int("marketing_recarga_saldo").default(0).notNull(),
 
   // Avisos de consumo del cupo utility (una sola vez por ciclo; se resetean al renovar).
@@ -1105,6 +1342,8 @@ export const transaccionMensajes = mysqlTable("transaccion_mensajes", {
     "renovacion_plan", // acreditación del cupo del plan al inicio del ciclo (positiva)
     "expiracion",      // sobrante del cupo que se pierde al renovar (negativa)
     "ajuste",          // corrección manual (soporte)
+    "reserva",         // crédito marketing retenido antes de llamar al proveedor
+    "compensacion",    // devolución idempotente de una reserva no enviada
   ]).notNull(),
   // Categoría / bucket afectado (Meta cobra distinto).
   categoria: mysqlEnum("categoria_mensaje", ["utility", "marketing"]).notNull(),
@@ -1119,8 +1358,16 @@ export const transaccionMensajes = mysqlTable("transaccion_mensajes", {
   // Trazabilidad. Sin FK estricta para no romper el ledger si se borra el pedido/recarga.
   pedidoUnificadoId: int("pedido_unificado_id"),
   recargaMensajesId: int("recarga_mensajes_id"),
+  // Operación durable para reservar/confirmar/compensar un envío Growth. Es
+  // nullable para no imponer una clave a movimientos legacy.
+  operacionId: varchar("operacion_id", { length: 128 }),
+  // Bucket exacto de donde salió una reserva; permite compensarla sin convertir
+  // cupos del ciclo en saldo de recarga acumulable.
+  reservaOrigen: mysqlEnum("reserva_origen", ["incluido", "recarga"]),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+  uniqueIndex("uq_transaccion_mensajes_rest_operacion").on(table.restauranteId, table.operacionId),
+]);
 
 // Packs de recarga comprables (prepago, modelo SUBE). Editable sin deploy: el
 // precio es la variable a calibrar (por encima del costo real por mensaje y un

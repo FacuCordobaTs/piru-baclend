@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { moduloEstaActivoAhora, sumarCuposMensajesDeModulos } from './modulos'
+import {
+  listadoHabilitaModulo,
+  moduloEstaActivoAhora,
+  MODULE_KEYS,
+  resolverModulosFacturablesDeListado,
+  resolverRepresentacionCanonicaCrecimiento,
+  sumarCuposMensajesDeModulos,
+} from './modulos'
 
 const AHORA = new Date('2026-08-14T12:00:00.000Z')
 const BASE = {
@@ -13,10 +20,69 @@ const BASE = {
 describe('matriz de acceso de módulos', () => {
   test('los cupos de mensajes salen sólo de módulos activos', () => {
     expect(sumarCuposMensajesDeModulos([
-      { activoAhora: true, mensajesUtilityIncluidos: 200, mensajesMarketingIncluidos: 0 },
-      { activoAhora: true, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 100 },
-      { activoAhora: false, mensajesUtilityIncluidos: 999, mensajesMarketingIncluidos: 999 },
+      { codigo: MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP, activoAhora: true, mensajesUtilityIncluidos: 200, mensajesMarketingIncluidos: 0 },
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: true, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 100 },
+      { codigo: MODULE_KEYS.POS, activoAhora: false, mensajesUtilityIncluidos: 999, mensajesMarketingIncluidos: 999 },
     ])).toEqual({ utility: 200, marketing: 100 })
+  })
+
+  test('Crecimiento acepta su entitlement directo y el alias legacy activo', () => {
+    expect(listadoHabilitaModulo([
+      { codigo: MODULE_KEYS.CRECIMIENTO, activoAhora: true },
+    ], MODULE_KEYS.CRECIMIENTO)).toBe(true)
+    expect(listadoHabilitaModulo([
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: true },
+    ], MODULE_KEYS.CRECIMIENTO)).toBe(true)
+  })
+
+  test('el alias es unidireccional y no activa un gate legacy', () => {
+    expect(listadoHabilitaModulo([
+      { codigo: MODULE_KEYS.CRECIMIENTO, activoAhora: true },
+    ], MODULE_KEYS.MOTOR_RECOMPRA)).toBe(false)
+  })
+
+  test('trial, suspensión y vencimiento bloquean también el acceso por alias', () => {
+    for (const politica of [
+      { ...BASE, estadoSuscripcion: 'trial' as const },
+      { ...BASE, estadoSuscripcion: 'suspendida' as const },
+      { ...BASE, estadoSuscripcion: 'activa' as const, vigenteHasta: AHORA },
+    ]) {
+      expect(listadoHabilitaModulo([
+        {
+          codigo: MODULE_KEYS.MOTOR_RECOMPRA,
+          activoAhora: moduloEstaActivoAhora(politica, AHORA),
+        },
+      ], MODULE_KEYS.CRECIMIENTO)).toBe(false)
+    }
+  })
+
+  test('dos entitlements del mismo servicio no duplican cupos ni importe mensual', () => {
+    expect(listadoHabilitaModulo([
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: true },
+      { codigo: MODULE_KEYS.CRECIMIENTO, activoAhora: true },
+    ], MODULE_KEYS.CRECIMIENTO)).toBe(true)
+
+    expect(sumarCuposMensajesDeModulos([
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: true, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 100 },
+      { codigo: MODULE_KEYS.CRECIMIENTO, activoAhora: true, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 0 },
+    ])).toEqual({ utility: 0, marketing: 0 })
+
+    expect(resolverModulosFacturablesDeListado([
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, tipo: 'pago', estado: 'activo', precioMensual: '70000.00', precioMensualCongelado: '70000.00' },
+      { codigo: MODULE_KEYS.CRECIMIENTO, tipo: 'pago', estado: 'activo', precioMensual: '70000.00', precioMensualCongelado: '70000.00' },
+    ])).toEqual([{ codigo: MODULE_KEYS.CRECIMIENTO, montoMensual: 70000 }])
+  })
+
+  test('el catálogo muestra Crecimiento y oculta la representación legacy', () => {
+    const crecimiento = { codigo: MODULE_KEYS.CRECIMIENTO, nombre: 'Crecimiento' }
+    expect(resolverRepresentacionCanonicaCrecimiento([
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, nombre: 'Motor de Recompra' },
+      crecimiento,
+      { codigo: MODULE_KEYS.POS, nombre: 'Punto de venta' },
+    ])).toEqual([
+      crecimiento,
+      { codigo: MODULE_KEYS.POS, nombre: 'Punto de venta' },
+    ])
   })
 
   test('un entitlement legacy no evita el requisito de suscripción', () => {

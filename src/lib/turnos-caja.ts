@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from 'drizzle-orm'
+import { and, desc, eq, isNull, sql } from 'drizzle-orm'
 import { turnoCaja as TurnoCajaTable } from '../db/schema'
 
 export interface TurnoCajaResumen {
@@ -54,9 +54,30 @@ export async function obtenerTurno(db: any, restauranteId: number, turnoId: numb
   return turno ?? null
 }
 
-export async function cerrarTurnoActual(db: any, restauranteId: number) {
+export class TurnoCajaDesactualizadoError extends Error {
+  code = 'TURNO_CAJA_DESACTUALIZADO' as const
+
+  constructor() {
+    super('El turno cambió en otro dispositivo. Actualizá la pantalla antes de volver a cerrarlo.')
+  }
+}
+
+export async function cerrarTurnoActual(db: any, restauranteId: number, turnoEsperadoId?: number) {
   return db.transaction(async (tx: any) => {
+    // Serializa cierres del mismo local. Sin este lock, dos POST casi
+    // simultáneos pueden cerrar el turno original y luego el recién creado.
+    await tx.execute(sql`
+      SELECT id
+      FROM turno_caja
+      WHERE restaurante_id = ${restauranteId} AND cierre_at IS NULL
+      ORDER BY apertura_at DESC
+      LIMIT 1
+      FOR UPDATE
+    `)
     const actual = await asegurarTurnoAbierto(tx, restauranteId)
+    if (turnoEsperadoId != null && actual.id !== turnoEsperadoId) {
+      throw new TurnoCajaDesactualizadoError()
+    }
     const cierreAt = new Date()
     await tx.update(TurnoCajaTable).set({ cierreAt, abierto: null, updatedAt: cierreAt })
       .where(and(eq(TurnoCajaTable.id, actual.id), isNull(TurnoCajaTable.cierreAt)))

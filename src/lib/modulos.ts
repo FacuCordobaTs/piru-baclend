@@ -31,10 +31,24 @@ export const MODULE_KEYS = {
   MULTISUCURSAL: 'multisucursal',
   AVISOS_AUTOMATICOS_WHATSAPP: 'avisos_automaticos_whatsapp',
   MOTOR_RECOMPRA: 'motor_recompra',
+  CRECIMIENTO: 'crecimiento',
   CIERRE_TURNO_MANUAL: 'cierre_turno_manual',
 } as const
 
 export type ModuleKey = (typeof MODULE_KEYS)[keyof typeof MODULE_KEYS]
+
+const ALIASES_ACCESO_MODULO: Partial<Record<ModuleKey, readonly ModuleKey[]>> = {
+  [MODULE_KEYS.CRECIMIENTO]: [MODULE_KEYS.MOTOR_RECOMPRA],
+}
+
+/**
+ * Durante el rollout, un entitlement legacy del Motor habilita Crecimiento.
+ * El alias es intencionalmente unidireccional: los gates legacy no cambian su
+ * contrato hasta que la migración de rutas se haga en una tarea posterior.
+ */
+export function codigosQueHabilitanModulo(modulo: ModuleKey): readonly ModuleKey[] {
+  return [modulo, ...(ALIASES_ACCESO_MODULO[modulo] ?? [])]
+}
 
 export const ESTADOS_SUSCRIPCION_CON_ACCESO = ['trial', 'activa', 'pago_pendiente'] as const
 const ESTADOS_SUSCRIPCION_CON_MODULOS_PAGOS = ['activa', 'pago_pendiente'] as const
@@ -99,6 +113,28 @@ export interface ModuloResuelto {
   precioMensualCongelado: string | null
   vigenteHasta: Date | null
   activoAhora: boolean
+}
+
+type ModuloConCodigoYEstado = Pick<ModuloResuelto, 'codigo' | 'activoAhora'>
+
+/** Política pura usada por el runtime para resolver el alias de acceso. */
+export function listadoHabilitaModulo(
+  modulos: ModuloConCodigoYEstado[],
+  modulo: ModuleKey,
+): boolean {
+  const codigosAceptados = codigosQueHabilitanModulo(modulo)
+  return modulos.some((item) => item.activoAhora && codigosAceptados.includes(item.codigo as ModuleKey))
+}
+
+/**
+ * Mientras conviven ambas filas, Crecimiento es la representación canónica.
+ * El caller debe filtrar antes por el estado que le interesa: así un alias
+ * legacy activo no se pierde si la fila nueva todavía no está operativa.
+ */
+export function resolverRepresentacionCanonicaCrecimiento<T extends { codigo: string }>(modulos: T[]): T[] {
+  const tieneCrecimiento = modulos.some((item) => item.codigo === MODULE_KEYS.CRECIMIENTO)
+  if (!tieneCrecimiento) return modulos
+  return modulos.filter((item) => item.codigo !== MODULE_KEYS.MOTOR_RECOMPRA)
 }
 
 /** Devuelve el catálogo completo enriquecido con el entitlement del restaurante. */
@@ -174,7 +210,7 @@ export async function tieneModuloActivo(
   modulo: ModuleKey,
 ): Promise<boolean> {
   const modulos = await resolverModulosRestaurante(db, restauranteId)
-  return modulos.some((item) => item.codigo === modulo && item.activoAhora)
+  return listadoHabilitaModulo(modulos, modulo)
 }
 
 export interface ImporteMensualResuelto {
@@ -191,14 +227,33 @@ export interface CuposMensajesPorModulo {
 }
 
 export function sumarCuposMensajesDeModulos(
-  modulos: Array<Pick<ModuloResuelto, 'activoAhora' | 'mensajesUtilityIncluidos' | 'mensajesMarketingIncluidos'>>,
+  modulos: Array<Pick<ModuloResuelto, 'codigo' | 'activoAhora' | 'mensajesUtilityIncluidos' | 'mensajesMarketingIncluidos'>>,
 ): CuposMensajesPorModulo {
-  return modulos.reduce<CuposMensajesPorModulo>((cupos, item) => {
-    if (!item.activoAhora) return cupos
+  const modulosActivos = resolverRepresentacionCanonicaCrecimiento(modulos.filter((item) => item.activoAhora))
+  return modulosActivos.reduce<CuposMensajesPorModulo>((cupos, item) => {
     cupos.utility += item.mensajesUtilityIncluidos
     cupos.marketing += item.mensajesMarketingIncluidos
     return cupos
   }, { utility: 0, marketing: 0 })
+}
+
+type ModuloFacturable = Pick<
+  ModuloResuelto,
+  'codigo' | 'tipo' | 'estado' | 'precioMensual' | 'precioMensualCongelado'
+>
+
+/** Resuelve servicios facturables sin cobrar dos veces Crecimiento y su alias. */
+export function resolverModulosFacturablesDeListado(
+  modulos: ModuloFacturable[],
+): Array<{ codigo: string; montoMensual: number }> {
+  return resolverRepresentacionCanonicaCrecimiento(
+    modulos.filter((item) => item.tipo === 'pago' && item.estado === 'activo'),
+  )
+    .map((item) => ({
+      codigo: item.codigo,
+      montoMensual: Number(item.precioMensualCongelado ?? item.precioMensual),
+    }))
+    .filter((item) => item.montoMensual > 0)
 }
 
 /**
@@ -231,16 +286,10 @@ export async function resolverImporteMensual(
     .limit(1)
 
   const modulos = await resolverModulosRestaurante(db, restauranteId)
-  const modulosFacturables = modulos
-    // Un módulo activo se factura en la próxima cuota aunque el restaurante no
-    // tenga todavía una suscripción activa. Así, el primer checkout incluye
-    // los módulos migrados y no presenta un total menor al que corresponde.
-    .filter((item) => item.tipo === 'pago' && item.estado === 'activo')
-    .map((item) => ({
-      codigo: item.codigo,
-      montoMensual: Number(item.precioMensualCongelado ?? item.precioMensual),
-    }))
-    .filter((item) => item.montoMensual > 0)
+  // Un módulo activo se factura en la próxima cuota aunque el restaurante no
+  // tenga todavía una suscripción activa. Así, el primer checkout incluye los
+  // módulos migrados sin duplicar Crecimiento y su alias legacy.
+  const modulosFacturables = resolverModulosFacturablesDeListado(modulos)
 
   const montoBaseMensual = Number(configuracion?.precioMensual ?? 0)
   const montoModulosMensual = modulosFacturables.reduce((total, item) => total + item.montoMensual, 0)

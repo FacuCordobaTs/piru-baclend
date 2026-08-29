@@ -24,6 +24,7 @@ import { contarPedidosPagadosFranja } from '../lib/franjas'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { estaPausadoPorSuscripcion } from '../lib/suscripciones'
 import { salirDeColaPorPedido } from '../lib/motor-recompra'
+import { atribuirPedidoMarketingBestEffort } from '../lib/marketing-atribucion'
 
 function isDiscountActive(descuento: number | null, inicio: Date | null, fin: Date | null): boolean {
   if (!descuento || descuento === 0) return false
@@ -706,6 +707,12 @@ const createDeliverySchema = z.object({
     notificarWhatsapp: z.boolean().optional().default(false),
     horarioProgramado: z.string().max(20).optional(),
     grupal: z.boolean().optional().default(false),
+    // Campos aditivos de Growth. Los storefronts instalados que no los envían
+    // siguen creando pedidos exactamente igual.
+    visitorId: z.string().trim().min(1).max(64).optional(),
+    sesionUuid: z.string().trim().min(1).max(64).optional(),
+    campaniaSlug: z.string().trim().min(1).max(191).optional(),
+    recetaToken: z.string().trim().min(1).max(512).optional(),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
         varianteId: z.number().int().positive().optional(),
@@ -725,7 +732,7 @@ const createDeliverySchema = z.object({
 
 publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado, grupal } = c.req.valid('json')
+    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado, grupal, visitorId, sesionUuid, campaniaSlug, recetaToken } = c.req.valid('json')
 
     try {
         const [deliveryCheck] = await db.select({
@@ -1185,6 +1192,11 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             })
         }
 
+        atribuirPedidoMarketingBestEffort(db, {
+            restauranteId, pedidoUnificadoId: pedidoId, clienteId,
+            visitorId, sesionUuid, campaniaSlug, recetaToken,
+        })
+
         return c.json({
             message: 'Pedido de delivery creado correctamente',
             success: true,
@@ -1224,6 +1236,10 @@ const createTakeawaySchema = z.object({
     notificarWhatsapp: z.boolean().optional().default(false),
     horarioProgramado: z.string().max(20).optional(),
     grupal: z.boolean().optional().default(false),
+    visitorId: z.string().trim().min(1).max(64).optional(),
+    sesionUuid: z.string().trim().min(1).max(64).optional(),
+    campaniaSlug: z.string().trim().min(1).max(191).optional(),
+    recetaToken: z.string().trim().min(1).max(512).optional(),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
         varianteId: z.number().int().positive().optional(),
@@ -1243,7 +1259,7 @@ const createTakeawaySchema = z.object({
 
 publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, sucursalId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado, grupal } = c.req.valid('json')
+    const { restauranteId, sucursalId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado, grupal, visitorId, sesionUuid, campaniaSlug, recetaToken } = c.req.valid('json')
 
     try {
         const [takeawayCheck] = await db.select({ takeawayEnabled: RestauranteTable.takeawayEnabled })
@@ -1655,6 +1671,11 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 shouldPrint: !waitToPay
             })
         }
+
+        atribuirPedidoMarketingBestEffort(db, {
+            restauranteId, pedidoUnificadoId: pedidoId, clienteId,
+            visitorId, sesionUuid, campaniaSlug, recetaToken,
+        })
 
         return c.json({
             message: 'Pedido de takeaway creado correctamente',

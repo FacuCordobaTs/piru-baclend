@@ -82,6 +82,11 @@ export interface CheckoutDeliveryData {
   horarioProgramado?: string;
   sucursalId?: number | null;
   tipoDomicilio?: 'casa' | 'departamento' | null;
+  // Contexto opcional de Growth; no afecta la confirmación operativa de sala.
+  visitorId?: string;
+  sesionUuid?: string;
+  campaniaSlug?: string;
+  recetaToken?: string;
 }
 
 // Semáforo: quién está editando el checkout

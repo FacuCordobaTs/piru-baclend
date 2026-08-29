@@ -17,6 +17,7 @@ import {
   suscripcion as SuscripcionTable,
 } from '../db/schema'
 import { SUSCRIPCION_UNICA_CODIGO } from './suscripcion'
+import { resolverRepresentacionCanonicaCrecimiento } from './modulos'
 
 type Db = MySql2Database<Record<string, never>>
 export type CicloFactura = 'mensual' | 'anual'
@@ -42,11 +43,12 @@ export function seleccionarModulosFacturables<T extends ModuloFacturable>(
   modulos: T[],
   opts: { soloModuloCodigo?: string; soloBase?: boolean },
 ): T[] {
-  return modulos.filter((modulo) => {
+  const seleccionados = modulos.filter((modulo) => {
     if (opts.soloBase) return false
     if (opts.soloModuloCodigo) return modulo.codigo === opts.soloModuloCodigo
     return modulo.estado === 'activo'
   })
+  return resolverRepresentacionCanonicaCrecimiento(seleccionados)
 }
 
 export function mesesDelCiclo(ciclo: CicloFactura): number {

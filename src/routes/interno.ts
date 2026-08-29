@@ -21,7 +21,7 @@ import {
   type CicloPago,
 } from '../lib/suscripciones'
 import { obtenerConfiguracionSuscripcion, resolverSuscripcionUnica } from '../lib/suscripcion'
-import { resolverImporteMensual, resolverModulosRestaurante } from '../lib/modulos'
+import { resolverImporteMensual, resolverModulosRestaurante, resolverRepresentacionCanonicaCrecimiento } from '../lib/modulos'
 import {
   generarClaimLink,
   buildClaimUrl,
@@ -371,9 +371,9 @@ internoRoute.put(
 internoRoute.get('/modulos', async (c) => {
   const db = drizzle(pool)
   try {
-    const modulos = await db.select().from(ModuloTable)
+    const modulos = resolverRepresentacionCanonicaCrecimiento(await db.select().from(ModuloTable)
       .where(eq(ModuloTable.activo, true))
-      .orderBy(asc(ModuloTable.orden), asc(ModuloTable.id))
+      .orderBy(asc(ModuloTable.orden), asc(ModuloTable.id)))
     return c.json({ success: true, data: modulos }, 200)
   } catch (error) {
     console.error('Error obteniendo módulos (interno):', error)
@@ -415,6 +415,9 @@ internoRoute.put(
       ])
       if (!restaurante) return c.json({ success: false, message: 'Local no encontrado' }, 404)
       if (!modulo) return c.json({ success: false, message: 'Módulo no encontrado' }, 404)
+      if (activo && !modulo.activable) {
+        return c.json({ success: false, message: 'Este módulo ya no admite nuevas activaciones' }, 409)
+      }
 
       const suscripcionPermitePago = suscripcion.estado === 'activa' || suscripcion.estado === 'pago_pendiente'
       if (activo && modulo.tipo === 'pago' && !suscripcionPermitePago) {

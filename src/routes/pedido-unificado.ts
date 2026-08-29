@@ -46,7 +46,7 @@ import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { consumirMensaje, estadoEnvioUtility, avisarSaldoBajoSiCorresponde } from '../lib/mensajes-wallet'
 import { asegurarOwnerStaff } from '../lib/staff'
-import { asegurarTurnoAbierto, cerrarTurnoActual, listarTurnos, obtenerTurno } from '../lib/turnos-caja'
+import { asegurarTurnoAbierto, cerrarTurnoActual, listarTurnos, obtenerTurno, TurnoCajaDesactualizadoError } from '../lib/turnos-caja'
 import { cantidadImpresaTrasEdicion, cantidadesPendientes, mismaConfiguracionItem } from '../lib/comanda-impresion'
 
 const itemSchema = z.object({
@@ -434,8 +434,21 @@ const pedidoUnificadoRoute = new Hono()
   .post('/turnos/cerrar', requireModulo(MODULE_KEYS.CIERRE_TURNO_MANUAL), async (c) => {
     const db = drizzle(pool)
     const restauranteId = Number((c as any).user.id)
-    const data = await cerrarTurnoActual(db, restauranteId)
-    return c.json({ success: true, message: 'Turno cerrado', data })
+    // `turnoId` es aditivo: los admins instalados que todavía no lo mandan
+    // conservan el contrato anterior. Los nuevos evitan cerrar por error un
+    // turno que otro dispositivo acaba de abrir.
+    const body = await c.req.json().catch(() => ({})) as { turnoId?: unknown }
+    const turnoId = Number(body.turnoId)
+    const turnoEsperadoId = Number.isInteger(turnoId) && turnoId > 0 ? turnoId : undefined
+    try {
+      const data = await cerrarTurnoActual(db, restauranteId, turnoEsperadoId)
+      return c.json({ success: true, message: 'Turno cerrado', data })
+    } catch (error) {
+      if (error instanceof TurnoCajaDesactualizadoError) {
+        return c.json({ success: false, code: error.code, message: error.message }, 409)
+      }
+      throw error
+    }
   })
 
   // Listar pedidos (tipo=delivery|takeaway|mesa|all)

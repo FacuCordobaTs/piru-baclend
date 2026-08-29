@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { moduloEstaActivoAhora, sumarCuposMensajesDeModulos } from './modulos'
+import {
+  moduloEstaActivoAhora,
+  MODULE_KEYS,
+  resolverModulosFacturablesDeListado,
+  sumarCuposMensajesDeModulos,
+} from './modulos'
 import { tieneAccesoAlPanelSuscripcion, type SuscripcionUnicaResuelta } from './suscripcion'
 
 const AHORA = new Date('2026-08-15T12:00:00.000Z')
@@ -64,8 +69,8 @@ describe('T41 · matriz de regresión de cuentas', () => {
     }, AHORA)).toBe(false)
     expect(activo(MOTOR, null)).toBe(false)
     expect(sumarCuposMensajesDeModulos([
-      { activoAhora: false, mensajesUtilityIncluidos: 200, mensajesMarketingIncluidos: 0 },
-      { activoAhora: false, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 100 },
+      { codigo: MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP, activoAhora: false, mensajesUtilityIncluidos: 200, mensajesMarketingIncluidos: 0 },
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: false, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 100 },
     ])).toEqual({ utility: 0, marketing: 0 })
   })
 
@@ -99,13 +104,25 @@ describe('T41 · matriz de regresión de cuentas', () => {
     expect(activo(AVISOS, 'activa')).toBe(true)
     expect(activo(MOTOR, 'activa')).toBe(true)
     expect(sumarCuposMensajesDeModulos([
-      { activoAhora: activo(AVISOS, 'activa'), mensajesUtilityIncluidos: 200, mensajesMarketingIncluidos: 0 },
-      { activoAhora: false, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 100 },
+      { codigo: MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP, activoAhora: activo(AVISOS, 'activa'), mensajesUtilityIncluidos: 200, mensajesMarketingIncluidos: 0 },
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: false, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 100 },
     ])).toEqual({ utility: 200, marketing: 0 })
     expect(sumarCuposMensajesDeModulos([
-      { activoAhora: false, mensajesUtilityIncluidos: 200, mensajesMarketingIncluidos: 0 },
-      { activoAhora: activo(MOTOR, 'activa'), mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 100 },
+      { codigo: MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP, activoAhora: false, mensajesUtilityIncluidos: 200, mensajesMarketingIncluidos: 0 },
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: activo(MOTOR, 'activa'), mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 100 },
     ])).toEqual({ utility: 0, marketing: 100 })
+  })
+
+  test('la cuenta migrada conserva precio pero no recibe cupo marketing futuro ni doble cobro', () => {
+    const entitlements = [
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: true, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 100 },
+      { codigo: MODULE_KEYS.CRECIMIENTO, activoAhora: true, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 0 },
+    ]
+    expect(sumarCuposMensajesDeModulos(entitlements)).toEqual({ utility: 0, marketing: 0 })
+    expect(resolverModulosFacturablesDeListado([
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, tipo: 'pago', estado: 'activo', precioMensual: '70000.00', precioMensualCongelado: '65000.00' },
+      { codigo: MODULE_KEYS.CRECIMIENTO, tipo: 'pago', estado: 'activo', precioMensual: '70000.00', precioMensualCongelado: '65000.00' },
+    ])).toEqual([{ codigo: MODULE_KEYS.CRECIMIENTO, montoMensual: 65000 }])
   })
 
   test('la gracia conserva base y módulos pagos vigentes', () => {

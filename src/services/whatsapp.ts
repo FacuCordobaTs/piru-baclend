@@ -716,6 +716,62 @@ export const sendClientRecuperoWhatsApp = async (c: any, data: ClientRecuperoDat
     }
 };
 
+export interface ClientGrowthRecipeData {
+    phone: string;
+    customerName: string;
+    restaurantName: string;
+    texto: string;
+    recipeUrl: string;
+}
+
+/**
+ * Entrega una receta de Crecimiento como mensaje MARKETING desde el número del
+ * local. La plantilla se usa (en vez de texto libre) porque el contacto puede
+ * ocurrir fuera de la ventana de 24 horas de WhatsApp.
+ *
+ * PLANTILLA A CREAR EN META: `crecimiento_receta_v1`, MARKETING, `es_AR`.
+ * Cuerpo posicional: "Hola {{1}} 👋\n\n{{2}}\n\n{{3}}".
+ * Botón URL dinámico: base `https://my.piru.app/`, sufijo `{{1}}`.
+ * Parámetros: nombre del cliente, texto sugerido y nombre del local. El botón
+ * recibe el path completo `username/r/token`, sin exponer datos personales.
+ */
+export const sendClientGrowthRecipeWhatsApp = async (
+    c: any,
+    data: ClientGrowthRecipeData,
+    creds?: WaCredentials,
+): Promise<{ success: boolean; id?: string; error?: unknown }> => {
+    const { WHATSAPP_API_TOKEN, WHATSAPP_PHONE_ID } = env<{ WHATSAPP_API_TOKEN: string; WHATSAPP_PHONE_ID: string }>(c);
+    const phoneId = creds?.phoneId ?? WHATSAPP_PHONE_ID;
+    const token = creds?.token ?? WHATSAPP_API_TOKEN;
+    if (!phoneId || !token) return { success: false, error: 'credenciales_whatsapp_incompletas' };
+
+    const path = data.recipeUrl.replace(/^https:\/\/my\.piru\.app\//, '');
+    const response = await fetch(`https://graph.facebook.com/v22.0/${phoneId}/messages`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            messaging_product: 'whatsapp', recipient_type: 'individual', to: data.phone, type: 'template',
+            template: {
+                name: 'crecimiento_receta_v1', language: { code: 'es_AR' },
+                components: [
+                    { type: 'body', parameters: [
+                        { type: 'text', text: data.customerName },
+                        { type: 'text', text: data.texto },
+                        { type: 'text', text: data.restaurantName },
+                    ] },
+                    { type: 'button', sub_type: 'url', index: 0, parameters: [{ type: 'text', text: path }] },
+                ],
+            },
+        }),
+    }).catch((error) => ({ ok: false, json: async () => error } as Response));
+    const result = await response.json() as any;
+    if (!response.ok) {
+        console.error('❌ Error WhatsApp API (receta Crecimiento):', JSON.stringify(result, null, 2));
+        return { success: false, error: result };
+    }
+    return { success: true, id: result.messages?.[0]?.id };
+};
+
 export interface PaymentLinkData {
     phone: string;    // teléfono del DUEÑO del local (formato internacional, solo dígitos)
     concepto: string; // {{1}} — qué está pagando, ej: "500 avisos por WhatsApp" o "Plan Intermedio"
