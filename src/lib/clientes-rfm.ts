@@ -135,8 +135,10 @@ export function computarPerfilesRFM(
     const ratio = diasDesdeUltimo != null ? diasDesdeUltimo / cadenciaEfectiva : Infinity
 
     let segmento: SegmentoCliente
-    if (c.cantidadPedidos <= 1 && ratio < RIESGO_RATIO) {
-      // Un solo pedido y todavía dentro de una ventana razonable de recompra.
+    if (c.cantidadPedidos <= 1) {
+      // Sin un segundo pedido todavía no existe una cadencia individual ni
+      // un hábito que pueda estar "en riesgo". Conservamos `nuevo` sin importar
+      // cuánto tiempo haya pasado para recomendar siempre la segunda compra.
       segmento = 'nuevo'
     } else if (ratio >= PERDIDO_RATIO) {
       segmento = 'perdido'

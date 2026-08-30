@@ -43,6 +43,21 @@ describe('resolverOportunidadesMarketing', () => {
     expect(baja.elegibilidad.bloqueos).toEqual(expect.arrayContaining([expect.objectContaining({ motivo: 'opt_out' })]))
   })
 
+  test('recomienda la segunda compra aunque el único pedido sea antiguo', () => {
+    const oportunidad = resolverOportunidadesMarketing({
+      clientes: [{ id: 4, nombre: 'Primer pedido antiguo', marketingOptOut: false }],
+      pedidos: [{ id: 40, clienteId: 4, total: 5000, createdAt: haceDias(365) }],
+      items: [{ pedidoId: 40, productoId: 12, cantidad: 1 }],
+      productos: [{ id: 12, nombre: 'Milanesa' }],
+      recuperos: [],
+      contactos: [],
+    }, [], ahora)[0]
+
+    expect(oportunidad.diagnostico.segmento).toBe('nuevo')
+    expect(oportunidad.receta.codigo).toBe('segunda_compra')
+    expect(oportunidad.destino).toEqual({ tipo: 'carrito', carritoRep: '12x1' })
+  })
+
   test('filtra por segmento y receta sin alterar la clasificación', () => {
     const oportunidades = resolverOportunidadesMarketing(datos(), [], ahora)
     const vip = oportunidades.find((oportunidad) => oportunidad.cliente.id === 1)!
