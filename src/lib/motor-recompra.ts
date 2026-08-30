@@ -40,7 +40,10 @@ import {
 import { enHorarioSilencio, horaArgentina } from './proteccion-base'
 import { resumenWallet } from './mensajes-wallet'
 import { MODULE_KEYS, tieneModuloActivo } from './modulos'
+import { puedeCrearGoteoLegacy } from './compatibilidad-recompra'
 import type { SegmentoCliente } from './clientes-rfm'
+
+export { puedeCrearGoteoLegacy } from './compatibilidad-recompra'
 
 type Db = MySql2Database<Record<string, never>>
 
@@ -112,6 +115,12 @@ export async function getCampanaActual(db: Db, restauranteId: number): Promise<C
 // ── Encendido (la DECISIÓN humana, una sola vez) ─────────────────────────────
 export interface ResultadoActivar {
   ok: boolean
+  /**
+   * El goteo es un contrato legado: una cuenta con sólo Crecimiento usa las
+   * acciones explícitas (enlaces/canales) y no puede crear una cola automática.
+   * Se conserva aditivo para que los admins viejos entiendan la respuesta.
+   */
+  schedulerLegacyNoDisponible?: boolean
   yaActiva?: boolean
   vacio?: boolean
   campanaId?: number
@@ -133,6 +142,22 @@ export async function activarMotor(
   restauranteId: number,
   cupoDiario?: number,
 ): Promise<ResultadoActivar> {
+  // Las campañas de Growth viven en `marketing_campana` y nunca deben crear
+  // filas en `campana_recompra`/`cola_recompra`. Sólo mantenemos el scheduler
+  // para locales que todavía poseen el entitlement físico del Motor legacy.
+  // `requireModulo(CRECIMIENTO)` en la ruta conserva acceso para admins
+  // instalados, pero no convierte ese alias en autorización para goteo nuevo.
+  if (!puedeCrearGoteoLegacy(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MOTOR_RECOMPRA))) {
+    return {
+      ok: false,
+      schedulerLegacyNoDisponible: true,
+      totalDetectados: 0,
+      totalContactar: 0,
+      totalControl: 0,
+      cupoDiario: clampCupo(cupoDiario ?? CUPO_DIARIO_DEFAULT),
+    }
+  }
+
   const actual = await getCampanaActual(db, restauranteId)
   if (actual) {
     // Ya hay una campaña viva (activa/completada/pausada). No se re-enciende: se reanuda/gestiona.
@@ -267,7 +292,7 @@ export async function procesarColaDiaria(
 ): Promise<ResultadoGoteo> {
   // El scheduler no atraviesa middleware HTTP: debe respetar el mismo
   // entitlement que las acciones manuales antes de enviar marketing.
-  if (!(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MOTOR_RECOMPRA))) {
+  if (!puedeCrearGoteoLegacy(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MOTOR_RECOMPRA))) {
     return goteoVacio('modulo_inactivo')
   }
 

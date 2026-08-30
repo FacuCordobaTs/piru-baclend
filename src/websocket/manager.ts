@@ -1230,6 +1230,11 @@ class WebSocketManager {
     horarioProgramado: string;
     sucursalId: number | null;
     tipoDomicilio: 'casa' | 'departamento' | null;
+    visitorId?: string;
+    sesionUuid?: string;
+    campaniaSlug?: string;
+    recetaToken?: string;
+    trackingClienteId?: string;
   }>) {
     const session = this.sessions.get(mesaId);
     if (!session) return;

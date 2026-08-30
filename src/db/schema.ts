@@ -32,6 +32,9 @@ export const restaurante = mysqlTable("restaurante", {
   imagenUrl: varchar("imagen_url", { length: 255 }),
   imagenLightUrl: varchar("imagen_light_url", { length: 255 }),
   username: varchar("username", { length: 255 }).unique(),
+  // ID público del contenedor Google Tag Manager del local. No es una credencial:
+  // el storefront lo necesita para poder cargar el contenedor configurado por el dueño.
+  gtmContainerId: varchar("gtm_container_id", { length: 64 }),
 
   mpAccessToken: varchar("mp_access_token", { length: 512 }),
   mpPublicKey: varchar("mp_public_key", { length: 255 }),

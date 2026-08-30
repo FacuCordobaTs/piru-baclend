@@ -15,6 +15,10 @@ import {
     itemPedidoDelivery as ItemPedidoDeliveryTable,
     pedidoTakeaway as PedidoTakeawayTable,
     itemPedidoTakeaway as ItemPedidoTakeawayTable,
+    marketingCampana as MarketingCampanaTable,
+    marketingEnlace as MarketingEnlaceTable,
+    marketingContacto as MarketingContactoTable,
+    pedidoMarketingAtribucion as PedidoMarketingAtribucionTable,
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
@@ -31,6 +35,8 @@ import {
     registrarContactoManual, CUPO_DIARIO_MIN, CUPO_DIARIO_MAX,
 } from '../lib/motor-recompra'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
+import { resolverOportunidadesMarketing } from '../lib/marketing-oportunidades'
+import { resolverDatosGrowthClientes } from '../lib/clientes-growth'
 
 const clientesRoute = new Hono()
 
@@ -190,10 +196,72 @@ clientesRoute.get('/list', async (c) => {
             clientesParaRespuesta.map(cl => cl.id),
         )
 
+        // Growth se resuelve con cargas por restaurante, nunca una consulta por
+        // cliente. Este endpoint continúa siendo público para admins legacy:
+        // todos los campos de crecimiento son estrictamente aditivos.
+        const [atribuciones, campanas, enlaces, recuperosGrowth, contactosGrowth] = await Promise.all([
+            db.select({
+                pedidoUnificadoId: PedidoMarketingAtribucionTable.pedidoUnificadoId,
+                campanaId: PedidoMarketingAtribucionTable.campanaId,
+                origen: PedidoMarketingAtribucionTable.origen,
+                recetaCodigo: PedidoMarketingAtribucionTable.recetaCodigo,
+                revenueAtribuido: PedidoMarketingAtribucionTable.revenueAtribuido,
+                createdAt: PedidoMarketingAtribucionTable.createdAt,
+            }).from(PedidoMarketingAtribucionTable)
+                .where(eq(PedidoMarketingAtribucionTable.restauranteId, restauranteId)),
+            db.select({ id: MarketingCampanaTable.id, nombre: MarketingCampanaTable.nombre, slug: MarketingCampanaTable.slug })
+                .from(MarketingCampanaTable)
+                .where(eq(MarketingCampanaTable.restauranteId, restauranteId)),
+            db.select({
+                id: MarketingEnlaceTable.id, clienteId: MarketingEnlaceTable.clienteId,
+                recetaCodigo: MarketingEnlaceTable.recetaCodigo, destinoTipo: MarketingEnlaceTable.destinoTipo,
+                productoId: MarketingEnlaceTable.productoId, carritoRep: MarketingEnlaceTable.carritoRep,
+                codigoDescuentoId: MarketingEnlaceTable.codigoDescuentoId, activo: MarketingEnlaceTable.activo,
+                expiraAt: MarketingEnlaceTable.expiraAt, createdAt: MarketingEnlaceTable.createdAt,
+            }).from(MarketingEnlaceTable)
+                .where(eq(MarketingEnlaceTable.restauranteId, restauranteId)),
+            db.select({ clienteId: RecuperoClienteTable.clienteId, createdAt: RecuperoClienteTable.createdAt })
+                .from(RecuperoClienteTable)
+                .where(eq(RecuperoClienteTable.restauranteId, restauranteId)),
+            db.select({ clienteId: MarketingContactoTable.clienteId, createdAt: MarketingContactoTable.createdAt })
+                .from(MarketingContactoTable)
+                .where(and(
+                    eq(MarketingContactoTable.restauranteId, restauranteId),
+                    inArray(MarketingContactoTable.estado, ['preparado', 'abierto', 'reservado', 'enviado']),
+                )),
+        ])
+        // Reusamos el mismo historial deduplicado que expone el contrato
+        // legacy; así `revenueHistorico` no puede diferir de `totalGastado`
+        // por un reintento técnico de checkout.
+        const pedidosGrowth = base.flatMap((cliente) => cliente.pedidos)
+        const pedidoGrowthIds = new Set(pedidosGrowth.map((pedido) => pedido.id))
+        const oportunidadesGrowth = resolverOportunidadesMarketing({
+            clientes: clientesParaRespuesta.map((cliente) => ({
+                id: cliente.id, nombre: cliente.nombre, marketingOptOut: cliente.marketingOptOut,
+            })),
+            pedidos: pedidosGrowth.map((pedido) => ({
+                id: pedido.id, clienteId: pedido.clienteId, total: pedido.total, createdAt: pedido.createdAt,
+            })),
+            items: itemsRaw.filter((item) => pedidoGrowthIds.has(item.pedidoId)).map((item) => ({
+                pedidoId: item.pedidoId, productoId: item.productoId, cantidad: item.cantidad ?? 1,
+            })),
+            productos: Object.entries(productosMap).map(([id, nombre]) => ({ id: Number(id), nombre })),
+            recuperos: recuperosGrowth,
+            contactos: contactosGrowth,
+        }, enlaces as any)
+        const growthPorCliente = resolverDatosGrowthClientes(
+            clientesParaRespuesta,
+            pedidosGrowth,
+            atribuciones as any,
+            campanas,
+            oportunidadesGrowth,
+        )
+
         const clientesConMetricas = base.map((b, i) => {
             const perfil = perfiles[i]
             const ultimoPedidoMs = b.fechasMs.length > 0 ? Math.max(...b.fechasMs) : null
             const recupero = estadoRecupero(toquesPorCliente[b.cliente.id] ?? [], ultimoPedidoMs)
+            const crecimiento = growthPorCliente.get(b.cliente.id)
             return {
                 ...b.cliente,
                 cantidadPedidos: b.cantidadPedidos,
@@ -210,6 +278,16 @@ clientesRoute.get('/list', async (c) => {
                 productosTop: b.productosTop,
                 // ── Estado de la escalera de recupero (Motor de Recompra · 4.2). También aditivo.
                 recupero,
+                // Crecimiento MVP (T19): aliases explícitos para que los
+                // bundles nuevos no tengan que inferir datos de campos legacy.
+                // Los defaults conservan el contrato aun sin tracking previo.
+                fuenteAdquisicion: crecimiento?.fuenteAdquisicion ?? null,
+                campanaAdquisicion: crecimiento?.campanaAdquisicion ?? null,
+                primeraCompra: crecimiento?.primeraCompra ?? null,
+                revenueHistorico: crecimiento?.revenueHistorico ?? b.totalGastado,
+                recetaRecomendada: crecimiento?.recetaRecomendada ?? null,
+                enlacePreparado: crecimiento?.enlacePreparado ?? null,
+                revenueAcciones: crecimiento?.revenueAcciones ?? 0,
                 pedidos: b.pedidos,
             }
         })
@@ -372,9 +450,9 @@ clientesRoute.delete('/:id', async (c) => {
 /**
  * POST /clientes/:id/recupero — Playbook de recupero de dormidos (Motor de Recompra · 4.2).
  * Acción VOLUNTARIA del local: manda el próximo toque de la escalera de incentivos al cliente.
- * Gateado por el módulo Motor de Recompra. Consume el bucket `marketing` del wallet.
+ * Gateado por Crecimiento (acepta el entitlement Motor legacy). Consume el bucket `marketing` del wallet.
  */
-clientesRoute.post('/:id/recupero', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
+clientesRoute.post('/:id/recupero', requireModulo(MODULE_KEYS.CRECIMIENTO), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const clienteId = parseInt(c.req.param('id'), 10)
@@ -424,7 +502,8 @@ clientesRoute.post('/:id/recupero', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), a
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MOTOR DE RECOMPRA · GOTEO (piloto automático) — campaña persistente que gotea
-// al ritmo del cupo diario. Todo gateado por el módulo Motor de Recompra.
+// al ritmo del cupo diario. Las rutas aceptan Crecimiento para admins viejos,
+// pero sólo el entitlement físico Motor puede crear goteo nuevo.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
@@ -432,7 +511,7 @@ clientesRoute.post('/:id/recupero', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), a
  *  - apagado → un PLAN de activación (cohorte detectada + propuesta de cupo + días que cubre el saldo).
  *  - encendido → el DASHBOARD (consumo junto a retorno: contactados, volvieron, plata recuperada).
  */
-clientesRoute.get('/recompra/estado', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
+clientesRoute.get('/recompra/estado', requireModulo(MODULE_KEYS.CRECIMIENTO), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
@@ -449,13 +528,21 @@ clientesRoute.get('/recompra/estado', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA),
  * aparta el 10% de control, carga la cola y dispara el primer goteo (respetando cupo/silencio).
  * Body opcional: { cupoDiario }.
  */
-clientesRoute.post('/recompra/activar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
+clientesRoute.post('/recompra/activar', requireModulo(MODULE_KEYS.CRECIMIENTO), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
         const body = await c.req.json().catch(() => ({}))
         const cupoDiario = body?.cupoDiario != null ? Number(body.cupoDiario) : undefined
         const resultado = await activarMotor(db, restauranteId, cupoDiario)
+        if (resultado.schedulerLegacyNoDisponible) {
+            return c.json({
+                success: false,
+                legacyScheduler: true,
+                message: 'El goteo automático es una función legacy. Usá las acciones explícitas de Crecimiento.',
+                data: resultado,
+            }, 409)
+        }
         return c.json({
             success: true,
             message: resultado.yaActiva
@@ -472,7 +559,7 @@ clientesRoute.post('/recompra/activar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA
 })
 
 /** POST /clientes/recompra/pausar — Pausar (siempre disponible). No se pierde nada: la cola queda. */
-clientesRoute.post('/recompra/pausar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
+clientesRoute.post('/recompra/pausar', requireModulo(MODULE_KEYS.CRECIMIENTO), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
@@ -486,7 +573,7 @@ clientesRoute.post('/recompra/pausar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA)
 })
 
 /** POST /clientes/recompra/reanudar — vuelve a gotear desde donde quedó. */
-clientesRoute.post('/recompra/reanudar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
+clientesRoute.post('/recompra/reanudar', requireModulo(MODULE_KEYS.CRECIMIENTO), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
@@ -500,7 +587,7 @@ clientesRoute.post('/recompra/reanudar', requireModulo(MODULE_KEYS.MOTOR_RECOMPR
 })
 
 /** PUT /clientes/recompra/config — ajusta el cupo diario (acotado al tope duro de sistema). */
-clientesRoute.put('/recompra/config', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
+clientesRoute.put('/recompra/config', requireModulo(MODULE_KEYS.CRECIMIENTO), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {

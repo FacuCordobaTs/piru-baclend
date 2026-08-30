@@ -87,6 +87,8 @@ export interface CheckoutDeliveryData {
   sesionUuid?: string;
   campaniaSlug?: string;
   recetaToken?: string;
+  /** Participante que guardó el checkout; sólo su storefront emite el purchase. */
+  trackingClienteId?: string;
 }
 
 // Semáforo: quién está editando el checkout
