@@ -19,6 +19,9 @@ import {
     marketingEnlace as MarketingEnlaceTable,
     marketingContacto as MarketingContactoTable,
     pedidoMarketingAtribucion as PedidoMarketingAtribucionTable,
+    marketingSesion as MarketingSesionTable,
+    marketingEvento as MarketingEventoTable,
+    codigoDescuento as CodigoDescuentoTable,
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
@@ -83,6 +86,10 @@ clientesRoute.get('/list', async (c) => {
             id: PedidoUnificadoTable.id,
             clienteId: PedidoUnificadoTable.clienteId,
             total: PedidoUnificadoTable.total,
+            sucursalId: PedidoUnificadoTable.sucursalId,
+            codigoDescuentoId: PedidoUnificadoTable.codigoDescuentoId,
+            montoDescuento: PedidoUnificadoTable.montoDescuento,
+            pagado: PedidoUnificadoTable.pagado,
             createdAt: PedidoUnificadoTable.createdAt,
             tipo: PedidoUnificadoTable.tipo,
         }).from(PedidoUnificadoTable)
@@ -199,7 +206,7 @@ clientesRoute.get('/list', async (c) => {
         // Growth se resuelve con cargas por restaurante, nunca una consulta por
         // cliente. Este endpoint continúa siendo público para admins legacy:
         // todos los campos de crecimiento son estrictamente aditivos.
-        const [atribuciones, campanas, enlaces, recuperosGrowth, contactosGrowth] = await Promise.all([
+        const [atribuciones, campanas, enlaces, recuperosGrowth, contactosGrowth, sesionesDirectas, eventosCompra, cupones] = await Promise.all([
             db.select({
                 pedidoUnificadoId: PedidoMarketingAtribucionTable.pedidoUnificadoId,
                 campanaId: PedidoMarketingAtribucionTable.campanaId,
@@ -229,12 +236,36 @@ clientesRoute.get('/list', async (c) => {
                     eq(MarketingContactoTable.restauranteId, restauranteId),
                     inArray(MarketingContactoTable.estado, ['preparado', 'abierto', 'reservado', 'enviado']),
                 )),
+            db.select({ id: MarketingSesionTable.id })
+                .from(MarketingSesionTable)
+                .where(and(
+                    eq(MarketingSesionTable.restauranteId, restauranteId),
+                    eq(MarketingSesionTable.firstTouchTipo, 'directo'),
+                    eq(MarketingSesionTable.lastTouchTipo, 'directo'),
+                )),
+            db.select({ marketingSesionId: MarketingEventoTable.marketingSesionId, pedidoUnificadoId: MarketingEventoTable.pedidoUnificadoId })
+                .from(MarketingEventoTable)
+                .where(and(
+                    eq(MarketingEventoTable.restauranteId, restauranteId),
+                    eq(MarketingEventoTable.tipo, 'purchase'),
+                )),
+            db.select({ id: CodigoDescuentoTable.id, codigo: CodigoDescuentoTable.codigo, tipo: CodigoDescuentoTable.tipo, valor: CodigoDescuentoTable.valor })
+                .from(CodigoDescuentoTable)
+                .where(eq(CodigoDescuentoTable.restauranteId, restauranteId)),
         ])
         // Reusamos el mismo historial deduplicado que expone el contrato
         // legacy; así `revenueHistorico` no puede diferir de `totalGastado`
         // por un reintento técnico de checkout.
         const pedidosGrowth = base.flatMap((cliente) => cliente.pedidos)
         const pedidoGrowthIds = new Set(pedidosGrowth.map((pedido) => pedido.id))
+        const sesionDirectaIds = new Set(sesionesDirectas.map((sesion) => sesion.id))
+        const pedidoAtribuidoIds = new Set(atribuciones.map((atribucion) => atribucion.pedidoUnificadoId))
+        const atribucionPorPedidoId = new Map(atribuciones.map((atribucion) => [atribucion.pedidoUnificadoId, atribucion]))
+        const pedidoIdsOrganicos = new Set(eventosCompra
+            .filter((evento) => evento.pedidoUnificadoId != null
+                && sesionDirectaIds.has(evento.marketingSesionId)
+                && !pedidoAtribuidoIds.has(evento.pedidoUnificadoId))
+            .map((evento) => evento.pedidoUnificadoId!))
         const oportunidadesGrowth = resolverOportunidadesMarketing({
             clientes: clientesParaRespuesta.map((cliente) => ({
                 id: cliente.id, nombre: cliente.nombre, marketingOptOut: cliente.marketingOptOut,
@@ -255,6 +286,10 @@ clientesRoute.get('/list', async (c) => {
             atribuciones as any,
             campanas,
             oportunidadesGrowth,
+            {
+                pedidoIdsOrganicos,
+                cupones,
+            },
         )
 
         const clientesConMetricas = base.map((b, i) => {
@@ -288,7 +323,15 @@ clientesRoute.get('/list', async (c) => {
                 recetaRecomendada: crecimiento?.recetaRecomendada ?? null,
                 enlacePreparado: crecimiento?.enlacePreparado ?? null,
                 revenueAcciones: crecimiento?.revenueAcciones ?? 0,
-                pedidos: b.pedidos,
+                campanasParticipadas: crecimiento?.campanasParticipadas ?? [],
+                cuponesUsados: crecimiento?.cuponesUsados ?? [],
+                actividadOrganica: crecimiento?.actividadOrganica ?? null,
+                pedidos: b.pedidos.map((pedido) => ({
+                    ...pedido,
+                    esOrganico: pedidoIdsOrganicos.has(pedido.id),
+                    campanaId: atribucionPorPedidoId.get(pedido.id)?.campanaId ?? null,
+                    recetaCodigo: atribucionPorPedidoId.get(pedido.id)?.recetaCodigo ?? null,
+                })),
             }
         })
 

@@ -20,6 +20,10 @@ describe('resolverDatosGrowthClientes', () => {
       ],
       [{ id: 7, nombre: 'Instagram agosto', slug: 'instagram-agosto' }],
       [{ cliente: { id: 10 }, receta: { codigo: 'mantene_ritmo' }, ultimoEnlacePreparado: { id: 44 } }],
+      {
+        pedidoIdsOrganicos: new Set([3]),
+        cupones: [{ id: 5, codigo: 'VOLVE10', tipo: 'porcentaje', valor: '10' }],
+      },
     )
 
     expect(datos.get(10)).toMatchObject({
@@ -31,7 +35,7 @@ describe('resolverDatosGrowthClientes', () => {
       enlacePreparado: { id: 44 },
       revenueAcciones: 300,
     })
-    expect(datos.get(11)).toMatchObject({ fuenteAdquisicion: 'campana', revenueHistorico: 80, revenueAcciones: 0 })
+    expect(datos.get(11)).toMatchObject({ fuenteAdquisicion: 'campana', revenueHistorico: 80, revenueAcciones: 0, actividadOrganica: { pedidos: 1, facturacion: 80 } })
   })
 
   test('mantiene defaults seguros para clientes sin historial ni tracking', () => {
@@ -44,6 +48,29 @@ describe('resolverDatosGrowthClientes', () => {
       recetaRecomendada: null,
       enlacePreparado: null,
       revenueAcciones: 0,
+      campanasParticipadas: [],
+      cuponesUsados: [],
+      actividadOrganica: null,
+    })
+  })
+
+  test('expone campañas, cupones y adquisición orgánica sin consultas por cliente', () => {
+    const datos = resolverDatosGrowthClientes(
+      [{ id: 10 }],
+      [
+        { id: 1, clienteId: 10, total: '90', codigoDescuentoId: 5, montoDescuento: '10', createdAt: fecha(1) },
+        { id: 2, clienteId: 10, total: '200', codigoDescuentoId: 5, montoDescuento: '20', createdAt: fecha(5) },
+      ],
+      [{ pedidoUnificadoId: 2, campanaId: 7, origen: 'campana', recetaCodigo: null, revenueAtribuido: '200', createdAt: fecha(5) }],
+      [{ id: 7, nombre: 'Instagram', slug: 'instagram' }],
+      [],
+      { pedidoIdsOrganicos: new Set([1]), cupones: [{ id: 5, codigo: 'BIENVENIDA', tipo: 'porcentaje', valor: '10' }] },
+    )
+    expect(datos.get(10)).toMatchObject({
+      fuenteAdquisicion: 'organico',
+      campanasParticipadas: [{ id: 7, pedidos: 1, revenueAtribuido: 200 }],
+      cuponesUsados: [{ id: 5, usos: 2, facturacion: 290, montoDescontado: 30 }],
+      actividadOrganica: { pedidos: 1, facturacion: 90 },
     })
   })
 })

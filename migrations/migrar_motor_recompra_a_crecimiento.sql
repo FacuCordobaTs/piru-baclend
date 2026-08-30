@@ -1,25 +1,3 @@
--- T03 — Catálogo y migración de Motor de Recompra a Crecimiento.
---
--- Objetivo:
---   * publicar un único producto comercial visible: `crecimiento`;
---   * conservar `motor_recompra` como alias operativo temporal para admins y
---     gates instalados, pero impedir cualquier activación nueva;
---   * espejar los entitlements existentes sin alterar precio congelado,
---     vigencia, origen, estado ni timestamps;
---   * no acreditar ni descontar mensajes durante la migración.
---
--- PRECONDICIONES OBLIGATORIAS:
---   1. hacer y verificar un backup lógico consistente;
---   2. haber aplicado `add_suscripcion_unica_modulos.sql`;
---   3. desplegar primero el backend de T02/T03, que deduplica Crecimiento y
---      Motor tanto en cotización como en factura y cupos.
---
--- Esta migración no modifica schema, wallets (`saldo_mensajes`), recargas,
--- ledger, pagos históricos ni tablas del Motor. MySQL confirma DDL de forma
--- implícita, pero los cambios de datos siguientes se ejecutan en transacción.
--- El seed y el espejo son idempotentes: una fila Crecimiento ya existente no
--- se reemplaza en una segunda ejecución.
-
 DELIMITER //
 DROP PROCEDURE IF EXISTS `t03_validar_motor_recompra`//
 CREATE PROCEDURE `t03_validar_motor_recompra`()
@@ -46,9 +24,6 @@ DELIMITER ;
 
 START TRANSACTION;
 
--- El precio, tipo, categoría, estado de producto y orden salen del catálogo
--- vigente en DB. Los cupos futuros de marketing quedan en cero: los saldos ya
--- acreditados permanecen intactos en la wallet.
 INSERT INTO `modulo`
   (`codigo`, `categoria_id`, `nombre`, `descripcion`, `tipo_modulo`,
    `precio_mensual`, `mensajes_utility_incluidos`,
@@ -66,9 +41,6 @@ ON DUPLICATE KEY UPDATE
   `activable` = true,
   `activo` = true;
 
--- El UPSERT no-op preserva cualquier fila Crecimiento que ya exista. Para una
--- cuenta aún no migrada copia todos los datos comerciales y operativos sin
--- recalcular ni reemplazar fechas o precios congelados.
 INSERT INTO `restaurante_modulo`
   (`restaurante_id`, `modulo_id`, `estado_restaurante_modulo`, `activado_at`,
    `desactivado_at`, `vigente_hasta`, `precio_mensual_congelado`,
@@ -88,10 +60,6 @@ JOIN `modulo` growth
 ON DUPLICATE KEY UPDATE
   `modulo_id` = VALUES(`modulo_id`);
 
--- Se mantiene activo como alias técnico para que los gates legacy continúen
--- funcionando. `activable=false` bloquea altas nuevas; el backend lo omite de
--- los catálogos y canoniza facturación/cupos sobre Crecimiento.
-UPDATE `modulo`
 SET `activable` = false
 WHERE `codigo` = 'motor_recompra';
 

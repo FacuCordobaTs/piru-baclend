@@ -1,11 +1,15 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { codigoDescuento as CodigoDescuentoTable } from '../db/schema'
+import {
+  codigoDescuento as CodigoDescuentoTable,
+  pedidoUnificado as PedidoUnificadoTable,
+  cliente as ClienteTable,
+} from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, inArray } from 'drizzle-orm'
 import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS } from '../lib/modulos'
 
@@ -34,6 +38,14 @@ const updateCodigoSchema = z.object({
   activo: z.boolean().optional(),
 })
 
+const resultadosCodigoQuerySchema = z.object({
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+  sucursalId: z.coerce.number().int().positive().optional(),
+}).refine((filtros) => !filtros.from || !filtros.to || filtros.from <= filtros.to, {
+  message: 'from debe ser anterior a to',
+})
+
 // GET /codigo-descuento - Listar todos los códigos del restaurante
 codigoDescuentoRoute.get('/', async (c) => {
   const db = drizzle(pool)
@@ -49,6 +61,100 @@ codigoDescuentoRoute.get('/', async (c) => {
   } catch (error) {
     console.error('Error fetching códigos de descuento:', error)
     return c.json({ success: false, message: 'Error al obtener códigos de descuento' }, 500)
+  }
+})
+
+// GET /codigo-descuento/:id/resultados — detalle analítico aditivo para la
+// vista unificada de Crecimiento. La facturación usa sólo pedidos cobrados y
+// conserva separado el monto efectivamente descontado.
+codigoDescuentoRoute.get('/:id/resultados', zValidator('query', resultadosCodigoQuerySchema), async (c) => {
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+  const codigoId = Number(c.req.param('id'))
+  if (!Number.isInteger(codigoId) || codigoId <= 0) return c.json({ success: false, message: 'ID inválido' }, 400)
+
+  try {
+    const [codigo] = await db.select().from(CodigoDescuentoTable).where(and(
+      eq(CodigoDescuentoTable.id, codigoId),
+      eq(CodigoDescuentoTable.restauranteId, restauranteId),
+    )).limit(1)
+    if (!codigo) return c.json({ success: false, message: 'Código no encontrado' }, 404)
+
+    const filtros = c.req.valid('query')
+    const pedidos = (await db.select({
+      id: PedidoUnificadoTable.id,
+      clienteId: PedidoUnificadoTable.clienteId,
+      sucursalId: PedidoUnificadoTable.sucursalId,
+      total: PedidoUnificadoTable.total,
+      montoDescuento: PedidoUnificadoTable.montoDescuento,
+      createdAt: PedidoUnificadoTable.createdAt,
+    }).from(PedidoUnificadoTable).where(and(
+      eq(PedidoUnificadoTable.restauranteId, restauranteId),
+      eq(PedidoUnificadoTable.codigoDescuentoId, codigoId),
+      eq(PedidoUnificadoTable.pagado, true),
+    ))).filter((pedido) => (
+      (!filtros.from || pedido.createdAt >= filtros.from)
+      && (!filtros.to || pedido.createdAt <= filtros.to)
+      && (!filtros.sucursalId || pedido.sucursalId === filtros.sucursalId)
+    ))
+    const clienteIds = Array.from(new Set(pedidos.map((pedido) => pedido.clienteId).filter((id): id is number => id != null)))
+    const clientes = clienteIds.length ? await db.select({
+      id: ClienteTable.id,
+      nombre: ClienteTable.nombre,
+      telefono: ClienteTable.telefono,
+    }).from(ClienteTable).where(and(
+      eq(ClienteTable.restauranteId, restauranteId),
+      inArray(ClienteTable.id, clienteIds),
+    )) : []
+    const clientePorId = new Map(clientes.map((cliente) => [cliente.id, cliente]))
+    const usosPorCliente = new Map<number, { id: number; nombre: string; telefono: string; usos: number; facturacion: number; montoDescontado: number; ultimoUsoAt: string }>()
+    for (const pedido of pedidos) {
+      if (pedido.clienteId == null) continue
+      const cliente = clientePorId.get(pedido.clienteId)
+      if (!cliente) continue
+      const actual = usosPorCliente.get(cliente.id)
+      const fecha = pedido.createdAt.toISOString()
+      usosPorCliente.set(cliente.id, actual ? {
+        ...actual,
+        usos: actual.usos + 1,
+        facturacion: actual.facturacion + Number(pedido.total),
+        montoDescontado: actual.montoDescontado + Number(pedido.montoDescuento ?? 0),
+        ultimoUsoAt: actual.ultimoUsoAt > fecha ? actual.ultimoUsoAt : fecha,
+      } : {
+        ...cliente,
+        usos: 1,
+        facturacion: Number(pedido.total),
+        montoDescontado: Number(pedido.montoDescuento ?? 0),
+        ultimoUsoAt: fecha,
+      })
+    }
+    const facturacionCobrada = pedidos.reduce((total, pedido) => total + Number(pedido.total), 0)
+    const montoDescontado = pedidos.reduce((total, pedido) => total + Number(pedido.montoDescuento ?? 0), 0)
+    return c.json({
+      success: true,
+      data: {
+        codigo,
+        filtros: {
+          from: filtros.from?.toISOString() ?? null,
+          to: filtros.to?.toISOString() ?? null,
+          sucursalId: filtros.sucursalId ?? null,
+        },
+        metricas: {
+          usos: pedidos.length,
+          clientes: usosPorCliente.size,
+          facturacionCobrada,
+          ventasAntesDescuento: facturacionCobrada + montoDescontado,
+          montoDescontado,
+          ticketPromedio: pedidos.length ? facturacionCobrada / pedidos.length : 0,
+        },
+        clientes: Array.from(usosPorCliente.values()).sort((a, b) => b.ultimoUsoAt.localeCompare(a.ultimoUsoAt)),
+        pedidos: pedidos.map((pedido) => ({ ...pedido, total: Number(pedido.total), montoDescuento: Number(pedido.montoDescuento ?? 0) }))
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+      },
+    }, 200)
+  } catch (error) {
+    console.error('Error obteniendo resultados del código de descuento:', error)
+    return c.json({ success: false, message: 'Error al obtener resultados del código' }, 500)
   }
 })
 

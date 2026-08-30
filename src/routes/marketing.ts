@@ -1261,6 +1261,7 @@ const resultadosQuerySchema = z.object({
   to: z.coerce.date().optional(),
   campaniaId: z.coerce.number().int().positive().optional(),
   sucursalId: z.coerce.number().int().positive().optional(),
+  fuente: z.enum(['organico']).optional(),
 }).refine((filtros) => !filtros.from || !filtros.to || filtros.from <= filtros.to, { message: 'from debe ser anterior a to' })
 
 export interface RepositorioResultadosMarketing {
@@ -1278,8 +1279,8 @@ function crearRepositorioResultadosDrizzle(): RepositorioResultadosMarketing {
         db.select({ id: PedidoUnificadoTable.id, clienteId: PedidoUnificadoTable.clienteId, sucursalId: PedidoUnificadoTable.sucursalId, total: PedidoUnificadoTable.total, montoDescuento: PedidoUnificadoTable.montoDescuento, createdAt: PedidoUnificadoTable.createdAt, pagado: PedidoUnificadoTable.pagado }).from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.restauranteId, restauranteId)),
         db.select({ id: MarketingCampanaTable.id, nombre: MarketingCampanaTable.nombre, slug: MarketingCampanaTable.slug, tipo: MarketingCampanaTable.tipo, inversionManual: MarketingCampanaTable.inversionManual, usaGrupoControl: MarketingCampanaTable.usaGrupoControl }).from(MarketingCampanaTable).where(eq(MarketingCampanaTable.restauranteId, restauranteId)),
         db.select({ pedidoUnificadoId: PedidoMarketingAtribucionTable.pedidoUnificadoId, campanaId: PedidoMarketingAtribucionTable.campanaId, recetaCodigo: PedidoMarketingAtribucionTable.recetaCodigo, revenueAtribuido: PedidoMarketingAtribucionTable.revenueAtribuido, descuentoAtribuido: PedidoMarketingAtribucionTable.descuentoAtribuido, createdAt: PedidoMarketingAtribucionTable.createdAt }).from(PedidoMarketingAtribucionTable).where(eq(PedidoMarketingAtribucionTable.restauranteId, restauranteId)),
-        db.select({ id: MarketingSesionTable.id, firstTouchCampanaId: MarketingSesionTable.firstTouchCampanaId, lastTouchCampanaId: MarketingSesionTable.lastTouchCampanaId, createdAt: MarketingSesionTable.createdAt }).from(MarketingSesionTable).where(eq(MarketingSesionTable.restauranteId, restauranteId)),
-        db.select({ id: MarketingEventoTable.id, marketingSesionId: MarketingEventoTable.marketingSesionId, tipo: MarketingEventoTable.tipo, ocurridoAt: MarketingEventoTable.ocurridoAt }).from(MarketingEventoTable).where(eq(MarketingEventoTable.restauranteId, restauranteId)),
+        db.select({ id: MarketingSesionTable.id, firstTouchTipo: MarketingSesionTable.firstTouchTipo, lastTouchTipo: MarketingSesionTable.lastTouchTipo, firstTouchCampanaId: MarketingSesionTable.firstTouchCampanaId, lastTouchCampanaId: MarketingSesionTable.lastTouchCampanaId, createdAt: MarketingSesionTable.createdAt }).from(MarketingSesionTable).where(eq(MarketingSesionTable.restauranteId, restauranteId)),
+        db.select({ id: MarketingEventoTable.id, marketingSesionId: MarketingEventoTable.marketingSesionId, tipo: MarketingEventoTable.tipo, pedidoUnificadoId: MarketingEventoTable.pedidoUnificadoId, ocurridoAt: MarketingEventoTable.ocurridoAt }).from(MarketingEventoTable).where(eq(MarketingEventoTable.restauranteId, restauranteId)),
         db.select({ id: MarketingContactoTable.id, enlaceId: MarketingContactoTable.enlaceId, canal: MarketingContactoTable.canal, estado: MarketingContactoTable.estado, costoMensajes: MarketingContactoTable.costoMensajes, createdAt: MarketingContactoTable.createdAt }).from(MarketingContactoTable).where(eq(MarketingContactoTable.restauranteId, restauranteId)),
         db.select({ id: MarketingEnlaceTable.id, campanaId: MarketingEnlaceTable.campanaId, recetaCodigo: MarketingEnlaceTable.recetaCodigo, createdAt: MarketingEnlaceTable.createdAt }).from(MarketingEnlaceTable).where(eq(MarketingEnlaceTable.restauranteId, restauranteId)),
       ])
@@ -1300,7 +1301,9 @@ export function crearMarketingResultadosRoute(repositorio: RepositorioResultados
     const [datos, oportunidades] = await Promise.all([repositorio.cargar(restauranteId), repositorio.cargarOportunidades(restauranteId)])
     return c.json({ success: true, data: resumirResultadosMarketing({ ...datos, oportunidades }, filtros) })
   }
-  route.get('/resumen', zValidator('query', resultadosQuerySchema), responder)
+  route.get('/resumen', zValidator('query', resultadosQuerySchema), async (c: any) => responder(c, c.req.valid('query')))
+  route.get('/organico/resultados', zValidator('query', resultadosQuerySchema), async (c: any) =>
+    responder(c, { ...c.req.valid('query'), campaniaId: undefined, fuente: 'organico' }))
   route.get('/campanas/:id/resultados', zValidator('param', idParamSchema), zValidator('query', resultadosQuerySchema), async (c: any) =>
     responder(c, { ...c.req.valid('query'), campaniaId: c.req.valid('param').id }))
   return route
