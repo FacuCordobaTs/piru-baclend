@@ -81,4 +81,26 @@ describe('resumirResultadosMarketing', () => {
     expect(resumen.metricas.sesiones).toBe(1)
     expect(resumen.funnel).toMatchObject({ session_start: 1, add_to_cart: 1, checkout_start: 1 })
   })
+
+  test('no clasifica como orgánico un pedido que guardó la campaña en la venta aunque falle el ledger', () => {
+    const conFuenteEnPedido: DatosResultadosMarketing = {
+      ...datos,
+      pedidos: [{
+        id: 30, clienteId: 15, sucursalId: 1, total: '450', montoDescuento: '50',
+        marketingCampanaId: 7, createdAt: fecha(2), pagado: true,
+      }],
+      atribuciones: [],
+      sesiones: [],
+      eventos: [],
+      contactos: [],
+      enlaces: [],
+      oportunidades: [],
+    }
+
+    const campana = resumirResultadosMarketing(conFuenteEnPedido, { campaniaId: 7 })
+    const organico = resumirResultadosMarketing(conFuenteEnPedido, { fuente: 'organico' })
+    expect(campana.metricas).toMatchObject({ pedidos: 1, ventas: 450, revenueAtribuido: 450 })
+    expect(campana.funnel.purchase).toBe(1)
+    expect(organico.metricas.pedidos).toBe(0)
+  })
 })

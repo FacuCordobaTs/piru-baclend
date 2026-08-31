@@ -267,6 +267,9 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   // Nullable: pedidos públicos, IA y el historial anterior no tienen actor de staff.
   creadoPorUsuarioId: int("creado_por_usuario_id").references(() => usuarioRestaurante.id, { onDelete: "set null" }),
   clienteId: int("cliente_id").references(() => cliente.id), // Nullable si no se registró
+  // Fuente operativa de atribución. Se escribe junto con el pedido para que
+  // una venta de campaña nunca dependa de una segunda inserción analítica.
+  marketingCampanaId: int("marketing_campana_id"),
 
   // Discriminador principal
   tipo: mysqlEnum("tipo", ["delivery", "takeaway", "mesa"]).notNull(),
@@ -344,6 +347,7 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
 }, (table) => [
   index("idx_pedido_unificado_mesa_local_estado").on(table.mesaLocalId, table.estado),
   index("idx_pedido_unificado_creado_por_usuario").on(table.creadoPorUsuarioId),
+  index("idx_pedido_unificado_marketing_campana").on(table.restauranteId, table.marketingCampanaId, table.createdAt),
 ]);
 
 export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {

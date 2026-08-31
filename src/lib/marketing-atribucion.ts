@@ -17,6 +17,7 @@ export interface ContextoAtribucionPedidoMarketing {
   visitorId?: string | null
   sesionUuid?: string | null
   campaniaSlug?: string | null
+  campanaId?: number | null
   recetaToken?: string | null
 }
 
@@ -236,11 +237,12 @@ async function asegurarSesionCampanaBestEffort(
 async function atribuirPedidoACampanaExplicita(
   db: Db,
   contexto: ContextoAtribucionPedidoMarketing,
-  slug: string,
+  referencia: { id: number | null; slug: string | null },
 ): Promise<ResultadoAtribucionPedidoMarketing> {
   const [campana] = await db.select({ id: MarketingCampanaTable.id }).from(MarketingCampanaTable).where(and(
     eq(MarketingCampanaTable.restauranteId, contexto.restauranteId),
-    eq(MarketingCampanaTable.slug, slug),
+    ...(referencia.id != null ? [eq(MarketingCampanaTable.id, referencia.id)] : []),
+    ...(referencia.slug ? [eq(MarketingCampanaTable.slug, referencia.slug)] : []),
   )).limit(1)
   if (!campana) throw new Error('la campaña no pertenece al restaurante')
 
@@ -286,7 +288,10 @@ async function atribuirPedidoACampanaExplicita(
 export async function atribuirPedidoMarketingBestEffort(db: Db, contexto: ContextoAtribucionPedidoMarketing): Promise<ResultadoAtribucionPedidoMarketing | null> {
   try {
     const slug = textoOpcional(contexto.campaniaSlug, 191)
-    if (slug) return await atribuirPedidoACampanaExplicita(db, contexto, slug)
+    const campanaId = Number.isInteger(contexto.campanaId) && Number(contexto.campanaId) > 0
+      ? Number(contexto.campanaId)
+      : null
+    if (slug || campanaId) return await atribuirPedidoACampanaExplicita(db, contexto, { id: campanaId, slug })
     return await atribuirPedidoMarketingSinPropagar(crearRepositorioAtribucionMarketing(db), contexto)
   } catch (error) {
     console.error('[marketing] No se pudo preparar la atribución del pedido:', error)

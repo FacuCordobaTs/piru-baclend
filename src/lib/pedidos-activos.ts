@@ -92,7 +92,7 @@ export const PEDIDO_LIST_PROJECTION = {
   grupal: PedidoUnificadoTable.grupal,
   creadoPorIa: PedidoUnificadoTable.creadoPorIa,
   anotadoManualmente: PedidoUnificadoTable.anotadoManualmente,
-  campanaId: PedidoMarketingAtribucionTable.campanaId,
+  campanaId: sql<number | null>`COALESCE(${PedidoUnificadoTable.marketingCampanaId}, ${PedidoMarketingAtribucionTable.campanaId})`,
   campanaNombre: MarketingCampanaTable.nombre,
   campanaSlug: MarketingCampanaTable.slug,
 } as const
@@ -237,8 +237,8 @@ export async function selectPedidosEnriquecidos(
       eq(PedidoUnificadoTable.restauranteId, PedidoMarketingAtribucionTable.restauranteId),
     ))
     .leftJoin(MarketingCampanaTable, and(
-      eq(PedidoMarketingAtribucionTable.campanaId, MarketingCampanaTable.id),
-      eq(PedidoMarketingAtribucionTable.restauranteId, MarketingCampanaTable.restauranteId),
+      eq(MarketingCampanaTable.id, sql`COALESCE(${PedidoUnificadoTable.marketingCampanaId}, ${PedidoMarketingAtribucionTable.campanaId})`),
+      eq(PedidoUnificadoTable.restauranteId, MarketingCampanaTable.restauranteId),
     ))
     .where(whereCondition)
     .orderBy(desc(PedidoUnificadoTable.createdAt))
@@ -277,17 +277,21 @@ export async function selectPedidosEnriquecidos(
 
 export async function buildCampanaPedido(db: Db, restauranteId: number, pedidoId: number) {
   const [campana] = await db.select({
-    campanaId: PedidoMarketingAtribucionTable.campanaId,
+    campanaId: sql<number | null>`COALESCE(${PedidoUnificadoTable.marketingCampanaId}, ${PedidoMarketingAtribucionTable.campanaId})`,
     campanaNombre: MarketingCampanaTable.nombre,
     campanaSlug: MarketingCampanaTable.slug,
-  }).from(PedidoMarketingAtribucionTable)
+  }).from(PedidoUnificadoTable)
+    .leftJoin(PedidoMarketingAtribucionTable, and(
+      eq(PedidoUnificadoTable.id, PedidoMarketingAtribucionTable.pedidoUnificadoId),
+      eq(PedidoUnificadoTable.restauranteId, PedidoMarketingAtribucionTable.restauranteId),
+    ))
     .leftJoin(MarketingCampanaTable, and(
-      eq(PedidoMarketingAtribucionTable.campanaId, MarketingCampanaTable.id),
-      eq(PedidoMarketingAtribucionTable.restauranteId, MarketingCampanaTable.restauranteId),
+      eq(MarketingCampanaTable.id, sql`COALESCE(${PedidoUnificadoTable.marketingCampanaId}, ${PedidoMarketingAtribucionTable.campanaId})`),
+      eq(PedidoUnificadoTable.restauranteId, MarketingCampanaTable.restauranteId),
     ))
     .where(and(
-      eq(PedidoMarketingAtribucionTable.restauranteId, restauranteId),
-      eq(PedidoMarketingAtribucionTable.pedidoUnificadoId, pedidoId),
+      eq(PedidoUnificadoTable.restauranteId, restauranteId),
+      eq(PedidoUnificadoTable.id, pedidoId),
     )).limit(1)
   return campana ?? { campanaId: null, campanaNombre: null, campanaSlug: null }
 }

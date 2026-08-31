@@ -9,7 +9,7 @@ export interface FiltrosResultadosMarketing {
 
 export interface PedidoResultadoMarketing {
   id: number; clienteId: number | null; sucursalId: number | null; total: number | string
-  montoDescuento: number | string | null; createdAt: Date; pagado: boolean
+  montoDescuento: number | string | null; marketingCampanaId?: number | null; createdAt: Date; pagado: boolean
 }
 export interface CampanaResultadoMarketing { id: number; nombre: string; slug: string; tipo: 'adquisicion' | 'recompra'; productoId: number | null; inversionManual: number | string; usaGrupoControl: boolean }
 export interface AtribucionResultadoMarketing { pedidoUnificadoId: number; campanaId: number | null; recetaCodigo: string | null; revenueAtribuido: number | string; descuentoAtribuido: number | string; createdAt: Date }
@@ -74,7 +74,24 @@ const contarPor = <T>(filas: T[], clave: (fila: T) => string) => Object.fromEntr
 export function resumirResultadosMarketing(datos: DatosResultadosMarketing, filtros: FiltrosResultadosMarketing = {}, incluirCampanas = true): ResultadoMarketing {
   const pedidosPagados = datos.pedidos.filter((pedido) => pedido.pagado && enRango(pedido.createdAt, filtros)
     && (!filtros.sucursalId || pedido.sucursalId === filtros.sucursalId))
-  const atribucionPorPedido = new Map(datos.atribuciones.map((fila) => [fila.pedidoUnificadoId, fila]))
+  // `pedido_unificado.marketing_campana_id` es la fuente operativa, escrita en
+  // el mismo INSERT del pedido. La tabla analítica sigue aportando recetas y
+  // snapshots, pero ya no puede convertir una venta real de campaña en orgánica.
+  const atribucionesEfectivas = [...datos.atribuciones]
+  const pedidosConAtribucion = new Set(atribucionesEfectivas.map((fila) => fila.pedidoUnificadoId))
+  for (const pedido of datos.pedidos) {
+    if (pedido.marketingCampanaId != null && !pedidosConAtribucion.has(pedido.id)) {
+      atribucionesEfectivas.push({
+        pedidoUnificadoId: pedido.id,
+        campanaId: pedido.marketingCampanaId,
+        recetaCodigo: null,
+        revenueAtribuido: pedido.total,
+        descuentoAtribuido: pedido.montoDescuento ?? 0,
+        createdAt: pedido.createdAt,
+      })
+    }
+  }
+  const atribucionPorPedido = new Map(atribucionesEfectivas.map((fila) => [fila.pedidoUnificadoId, fila]))
   const idsCampania = filtros.campaniaId == null ? null : new Set([filtros.campaniaId])
   const sesionesOrganicas = filtros.fuente === 'organico'
     ? datos.sesiones.filter((sesion) => (
@@ -97,7 +114,7 @@ export function resumirResultadosMarketing(datos: DatosResultadosMarketing, filt
       : pedidosPagados
   const pedidosUnicos = Array.from(new Map(pedidosScope.map((pedido) => [pedido.id, pedido])).values())
   const idsPedidos = new Set(pedidosUnicos.map((pedido) => pedido.id))
-  const atribuciones = datos.atribuciones.filter((fila) => idsPedidos.has(fila.pedidoUnificadoId))
+  const atribuciones = atribucionesEfectivas.filter((fila) => idsPedidos.has(fila.pedidoUnificadoId))
   const sesiones = datos.sesiones.filter((fila) => enRango(fila.createdAt, filtros)
     && (filtros.fuente === 'organico'
       ? idsSesionesOrganicas.has(fila.id)

@@ -743,12 +743,19 @@ function crearRepositorioCampanasDrizzle(): RepositorioCampanasMarketing {
       return this.actualizar(restauranteId, id, { estado: 'inactiva' })
     },
     async tieneAtribucion(restauranteId, id) {
-      const [atribucion] = await db.select({ id: PedidoMarketingAtribucionTable.id }).from(PedidoMarketingAtribucionTable)
-        .where(and(
-          eq(PedidoMarketingAtribucionTable.restauranteId, restauranteId),
-          eq(PedidoMarketingAtribucionTable.campanaId, id),
-        )).limit(1)
-      return Boolean(atribucion)
+      const [atribucion, pedido] = await Promise.all([
+        db.select({ id: PedidoMarketingAtribucionTable.id }).from(PedidoMarketingAtribucionTable)
+          .where(and(
+            eq(PedidoMarketingAtribucionTable.restauranteId, restauranteId),
+            eq(PedidoMarketingAtribucionTable.campanaId, id),
+          )).limit(1),
+        db.select({ id: PedidoUnificadoTable.id }).from(PedidoUnificadoTable)
+          .where(and(
+            eq(PedidoUnificadoTable.restauranteId, restauranteId),
+            eq(PedidoUnificadoTable.marketingCampanaId, id),
+          )).limit(1),
+      ])
+      return Boolean(atribucion[0] || pedido[0])
     },
     async borrar(restauranteId, id) {
       await db.delete(MarketingCampanaTable).where(and(eq(MarketingCampanaTable.id, id), eq(MarketingCampanaTable.restauranteId, restauranteId)))
@@ -1417,7 +1424,7 @@ function crearRepositorioResultadosDrizzle(): RepositorioResultadosMarketing {
   return {
     async cargar(restauranteId) {
       const [pedidos, campanas, atribuciones, sesiones, eventos, contactos, enlaces] = await Promise.all([
-        db.select({ id: PedidoUnificadoTable.id, clienteId: PedidoUnificadoTable.clienteId, sucursalId: PedidoUnificadoTable.sucursalId, total: PedidoUnificadoTable.total, montoDescuento: PedidoUnificadoTable.montoDescuento, createdAt: PedidoUnificadoTable.createdAt, pagado: PedidoUnificadoTable.pagado }).from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.restauranteId, restauranteId)),
+        db.select({ id: PedidoUnificadoTable.id, clienteId: PedidoUnificadoTable.clienteId, sucursalId: PedidoUnificadoTable.sucursalId, total: PedidoUnificadoTable.total, montoDescuento: PedidoUnificadoTable.montoDescuento, marketingCampanaId: PedidoUnificadoTable.marketingCampanaId, createdAt: PedidoUnificadoTable.createdAt, pagado: PedidoUnificadoTable.pagado }).from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.restauranteId, restauranteId)),
         db.select({ id: MarketingCampanaTable.id, nombre: MarketingCampanaTable.nombre, slug: MarketingCampanaTable.slug, tipo: MarketingCampanaTable.tipo, productoId: MarketingCampanaTable.productoId, inversionManual: MarketingCampanaTable.inversionManual, usaGrupoControl: MarketingCampanaTable.usaGrupoControl }).from(MarketingCampanaTable).where(eq(MarketingCampanaTable.restauranteId, restauranteId)),
         db.select({ pedidoUnificadoId: PedidoMarketingAtribucionTable.pedidoUnificadoId, campanaId: PedidoMarketingAtribucionTable.campanaId, recetaCodigo: PedidoMarketingAtribucionTable.recetaCodigo, revenueAtribuido: PedidoMarketingAtribucionTable.revenueAtribuido, descuentoAtribuido: PedidoMarketingAtribucionTable.descuentoAtribuido, createdAt: PedidoMarketingAtribucionTable.createdAt }).from(PedidoMarketingAtribucionTable).where(eq(PedidoMarketingAtribucionTable.restauranteId, restauranteId)),
         db.select({ id: MarketingSesionTable.id, firstTouchTipo: MarketingSesionTable.firstTouchTipo, lastTouchTipo: MarketingSesionTable.lastTouchTipo, firstTouchCampanaId: MarketingSesionTable.firstTouchCampanaId, lastTouchCampanaId: MarketingSesionTable.lastTouchCampanaId, createdAt: MarketingSesionTable.createdAt }).from(MarketingSesionTable).where(eq(MarketingSesionTable.restauranteId, restauranteId)),

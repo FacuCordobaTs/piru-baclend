@@ -60,6 +60,21 @@ async function resolverOfertaProductoCampana(
   return ofertaProductoEstaVigente(normalizada) ? normalizada : null
 }
 
+async function resolverCampanaPedidoExplicita(
+  db: MySql2Database<Record<string, never>>,
+  restauranteId: number,
+  campanaId: number | undefined,
+  campaniaSlug: string | undefined,
+): Promise<number | null> {
+  if (!campanaId && !campaniaSlug) return null
+  const condiciones = [eq(MarketingCampanaTable.restauranteId, restauranteId)]
+  if (campanaId) condiciones.push(eq(MarketingCampanaTable.id, campanaId))
+  if (campaniaSlug) condiciones.push(eq(MarketingCampanaTable.slug, campaniaSlug))
+  const [campana] = await db.select({ id: MarketingCampanaTable.id })
+    .from(MarketingCampanaTable).where(and(...condiciones)).limit(1)
+  return campana?.id ?? null
+}
+
 async function consumirCupoOfertaProducto(
   db: MySql2Database<Record<string, never>>,
   oferta: OfertaProductoCampana | null,
@@ -760,6 +775,7 @@ const createDeliverySchema = z.object({
     visitorId: z.string().trim().min(1).max(64).optional(),
     sesionUuid: z.string().trim().min(1).max(64).optional(),
     campaniaSlug: z.string().trim().min(1).max(191).optional(),
+    campanaId: z.number().int().positive().optional(),
     recetaToken: z.string().trim().min(1).max(512).optional(),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
@@ -780,7 +796,7 @@ const createDeliverySchema = z.object({
 
 publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado, grupal, visitorId, sesionUuid, campaniaSlug, recetaToken } = c.req.valid('json')
+    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado, grupal, visitorId, sesionUuid, campaniaSlug, campanaId, recetaToken } = c.req.valid('json')
 
     try {
         const [deliveryCheck] = await db.select({
@@ -820,6 +836,10 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         }
 
         const productosMap = new Map(productosRaw.map(p => [p.id, { producto: p, puntos: puntosMap.get(p.id) ?? null }]))
+        const marketingCampanaId = await resolverCampanaPedidoExplicita(db, restauranteId, campanaId, campaniaSlug)
+        if ((campanaId || campaniaSlug) && marketingCampanaId == null) {
+            return c.json({ message: 'La campaña del pedido no es válida', success: false }, 400)
+        }
         const ofertaCampana = await resolverOfertaProductoCampana(db, restauranteId, campaniaSlug)
 
         const uniqueVariantesIds = [...new Set(items.map(i => i.varianteId).filter(Boolean))] as number[];
@@ -1061,6 +1081,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         const nuevoPedido = await db.insert(PedidoUnificadoTable).values({
             restauranteId,
             clienteId: clienteId || null,
+            marketingCampanaId,
             tipo: 'delivery',
             sucursalId: pedidoSucursalId,
             direccion,
@@ -1162,7 +1183,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         // Dashboard recibe el pedido ya etiquetado con su campaña.
         const atribucionMarketing = await atribuirPedidoMarketingBestEffort(db, {
             restauranteId, pedidoUnificadoId: pedidoId, clienteId,
-            visitorId, sesionUuid, campaniaSlug, recetaToken,
+            visitorId, sesionUuid, campaniaSlug, campanaId: marketingCampanaId, recetaToken,
         })
 
         const waitToPay = debeEsperarWebhookParaNotificar(metodoPagoEfectivoDelivery)
@@ -1283,7 +1304,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 horarioProgramado: horarioProgramado || null,
                 // Diagnóstico aditivo para storefronts nuevos; no altera el
                 // contrato que consumen las versiones instaladas.
-                marketingAttribution: atribucionMarketing?.estado ?? 'error',
+                marketingAttribution: marketingCampanaId != null ? 'atribuido' : (atribucionMarketing?.estado ?? 'sin_tracking'),
+                marketingCampanaId,
             }
         }, 201)
     } catch (error) {
@@ -1306,6 +1328,7 @@ const createTakeawaySchema = z.object({
     visitorId: z.string().trim().min(1).max(64).optional(),
     sesionUuid: z.string().trim().min(1).max(64).optional(),
     campaniaSlug: z.string().trim().min(1).max(191).optional(),
+    campanaId: z.number().int().positive().optional(),
     recetaToken: z.string().trim().min(1).max(512).optional(),
     items: z.array(z.object({
         productoId: z.number().int().positive(),
@@ -1326,7 +1349,7 @@ const createTakeawaySchema = z.object({
 
 publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, sucursalId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado, grupal, visitorId, sesionUuid, campaniaSlug, recetaToken } = c.req.valid('json')
+    const { restauranteId, sucursalId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado, grupal, visitorId, sesionUuid, campaniaSlug, campanaId, recetaToken } = c.req.valid('json')
 
     try {
         const [takeawayCheck] = await db.select({ takeawayEnabled: RestauranteTable.takeawayEnabled })
@@ -1359,6 +1382,10 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         }
 
         const productosMap = new Map(productosRaw.map(p => [p.id, { producto: p, puntos: puntosMap.get(p.id) ?? null }]))
+        const marketingCampanaId = await resolverCampanaPedidoExplicita(db, restauranteId, campanaId, campaniaSlug)
+        if ((campanaId || campaniaSlug) && marketingCampanaId == null) {
+            return c.json({ message: 'La campaña del pedido no es válida', success: false }, 400)
+        }
         const ofertaCampana = await resolverOfertaProductoCampana(db, restauranteId, campaniaSlug)
 
         const uniqueVariantesIds = [...new Set(items.map(i => i.varianteId).filter(Boolean))] as number[];
@@ -1569,6 +1596,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         const nuevoPedido = await db.insert(PedidoUnificadoTable).values({
             restauranteId,
             clienteId: clienteId || null,
+            marketingCampanaId,
             tipo: 'takeaway',
             sucursalId: pedidoSucursalIdTk,
             nombreCliente: nombreCliente || null,
@@ -1668,7 +1696,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         // Dashboard recibe el pedido ya etiquetado con su campaña.
         const atribucionMarketing = await atribuirPedidoMarketingBestEffort(db, {
             restauranteId, pedidoUnificadoId: pedidoId, clienteId,
-            visitorId, sesionUuid, campaniaSlug, recetaToken,
+            visitorId, sesionUuid, campaniaSlug, campanaId: marketingCampanaId, recetaToken,
         })
 
         const waitToPay = debeEsperarWebhookParaNotificar(metodoPagoEfectivo)
@@ -1775,7 +1803,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 whatsappDestino: await whatsappPropioDeSucursal(db, restauranteId, pedidoSucursalIdTk),
                 transferenciaAliasDestino: await aliasTransferenciaDeSucursal(db, restauranteId, pedidoSucursalIdTk),
                 horarioProgramado: horarioProgramado || null,
-                marketingAttribution: atribucionMarketing?.estado ?? 'error',
+                marketingAttribution: marketingCampanaId != null ? 'atribuido' : (atribucionMarketing?.estado ?? 'sin_tracking'),
+                marketingCampanaId,
             }
         }, 201)
     } catch (error) {

@@ -87,6 +87,7 @@ clientesRoute.get('/list', async (c) => {
             sucursalId: PedidoUnificadoTable.sucursalId,
             codigoDescuentoId: PedidoUnificadoTable.codigoDescuentoId,
             montoDescuento: PedidoUnificadoTable.montoDescuento,
+            marketingCampanaId: PedidoUnificadoTable.marketingCampanaId,
             pagado: PedidoUnificadoTable.pagado,
             createdAt: PedidoUnificadoTable.createdAt,
             tipo: PedidoUnificadoTable.tipo,
@@ -243,8 +244,22 @@ clientesRoute.get('/list', async (c) => {
         // por un reintento técnico de checkout.
         const pedidosGrowth = base.flatMap((cliente) => cliente.pedidos)
         const pedidoGrowthIds = new Set(pedidosGrowth.map((pedido) => pedido.id))
-        const pedidoAtribuidoIds = new Set(atribuciones.map((atribucion) => atribucion.pedidoUnificadoId))
-        const atribucionPorPedidoId = new Map(atribuciones.map((atribucion) => [atribucion.pedidoUnificadoId, atribucion]))
+        const atribucionesEfectivas: any[] = [...atribuciones]
+        const pedidoAtribuidoIds = new Set(atribucionesEfectivas.map((atribucion) => atribucion.pedidoUnificadoId))
+        for (const pedido of pedidosGrowth) {
+            if (pedido.marketingCampanaId != null && !pedidoAtribuidoIds.has(pedido.id)) {
+                atribucionesEfectivas.push({
+                    pedidoUnificadoId: pedido.id,
+                    campanaId: pedido.marketingCampanaId,
+                    origen: 'campana',
+                    recetaCodigo: null,
+                    revenueAtribuido: pedido.total,
+                    createdAt: pedido.createdAt,
+                })
+                pedidoAtribuidoIds.add(pedido.id)
+            }
+        }
+        const atribucionPorPedidoId = new Map(atribucionesEfectivas.map((atribucion) => [atribucion.pedidoUnificadoId, atribucion]))
         // Todo pedido sin atribución de campaña/receta es orgánico. Exigir un
         // evento `purchase` ocultaba clientes históricos y navegadores con
         // tracking bloqueado, aunque la compra existiera y estuviera cobrada.
@@ -268,7 +283,7 @@ clientesRoute.get('/list', async (c) => {
         const growthPorCliente = resolverDatosGrowthClientes(
             clientesParaRespuesta,
             pedidosGrowth,
-            atribuciones as any,
+            atribucionesEfectivas,
             campanas,
             oportunidadesGrowth,
             {
