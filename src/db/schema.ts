@@ -724,7 +724,10 @@ export const pedidoMarketingAtribucion = mysqlTable("pedido_marketing_atribucion
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
   pedidoUnificadoId: int("pedido_unificado_id").references(() => pedidoUnificado.id).notNull(),
-  marketingSesionId: int("marketing_sesion_id").references(() => marketingSesion.id).notNull(),
+  // La sesión es contexto analítico best-effort. Una compra con slug de
+  // campaña explícito debe poder atribuirse aunque el navegador haya bloqueado
+  // storage/tracking o la sesión haya expirado.
+  marketingSesionId: int("marketing_sesion_id").references(() => marketingSesion.id),
   campanaId: int("campana_id").references(() => marketingCampana.id),
   origen: mysqlEnum("origen", ["campana", "receta"]).notNull(),
   recetaCodigo: varchar("receta_codigo", { length: 64 }),

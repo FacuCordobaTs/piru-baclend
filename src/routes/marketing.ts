@@ -92,11 +92,31 @@ export interface ReferenciasEventosMarketing {
 
 export interface DependenciasMarketingRoute {
   referencias: ReferenciasEventosMarketing
+  resolverCampaniasPorSlug?: (restauranteId: number, slugs: string[]) => Promise<Map<string, number>>
   guardarEventos: (restauranteId: number, eventos: EventoMarketingInput[]) => Promise<ResultadoEventoMarketing[]>
 }
 
 function idsUnicos(eventos: EventoMarketingInput[], selector: (evento: EventoMarketingInput) => number | null | undefined): number[] {
   return [...new Set(eventos.map(selector).filter((id): id is number => id != null))]
+}
+
+async function restaurarTouchesDesdeSlug(
+  dependencias: DependenciasMarketingRoute,
+  restauranteId: number,
+  eventos: EventoMarketingInput[],
+): Promise<EventoMarketingInput[]> {
+  const slugs = [...new Set(eventos.flatMap((evento) => {
+    const slug = evento.metadata?.campaniaSlug
+    return !evento.touch && typeof slug === 'string' && slug.trim() ? [slug.trim().slice(0, 191)] : []
+  }))]
+  if (!slugs.length || !dependencias.resolverCampaniasPorSlug) return eventos
+  const ids = await dependencias.resolverCampaniasPorSlug(restauranteId, slugs)
+  return eventos.map((evento) => {
+    if (evento.touch) return evento
+    const slug = typeof evento.metadata?.campaniaSlug === 'string' ? evento.metadata.campaniaSlug.trim() : ''
+    const campanaId = ids.get(slug)
+    return campanaId ? { ...evento, touch: { tipo: 'campana', campanaId } } : evento
+  })
 }
 
 /**
@@ -168,14 +188,14 @@ export function crearMarketingRoute(dependencias: DependenciasMarketingRoute): H
       return c.json({ success: false, message: 'Payload de eventos de marketing inválido', errors: validacion.error.issues }, 400)
     }
 
-    const { restauranteId, eventos } = validacion.data
-    const errorReferencia = await validarReferenciasEventosMarketing(dependencias.referencias, restauranteId, eventos)
-    if (errorReferencia) {
-      const status = errorReferencia === 'Restaurante no encontrado' ? 404 : 400
-      return c.json({ success: false, message: errorReferencia }, status)
-    }
-
     try {
+      const { restauranteId } = validacion.data
+      const eventos = await restaurarTouchesDesdeSlug(dependencias, restauranteId, validacion.data.eventos)
+      const errorReferencia = await validarReferenciasEventosMarketing(dependencias.referencias, restauranteId, eventos)
+      if (errorReferencia) {
+        const status = errorReferencia === 'Restaurante no encontrado' ? 404 : 400
+        return c.json({ success: false, message: errorReferencia }, status)
+      }
       const resultados = await dependencias.guardarEventos(restauranteId, eventos)
       const insertados = resultados.filter((resultado) => resultado.estado === 'insertado').length
       return c.json({
@@ -204,14 +224,22 @@ export function crearMarketingRoute(dependencias: DependenciasMarketingRoute): H
 
 export const marketingRoute = crearMarketingRoute({
   referencias: crearReferenciasDrizzle(),
+  async resolverCampaniasPorSlug(restauranteId, slugs) {
+    if (!slugs.length) return new Map()
+    const rows = await drizzle(pool).select({ id: MarketingCampanaTable.id, slug: MarketingCampanaTable.slug })
+      .from(MarketingCampanaTable).where(and(
+        eq(MarketingCampanaTable.restauranteId, restauranteId),
+        inArray(MarketingCampanaTable.slug, slugs),
+      ))
+    return new Map(rows.map((row) => [row.slug, row.id]))
+  },
   guardarEventos: (restauranteId, eventos) => guardarEventosMarketing(drizzle(pool), restauranteId, eventos),
 })
 
 /**
- * Sólo contiene los datos que el storefront necesita para navegar. El id de
- * campaña queda deliberadamente fuera del response público: se usa de forma
- * interna para iniciar el touch atribuible cuando el cliente ya tiene IDs de
- * visitante/sesión.
+ * Sólo contiene los datos que el storefront necesita para navegar y trackear.
+ * El id de campaña se entrega exclusivamente dentro del contexto analítico;
+ * cada evento vuelve a validarlo contra restaurante_id antes de persistir.
  */
 export interface CampanaSmartLinkPublica {
   restauranteId: number
@@ -336,7 +364,10 @@ export function crearMarketingSmartLinksRoute(dependencias: DependenciasSmartLin
           fechaFin: campana.fechaFin?.toISOString() ?? null,
           visitas: campana.visitas,
         },
-        contexto: { campaniaSlug: campana.slug },
+        // El ID no concede acceso: el endpoint de eventos vuelve a validar que
+        // pertenezca al restaurante. Permite que cada evento conserve el touch
+        // aun si la inicialización best-effort de la sesión falló.
+        contexto: { campaniaSlug: campana.slug, campanaId: campana.id },
         utms: {
           utmSource: campana.utmSource,
           utmMedium: campana.utmMedium,
@@ -398,44 +429,52 @@ const marketingSmartLinksRoute = crearMarketingSmartLinksRoute({
     const db = drizzle(pool)
     const ahora = new Date()
     const expiraAt = new Date(ahora.getTime() + 30 * 60 * 1000)
-    let [sesion] = await db.select().from(MarketingSesionTable).where(and(
-      eq(MarketingSesionTable.restauranteId, contexto.restauranteId),
-      eq(MarketingSesionTable.sesionUuid, contexto.sesionUuid),
-    )).limit(1)
-    let contarVisita = false
-    if (!sesion) {
-      const insercion = await db.insert(MarketingSesionTable).values({
-        restauranteId: contexto.restauranteId,
-        sesionUuid: contexto.sesionUuid,
-        visitorId: contexto.visitorId,
-        firstTouchTipo: 'campana',
-        firstTouchCampanaId: contexto.campanaId,
-        firstTouchRecetaCodigo: null,
-        firstTouchAt: ahora,
-        lastTouchTipo: 'campana',
-        lastTouchCampanaId: contexto.campanaId,
-        lastTouchRecetaCodigo: null,
-        lastTouchAt: ahora,
-        expiraAt,
-      }).ignore()
-      contarVisita = Number(insercion[0]?.affectedRows ?? 0) === 1
-      ;[sesion] = await db.select().from(MarketingSesionTable).where(and(
+    let visitaContada = false
+    try {
+      let [sesion] = await db.select().from(MarketingSesionTable).where(and(
         eq(MarketingSesionTable.restauranteId, contexto.restauranteId),
         eq(MarketingSesionTable.sesionUuid, contexto.sesionUuid),
       )).limit(1)
-    }
-    if (!sesion || sesion.visitorId !== contexto.visitorId) throw new Error('Sesión de campaña inválida')
-    if (!contarVisita) {
-      contarVisita = sesion.lastTouchCampanaId !== contexto.campanaId || sesion.expiraAt < ahora
-      await db.update(MarketingSesionTable).set({
-        lastTouchTipo: 'campana', lastTouchCampanaId: contexto.campanaId,
-        lastTouchRecetaCodigo: null, lastTouchAt: ahora, expiraAt,
-      }).where(and(eq(MarketingSesionTable.restauranteId, contexto.restauranteId), eq(MarketingSesionTable.id, sesion.id)))
-    }
-    if (contarVisita) {
-      await db.update(MarketingCampanaTable)
-        .set({ visitas: sql`${MarketingCampanaTable.visitas} + 1` })
-        .where(and(eq(MarketingCampanaTable.restauranteId, contexto.restauranteId), eq(MarketingCampanaTable.id, contexto.campanaId)))
+      let contarVisita = false
+      if (!sesion) {
+        const insercion = await db.insert(MarketingSesionTable).values({
+          restauranteId: contexto.restauranteId,
+          sesionUuid: contexto.sesionUuid,
+          visitorId: contexto.visitorId,
+          firstTouchTipo: 'campana', firstTouchCampanaId: contexto.campanaId,
+          firstTouchRecetaCodigo: null, firstTouchAt: ahora,
+          lastTouchTipo: 'campana', lastTouchCampanaId: contexto.campanaId,
+          lastTouchRecetaCodigo: null, lastTouchAt: ahora, expiraAt,
+        }).ignore()
+        contarVisita = Number(insercion[0]?.affectedRows ?? 0) === 1
+        ;[sesion] = await db.select().from(MarketingSesionTable).where(and(
+          eq(MarketingSesionTable.restauranteId, contexto.restauranteId),
+          eq(MarketingSesionTable.sesionUuid, contexto.sesionUuid),
+        )).limit(1)
+      }
+      if (!sesion || sesion.visitorId !== contexto.visitorId) throw new Error('Sesión de campaña inválida')
+      if (!contarVisita) {
+        contarVisita = sesion.lastTouchCampanaId !== contexto.campanaId || sesion.expiraAt < ahora
+        await db.update(MarketingSesionTable).set({
+          lastTouchTipo: 'campana', lastTouchCampanaId: contexto.campanaId,
+          lastTouchRecetaCodigo: null, lastTouchAt: ahora, expiraAt,
+        }).where(and(eq(MarketingSesionTable.restauranteId, contexto.restauranteId), eq(MarketingSesionTable.id, sesion.id)))
+      }
+      if (contarVisita) {
+        await db.update(MarketingCampanaTable)
+          .set({ visitas: sql`${MarketingCampanaTable.visitas} + 1` })
+          .where(and(eq(MarketingCampanaTable.restauranteId, contexto.restauranteId), eq(MarketingCampanaTable.id, contexto.campanaId)))
+        visitaContada = true
+      }
+    } catch (error) {
+      // La analítica de sesión es best-effort; aun si esa tabla falla, la
+      // apertura real del Smart Link no debe perderse del contador compacto.
+      if (!visitaContada) {
+        await db.update(MarketingCampanaTable)
+          .set({ visitas: sql`${MarketingCampanaTable.visitas} + 1` })
+          .where(and(eq(MarketingCampanaTable.restauranteId, contexto.restauranteId), eq(MarketingCampanaTable.id, contexto.campanaId)))
+      }
+      throw error
     }
   },
 })

@@ -1254,7 +1254,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             })
         }
 
-        await atribuirPedidoMarketingBestEffort(db, {
+        const atribucionMarketing = await atribuirPedidoMarketingBestEffort(db, {
             restauranteId, pedidoUnificadoId: pedidoId, clienteId,
             visitorId, sesionUuid, campaniaSlug, recetaToken,
         })
@@ -1279,6 +1279,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 whatsappDestino: await whatsappPropioDeSucursal(db, restauranteId, pedidoSucursalId),
                 transferenciaAliasDestino: await aliasTransferenciaDeSucursal(db, restauranteId, pedidoSucursalId),
                 horarioProgramado: horarioProgramado || null,
+                // Diagnóstico aditivo para storefronts nuevos; no altera el
+                // contrato que consumen las versiones instaladas.
+                marketingAttribution: atribucionMarketing?.estado ?? 'error',
             }
         }, 201)
     } catch (error) {
@@ -1748,7 +1751,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             })
         }
 
-        await atribuirPedidoMarketingBestEffort(db, {
+        const atribucionMarketing = await atribuirPedidoMarketingBestEffort(db, {
             restauranteId, pedidoUnificadoId: pedidoId, clienteId,
             visitorId, sesionUuid, campaniaSlug, recetaToken,
         })
@@ -1768,6 +1771,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 whatsappDestino: await whatsappPropioDeSucursal(db, restauranteId, pedidoSucursalIdTk),
                 transferenciaAliasDestino: await aliasTransferenciaDeSucursal(db, restauranteId, pedidoSucursalIdTk),
                 horarioProgramado: horarioProgramado || null,
+                marketingAttribution: atribucionMarketing?.estado ?? 'error',
             }
         }, 201)
     } catch (error) {

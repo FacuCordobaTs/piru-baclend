@@ -9,7 +9,6 @@ import {
   pedidoMarketingAtribucion as PedidoMarketingAtribucionTable,
   pedidoUnificado as PedidoUnificadoTable,
 } from '../db/schema'
-import { guardarEventosMarketing } from './marketing-tracking'
 
 export interface ContextoAtribucionPedidoMarketing {
   restauranteId: number
@@ -47,7 +46,7 @@ export interface RepositorioAtribucionMarketing {
   insertarAtribucion(input: {
     restauranteId: number
     pedidoUnificadoId: number
-    marketingSesionId: number
+    marketingSesionId: number | null
     campanaId: number | null
     origen: 'campana' | 'receta'
     recetaCodigo: string | null
@@ -184,49 +183,111 @@ export async function atribuirPedidoMarketingSinPropagar(
   }
 }
 
-/** Nunca propaga errores al checkout. */
-async function asegurarSesionExplicitaCampana(
+async function asegurarSesionCampanaBestEffort(
   db: Db,
   contexto: ContextoAtribucionPedidoMarketing,
-): Promise<ContextoAtribucionPedidoMarketing> {
-  const slug = textoOpcional(contexto.campaniaSlug, 191)
-  if (!slug) return contexto
+  campanaId: number,
+): Promise<number | null> {
+  try {
+    const ahora = new Date()
+    const expiraAt = new Date(ahora.getTime() + 30 * 60 * 1000)
+    const visitorOriginal = textoOpcional(contexto.visitorId, 64)
+    const sesionOriginal = textoOpcional(contexto.sesionUuid, 64)
+    if (visitorOriginal && sesionOriginal) {
+      const [existente] = await db.select({ id: MarketingSesionTable.id, visitorId: MarketingSesionTable.visitorId })
+        .from(MarketingSesionTable).where(and(
+          eq(MarketingSesionTable.restauranteId, contexto.restauranteId),
+          eq(MarketingSesionTable.sesionUuid, sesionOriginal),
+        )).limit(1)
+      if (existente?.visitorId === visitorOriginal) {
+        await db.update(MarketingSesionTable).set({
+          lastTouchTipo: 'campana', lastTouchCampanaId: campanaId,
+          lastTouchRecetaCodigo: null, lastTouchAt: ahora, expiraAt,
+        }).where(and(
+          eq(MarketingSesionTable.restauranteId, contexto.restauranteId),
+          eq(MarketingSesionTable.id, existente.id),
+        ))
+        return existente.id
+      }
+    }
+
+    const sintetico = `pedido-${contexto.pedidoUnificadoId}`
+    await db.insert(MarketingSesionTable).values({
+      restauranteId: contexto.restauranteId,
+      sesionUuid: sintetico,
+      visitorId: sintetico,
+      firstTouchTipo: 'campana', firstTouchCampanaId: campanaId,
+      firstTouchRecetaCodigo: null, firstTouchAt: ahora,
+      lastTouchTipo: 'campana', lastTouchCampanaId: campanaId,
+      lastTouchRecetaCodigo: null, lastTouchAt: ahora, expiraAt,
+    }).ignore()
+    const [tecnica] = await db.select({ id: MarketingSesionTable.id }).from(MarketingSesionTable).where(and(
+      eq(MarketingSesionTable.restauranteId, contexto.restauranteId),
+      eq(MarketingSesionTable.sesionUuid, sintetico),
+    )).limit(1)
+    return tecnica?.id ?? null
+  } catch (error) {
+    // La relación pedido↔campaña se persiste igualmente con sesión NULL.
+    console.error('[marketing] No se pudo conservar la sesión del pedido atribuido:', error)
+    return null
+  }
+}
+
+async function atribuirPedidoACampanaExplicita(
+  db: Db,
+  contexto: ContextoAtribucionPedidoMarketing,
+  slug: string,
+): Promise<ResultadoAtribucionPedidoMarketing> {
   const [campana] = await db.select({ id: MarketingCampanaTable.id }).from(MarketingCampanaTable).where(and(
     eq(MarketingCampanaTable.restauranteId, contexto.restauranteId),
     eq(MarketingCampanaTable.slug, slug),
   )).limit(1)
-  if (!campana) return contexto
+  if (!campana) throw new Error('la campaña no pertenece al restaurante')
 
-  const visitorOriginal = textoOpcional(contexto.visitorId, 64)
-  const sesionOriginal = textoOpcional(contexto.sesionUuid, 64)
-  const sintetico = `pedido-${contexto.pedidoUnificadoId}`
-  const registrar = async (visitorId: string, sesionUuid: string, sufijo: string) => {
-    await guardarEventosMarketing(db, contexto.restauranteId, [{
-      eventoUuid: `pedido-campana-${contexto.pedidoUnificadoId}-${sufijo}`,
-      sesionUuid,
-      visitorId,
-      tipo: 'purchase',
-      ocurridoAt: new Date(),
-      pedidoUnificadoId: contexto.pedidoUnificadoId,
-      touch: { tipo: 'campana', campanaId: campana.id },
-    }])
-    return { ...contexto, visitorId, sesionUuid }
+  const [pedido] = await db.select({ total: PedidoUnificadoTable.total, montoDescuento: PedidoUnificadoTable.montoDescuento })
+    .from(PedidoUnificadoTable).where(and(
+      eq(PedidoUnificadoTable.restauranteId, contexto.restauranteId),
+      eq(PedidoUnificadoTable.id, contexto.pedidoUnificadoId),
+    )).limit(1)
+  if (!pedido) throw new Error('el pedido no pertenece al restaurante')
+  if (contexto.clienteId != null) {
+    const [cliente] = await db.select({ id: ClienteTable.id }).from(ClienteTable).where(and(
+      eq(ClienteTable.restauranteId, contexto.restauranteId),
+      eq(ClienteTable.id, contexto.clienteId),
+    )).limit(1)
+    if (!cliente) throw new Error('el cliente no pertenece al restaurante')
   }
 
-  try {
-    return await registrar(visitorOriginal ?? sintetico, sesionOriginal ?? sintetico, 'original')
-  } catch {
-    // Si una sesión del navegador expiró o fue bloqueada, el slug explícito
-    // del checkout sigue permitiendo una sesión técnica tenant-safe. El pedido
-    // no queda huérfano de campaña por una falla analítica previa.
-    return registrar(sintetico, sintetico, 'fallback')
+  const marketingSesionId = await asegurarSesionCampanaBestEffort(db, contexto, campana.id)
+  await db.insert(PedidoMarketingAtribucionTable).values({
+    restauranteId: contexto.restauranteId,
+    pedidoUnificadoId: contexto.pedidoUnificadoId,
+    marketingSesionId,
+    campanaId: campana.id,
+    origen: 'campana',
+    recetaCodigo: null,
+    revenueAtribuido: pedido.total,
+    descuentoAtribuido: pedido.montoDescuento ?? '0.00',
+  }).ignore()
+
+  // INSERT IGNORE puede silenciar más que una colisión idempotente. Verificar
+  // la fila evita declarar éxito cuando MySQL descartó realmente la escritura.
+  const [persistida] = await db.select({ campanaId: PedidoMarketingAtribucionTable.campanaId })
+    .from(PedidoMarketingAtribucionTable).where(and(
+      eq(PedidoMarketingAtribucionTable.restauranteId, contexto.restauranteId),
+      eq(PedidoMarketingAtribucionTable.pedidoUnificadoId, contexto.pedidoUnificadoId),
+    )).limit(1)
+  if (!persistida || persistida.campanaId !== campana.id) {
+    throw new Error('no se pudo persistir la atribución explícita del pedido')
   }
+  return { estado: 'atribuido' }
 }
 
 export async function atribuirPedidoMarketingBestEffort(db: Db, contexto: ContextoAtribucionPedidoMarketing): Promise<ResultadoAtribucionPedidoMarketing | null> {
   try {
-    const contextoAtribuible = await asegurarSesionExplicitaCampana(db, contexto)
-    return await atribuirPedidoMarketingSinPropagar(crearRepositorioAtribucionMarketing(db), contextoAtribuible)
+    const slug = textoOpcional(contexto.campaniaSlug, 191)
+    if (slug) return await atribuirPedidoACampanaExplicita(db, contexto, slug)
+    return await atribuirPedidoMarketingSinPropagar(crearRepositorioAtribucionMarketing(db), contexto)
   } catch (error) {
     console.error('[marketing] No se pudo preparar la atribución del pedido:', error)
     return null

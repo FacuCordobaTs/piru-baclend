@@ -69,6 +69,22 @@ describe('POST /public/marketing/events', () => {
     expect(persistencias).toBe(0)
   })
 
+  test('recupera el touch desde el slug para storefronts cacheados', async () => {
+    let guardados: EventoMarketingInput[] = []
+    const response = await app(dependencias({
+      resolverCampaniasPorSlug: async () => new Map([['promo-smash', 99]]),
+      guardarEventos: async (_restauranteId, eventos) => {
+        guardados = eventos
+        return [{ eventoUuid: eventos[0].eventoUuid, estado: 'insertado', sesionId: 10 }]
+      },
+    })).request('/public/marketing/events', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload({ eventos: [{ ...payload().eventos[0], tipo: 'checkout_start', metadata: { campaniaSlug: 'promo-smash' } }] })),
+    })
+    expect(response.status).toBe(200)
+    expect(guardados[0].touch).toEqual({ tipo: 'campana', campanaId: 99 })
+  })
+
   test('rechaza batches de más de veinte eventos', async () => {
     const evento = payload().eventos[0]
     const response = await app().request('/public/marketing/events', {
@@ -131,16 +147,16 @@ function appSmartLinks(deps = dependenciasSmartLinks()) {
 }
 
 describe('GET /public/marketing/campanas/:username/:slug', () => {
-  test('resuelve destino producto sin exponer IDs internos de campaña', async () => {
+  test('resuelve destino producto y entrega un touch que el backend vuelve a validar por tenant', async () => {
     const { app } = appSmartLinks()
     const response = await app.request('/public/marketing/campanas/pizzeria/ig-agosto')
     expect(response.status).toBe(200)
     const body = await response.json()
     expect(body).toMatchObject({
       success: true,
-      data: { encontrada: true, destino: { tipo: 'producto', productoId: 10 }, contexto: { campaniaSlug: 'ig-agosto' }, beneficio: { codigoDescuentoId: 4, codigo: 'VOLVE10' } },
+      data: { encontrada: true, destino: { tipo: 'producto', productoId: 10 }, contexto: { campaniaSlug: 'ig-agosto', campanaId: 99 }, beneficio: { codigoDescuentoId: 4, codigo: 'VOLVE10' } },
     })
-    expect(JSON.stringify(body)).not.toContain('99')
+    expect(body.data).not.toHaveProperty('restauranteId')
   })
 
   test('resuelve tienda y carrito, y degrada configuraciones inválidas a tienda', async () => {
