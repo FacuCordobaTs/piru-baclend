@@ -32,7 +32,9 @@ describe('resumirResultadosMarketing', () => {
   test('concilia ventas pagadas sin contar dos veces atribución, eventos ni POS', () => {
     const resumen = resumirResultadosMarketing(datos)
     expect(resumen.metricas).toMatchObject({ ventas: 600, pedidos: 3, ticketPromedio: 200, revenueAtribuido: 300, descuentos: 30, costoMensajes: 1, inversionManual: 50, costoTotal: 61, retorno: 239 })
-    expect(resumen.funnel).toMatchObject({ session_start: 2, purchase: 2 })
+    // Las compras se concilian contra pedidos cobrados; no dependen de que el
+    // navegador haya logrado entregar el evento analítico.
+    expect(resumen.funnel).toMatchObject({ session_start: 2, purchase: 3 })
     expect(resumen.oportunidades).toMatchObject({ total: 1, porSegmento: { dormido: 1 } })
   })
 

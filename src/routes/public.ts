@@ -962,6 +962,13 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             if (!cupon || cupon.restauranteId !== restauranteId) {
                 return c.json({ message: 'Código de descuento inválido', success: false }, 400)
             }
+            const ahoraCupon = new Date()
+            if (!cupon.activo || (cupon.fechaInicio && new Date(cupon.fechaInicio) > ahoraCupon) || (cupon.fechaFin && new Date(cupon.fechaFin) < ahoraCupon)) {
+                return c.json({ message: 'El código de descuento no está vigente', success: false }, 400)
+            }
+            if (total < parseFloat(cupon.montoMinimo || '0')) {
+                return c.json({ message: `El código requiere un mínimo de $${parseFloat(cupon.montoMinimo || '0').toFixed(0)}`, success: false }, 400)
+            }
             let desc = 0
             if (cupon.tipo === 'porcentaje') desc = total * (parseFloat(cupon.valor) / 100)
             else desc = parseFloat(cupon.valor)
@@ -1433,6 +1440,13 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             const [cupon] = await db.select().from(CodigoDescuentoTable).where(eq(CodigoDescuentoTable.id, codigoDescuentoId)).limit(1)
             if (!cupon || cupon.restauranteId !== restauranteId) {
                 return c.json({ message: 'Código de descuento inválido', success: false }, 400)
+            }
+            const ahoraCupon = new Date()
+            if (!cupon.activo || (cupon.fechaInicio && new Date(cupon.fechaInicio) > ahoraCupon) || (cupon.fechaFin && new Date(cupon.fechaFin) < ahoraCupon)) {
+                return c.json({ message: 'El código de descuento no está vigente', success: false }, 400)
+            }
+            if (total < parseFloat(cupon.montoMinimo || '0')) {
+                return c.json({ message: `El código requiere un mínimo de $${parseFloat(cupon.montoMinimo || '0').toFixed(0)}`, success: false }, 400)
             }
             let desc = 0
             if (cupon.tipo === 'porcentaje') desc = total * (parseFloat(cupon.valor) / 100)

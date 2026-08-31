@@ -115,6 +115,7 @@ function dependenciasSmartLinks(overrides: Partial<DependenciasSmartLinksMarketi
       buscarCampanaActiva: async (username, slug) => username === 'pizzeria' && slug === 'ig-agosto'
         ? {
             restauranteId: 7, id: 99, slug, destinoTipo: 'producto', productoId: 10, carritoRep: null,
+            codigoDescuentoId: 4, codigoDescuento: 'VOLVE10',
             utmSource: 'instagram', utmMedium: 'social', utmCampaign: 'Agosto', utmTerm: null, utmContent: null,
           }
         : null,
@@ -136,7 +137,7 @@ describe('GET /public/marketing/campanas/:username/:slug', () => {
     const body = await response.json()
     expect(body).toMatchObject({
       success: true,
-      data: { encontrada: true, destino: { tipo: 'producto', productoId: 10 }, contexto: { campaniaSlug: 'ig-agosto' } },
+      data: { encontrada: true, destino: { tipo: 'producto', productoId: 10 }, contexto: { campaniaSlug: 'ig-agosto' }, beneficio: { codigoDescuentoId: 4, codigo: 'VOLVE10' } },
     })
     expect(JSON.stringify(body)).not.toContain('99')
   })
@@ -187,6 +188,7 @@ function dependenciasRecetasPublicas(overrides: Partial<DependenciasRecetasPubli
   const enlace = {
     restauranteId: 7, tokenHash: hashTokenMarketing(token), recetaCodigo: 'recuperar_habito',
     destinoTipo: 'carrito' as const, productoId: null, carritoRep: '12x2', clienteId: 11, textoSugerido: 'Dato privado',
+    codigoDescuentoId: 8, codigoDescuento: 'ANA10',
   }
   const deps: DependenciasRecetasPublicasMarketing & { contextos: any[]; setModuloActivo: (activo: boolean) => void } = {
     contextos,
@@ -211,7 +213,7 @@ describe('GET /public/marketing/recetas/:username/:token', () => {
     const response = await app.request(`/public/marketing/recetas/pizzeria/${token}?visitorId=visitor-1&sesionUuid=sesion-1&eventoUuid=evento-1`)
     expect(response.status).toBe(200)
     const body = await response.json()
-    expect(body).toMatchObject({ success: true, data: { encontrada: true, destino: { tipo: 'carrito', carritoRep: '12x2' }, contexto: { recetaCodigo: 'recuperar_habito' } } })
+    expect(body).toMatchObject({ success: true, data: { encontrada: true, destino: { tipo: 'carrito', carritoRep: '12x2' }, contexto: { recetaCodigo: 'recuperar_habito' }, beneficio: { codigoDescuentoId: 8, codigo: 'ANA10' } } })
     expect(JSON.stringify(body)).not.toContain('clienteId')
     expect(JSON.stringify(body)).not.toContain('Dato privado')
     expect(JSON.stringify(body)).not.toContain('tokenHash')

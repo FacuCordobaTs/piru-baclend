@@ -84,7 +84,10 @@ export function resumirResultadosMarketing(datos: DatosResultadosMarketing, filt
     .filter((evento) => evento.tipo === 'purchase' && idsSesionesOrganicas.has(evento.marketingSesionId) && evento.pedidoUnificadoId != null)
     .map((evento) => evento.pedidoUnificadoId!))
   const pedidosScope = filtros.fuente === 'organico'
-    ? pedidosPagados.filter((pedido) => idsPedidosOrganicos.has(pedido.id) && !atribucionPorPedido.has(pedido.id))
+    // Orgánico incluye también pedidos previos al tracking o cuyo navegador
+    // bloqueó analítica: la ausencia de una campaña atribuida es la definición
+    // comercial relevante, no la presencia de un evento técnico.
+    ? pedidosPagados.filter((pedido) => !atribucionPorPedido.has(pedido.id))
     : idsCampania
       ? pedidosPagados.filter((pedido) => idsCampania.has(atribucionPorPedido.get(pedido.id)?.campanaId ?? -1))
       : pedidosPagados
@@ -118,7 +121,14 @@ export function resumirResultadosMarketing(datos: DatosResultadosMarketing, filt
   const costoMensajes = redondear(contactos.filter((fila) => fila.canal === 'piru_whatsapp' && fila.estado === 'enviado').reduce((total, fila) => total + numero(fila.costoMensajes), 0))
   const costoTotal = redondear(inversion + costoMensajes + descuentosAtribuidos)
   const retorno = redondear(revenueAtribuido - costoTotal)
-  const funnel = Object.fromEntries(['session_start', 'product_view', 'add_to_cart', 'checkout_start', 'purchase'].map((tipo) => [tipo, new Set(eventos.filter((evento) => evento.tipo === tipo).map((evento) => evento.id)).size])) as Record<string, number>
+  const funnel = Object.fromEntries(['session_start', 'product_view', 'add_to_cart', 'checkout_start', 'purchase'].map((tipo) => [
+    tipo,
+    tipo === 'purchase'
+      ? pedidosUnicos.length
+      : tipo === 'session_start'
+        ? sesiones.length
+      : new Set(eventos.filter((evento) => evento.tipo === tipo).map((evento) => evento.id)).size,
+  ])) as Record<string, number>
   const campanas: ResultadoMarketing['campanas'] = !incluirCampanas || filtros.fuente === 'organico' ? [] : datos.campanas.filter((campana) => !idsCampania || idsCampania.has(campana.id)).map((campana) => {
     const resultado = resumirResultadosMarketing(datos, { ...filtros, fuente: undefined, campaniaId: campana.id }, false)
     return {

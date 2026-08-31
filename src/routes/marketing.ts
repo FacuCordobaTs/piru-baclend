@@ -220,11 +220,19 @@ export interface CampanaSmartLinkPublica {
   destinoTipo: 'tienda' | 'producto' | 'carrito'
   productoId: number | null
   carritoRep: string | null
+  codigoDescuentoId?: number | null
+  codigoDescuento?: string | null
   utmSource: string | null
   utmMedium: string | null
   utmCampaign: string | null
   utmTerm: string | null
   utmContent: string | null
+}
+
+function beneficioSmartLink(enlace: Pick<CampanaSmartLinkPublica, 'codigoDescuentoId' | 'codigoDescuento'>) {
+  return enlace.codigoDescuentoId != null && enlace.codigoDescuento
+    ? { codigoDescuentoId: enlace.codigoDescuentoId, codigo: enlace.codigoDescuento }
+    : undefined
 }
 
 export interface RepositorioSmartLinksMarketing {
@@ -301,6 +309,7 @@ export function crearMarketingSmartLinksRoute(dependencias: DependenciasSmartLin
       data: {
         encontrada: true,
         destino: destinoSmartLink(campana),
+        beneficio: beneficioSmartLink(campana),
         contexto: { campaniaSlug: campana.slug },
         utms: {
           utmSource: campana.utmSource,
@@ -326,6 +335,8 @@ function crearRepositorioSmartLinksDrizzle(): RepositorioSmartLinksMarketing {
         destinoTipo: MarketingCampanaTable.destinoTipo,
         productoId: MarketingCampanaTable.productoId,
         carritoRep: MarketingCampanaTable.carritoRep,
+        codigoDescuentoId: MarketingCampanaTable.codigoDescuentoId,
+        codigoDescuento: CodigoDescuentoTable.codigo,
         utmSource: MarketingCampanaTable.utmSource,
         utmMedium: MarketingCampanaTable.utmMedium,
         utmCampaign: MarketingCampanaTable.utmCampaign,
@@ -333,6 +344,11 @@ function crearRepositorioSmartLinksDrizzle(): RepositorioSmartLinksMarketing {
         utmContent: MarketingCampanaTable.utmContent,
       }).from(MarketingCampanaTable)
         .innerJoin(RestauranteTable, eq(MarketingCampanaTable.restauranteId, RestauranteTable.id))
+        .leftJoin(CodigoDescuentoTable, and(
+          eq(MarketingCampanaTable.codigoDescuentoId, CodigoDescuentoTable.id),
+          eq(MarketingCampanaTable.restauranteId, CodigoDescuentoTable.restauranteId),
+          eq(CodigoDescuentoTable.activo, true),
+        ))
         .where(and(
           eq(RestauranteTable.username, username),
           eq(MarketingCampanaTable.slug, slug),
@@ -365,6 +381,8 @@ export interface EnlaceRecetaPublico {
   destinoTipo: 'tienda' | 'producto' | 'carrito'
   productoId: number | null
   carritoRep: string | null
+  codigoDescuentoId?: number | null
+  codigoDescuento?: string | null
 }
 
 export interface RepositorioRecetasPublicasMarketing {
@@ -425,6 +443,7 @@ export function crearMarketingRecetasPublicasRoute(dependencias: DependenciasRec
       data: {
         encontrada: true,
         destino: destinoSmartLink(enlace),
+        beneficio: beneficioSmartLink(enlace),
         // La receta es contexto comercial, no identidad. El cliente asociado
         // al enlace nunca cruza el borde público.
         contexto: enlace.recetaCodigo ? { recetaCodigo: enlace.recetaCodigo } : undefined,
@@ -445,8 +464,15 @@ function crearRepositorioRecetasPublicasDrizzle(): RepositorioRecetasPublicasMar
         destinoTipo: MarketingEnlaceTable.destinoTipo,
         productoId: MarketingEnlaceTable.productoId,
         carritoRep: MarketingEnlaceTable.carritoRep,
+        codigoDescuentoId: MarketingEnlaceTable.codigoDescuentoId,
+        codigoDescuento: CodigoDescuentoTable.codigo,
       }).from(MarketingEnlaceTable)
         .innerJoin(RestauranteTable, eq(MarketingEnlaceTable.restauranteId, RestauranteTable.id))
+        .leftJoin(CodigoDescuentoTable, and(
+          eq(MarketingEnlaceTable.codigoDescuentoId, CodigoDescuentoTable.id),
+          eq(MarketingEnlaceTable.restauranteId, CodigoDescuentoTable.restauranteId),
+          eq(CodigoDescuentoTable.activo, true),
+        ))
         .where(and(
           eq(RestauranteTable.username, username),
           eq(MarketingEnlaceTable.tokenHash, tokenHash),
