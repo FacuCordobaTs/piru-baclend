@@ -353,6 +353,7 @@ export function crearMarketingSmartLinksRoute(dependencias: DependenciasSmartLin
         destino: destinoSmartLink(campana),
         beneficio: beneficioSmartLink(campana),
         campana: campana.productoId == null ? undefined : {
+          campanaId: campana.id,
           nombre: campana.nombre,
           slug: campana.slug,
           productoId: campana.productoId,
@@ -1420,7 +1421,7 @@ function crearRepositorioResultadosDrizzle(): RepositorioResultadosMarketing {
         db.select({ id: MarketingCampanaTable.id, nombre: MarketingCampanaTable.nombre, slug: MarketingCampanaTable.slug, tipo: MarketingCampanaTable.tipo, productoId: MarketingCampanaTable.productoId, inversionManual: MarketingCampanaTable.inversionManual, usaGrupoControl: MarketingCampanaTable.usaGrupoControl }).from(MarketingCampanaTable).where(eq(MarketingCampanaTable.restauranteId, restauranteId)),
         db.select({ pedidoUnificadoId: PedidoMarketingAtribucionTable.pedidoUnificadoId, campanaId: PedidoMarketingAtribucionTable.campanaId, recetaCodigo: PedidoMarketingAtribucionTable.recetaCodigo, revenueAtribuido: PedidoMarketingAtribucionTable.revenueAtribuido, descuentoAtribuido: PedidoMarketingAtribucionTable.descuentoAtribuido, createdAt: PedidoMarketingAtribucionTable.createdAt }).from(PedidoMarketingAtribucionTable).where(eq(PedidoMarketingAtribucionTable.restauranteId, restauranteId)),
         db.select({ id: MarketingSesionTable.id, firstTouchTipo: MarketingSesionTable.firstTouchTipo, lastTouchTipo: MarketingSesionTable.lastTouchTipo, firstTouchCampanaId: MarketingSesionTable.firstTouchCampanaId, lastTouchCampanaId: MarketingSesionTable.lastTouchCampanaId, createdAt: MarketingSesionTable.createdAt }).from(MarketingSesionTable).where(eq(MarketingSesionTable.restauranteId, restauranteId)),
-        db.select({ id: MarketingEventoTable.id, marketingSesionId: MarketingEventoTable.marketingSesionId, tipo: MarketingEventoTable.tipo, productoId: MarketingEventoTable.productoId, pedidoUnificadoId: MarketingEventoTable.pedidoUnificadoId, ocurridoAt: MarketingEventoTable.ocurridoAt }).from(MarketingEventoTable).where(eq(MarketingEventoTable.restauranteId, restauranteId)),
+        db.select({ id: MarketingEventoTable.id, marketingSesionId: MarketingEventoTable.marketingSesionId, sesionUuid: MarketingEventoTable.sesionUuid, campanaId: MarketingEventoTable.campanaId, tipo: MarketingEventoTable.tipo, productoId: MarketingEventoTable.productoId, pedidoUnificadoId: MarketingEventoTable.pedidoUnificadoId, ocurridoAt: MarketingEventoTable.ocurridoAt }).from(MarketingEventoTable).where(eq(MarketingEventoTable.restauranteId, restauranteId)),
         db.select({ id: MarketingContactoTable.id, enlaceId: MarketingContactoTable.enlaceId, canal: MarketingContactoTable.canal, estado: MarketingContactoTable.estado, costoMensajes: MarketingContactoTable.costoMensajes, createdAt: MarketingContactoTable.createdAt }).from(MarketingContactoTable).where(eq(MarketingContactoTable.restauranteId, restauranteId)),
         db.select({ id: MarketingEnlaceTable.id, campanaId: MarketingEnlaceTable.campanaId, recetaCodigo: MarketingEnlaceTable.recetaCodigo, createdAt: MarketingEnlaceTable.createdAt }).from(MarketingEnlaceTable).where(eq(MarketingEnlaceTable.restauranteId, restauranteId)),
       ])

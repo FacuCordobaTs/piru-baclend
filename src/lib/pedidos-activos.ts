@@ -11,6 +11,8 @@ import {
   sucursal as SucursalTable,
   repartidor as RepartidorTable,
   mesaLocal as MesaLocalTable,
+  pedidoMarketingAtribucion as PedidoMarketingAtribucionTable,
+  marketingCampana as MarketingCampanaTable,
 } from '../db/schema'
 import {
   rowToPagoRow,
@@ -90,6 +92,9 @@ export const PEDIDO_LIST_PROJECTION = {
   grupal: PedidoUnificadoTable.grupal,
   creadoPorIa: PedidoUnificadoTable.creadoPorIa,
   anotadoManualmente: PedidoUnificadoTable.anotadoManualmente,
+  campanaId: PedidoMarketingAtribucionTable.campanaId,
+  campanaNombre: MarketingCampanaTable.nombre,
+  campanaSlug: MarketingCampanaTable.slug,
 } as const
 
 /** WHERE compartido por /list y /activos (incluye la lógica de ocultar impagos). */
@@ -227,6 +232,14 @@ export async function selectPedidosEnriquecidos(
     .leftJoin(SucursalTable, eq(PedidoUnificadoTable.sucursalId, SucursalTable.id))
     .leftJoin(RepartidorTable, eq(PedidoUnificadoTable.repartidorId, RepartidorTable.id))
     .leftJoin(MesaLocalTable, eq(PedidoUnificadoTable.mesaLocalId, MesaLocalTable.id))
+    .leftJoin(PedidoMarketingAtribucionTable, and(
+      eq(PedidoUnificadoTable.id, PedidoMarketingAtribucionTable.pedidoUnificadoId),
+      eq(PedidoUnificadoTable.restauranteId, PedidoMarketingAtribucionTable.restauranteId),
+    ))
+    .leftJoin(MarketingCampanaTable, and(
+      eq(PedidoMarketingAtribucionTable.campanaId, MarketingCampanaTable.id),
+      eq(PedidoMarketingAtribucionTable.restauranteId, MarketingCampanaTable.restauranteId),
+    ))
     .where(whereCondition)
     .orderBy(desc(PedidoUnificadoTable.createdAt))
   if (opts?.limit != null) q = q.limit(opts.limit)
@@ -260,6 +273,23 @@ export async function selectPedidosEnriquecidos(
       return { ...pedido, items, totalItems: items.reduce((s: number, i: any) => s + (i.cantidad || 1), 0) }
     })
   )
+}
+
+export async function buildCampanaPedido(db: Db, restauranteId: number, pedidoId: number) {
+  const [campana] = await db.select({
+    campanaId: PedidoMarketingAtribucionTable.campanaId,
+    campanaNombre: MarketingCampanaTable.nombre,
+    campanaSlug: MarketingCampanaTable.slug,
+  }).from(PedidoMarketingAtribucionTable)
+    .leftJoin(MarketingCampanaTable, and(
+      eq(PedidoMarketingAtribucionTable.campanaId, MarketingCampanaTable.id),
+      eq(PedidoMarketingAtribucionTable.restauranteId, MarketingCampanaTable.restauranteId),
+    ))
+    .where(and(
+      eq(PedidoMarketingAtribucionTable.restauranteId, restauranteId),
+      eq(PedidoMarketingAtribucionTable.pedidoUnificadoId, pedidoId),
+    )).limit(1)
+  return campana ?? { campanaId: null, campanaNombre: null, campanaSlug: null }
 }
 
 export async function buildPedidoListRow(db: Db, pedidoId: number) {

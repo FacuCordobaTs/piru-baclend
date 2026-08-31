@@ -691,7 +691,11 @@ export const marketingSesion = mysqlTable("marketing_sesion", {
 export const marketingEvento = mysqlTable("marketing_evento", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
-  marketingSesionId: int("marketing_sesion_id").references(() => marketingSesion.id).notNull(),
+  // La sesión mejora el análisis, pero los eventos con touch explícito deben
+  // sobrevivir aunque storage/sesión fallen en el navegador.
+  marketingSesionId: int("marketing_sesion_id").references(() => marketingSesion.id),
+  sesionUuid: varchar("sesion_uuid", { length: 64 }),
+  campanaId: int("campana_id").references(() => marketingCampana.id),
   eventoUuid: varchar("evento_uuid", { length: 64 }).notNull(),
   tipo: mysqlEnum("tipo", [
     "session_start",
@@ -710,6 +714,8 @@ export const marketingEvento = mysqlTable("marketing_evento", {
 }, (table) => [
   uniqueIndex("uq_marketing_evento_restaurante_uuid").on(table.restauranteId, table.eventoUuid),
   index("idx_marketing_evento_sesion_fecha").on(table.marketingSesionId, table.ocurridoAt),
+  index("idx_marketing_evento_campana_fecha").on(table.restauranteId, table.campanaId, table.ocurridoAt),
+  index("idx_marketing_evento_sesion_uuid").on(table.restauranteId, table.sesionUuid),
   index("idx_marketing_evento_restaurante_tipo_fecha").on(table.restauranteId, table.tipo, table.ocurridoAt),
   index("idx_marketing_evento_pedido").on(table.pedidoUnificadoId),
   index("idx_marketing_evento_producto").on(table.productoId),

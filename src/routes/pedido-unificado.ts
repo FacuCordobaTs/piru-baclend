@@ -41,6 +41,7 @@ import {
   selectPedidosEnriquecidos,
   enrichItemsWithProductInfo,
   buildClienteContexto,
+  buildCampanaPedido,
 } from '../lib/pedidos-activos'
 import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
@@ -353,13 +354,14 @@ export async function respuestaPedidoEditable(db: any, restauranteId: number, pe
     .where(eq(ItemPedidoUnificadoTable.pedidoId, pedidoId))
   const items = await enrichItemsWithProductInfo(db, itemsRaw)
   const motivosNoEditable = motivosPedidoNoEditable(pedido)
+  const campana = await buildCampanaPedido(db, restauranteId, pedidoId)
   let mesaNombre: string | null = null
   if (pedido.mesaLocalId) {
     const [mesa] = await db.select({ nombre: MesaLocalTable.nombre }).from(MesaLocalTable)
       .where(and(eq(MesaLocalTable.id, pedido.mesaLocalId), eq(MesaLocalTable.restauranteId, restauranteId))).limit(1)
     mesaNombre = mesa?.nombre ?? null
   }
-  return { ...pedido, mesaNombre, items, totalItems: items.reduce((sum, item: any) => sum + (item.cantidad || 1), 0), version: pedido.version, editable: motivosNoEditable.length === 0, motivosNoEditable }
+  return { ...pedido, ...campana, mesaNombre, items, totalItems: items.reduce((sum, item: any) => sum + (item.cantidad || 1), 0), version: pedido.version, editable: motivosNoEditable.length === 0, motivosNoEditable }
 }
 
 export async function ejecutarMutacionPos(

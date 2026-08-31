@@ -16,7 +16,7 @@ import {
 
 class RepositorioEnMemoria implements RepositorioMarketingTracking {
   sesiones: SesionMarketingPersistida[] = []
-  eventos: Array<{ restauranteId: number; sesionId: number; evento: EventoMarketingValidado }> = []
+  eventos: Array<{ restauranteId: number; sesionId: number | null; evento: EventoMarketingValidado }> = []
   private siguienteSesionId = 1
 
   async buscarSesion(restauranteId: number, sesionUuid: string) {
@@ -38,7 +38,7 @@ class RepositorioEnMemoria implements RepositorioMarketingTracking {
     return existente ? { sesionId: existente.sesionId } : null
   }
 
-  async insertarEvento(restauranteId: number, sesionId: number, evento: EventoMarketingValidado) {
+  async insertarEvento(restauranteId: number, sesionId: number | null, evento: EventoMarketingValidado) {
     if (await this.buscarEvento(restauranteId, evento.eventoUuid)) return false
     this.eventos.push({ restauranteId, sesionId, evento })
     return true
@@ -164,5 +164,20 @@ describe('marketing tracking', () => {
       visitorId: 'visitor-2',
     })])).rejects.toMatchObject({ codigo: 'VISITOR_NO_COINCIDE' })
     expect(repo.eventos).toHaveLength(1)
+  })
+
+  test('conserva un evento con campaña explícita aunque no pueda crear la sesión', async () => {
+    const repo = new RepositorioEnMemoria()
+    repo.crearOEncontrarSesion = async () => { throw new Error('tabla de sesiones no disponible') }
+
+    const [resultado] = await procesarBatchEventosMarketing(repo, 1, [evento({
+      tipo: 'add_to_cart',
+      productoId: 50,
+      cantidad: 1,
+      touch: { tipo: 'campana', campanaId: 7 },
+    })])
+
+    expect(resultado).toMatchObject({ estado: 'insertado', sesionId: null })
+    expect(repo.eventos[0]).toMatchObject({ sesionId: null, evento: { sesionUuid: 'sesion-1' } })
   })
 })

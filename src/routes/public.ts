@@ -1158,6 +1158,13 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             }
         }
 
+        // Persistir Growth antes del primer upsert por WebSocket: así el
+        // Dashboard recibe el pedido ya etiquetado con su campaña.
+        const atribucionMarketing = await atribuirPedidoMarketingBestEffort(db, {
+            restauranteId, pedidoUnificadoId: pedidoId, clienteId,
+            visitorId, sesionUuid, campaniaSlug, recetaToken,
+        })
+
         const waitToPay = debeEsperarWebhookParaNotificar(metodoPagoEfectivoDelivery)
         try {
             const restaurante = await db.select({
@@ -1253,11 +1260,6 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 shouldPrint: !waitToPay
             })
         }
-
-        const atribucionMarketing = await atribuirPedidoMarketingBestEffort(db, {
-            restauranteId, pedidoUnificadoId: pedidoId, clienteId,
-            visitorId, sesionUuid, campaniaSlug, recetaToken,
-        })
 
         return c.json({
             message: 'Pedido de delivery creado correctamente',
@@ -1662,6 +1664,13 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             }
         }
 
+        // Persistir Growth antes del primer upsert por WebSocket: así el
+        // Dashboard recibe el pedido ya etiquetado con su campaña.
+        const atribucionMarketing = await atribuirPedidoMarketingBestEffort(db, {
+            restauranteId, pedidoUnificadoId: pedidoId, clienteId,
+            visitorId, sesionUuid, campaniaSlug, recetaToken,
+        })
+
         const waitToPay = debeEsperarWebhookParaNotificar(metodoPagoEfectivo)
         try {
             const restaurante = await db.select({
@@ -1750,11 +1759,6 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 shouldPrint: !waitToPay
             })
         }
-
-        const atribucionMarketing = await atribuirPedidoMarketingBestEffort(db, {
-            restauranteId, pedidoUnificadoId: pedidoId, clienteId,
-            visitorId, sesionUuid, campaniaSlug, recetaToken,
-        })
 
         return c.json({
             message: 'Pedido de takeaway creado correctamente',

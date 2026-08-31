@@ -60,4 +60,25 @@ describe('resumirResultadosMarketing', () => {
     expect(resumen.funnel).toMatchObject({ session_start: 1, purchase: 1 })
     expect(resumen.campanas).toEqual([])
   })
+
+  test('arma el embudo por campana_id y sesion_uuid cuando la sesión SQL no se materializó', () => {
+    const sinSesion: DatosResultadosMarketing = {
+      ...datos,
+      pedidos: [],
+      atribuciones: [],
+      sesiones: [],
+      contactos: [],
+      enlaces: [],
+      oportunidades: [],
+      eventos: [
+        { id: 20, marketingSesionId: null, sesionUuid: 'fallback-1', campanaId: 7, tipo: 'session_start', ocurridoAt: fecha(1) },
+        { id: 21, marketingSesionId: null, sesionUuid: 'fallback-1', campanaId: 7, tipo: 'add_to_cart', productoId: 50, ocurridoAt: fecha(1) },
+        { id: 22, marketingSesionId: null, sesionUuid: 'fallback-1', campanaId: 7, tipo: 'checkout_start', ocurridoAt: fecha(1) },
+      ],
+    }
+
+    const resumen = resumirResultadosMarketing(sinSesion, { campaniaId: 7 })
+    expect(resumen.metricas.sesiones).toBe(1)
+    expect(resumen.funnel).toMatchObject({ session_start: 1, add_to_cart: 1, checkout_start: 1 })
+  })
 })

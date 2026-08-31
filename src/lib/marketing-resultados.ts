@@ -23,7 +23,9 @@ export interface SesionResultadoMarketing {
 }
 export interface EventoResultadoMarketing {
   id: number
-  marketingSesionId: number
+  marketingSesionId: number | null
+  sesionUuid?: string | null
+  campanaId?: number | null
   tipo: 'session_start' | 'product_view' | 'add_to_cart' | 'checkout_start' | 'purchase'
   productoId?: number | null
   pedidoUnificadoId?: number | null
@@ -82,7 +84,8 @@ export function resumirResultadosMarketing(datos: DatosResultadosMarketing, filt
     : []
   const idsSesionesOrganicas = new Set(sesionesOrganicas.map((sesion) => sesion.id))
   const idsPedidosOrganicos = new Set(datos.eventos
-    .filter((evento) => evento.tipo === 'purchase' && idsSesionesOrganicas.has(evento.marketingSesionId) && evento.pedidoUnificadoId != null)
+    .filter((evento) => evento.tipo === 'purchase' && evento.marketingSesionId != null
+      && idsSesionesOrganicas.has(evento.marketingSesionId) && evento.pedidoUnificadoId != null)
     .map((evento) => evento.pedidoUnificadoId!))
   const pedidosScope = filtros.fuente === 'organico'
     // Orgánico incluye también pedidos previos al tracking o cuyo navegador
@@ -100,7 +103,23 @@ export function resumirResultadosMarketing(datos: DatosResultadosMarketing, filt
       ? idsSesionesOrganicas.has(fila.id)
       : (!idsCampania || idsCampania.has(fila.firstTouchCampanaId ?? -1) || idsCampania.has(fila.lastTouchCampanaId ?? -1))))
   const idsSesiones = new Set(sesiones.map((fila) => fila.id))
-  const eventos = datos.eventos.filter((fila) => idsSesiones.has(fila.marketingSesionId) && enRango(fila.ocurridoAt, filtros))
+  const eventos = datos.eventos.filter((fila) => enRango(fila.ocurridoAt, filtros) && (
+    filtros.fuente === 'organico'
+      ? fila.campanaId == null && fila.marketingSesionId != null && idsSesionesOrganicas.has(fila.marketingSesionId)
+      : idsCampania
+        ? idsCampania.has(fila.campanaId ?? -1)
+          || (fila.marketingSesionId != null && idsSesiones.has(fila.marketingSesionId))
+        : true
+  ))
+  const claveSesionEvento = (evento: EventoResultadoMarketing) => evento.marketingSesionId != null
+    ? `id:${evento.marketingSesionId}`
+    : evento.sesionUuid
+      ? `uuid:${evento.sesionUuid}`
+      : `evento:${evento.id}`
+  const clavesSesiones = new Set([
+    ...sesiones.map((sesion) => `id:${sesion.id}`),
+    ...eventos.map(claveSesionEvento),
+  ])
   const enlacesRelacionados = filtros.fuente === 'organico'
     ? []
     : datos.enlaces.filter((fila) => !idsCampania || idsCampania.has(fila.campanaId ?? -1))
@@ -129,14 +148,14 @@ export function resumirResultadosMarketing(datos: DatosResultadosMarketing, filt
     tipo === 'purchase'
       ? pedidosUnicos.length
       : tipo === 'session_start'
-        ? sesiones.length
-      : new Set(eventos.filter((evento) => evento.tipo === tipo).map((evento) => evento.marketingSesionId)).size,
+        ? clavesSesiones.size
+      : new Set(eventos.filter((evento) => evento.tipo === tipo).map(claveSesionEvento)).size,
   ])) as Record<string, number>
   const campanaUnica = filtros.campaniaId == null ? null : datos.campanas.find((campana) => campana.id === filtros.campaniaId) ?? null
   const sesionesQueAgregaronPromo = new Set(eventos.filter((evento) => evento.tipo === 'add_to_cart'
-    && campanaUnica?.productoId != null && evento.productoId === campanaUnica.productoId).map((evento) => evento.marketingSesionId))
+    && campanaUnica?.productoId != null && evento.productoId === campanaUnica.productoId).map(claveSesionEvento))
   const sesionesQueAgregaronOtro = new Set(eventos.filter((evento) => evento.tipo === 'add_to_cart'
-    && campanaUnica?.productoId != null && evento.productoId != null && evento.productoId !== campanaUnica.productoId).map((evento) => evento.marketingSesionId))
+    && campanaUnica?.productoId != null && evento.productoId != null && evento.productoId !== campanaUnica.productoId).map(claveSesionEvento))
   funnel.add_other_product = new Set([...sesionesQueAgregaronPromo].filter((id) => sesionesQueAgregaronOtro.has(id))).size
   const campanas: ResultadoMarketing['campanas'] = !incluirCampanas || filtros.fuente === 'organico' ? [] : datos.campanas.filter((campana) => !idsCampania || idsCampania.has(campana.id)).map((campana) => {
     const resultado = resumirResultadosMarketing(datos, { ...filtros, fuente: undefined, campaniaId: campana.id }, false)
@@ -156,8 +175,8 @@ export function resumirResultadosMarketing(datos: DatosResultadosMarketing, filt
     filtros: { from: filtros.from?.toISOString() ?? null, to: filtros.to?.toISOString() ?? null, campaniaId: filtros.campaniaId ?? null, sucursalId: filtros.sucursalId ?? null },
     metricas: {
       ventas, pedidos: pedidosUnicos.length, ticketPromedio: pedidosUnicos.length ? redondear(ventas / pedidosUnicos.length) : 0,
-      clientesNuevos: nuevos, clientesRecurrentes: Math.max(0, clientes.size - nuevos), sesiones: sesiones.length,
-      conversion: sesiones.length ? redondear((pedidosUnicos.length / sesiones.length) * 100) : 0,
+      clientesNuevos: nuevos, clientesRecurrentes: Math.max(0, clientes.size - nuevos), sesiones: clavesSesiones.size,
+      conversion: clavesSesiones.size ? redondear((pedidosUnicos.length / clavesSesiones.size) * 100) : 0,
       revenueAtribuido, descuentos, descuentosAtribuidos, enlacesCreados: enlaces.length, contactos: contactos.length,
       mensajesPagos: contactos.filter((fila) => fila.canal === 'piru_whatsapp' && fila.estado === 'enviado').length,
       costoMensajes, inversionManual: inversion, costoTotal, retorno,

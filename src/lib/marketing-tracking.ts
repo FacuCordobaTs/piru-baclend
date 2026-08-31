@@ -109,10 +109,10 @@ export interface CambiosSesionMarketing {
 export interface RepositorioMarketingTracking {
   buscarSesion(restauranteId: number, sesionUuid: string): Promise<SesionMarketingPersistida | null>
   crearOEncontrarSesion(sesion: NuevaSesionMarketing): Promise<SesionMarketingPersistida>
-  buscarEvento(restauranteId: number, eventoUuid: string): Promise<{ sesionId: number } | null>
+  buscarEvento(restauranteId: number, eventoUuid: string): Promise<{ sesionId: number | null } | null>
   insertarEvento(
     restauranteId: number,
-    sesionId: number,
+    sesionId: number | null,
     evento: EventoMarketingValidado,
   ): Promise<boolean>
   actualizarSesionSiEsMasReciente(
@@ -142,7 +142,7 @@ export class ErrorMarketingTracking extends Error {
 export interface ResultadoEventoMarketing {
   eventoUuid: string
   estado: 'insertado' | 'duplicado'
-  sesionId: number
+  sesionId: number | null
 }
 
 const TOUCH_DIRECTO: TouchMarketing = {
@@ -351,21 +351,31 @@ export async function procesarBatchEventosMarketing(
       continue
     }
 
-    let sesion = await repositorio.buscarSesion(restauranteId, evento.sesionUuid)
-    if (!sesion) sesion = await repositorio.crearOEncontrarSesion(nuevaSesion(restauranteId, evento))
+    let sesion: SesionMarketingPersistida | null = null
+    try {
+      sesion = await repositorio.buscarSesion(restauranteId, evento.sesionUuid)
+      if (!sesion) sesion = await repositorio.crearOEncontrarSesion(nuevaSesion(restauranteId, evento))
+    } catch (error) {
+      // El link público ya resolvió y validó la campaña. Si por una migración
+      // incompleta o un fallo transitorio no se puede materializar la sesión,
+      // el evento conserva campana_id + sesion_uuid y no se pierde el embudo.
+      if (evento.touch.tipo !== 'campana') throw error
+      console.error('[marketing] se registra evento de campaña sin sesión materializada', error)
+      sesion = null
+    }
 
-    if (sesion.restauranteId !== restauranteId) {
+    if (sesion && sesion.restauranteId !== restauranteId) {
       throw new ErrorMarketingTracking('EVENTO_INVALIDO', 'la sesión no pertenece al restaurante')
     }
-    if (sesion.visitorId !== evento.visitorId) {
+    if (sesion && sesion.visitorId !== evento.visitorId) {
       throw new ErrorMarketingTracking('VISITOR_NO_COINCIDE', 'visitorId no coincide con la sesión')
     }
-    if (sesionEstaExpirada(sesion, evento.ocurridoAt)) {
+    if (sesion && sesionEstaExpirada(sesion, evento.ocurridoAt)) {
       throw new ErrorMarketingTracking('SESION_EXPIRADA', 'la sesión de marketing expiró')
     }
 
-    const insertado = await repositorio.insertarEvento(restauranteId, sesion.id, evento)
-    if (insertado) {
+    const insertado = await repositorio.insertarEvento(restauranteId, sesion?.id ?? null, evento)
+    if (insertado && sesion) {
       const cambios = resolverCambiosSesion(sesion, evento)
       await repositorio.actualizarSesionSiEsMasReciente(restauranteId, sesion.id, cambios)
       sesion = { ...sesion, ...cambios }
@@ -373,7 +383,7 @@ export async function procesarBatchEventosMarketing(
     resultados.push({
       eventoUuid: evento.eventoUuid,
       estado: insertado ? 'insertado' : 'duplicado',
-      sesionId: sesion.id,
+      sesionId: sesion?.id ?? null,
     })
   }
   return resultados
@@ -428,6 +438,8 @@ export function crearRepositorioMarketingTracking(db: Db): RepositorioMarketingT
       const result = await db.insert(MarketingEventoTable).values({
         restauranteId,
         marketingSesionId: sesionId,
+        sesionUuid: evento.sesionUuid,
+        campanaId: evento.touch.tipo === 'campana' ? evento.touch.campanaId : null,
         eventoUuid: evento.eventoUuid,
         tipo: evento.tipo,
         productoId: evento.productoId,
