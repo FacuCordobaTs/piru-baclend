@@ -9,7 +9,7 @@ const datos: DatosResultadosMarketing = {
     { id: 3, clienteId: 11, sucursalId: 2, total: '300', montoDescuento: '20', createdAt: fecha(2), pagado: true },
     { id: 4, clienteId: 12, sucursalId: 1, total: '900', montoDescuento: '0', createdAt: fecha(2), pagado: false },
   ],
-  campanas: [{ id: 7, nombre: 'Instagram', slug: 'ig', tipo: 'adquisicion', inversionManual: '50', usaGrupoControl: true }],
+  campanas: [{ id: 7, nombre: 'Instagram', slug: 'ig', tipo: 'adquisicion', productoId: 50, inversionManual: '50', usaGrupoControl: true }],
   atribuciones: [
     { pedidoUnificadoId: 1, campanaId: 7, recetaCodigo: null, revenueAtribuido: '100', descuentoAtribuido: '10', createdAt: fecha(1) },
     { pedidoUnificadoId: 2, campanaId: 7, recetaCodigo: 'segunda_compra', revenueAtribuido: '200', descuentoAtribuido: '0', createdAt: fecha(2) },
@@ -22,6 +22,9 @@ const datos: DatosResultadosMarketing = {
     { id: 1, marketingSesionId: 1, tipo: 'session_start', ocurridoAt: fecha(1) }, { id: 2, marketingSesionId: 1, tipo: 'purchase', ocurridoAt: fecha(1) },
     { id: 3, marketingSesionId: 2, tipo: 'session_start', ocurridoAt: fecha(2) },
     { id: 4, marketingSesionId: 2, tipo: 'purchase', pedidoUnificadoId: 3, ocurridoAt: fecha(2) },
+    { id: 5, marketingSesionId: 1, tipo: 'add_to_cart', productoId: 50, ocurridoAt: fecha(1) },
+    { id: 6, marketingSesionId: 1, tipo: 'add_to_cart', productoId: 51, ocurridoAt: fecha(1) },
+    { id: 7, marketingSesionId: 1, tipo: 'add_to_cart', productoId: 51, ocurridoAt: fecha(1) },
   ],
   enlaces: [{ id: 1, campanaId: 7, recetaCodigo: null, createdAt: fecha(1) }],
   contactos: [{ id: 1, enlaceId: 1, canal: 'piru_whatsapp', estado: 'enviado', costoMensajes: '1', createdAt: fecha(2) }],
@@ -41,6 +44,7 @@ describe('resumirResultadosMarketing', () => {
   test('filtra campaña sin confundir atribuido con incremental ni incluir ventas POS/directas', () => {
     const resumen = resumirResultadosMarketing(datos, { campaniaId: 7, sucursalId: 1 })
     expect(resumen.metricas).toMatchObject({ ventas: 300, pedidos: 2, revenueAtribuido: 300, clientesNuevos: 1, clientesRecurrentes: 0 })
+    expect(resumen.funnel).toMatchObject({ add_to_cart: 1, add_other_product: 1 })
     expect(resumen.incremental).toMatchObject({ disponible: false })
     expect(resumen.campanas[0]).toMatchObject({ id: 7, incremental: { disponible: false } })
   })

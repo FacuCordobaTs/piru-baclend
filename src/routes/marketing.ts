@@ -26,7 +26,7 @@ import {
   type EventoMarketingInput,
   type ResultadoEventoMarketing,
 } from '../lib/marketing-tracking'
-import { and, desc, eq, gt, gte, inArray, isNull, ne, or } from 'drizzle-orm'
+import { and, desc, eq, gt, gte, inArray, isNull, ne, or, sql } from 'drizzle-orm'
 import { authMiddleware } from '../middleware/auth'
 import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS } from '../lib/modulos'
@@ -216,12 +216,19 @@ export const marketingRoute = crearMarketingRoute({
 export interface CampanaSmartLinkPublica {
   restauranteId: number
   id: number
+  nombre: string
   slug: string
   destinoTipo: 'tienda' | 'producto' | 'carrito'
   productoId: number | null
   carritoRep: string | null
   codigoDescuentoId?: number | null
   codigoDescuento?: string | null
+  descuentoProductoPorcentaje: number
+  limiteUsos: number | null
+  usosActuales: number
+  fechaInicio: Date | null
+  fechaFin: Date | null
+  visitas: number
   utmSource: string | null
   utmMedium: string | null
   utmCampaign: string | null
@@ -250,6 +257,7 @@ export interface ContextoSmartLinkMarketing {
 export interface DependenciasSmartLinksMarketing {
   repositorio: RepositorioSmartLinksMarketing
   enriquecerContexto: (contexto: ContextoSmartLinkMarketing) => Promise<void>
+  ahora?: () => Date
 }
 
 const smartLinkParamsSchema = z.object({
@@ -288,10 +296,16 @@ export function crearMarketingSmartLinksRoute(dependencias: DependenciasSmartLin
   route.get('/marketing/campanas/:username/:slug', zValidator('param', smartLinkParamsSchema), async (c) => {
     const { username, slug } = c.req.valid('param')
     const campana = await dependencias.repositorio.buscarCampanaActiva(username, slug)
+    const ahora = dependencias.ahora?.() ?? new Date()
+    const vigente = Boolean(campana
+      && (campana.destinoTipo !== 'producto' || campana.productoId != null)
+      && (!campana.fechaInicio || campana.fechaInicio <= ahora)
+      && (!campana.fechaFin || campana.fechaFin >= ahora)
+      && (campana.limiteUsos == null || campana.usosActuales < campana.limiteUsos))
 
     // Un link retirado, inexistente o de otro tenant se comporta igual: abre
     // la tienda sin revelar si la campaña existió ni sus identificadores.
-    if (!campana) return c.json({ success: true, data: { encontrada: false, destino: { tipo: 'tienda' } } })
+    if (!campana || !vigente) return c.json({ success: true, data: { encontrada: false, destino: { tipo: 'tienda' } } })
 
     const contexto = contextoSmartLink(c.req.query(), campana)
     if (contexto) {
@@ -310,6 +324,18 @@ export function crearMarketingSmartLinksRoute(dependencias: DependenciasSmartLin
         encontrada: true,
         destino: destinoSmartLink(campana),
         beneficio: beneficioSmartLink(campana),
+        campana: campana.productoId == null ? undefined : {
+          nombre: campana.nombre,
+          slug: campana.slug,
+          productoId: campana.productoId,
+          descuentoPorcentaje: campana.descuentoProductoPorcentaje,
+          limiteUsos: campana.limiteUsos,
+          usosActuales: campana.usosActuales,
+          usosRestantes: campana.limiteUsos == null ? null : Math.max(0, campana.limiteUsos - campana.usosActuales),
+          fechaInicio: campana.fechaInicio?.toISOString() ?? null,
+          fechaFin: campana.fechaFin?.toISOString() ?? null,
+          visitas: campana.visitas,
+        },
         contexto: { campaniaSlug: campana.slug },
         utms: {
           utmSource: campana.utmSource,
@@ -331,12 +357,19 @@ function crearRepositorioSmartLinksDrizzle(): RepositorioSmartLinksMarketing {
       const [campana] = await db.select({
         restauranteId: MarketingCampanaTable.restauranteId,
         id: MarketingCampanaTable.id,
+        nombre: MarketingCampanaTable.nombre,
         slug: MarketingCampanaTable.slug,
         destinoTipo: MarketingCampanaTable.destinoTipo,
         productoId: MarketingCampanaTable.productoId,
         carritoRep: MarketingCampanaTable.carritoRep,
         codigoDescuentoId: MarketingCampanaTable.codigoDescuentoId,
         codigoDescuento: CodigoDescuentoTable.codigo,
+        descuentoProductoPorcentaje: MarketingCampanaTable.descuentoProductoPorcentaje,
+        limiteUsos: MarketingCampanaTable.limiteUsos,
+        usosActuales: MarketingCampanaTable.usosActuales,
+        fechaInicio: MarketingCampanaTable.fechaInicio,
+        fechaFin: MarketingCampanaTable.fechaFin,
+        visitas: MarketingCampanaTable.visitas,
         utmSource: MarketingCampanaTable.utmSource,
         utmMedium: MarketingCampanaTable.utmMedium,
         utmCampaign: MarketingCampanaTable.utmCampaign,
@@ -362,14 +395,48 @@ function crearRepositorioSmartLinksDrizzle(): RepositorioSmartLinksMarketing {
 const marketingSmartLinksRoute = crearMarketingSmartLinksRoute({
   repositorio: crearRepositorioSmartLinksDrizzle(),
   async enriquecerContexto(contexto) {
-    await guardarEventosMarketing(drizzle(pool), contexto.restauranteId, [{
-      eventoUuid: contexto.eventoUuid,
-      sesionUuid: contexto.sesionUuid,
-      visitorId: contexto.visitorId,
-      tipo: 'session_start',
-      ocurridoAt: new Date(),
-      touch: { tipo: 'campana', campanaId: contexto.campanaId },
-    }])
+    const db = drizzle(pool)
+    const ahora = new Date()
+    const expiraAt = new Date(ahora.getTime() + 30 * 60 * 1000)
+    let [sesion] = await db.select().from(MarketingSesionTable).where(and(
+      eq(MarketingSesionTable.restauranteId, contexto.restauranteId),
+      eq(MarketingSesionTable.sesionUuid, contexto.sesionUuid),
+    )).limit(1)
+    let contarVisita = false
+    if (!sesion) {
+      const insercion = await db.insert(MarketingSesionTable).values({
+        restauranteId: contexto.restauranteId,
+        sesionUuid: contexto.sesionUuid,
+        visitorId: contexto.visitorId,
+        firstTouchTipo: 'campana',
+        firstTouchCampanaId: contexto.campanaId,
+        firstTouchRecetaCodigo: null,
+        firstTouchAt: ahora,
+        lastTouchTipo: 'campana',
+        lastTouchCampanaId: contexto.campanaId,
+        lastTouchRecetaCodigo: null,
+        lastTouchAt: ahora,
+        expiraAt,
+      }).ignore()
+      contarVisita = Number(insercion[0]?.affectedRows ?? 0) === 1
+      ;[sesion] = await db.select().from(MarketingSesionTable).where(and(
+        eq(MarketingSesionTable.restauranteId, contexto.restauranteId),
+        eq(MarketingSesionTable.sesionUuid, contexto.sesionUuid),
+      )).limit(1)
+    }
+    if (!sesion || sesion.visitorId !== contexto.visitorId) throw new Error('Sesión de campaña inválida')
+    if (!contarVisita) {
+      contarVisita = sesion.lastTouchCampanaId !== contexto.campanaId || sesion.expiraAt < ahora
+      await db.update(MarketingSesionTable).set({
+        lastTouchTipo: 'campana', lastTouchCampanaId: contexto.campanaId,
+        lastTouchRecetaCodigo: null, lastTouchAt: ahora, expiraAt,
+      }).where(and(eq(MarketingSesionTable.restauranteId, contexto.restauranteId), eq(MarketingSesionTable.id, sesion.id)))
+    }
+    if (contarVisita) {
+      await db.update(MarketingCampanaTable)
+        .set({ visitas: sql`${MarketingCampanaTable.visitas} + 1` })
+        .where(and(eq(MarketingCampanaTable.restauranteId, contexto.restauranteId), eq(MarketingCampanaTable.id, contexto.campanaId)))
+    }
   },
 })
 
@@ -511,6 +578,7 @@ const slugSchema = z.string().trim().min(3).max(191)
 const textoOpcionalSchema = z.string().trim().min(1).max(255).nullable().optional().transform((valor) => valor ?? null)
 const inversionSchema = z.union([z.number(), z.string().regex(/^\d+(?:\.\d{1,2})?$/)])
   .transform((valor) => Number(valor)).refine((valor) => Number.isFinite(valor) && valor >= 0 && valor <= 999999999999.99)
+const fechaOpcionalSchema = z.coerce.date().nullable().optional().transform((valor) => valor ?? null)
 
 const camposCampanaSchema = z.object({
   nombre: z.string().trim().min(1).max(255),
@@ -521,6 +589,10 @@ const camposCampanaSchema = z.object({
   productoId: z.number().int().positive().nullable().optional(),
   carritoRep: z.string().trim().max(2048).nullable().optional(),
   codigoDescuentoId: z.number().int().positive().nullable().optional(),
+  descuentoProductoPorcentaje: z.number().int().min(0).max(100).optional(),
+  limiteUsos: z.number().int().positive().nullable().optional(),
+  fechaInicio: fechaOpcionalSchema,
+  fechaFin: fechaOpcionalSchema,
   utmSource: textoOpcionalSchema,
   utmMedium: textoOpcionalSchema,
   utmCampaign: textoOpcionalSchema,
@@ -537,6 +609,9 @@ const camposCampanaSchema = z.object({
   }
   if (valor.carritoRep && !/^\d+x\d+(?:-\d+x\d+)*$/.test(valor.carritoRep)) {
     ctx.addIssue({ code: 'custom', path: ['carritoRep'], message: 'El carrito no tiene el formato canónico' })
+  }
+  if (valor.fechaInicio && valor.fechaFin && valor.fechaFin <= valor.fechaInicio) {
+    ctx.addIssue({ code: 'custom', path: ['fechaFin'], message: 'La fecha de fin debe ser posterior al inicio' })
   }
 })
 
@@ -564,7 +639,7 @@ export interface RepositorioCampanasMarketing {
 
 function valoresCampana(input: Partial<CampanaInput>) {
   const valores: Record<string, unknown> = {}
-  const campos = ['nombre', 'tipo', 'recetaCodigo', 'estado', 'destinoTipo', 'productoId', 'carritoRep', 'codigoDescuentoId', 'utmSource', 'utmMedium', 'utmCampaign', 'utmTerm', 'utmContent', 'usaGrupoControl'] as const
+  const campos = ['nombre', 'tipo', 'recetaCodigo', 'estado', 'destinoTipo', 'productoId', 'carritoRep', 'codigoDescuentoId', 'descuentoProductoPorcentaje', 'limiteUsos', 'fechaInicio', 'fechaFin', 'utmSource', 'utmMedium', 'utmCampaign', 'utmTerm', 'utmContent', 'usaGrupoControl'] as const
   for (const campo of campos) if (input[campo] !== undefined) valores[campo] = input[campo]
   if (input.inversionManual !== undefined) valores.inversionManual = input.inversionManual.toFixed(2)
   return valores
@@ -1303,10 +1378,10 @@ function crearRepositorioResultadosDrizzle(): RepositorioResultadosMarketing {
     async cargar(restauranteId) {
       const [pedidos, campanas, atribuciones, sesiones, eventos, contactos, enlaces] = await Promise.all([
         db.select({ id: PedidoUnificadoTable.id, clienteId: PedidoUnificadoTable.clienteId, sucursalId: PedidoUnificadoTable.sucursalId, total: PedidoUnificadoTable.total, montoDescuento: PedidoUnificadoTable.montoDescuento, createdAt: PedidoUnificadoTable.createdAt, pagado: PedidoUnificadoTable.pagado }).from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.restauranteId, restauranteId)),
-        db.select({ id: MarketingCampanaTable.id, nombre: MarketingCampanaTable.nombre, slug: MarketingCampanaTable.slug, tipo: MarketingCampanaTable.tipo, inversionManual: MarketingCampanaTable.inversionManual, usaGrupoControl: MarketingCampanaTable.usaGrupoControl }).from(MarketingCampanaTable).where(eq(MarketingCampanaTable.restauranteId, restauranteId)),
+        db.select({ id: MarketingCampanaTable.id, nombre: MarketingCampanaTable.nombre, slug: MarketingCampanaTable.slug, tipo: MarketingCampanaTable.tipo, productoId: MarketingCampanaTable.productoId, inversionManual: MarketingCampanaTable.inversionManual, usaGrupoControl: MarketingCampanaTable.usaGrupoControl }).from(MarketingCampanaTable).where(eq(MarketingCampanaTable.restauranteId, restauranteId)),
         db.select({ pedidoUnificadoId: PedidoMarketingAtribucionTable.pedidoUnificadoId, campanaId: PedidoMarketingAtribucionTable.campanaId, recetaCodigo: PedidoMarketingAtribucionTable.recetaCodigo, revenueAtribuido: PedidoMarketingAtribucionTable.revenueAtribuido, descuentoAtribuido: PedidoMarketingAtribucionTable.descuentoAtribuido, createdAt: PedidoMarketingAtribucionTable.createdAt }).from(PedidoMarketingAtribucionTable).where(eq(PedidoMarketingAtribucionTable.restauranteId, restauranteId)),
         db.select({ id: MarketingSesionTable.id, firstTouchTipo: MarketingSesionTable.firstTouchTipo, lastTouchTipo: MarketingSesionTable.lastTouchTipo, firstTouchCampanaId: MarketingSesionTable.firstTouchCampanaId, lastTouchCampanaId: MarketingSesionTable.lastTouchCampanaId, createdAt: MarketingSesionTable.createdAt }).from(MarketingSesionTable).where(eq(MarketingSesionTable.restauranteId, restauranteId)),
-        db.select({ id: MarketingEventoTable.id, marketingSesionId: MarketingEventoTable.marketingSesionId, tipo: MarketingEventoTable.tipo, pedidoUnificadoId: MarketingEventoTable.pedidoUnificadoId, ocurridoAt: MarketingEventoTable.ocurridoAt }).from(MarketingEventoTable).where(eq(MarketingEventoTable.restauranteId, restauranteId)),
+        db.select({ id: MarketingEventoTable.id, marketingSesionId: MarketingEventoTable.marketingSesionId, tipo: MarketingEventoTable.tipo, productoId: MarketingEventoTable.productoId, pedidoUnificadoId: MarketingEventoTable.pedidoUnificadoId, ocurridoAt: MarketingEventoTable.ocurridoAt }).from(MarketingEventoTable).where(eq(MarketingEventoTable.restauranteId, restauranteId)),
         db.select({ id: MarketingContactoTable.id, enlaceId: MarketingContactoTable.enlaceId, canal: MarketingContactoTable.canal, estado: MarketingContactoTable.estado, costoMensajes: MarketingContactoTable.costoMensajes, createdAt: MarketingContactoTable.createdAt }).from(MarketingContactoTable).where(eq(MarketingContactoTable.restauranteId, restauranteId)),
         db.select({ id: MarketingEnlaceTable.id, campanaId: MarketingEnlaceTable.campanaId, recetaCodigo: MarketingEnlaceTable.recetaCodigo, createdAt: MarketingEnlaceTable.createdAt }).from(MarketingEnlaceTable).where(eq(MarketingEnlaceTable.restauranteId, restauranteId)),
       ])

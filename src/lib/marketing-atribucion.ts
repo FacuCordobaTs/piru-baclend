@@ -9,6 +9,7 @@ import {
   pedidoMarketingAtribucion as PedidoMarketingAtribucionTable,
   pedidoUnificado as PedidoUnificadoTable,
 } from '../db/schema'
+import { guardarEventosMarketing } from './marketing-tracking'
 
 export interface ContextoAtribucionPedidoMarketing {
   restauranteId: number
@@ -184,6 +185,50 @@ export async function atribuirPedidoMarketingSinPropagar(
 }
 
 /** Nunca propaga errores al checkout. */
-export function atribuirPedidoMarketingBestEffort(db: Db, contexto: ContextoAtribucionPedidoMarketing): void {
-  void atribuirPedidoMarketingSinPropagar(crearRepositorioAtribucionMarketing(db), contexto)
+async function asegurarSesionExplicitaCampana(
+  db: Db,
+  contexto: ContextoAtribucionPedidoMarketing,
+): Promise<ContextoAtribucionPedidoMarketing> {
+  const slug = textoOpcional(contexto.campaniaSlug, 191)
+  if (!slug) return contexto
+  const [campana] = await db.select({ id: MarketingCampanaTable.id }).from(MarketingCampanaTable).where(and(
+    eq(MarketingCampanaTable.restauranteId, contexto.restauranteId),
+    eq(MarketingCampanaTable.slug, slug),
+  )).limit(1)
+  if (!campana) return contexto
+
+  const visitorOriginal = textoOpcional(contexto.visitorId, 64)
+  const sesionOriginal = textoOpcional(contexto.sesionUuid, 64)
+  const sintetico = `pedido-${contexto.pedidoUnificadoId}`
+  const registrar = async (visitorId: string, sesionUuid: string, sufijo: string) => {
+    await guardarEventosMarketing(db, contexto.restauranteId, [{
+      eventoUuid: `pedido-campana-${contexto.pedidoUnificadoId}-${sufijo}`,
+      sesionUuid,
+      visitorId,
+      tipo: 'purchase',
+      ocurridoAt: new Date(),
+      pedidoUnificadoId: contexto.pedidoUnificadoId,
+      touch: { tipo: 'campana', campanaId: campana.id },
+    }])
+    return { ...contexto, visitorId, sesionUuid }
+  }
+
+  try {
+    return await registrar(visitorOriginal ?? sintetico, sesionOriginal ?? sintetico, 'original')
+  } catch {
+    // Si una sesión del navegador expiró o fue bloqueada, el slug explícito
+    // del checkout sigue permitiendo una sesión técnica tenant-safe. El pedido
+    // no queda huérfano de campaña por una falla analítica previa.
+    return registrar(sintetico, sintetico, 'fallback')
+  }
+}
+
+export async function atribuirPedidoMarketingBestEffort(db: Db, contexto: ContextoAtribucionPedidoMarketing): Promise<ResultadoAtribucionPedidoMarketing | null> {
+  try {
+    const contextoAtribuible = await asegurarSesionExplicitaCampana(db, contexto)
+    return await atribuirPedidoMarketingSinPropagar(crearRepositorioAtribucionMarketing(db), contextoAtribuible)
+  } catch (error) {
+    console.error('[marketing] No se pudo preparar la atribución del pedido:', error)
+    return null
+  }
 }

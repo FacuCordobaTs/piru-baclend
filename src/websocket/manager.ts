@@ -1480,7 +1480,7 @@ class WebSocketManager {
 
       const pedidoUnificadoId = Number(nuevoPedido[0].insertId);
 
-      atribuirPedidoMarketingBestEffort(this.db, {
+      await atribuirPedidoMarketingBestEffort(this.db, {
         restauranteId: sala[0].restauranteId!,
         pedidoUnificadoId,
         clienteId,

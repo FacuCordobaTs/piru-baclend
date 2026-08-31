@@ -114,8 +114,9 @@ function dependenciasSmartLinks(overrides: Partial<DependenciasSmartLinksMarketi
     repositorio: {
       buscarCampanaActiva: async (username, slug) => username === 'pizzeria' && slug === 'ig-agosto'
         ? {
-            restauranteId: 7, id: 99, slug, destinoTipo: 'producto', productoId: 10, carritoRep: null,
+            restauranteId: 7, id: 99, nombre: 'Instagram agosto', slug, destinoTipo: 'producto', productoId: 10, carritoRep: null,
             codigoDescuentoId: 4, codigoDescuento: 'VOLVE10',
+            descuentoProductoPorcentaje: 20, limiteUsos: 100, usosActuales: 2, fechaInicio: null, fechaFin: null, visitas: 12,
             utmSource: 'instagram', utmMedium: 'social', utmCampaign: 'Agosto', utmTerm: null, utmContent: null,
           }
         : null,
@@ -145,9 +146,10 @@ describe('GET /public/marketing/campanas/:username/:slug', () => {
   test('resuelve tienda y carrito, y degrada configuraciones inválidas a tienda', async () => {
     const base = dependenciasSmartLinks()
     base.repositorio.buscarCampanaActiva = async (_username, slug) => ({
-      restauranteId: 7, id: 99, slug, productoId: null,
+      restauranteId: 7, id: 99, nombre: 'Campaña legacy', slug, productoId: null,
       destinoTipo: slug === 'carrito' ? 'carrito' : 'producto',
       carritoRep: slug === 'carrito' ? '10x2-15x1' : null,
+      descuentoProductoPorcentaje: 0, limiteUsos: null, usosActuales: 0, fechaInicio: null, fechaFin: null, visitas: 0,
       utmSource: null, utmMedium: null, utmCampaign: null, utmTerm: null, utmContent: null,
     })
     const app = new Hono().route('/public', crearMarketingSmartLinksRoute(base))
@@ -164,6 +166,22 @@ describe('GET /public/marketing/campanas/:username/:slug', () => {
       const response = await app.request(path)
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ success: true, data: { encontrada: false, destino: { tipo: 'tienda' } } })
+    }
+  })
+
+  test('deja de publicar la oferta cuando vence o consume todo el cupo', async () => {
+    const base = dependenciasSmartLinks({ ahora: () => new Date('2026-08-31T12:00:00.000Z') })
+    const original = base.repositorio.buscarCampanaActiva
+    base.repositorio.buscarCampanaActiva = async (username, slug) => {
+      const campana = await original(username, 'ig-agosto')
+      if (!campana) return null
+      return slug === 'agotada' ? { ...campana, slug, limiteUsos: 2, usosActuales: 2 }
+        : { ...campana, slug, fechaFin: new Date('2026-08-31T11:59:59.000Z') }
+    }
+    const app = new Hono().route('/public', crearMarketingSmartLinksRoute(base))
+    for (const slug of ['agotada', 'vencida']) {
+      expect(await (await app.request(`/public/marketing/campanas/pizzeria/${slug}`)).json())
+        .toEqual({ success: true, data: { encontrada: false, destino: { tipo: 'tienda' } } })
     }
   })
 

@@ -1,8 +1,9 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable, codigoDescuento as CodigoDescuentoTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable } from '../db/schema'
+import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable, codigoDescuento as CodigoDescuentoTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable, marketingCampana as MarketingCampanaTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
-import { eq, and, desc, or, lt, isNull, sql, inArray } from 'drizzle-orm'
+import type { MySql2Database } from 'drizzle-orm/mysql2'
+import { eq, and, desc, or, lt, lte, gte, isNull, sql, inArray } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp, notificarClientePagoConfirmado } from '../services/whatsapp'
 import { productoPuntos as ProductoPuntosTable, zonaDelivery as ZonaDeliveryTable } from '../db/schema'
@@ -25,6 +26,7 @@ import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { estaPausadoPorSuscripcion } from '../lib/suscripciones'
 import { salirDeColaPorPedido } from '../lib/motor-recompra'
 import { atribuirPedidoMarketingBestEffort } from '../lib/marketing-atribucion'
+import { aplicarOfertaProducto, ofertaProductoEstaVigente, type OfertaProductoCampana } from '../lib/campana-oferta'
 
 function isDiscountActive(descuento: number | null, inicio: Date | null, fin: Date | null): boolean {
   if (!descuento || descuento === 0) return false
@@ -32,6 +34,49 @@ function isDiscountActive(descuento: number | null, inicio: Date | null, fin: Da
   if (inicio && inicio > now) return false
   if (fin && fin < now) return false
   return true
+}
+
+async function resolverOfertaProductoCampana(
+  db: MySql2Database<Record<string, never>>,
+  restauranteId: number,
+  campaniaSlug: string | undefined,
+): Promise<OfertaProductoCampana | null> {
+  if (!campaniaSlug) return null
+  const [oferta] = await db.select({
+    id: MarketingCampanaTable.id,
+    productoId: MarketingCampanaTable.productoId,
+    descuentoProductoPorcentaje: MarketingCampanaTable.descuentoProductoPorcentaje,
+    limiteUsos: MarketingCampanaTable.limiteUsos,
+    usosActuales: MarketingCampanaTable.usosActuales,
+    fechaInicio: MarketingCampanaTable.fechaInicio,
+    fechaFin: MarketingCampanaTable.fechaFin,
+  }).from(MarketingCampanaTable).where(and(
+    eq(MarketingCampanaTable.restauranteId, restauranteId),
+    eq(MarketingCampanaTable.slug, campaniaSlug),
+    eq(MarketingCampanaTable.estado, 'activa'),
+  )).limit(1)
+  if (!oferta?.productoId) return null
+  const normalizada = { ...oferta, productoId: oferta.productoId }
+  return ofertaProductoEstaVigente(normalizada) ? normalizada : null
+}
+
+async function consumirCupoOfertaProducto(
+  db: MySql2Database<Record<string, never>>,
+  oferta: OfertaProductoCampana | null,
+  contieneProductoPromocionado: boolean,
+): Promise<boolean> {
+  if (!oferta || !contieneProductoPromocionado) return true
+  const ahora = new Date()
+  const resultado = await db.update(MarketingCampanaTable)
+    .set({ usosActuales: sql`${MarketingCampanaTable.usosActuales} + 1` })
+    .where(and(
+      eq(MarketingCampanaTable.id, oferta.id),
+      eq(MarketingCampanaTable.estado, 'activa'),
+      or(isNull(MarketingCampanaTable.fechaInicio), lte(MarketingCampanaTable.fechaInicio, ahora)),
+      or(isNull(MarketingCampanaTable.fechaFin), gte(MarketingCampanaTable.fechaFin, ahora)),
+      or(isNull(MarketingCampanaTable.limiteUsos), lt(MarketingCampanaTable.usosActuales, MarketingCampanaTable.limiteUsos)),
+    ))
+  return Number(resultado[0]?.affectedRows ?? 0) === 1
 }
 
 // Una franja deja de poder elegirse una vez que ya pasó su horario de inicio (son pedidos "para más adelante")
@@ -775,6 +820,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         }
 
         const productosMap = new Map(productosRaw.map(p => [p.id, { producto: p, puntos: puntosMap.get(p.id) ?? null }]))
+        const ofertaCampana = await resolverOfertaProductoCampana(db, restauranteId, campaniaSlug)
 
         const uniqueVariantesIds = [...new Set(items.map(i => i.varianteId).filter(Boolean))] as number[];
         const uniqueVariantesSecundariasIds = [...new Set(items.map(i => i.varianteSecundariaId).filter(Boolean))] as number[];
@@ -795,6 +841,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         const requierenSecundaria = new Set(opcionesRequeridas.filter(v => v.grupo === 2).map(v => v.productoId))
 
         let total = 0
+        let montoDescuentoCampana = 0
         let puntosGanados = 0;
         let puntosUsados = 0;
 
@@ -825,11 +872,11 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 if (item.varianteSecundariaId && variantesSecundariasMap.has(item.varianteSecundariaId)) {
                     precioBase += parseFloat(variantesSecundariasMap.get(item.varianteSecundariaId).precio)
                 }
-                const descuentoPct = row.producto.descuento || 0
-                const descuentoAplicable = isDiscountActive(descuentoPct, row.producto.descuentoFechaInicio, row.producto.descuentoFechaFin)
-                if (descuentoAplicable && descuentoPct > 0) {
-                    precioBase = precioBase * (1 - descuentoPct / 100)
-                }
+                const descuentoPct = isDiscountActive(row.producto.descuento || 0, row.producto.descuentoFechaInicio, row.producto.descuentoFechaFin)
+                    ? row.producto.descuento || 0 : 0
+                const precioOferta = aplicarOfertaProducto(precioBase, descuentoPct, item.productoId, ofertaCampana)
+                precioBase = precioOferta.precioFinal
+                montoDescuentoCampana += precioOferta.descuentoAtribuibleCampana * item.cantidad
 
                 // Sumar el precio de los agregados
                 if (item.agregados && item.agregados.length > 0) {
@@ -1004,6 +1051,13 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         }
         const metodoPagoEfectivoDelivery = resolvedDel.metodo
 
+        const contieneProductoPromocionado = ofertaCampana != null
+            && items.some((item) => !item.esCanjePuntos && item.productoId === ofertaCampana.productoId)
+        if (!await consumirCupoOfertaProducto(db, ofertaCampana, contieneProductoPromocionado)) {
+            return c.json({ message: 'La promoción alcanzó su límite o ya no está vigente', success: false }, 400)
+        }
+        const montoDescuentoTotal = montoDescuento + montoDescuentoCampana
+
         const nuevoPedido = await db.insert(PedidoUnificadoTable).values({
             restauranteId,
             clienteId: clienteId || null,
@@ -1022,7 +1076,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             estado: 'pending',
             total: total.toFixed(2),
             codigoDescuentoId: codigoDescuentoIdFinal,
-            montoDescuento: montoDescuento.toFixed(2),
+            montoDescuento: montoDescuentoTotal.toFixed(2),
             notificarWhatsapp: notificarWhatsapp || false,
             horarioProgramado: horarioProgramado || null,
             deliveryFee: deliveryFeeAplicado.toFixed(2),
@@ -1046,11 +1100,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 if (item.varianteSecundariaId && variantesSecundariasMap.has(item.varianteSecundariaId)) {
                     precioVal += parseFloat(variantesSecundariasMap.get(item.varianteSecundariaId).precio)
                 }
-                const descuentoPct = row.producto.descuento || 0
-                const descuentoAplicableItem = isDiscountActive(descuentoPct, row.producto.descuentoFechaInicio, row.producto.descuentoFechaFin)
-                if (descuentoAplicableItem && descuentoPct > 0) {
-                    precioVal = precioVal * (1 - descuentoPct / 100)
-                }
+                const descuentoPct = isDiscountActive(row.producto.descuento || 0, row.producto.descuentoFechaInicio, row.producto.descuentoFechaFin)
+                    ? row.producto.descuento || 0 : 0
+                precioVal = aplicarOfertaProducto(precioVal, descuentoPct, item.productoId, ofertaCampana).precioFinal
                 if (item.agregados && item.agregados.length > 0) {
                     for (const ag of item.agregados) {
                         precioVal += parseFloat(ag.precio)
@@ -1202,7 +1254,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             })
         }
 
-        atribuirPedidoMarketingBestEffort(db, {
+        await atribuirPedidoMarketingBestEffort(db, {
             restauranteId, pedidoUnificadoId: pedidoId, clienteId,
             visitorId, sesionUuid, campaniaSlug, recetaToken,
         })
@@ -1302,6 +1354,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         }
 
         const productosMap = new Map(productosRaw.map(p => [p.id, { producto: p, puntos: puntosMap.get(p.id) ?? null }]))
+        const ofertaCampana = await resolverOfertaProductoCampana(db, restauranteId, campaniaSlug)
 
         const uniqueVariantesIds = [...new Set(items.map(i => i.varianteId).filter(Boolean))] as number[];
         const uniqueVariantesSecundariasIds = [...new Set(items.map(i => i.varianteSecundariaId).filter(Boolean))] as number[];
@@ -1322,6 +1375,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         const requierenSecundaria = new Set(opcionesRequeridas.filter(v => v.grupo === 2).map(v => v.productoId))
 
         let total = 0
+        let montoDescuentoCampanaTk = 0
         let puntosGanados = 0;
         let puntosUsados = 0;
 
@@ -1352,11 +1406,11 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 if (item.varianteSecundariaId && variantesSecundariasMap.has(item.varianteSecundariaId)) {
                     precioBase += parseFloat(variantesSecundariasMap.get(item.varianteSecundariaId).precio)
                 }
-                const descuentoPctTk = row.producto.descuento || 0
-                const descuentoAplicableTk = isDiscountActive(descuentoPctTk, row.producto.descuentoFechaInicio, row.producto.descuentoFechaFin)
-                if (descuentoAplicableTk && descuentoPctTk > 0) {
-                    precioBase = precioBase * (1 - descuentoPctTk / 100)
-                }
+                const descuentoPctTk = isDiscountActive(row.producto.descuento || 0, row.producto.descuentoFechaInicio, row.producto.descuentoFechaFin)
+                    ? row.producto.descuento || 0 : 0
+                const precioOferta = aplicarOfertaProducto(precioBase, descuentoPctTk, item.productoId, ofertaCampana)
+                precioBase = precioOferta.precioFinal
+                montoDescuentoCampanaTk += precioOferta.descuentoAtribuibleCampana * item.cantidad
 
                 // Sumar el precio de los agregados
                 if (item.agregados && item.agregados.length > 0) {
@@ -1483,6 +1537,13 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         }
         const metodoPagoEfectivo = resolvedTk.metodo
 
+        const contieneProductoPromocionadoTk = ofertaCampana != null
+            && items.some((item) => !item.esCanjePuntos && item.productoId === ofertaCampana.productoId)
+        if (!await consumirCupoOfertaProducto(db, ofertaCampana, contieneProductoPromocionadoTk)) {
+            return c.json({ message: 'La promoción alcanzó su límite o ya no está vigente', success: false }, 400)
+        }
+        const montoDescuentoTotalTk = montoDescuentoTk + montoDescuentoCampanaTk
+
         let pedidoSucursalIdTk: number | null = null
         if (sucursalId != null) {
             const [scRow] = await db
@@ -1515,7 +1576,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             estado: 'pending',
             total: total.toFixed(2),
             codigoDescuentoId: codigoDescuentoIdFinalTk,
-            montoDescuento: montoDescuentoTk.toFixed(2),
+            montoDescuento: montoDescuentoTotalTk.toFixed(2),
             notificarWhatsapp: notificarWhatsapp || false,
             horarioProgramado: horarioProgramado || null,
             grupal: grupal || false,
@@ -1538,11 +1599,9 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 if (item.varianteSecundariaId && variantesSecundariasMap.has(item.varianteSecundariaId)) {
                     precioVal += parseFloat(variantesSecundariasMap.get(item.varianteSecundariaId).precio)
                 }
-                const descuentoPctItem = row.producto.descuento || 0
-                const descuentoAplicableItem2 = isDiscountActive(descuentoPctItem, row.producto.descuentoFechaInicio, row.producto.descuentoFechaFin)
-                if (descuentoAplicableItem2 && descuentoPctItem > 0) {
-                    precioVal = precioVal * (1 - descuentoPctItem / 100)
-                }
+                const descuentoPctItem = isDiscountActive(row.producto.descuento || 0, row.producto.descuentoFechaInicio, row.producto.descuentoFechaFin)
+                    ? row.producto.descuento || 0 : 0
+                precioVal = aplicarOfertaProducto(precioVal, descuentoPctItem, item.productoId, ofertaCampana).precioFinal
                 if (item.agregados && item.agregados.length > 0) {
                     for (const ag of item.agregados) {
                         precioVal += parseFloat(ag.precio)
@@ -1689,7 +1748,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             })
         }
 
-        atribuirPedidoMarketingBestEffort(db, {
+        await atribuirPedidoMarketingBestEffort(db, {
             restauranteId, pedidoUnificadoId: pedidoId, clienteId,
             visitorId, sesionUuid, campaniaSlug, recetaToken,
         })

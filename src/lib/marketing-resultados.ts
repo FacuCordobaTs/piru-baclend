@@ -11,7 +11,7 @@ export interface PedidoResultadoMarketing {
   id: number; clienteId: number | null; sucursalId: number | null; total: number | string
   montoDescuento: number | string | null; createdAt: Date; pagado: boolean
 }
-export interface CampanaResultadoMarketing { id: number; nombre: string; slug: string; tipo: 'adquisicion' | 'recompra'; inversionManual: number | string; usaGrupoControl: boolean }
+export interface CampanaResultadoMarketing { id: number; nombre: string; slug: string; tipo: 'adquisicion' | 'recompra'; productoId: number | null; inversionManual: number | string; usaGrupoControl: boolean }
 export interface AtribucionResultadoMarketing { pedidoUnificadoId: number; campanaId: number | null; recetaCodigo: string | null; revenueAtribuido: number | string; descuentoAtribuido: number | string; createdAt: Date }
 export interface SesionResultadoMarketing {
   id: number
@@ -25,6 +25,7 @@ export interface EventoResultadoMarketing {
   id: number
   marketingSesionId: number
   tipo: 'session_start' | 'product_view' | 'add_to_cart' | 'checkout_start' | 'purchase'
+  productoId?: number | null
   pedidoUnificadoId?: number | null
   ocurridoAt: Date
 }
@@ -121,14 +122,22 @@ export function resumirResultadosMarketing(datos: DatosResultadosMarketing, filt
   const costoMensajes = redondear(contactos.filter((fila) => fila.canal === 'piru_whatsapp' && fila.estado === 'enviado').reduce((total, fila) => total + numero(fila.costoMensajes), 0))
   const costoTotal = redondear(inversion + costoMensajes + descuentosAtribuidos)
   const retorno = redondear(revenueAtribuido - costoTotal)
+  // El embudo cuenta personas/sesiones, no clicks repetidos. `purchase` se
+  // concilia con pedidos cobrados para no depender de un evento del navegador.
   const funnel = Object.fromEntries(['session_start', 'product_view', 'add_to_cart', 'checkout_start', 'purchase'].map((tipo) => [
     tipo,
     tipo === 'purchase'
       ? pedidosUnicos.length
       : tipo === 'session_start'
         ? sesiones.length
-      : new Set(eventos.filter((evento) => evento.tipo === tipo).map((evento) => evento.id)).size,
+      : new Set(eventos.filter((evento) => evento.tipo === tipo).map((evento) => evento.marketingSesionId)).size,
   ])) as Record<string, number>
+  const campanaUnica = filtros.campaniaId == null ? null : datos.campanas.find((campana) => campana.id === filtros.campaniaId) ?? null
+  const sesionesQueAgregaronPromo = new Set(eventos.filter((evento) => evento.tipo === 'add_to_cart'
+    && campanaUnica?.productoId != null && evento.productoId === campanaUnica.productoId).map((evento) => evento.marketingSesionId))
+  const sesionesQueAgregaronOtro = new Set(eventos.filter((evento) => evento.tipo === 'add_to_cart'
+    && campanaUnica?.productoId != null && evento.productoId != null && evento.productoId !== campanaUnica.productoId).map((evento) => evento.marketingSesionId))
+  funnel.add_other_product = new Set([...sesionesQueAgregaronPromo].filter((id) => sesionesQueAgregaronOtro.has(id))).size
   const campanas: ResultadoMarketing['campanas'] = !incluirCampanas || filtros.fuente === 'organico' ? [] : datos.campanas.filter((campana) => !idsCampania || idsCampania.has(campana.id)).map((campana) => {
     const resultado = resumirResultadosMarketing(datos, { ...filtros, fuente: undefined, campaniaId: campana.id }, false)
     return {

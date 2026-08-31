@@ -617,6 +617,16 @@ export const marketingCampana = mysqlTable("marketing_campana", {
   productoId: int("producto_id").references(() => producto.id, { onDelete: "set null" }),
   carritoRep: varchar("carrito_rep", { length: 2048 }),
   codigoDescuentoId: int("codigo_descuento_id").references(() => codigoDescuento.id, { onDelete: "set null" }),
+  // Oferta simple de producto. Es independiente de codigo_descuento porque el
+  // beneficio se aplica únicamente al producto de la campaña, no al carrito.
+  descuentoProductoPorcentaje: int("descuento_producto_porcentaje").default(0).notNull(),
+  limiteUsos: int("limite_usos"),
+  usosActuales: int("usos_actuales").default(0).notNull(),
+  fechaInicio: timestamp("fecha_inicio"),
+  fechaFin: timestamp("fecha_fin"),
+  // Contador compacto: una visita atribuible por sesión/campaña. No se crea
+  // una fila marketing_evento por cada apertura del Smart Link.
+  visitas: int("visitas").default(0).notNull(),
   utmSource: varchar("utm_source", { length: 255 }),
   utmMedium: varchar("utm_medium", { length: 255 }),
   utmCampaign: varchar("utm_campaign", { length: 255 }),
@@ -637,6 +647,10 @@ export const marketingCampana = mysqlTable("marketing_campana", {
   index("idx_marketing_campana_producto").on(table.productoId),
   index("idx_marketing_campana_codigo_descuento").on(table.codigoDescuentoId),
   check("chk_marketing_campana_inversion", sql`${table.inversionManual} >= 0`),
+  check("chk_marketing_campana_descuento_producto", sql`${table.descuentoProductoPorcentaje} BETWEEN 0 AND 100`),
+  check("chk_marketing_campana_limite_usos", sql`${table.limiteUsos} IS NULL OR ${table.limiteUsos} > 0`),
+  check("chk_marketing_campana_usos_actuales", sql`${table.usosActuales} >= 0`),
+  check("chk_marketing_campana_visitas", sql`${table.visitas} >= 0`),
 ]);
 
 // Una sesión de storefront dura 30 minutos desde la última actividad (la
