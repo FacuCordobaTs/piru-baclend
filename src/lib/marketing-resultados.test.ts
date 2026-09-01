@@ -49,6 +49,17 @@ describe('resumirResultadosMarketing', () => {
     expect(resumen.campanas[0]).toMatchObject({ id: 7, incremental: { disponible: false } })
   })
 
+  test('calcula la conversión comercial con visitas al link y conserva sesiones como alias', () => {
+    const resumen = resumirResultadosMarketing({
+      ...datos,
+      campanas: [{ id: 7, nombre: 'Promo', slug: 'promo', tipo: 'adquisicion', productoId: 50, visitas: 10, inversionManual: 0, usaGrupoControl: false }],
+    }, { campaniaId: 7 })
+
+    expect(resumen.metricas.visitas).toBe(10)
+    expect(resumen.metricas.sesiones).toBe(1)
+    expect(resumen.metricas.conversion).toBe(20)
+  })
+
   test('aplica fecha a ventas y contactos sin perder el enlace creado antes', () => {
     const resumen = resumirResultadosMarketing(datos, { from: fecha(2), to: fecha(2) })
     expect(resumen.metricas).toMatchObject({ ventas: 500, pedidos: 2, contactos: 1, costoMensajes: 1 })

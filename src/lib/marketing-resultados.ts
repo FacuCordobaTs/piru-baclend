@@ -11,7 +11,7 @@ export interface PedidoResultadoMarketing {
   id: number; clienteId: number | null; sucursalId: number | null; total: number | string
   montoDescuento: number | string | null; marketingCampanaId?: number | null; createdAt: Date; pagado: boolean
 }
-export interface CampanaResultadoMarketing { id: number; nombre: string; slug: string; tipo: 'adquisicion' | 'recompra'; productoId: number | null; inversionManual: number | string; usaGrupoControl: boolean }
+export interface CampanaResultadoMarketing { id: number; nombre: string; slug: string; tipo: 'adquisicion' | 'recompra'; productoId: number | null; visitas?: number; inversionManual: number | string; usaGrupoControl: boolean }
 export interface AtribucionResultadoMarketing { pedidoUnificadoId: number; campanaId: number | null; recetaCodigo: string | null; revenueAtribuido: number | string; descuentoAtribuido: number | string; createdAt: Date }
 export interface SesionResultadoMarketing {
   id: number
@@ -43,7 +43,8 @@ export interface DatosResultadosMarketing {
 
 export interface MetricasResultadosMarketing {
   ventas: number; pedidos: number; ticketPromedio: number; clientesNuevos: number; clientesRecurrentes: number
-  sesiones: number; conversion: number; revenueAtribuido: number; descuentos: number; descuentosAtribuidos: number
+  /** `sesiones` queda como alias técnico retrocompatible. La UI usa `visitas`. */
+  sesiones: number; visitas: number; conversion: number; revenueAtribuido: number; descuentos: number; descuentosAtribuidos: number
   enlacesCreados: number; contactos: number; mensajesPagos: number; costoMensajes: number; inversionManual: number
   costoTotal: number; retorno: number
 }
@@ -169,6 +170,15 @@ export function resumirResultadosMarketing(datos: DatosResultadosMarketing, filt
       : new Set(eventos.filter((evento) => evento.tipo === tipo).map(claveSesionEvento)).size,
   ])) as Record<string, number>
   const campanaUnica = filtros.campaniaId == null ? null : datos.campanas.find((campana) => campana.id === filtros.campaniaId) ?? null
+  // Para una campaña sin filtro temporal usamos su contador compacto, que
+  // registra cada apertura aun cuando el navegador cierre antes de enviar
+  // telemetría. Con fechas usamos las visitas fechadas del tracking interno.
+  const tieneFiltroTemporal = Boolean(filtros.from || filtros.to)
+  const visitas = filtros.fuente === 'organico'
+    ? clavesSesiones.size
+    : campanaUnica && !tieneFiltroTemporal
+      ? Math.max(clavesSesiones.size, numero(campanaUnica.visitas))
+      : clavesSesiones.size
   const sesionesQueAgregaronPromo = new Set(eventos.filter((evento) => evento.tipo === 'add_to_cart'
     && campanaUnica?.productoId != null && evento.productoId === campanaUnica.productoId).map(claveSesionEvento))
   const sesionesQueAgregaronOtro = new Set(eventos.filter((evento) => evento.tipo === 'add_to_cart'
@@ -192,8 +202,8 @@ export function resumirResultadosMarketing(datos: DatosResultadosMarketing, filt
     filtros: { from: filtros.from?.toISOString() ?? null, to: filtros.to?.toISOString() ?? null, campaniaId: filtros.campaniaId ?? null, sucursalId: filtros.sucursalId ?? null },
     metricas: {
       ventas, pedidos: pedidosUnicos.length, ticketPromedio: pedidosUnicos.length ? redondear(ventas / pedidosUnicos.length) : 0,
-      clientesNuevos: nuevos, clientesRecurrentes: Math.max(0, clientes.size - nuevos), sesiones: clavesSesiones.size,
-      conversion: clavesSesiones.size ? redondear((pedidosUnicos.length / clavesSesiones.size) * 100) : 0,
+      clientesNuevos: nuevos, clientesRecurrentes: Math.max(0, clientes.size - nuevos), sesiones: clavesSesiones.size, visitas,
+      conversion: visitas ? redondear((pedidosUnicos.length / visitas) * 100) : 0,
       revenueAtribuido, descuentos, descuentosAtribuidos, enlacesCreados: enlaces.length, contactos: contactos.length,
       mensajesPagos: contactos.filter((fila) => fila.canal === 'piru_whatsapp' && fila.estado === 'enviado').length,
       costoMensajes, inversionManual: inversion, costoTotal, retorno,
