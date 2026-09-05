@@ -31,6 +31,7 @@ export interface EventoResultadoMarketing {
   pedidoUnificadoId?: number | null
   ocurridoAt: Date
 }
+export interface ItemPedidoResultadoMarketing { pedidoId: number; productoId: number }
 export interface ContactoResultadoMarketing { id: number; enlaceId: number; canal: 'copiado' | 'wa_me' | 'piru_whatsapp' | 'otro'; estado: 'preparado' | 'abierto' | 'reservado' | 'enviado' | 'fallido' | 'revertido'; costoMensajes: number | string; createdAt: Date }
 export interface EnlaceResultadoMarketing { id: number; campanaId: number | null; recetaCodigo: string | null; createdAt: Date }
 export interface OportunidadResultadoMarketing { segmento: string; recetaCodigo: string }
@@ -38,7 +39,7 @@ export interface OportunidadResultadoMarketing { segmento: string; recetaCodigo:
 export interface DatosResultadosMarketing {
   pedidos: PedidoResultadoMarketing[]; campanas: CampanaResultadoMarketing[]; atribuciones: AtribucionResultadoMarketing[]
   sesiones: SesionResultadoMarketing[]; eventos: EventoResultadoMarketing[]; contactos: ContactoResultadoMarketing[]
-  enlaces: EnlaceResultadoMarketing[]; oportunidades: OportunidadResultadoMarketing[]
+  enlaces: EnlaceResultadoMarketing[]; oportunidades: OportunidadResultadoMarketing[]; itemsPedido?: ItemPedidoResultadoMarketing[]
 }
 
 export interface MetricasResultadosMarketing {
@@ -161,14 +162,22 @@ export function resumirResultadosMarketing(datos: DatosResultadosMarketing, filt
   const retorno = redondear(revenueAtribuido - costoTotal)
   // El embudo cuenta personas/sesiones, no clicks repetidos. `purchase` se
   // concilia con pedidos cobrados para no depender de un evento del navegador.
-  const funnel = Object.fromEntries(['session_start', 'product_view', 'add_to_cart', 'checkout_start', 'purchase'].map((tipo) => [
+  const clavesPorTipo = new Map(['session_start', 'product_view', 'purchase'].map((tipo) => [
+    tipo,
+    new Set(eventos.filter((evento) => evento.tipo === tipo).map(claveSesionEvento)),
+  ]))
+  const funnel = Object.fromEntries(['session_start', 'product_view', 'purchase'].map((tipo) => [
     tipo,
     tipo === 'purchase'
       ? pedidosUnicos.length
       : tipo === 'session_start'
         ? clavesSesiones.size
-      : new Set(eventos.filter((evento) => evento.tipo === tipo).map(claveSesionEvento)).size,
+      : clavesPorTipo.get(tipo)!.size,
   ])) as Record<string, number>
+  // Aliases de respuesta para admins instalados: se conservan sin datos para
+  // no romper el contrato mientras los pasos dejan de trackearse.
+  funnel.add_to_cart = 0
+  funnel.checkout_start = 0
   const campanaUnica = filtros.campaniaId == null ? null : datos.campanas.find((campana) => campana.id === filtros.campaniaId) ?? null
   // Para una campaña sin filtro temporal usamos su contador compacto, que
   // registra cada apertura aun cuando el navegador cierre antes de enviar
@@ -179,11 +188,19 @@ export function resumirResultadosMarketing(datos: DatosResultadosMarketing, filt
     : campanaUnica && !tieneFiltroTemporal
       ? Math.max(clavesSesiones.size, numero(campanaUnica.visitas))
       : clavesSesiones.size
-  const sesionesQueAgregaronPromo = new Set(eventos.filter((evento) => evento.tipo === 'add_to_cart'
-    && campanaUnica?.productoId != null && evento.productoId === campanaUnica.productoId).map(claveSesionEvento))
-  const sesionesQueAgregaronOtro = new Set(eventos.filter((evento) => evento.tipo === 'add_to_cart'
-    && campanaUnica?.productoId != null && evento.productoId != null && evento.productoId !== campanaUnica.productoId).map(claveSesionEvento))
-  funnel.add_other_product = new Set([...sesionesQueAgregaronPromo].filter((id) => sesionesQueAgregaronOtro.has(id))).size
+  const productosPorPedido = new Map<number, Set<number>>()
+  for (const item of datos.itemsPedido ?? []) {
+    if (!idsPedidos.has(item.pedidoId)) continue
+    const productos = productosPorPedido.get(item.pedidoId) ?? new Set<number>()
+    productos.add(item.productoId)
+    productosPorPedido.set(item.pedidoId, productos)
+  }
+  // Se compara el pedido cobrado, no eventos del navegador: debe incluir el
+  // producto promocionado y al menos un producto distinto. Variantes del
+  // mismo producto no incrementan esta métrica.
+  funnel.add_other_product = campanaUnica?.productoId == null ? 0 : [...productosPorPedido.values()].filter((productos) => (
+    productos.has(campanaUnica.productoId!) && [...productos].some((productoId) => productoId !== campanaUnica.productoId)
+  )).length
   const campanas: ResultadoMarketing['campanas'] = !incluirCampanas || filtros.fuente === 'organico' ? [] : datos.campanas.filter((campana) => !idsCampania || idsCampania.has(campana.id)).map((campana) => {
     const resultado = resumirResultadosMarketing(datos, { ...filtros, fuente: undefined, campaniaId: campana.id }, false)
     return {

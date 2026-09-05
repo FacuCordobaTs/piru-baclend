@@ -19,7 +19,7 @@ const datos: DatosResultadosMarketing = {
     { id: 2, firstTouchTipo: 'directo', lastTouchTipo: 'directo', firstTouchCampanaId: null, lastTouchCampanaId: null, createdAt: fecha(2) },
   ],
   eventos: [
-    { id: 1, marketingSesionId: 1, tipo: 'session_start', ocurridoAt: fecha(1) }, { id: 2, marketingSesionId: 1, tipo: 'purchase', ocurridoAt: fecha(1) },
+    { id: 1, marketingSesionId: 1, tipo: 'session_start', ocurridoAt: fecha(1) }, { id: 2, marketingSesionId: 1, tipo: 'purchase', pedidoUnificadoId: 1, ocurridoAt: fecha(1) },
     { id: 3, marketingSesionId: 2, tipo: 'session_start', ocurridoAt: fecha(2) },
     { id: 4, marketingSesionId: 2, tipo: 'purchase', pedidoUnificadoId: 3, ocurridoAt: fecha(2) },
     { id: 5, marketingSesionId: 1, tipo: 'add_to_cart', productoId: 50, ocurridoAt: fecha(1) },
@@ -29,6 +29,10 @@ const datos: DatosResultadosMarketing = {
   enlaces: [{ id: 1, campanaId: 7, recetaCodigo: null, createdAt: fecha(1) }],
   contactos: [{ id: 1, enlaceId: 1, canal: 'piru_whatsapp', estado: 'enviado', costoMensajes: '1', createdAt: fecha(2) }],
   oportunidades: [{ segmento: 'dormido', recetaCodigo: 'recuperar_habito' }],
+  itemsPedido: [
+    { pedidoId: 1, productoId: 50 }, { pedidoId: 1, productoId: 51 },
+    { pedidoId: 2, productoId: 50 }, { pedidoId: 3, productoId: 70 },
+  ],
 }
 
 describe('resumirResultadosMarketing', () => {
@@ -44,7 +48,7 @@ describe('resumirResultadosMarketing', () => {
   test('filtra campaña sin confundir atribuido con incremental ni incluir ventas POS/directas', () => {
     const resumen = resumirResultadosMarketing(datos, { campaniaId: 7, sucursalId: 1 })
     expect(resumen.metricas).toMatchObject({ ventas: 300, pedidos: 2, revenueAtribuido: 300, clientesNuevos: 1, clientesRecurrentes: 0 })
-    expect(resumen.funnel).toMatchObject({ add_to_cart: 1, add_other_product: 1 })
+    expect(resumen.funnel).toMatchObject({ add_to_cart: 0, checkout_start: 0, add_other_product: 1 })
     expect(resumen.incremental).toMatchObject({ disponible: false })
     expect(resumen.campanas[0]).toMatchObject({ id: 7, incremental: { disponible: false } })
   })
@@ -58,6 +62,21 @@ describe('resumirResultadosMarketing', () => {
     expect(resumen.metricas.visitas).toBe(10)
     expect(resumen.metricas.sesiones).toBe(1)
     expect(resumen.metricas.conversion).toBe(20)
+  })
+
+  test('calcula productos extra sólo desde los ítems de pedidos cobrados', () => {
+    const resumen = resumirResultadosMarketing({ ...datos, eventos: [] }, { campaniaId: 7 })
+
+    expect(resumen.funnel).toMatchObject({ add_to_cart: 0, checkout_start: 0, purchase: 2, add_other_product: 1 })
+  })
+
+  test('no cuenta eventos históricos ni repeticiones del producto promocionado como productos extra', () => {
+    const resumen = resumirResultadosMarketing({
+      ...datos,
+      itemsPedido: [{ pedidoId: 1, productoId: 50 }, { pedidoId: 1, productoId: 50 }, { pedidoId: 2, productoId: 50 }],
+    }, { campaniaId: 7 })
+
+    expect(resumen.funnel.add_other_product).toBe(0)
   })
 
   test('aplica fecha a ventas y contactos sin perder el enlace creado antes', () => {
@@ -90,7 +109,7 @@ describe('resumirResultadosMarketing', () => {
 
     const resumen = resumirResultadosMarketing(sinSesion, { campaniaId: 7 })
     expect(resumen.metricas.sesiones).toBe(1)
-    expect(resumen.funnel).toMatchObject({ session_start: 1, add_to_cart: 1, checkout_start: 1 })
+    expect(resumen.funnel).toMatchObject({ session_start: 1, add_to_cart: 0, checkout_start: 0 })
   })
 
   test('no clasifica como orgánico un pedido que guardó la campaña en la venta aunque falle el ledger', () => {

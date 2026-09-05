@@ -78,6 +78,10 @@ const eventoSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).nullable().optional(),
 }).strict()
 
+// Los storefronts nuevos ya no generan estos pasos. Los aceptamos para que
+// versiones instaladas no fallen, pero no vuelven a alimentar métricas.
+const tiposEventoRetirados = new Set(['add_to_cart', 'checkout_start'])
+
 export const eventosMarketingRequestSchema = z.object({
   restauranteId: z.number().int().positive(),
   eventos: z.array(eventoSchema).min(1).max(20),
@@ -190,7 +194,11 @@ export function crearMarketingRoute(dependencias: DependenciasMarketingRoute): H
 
     try {
       const { restauranteId } = validacion.data
-      const eventos = await restaurarTouchesDesdeSlug(dependencias, restauranteId, validacion.data.eventos)
+      const eventosVigentes = validacion.data.eventos.filter((evento) => !tiposEventoRetirados.has(evento.tipo))
+      if (!eventosVigentes.length) {
+        return c.json({ success: true, data: { eventos: [], procesados: 0, insertados: 0, duplicados: 0 } }, 200)
+      }
+      const eventos = await restaurarTouchesDesdeSlug(dependencias, restauranteId, eventosVigentes)
       const errorReferencia = await validarReferenciasEventosMarketing(dependencias.referencias, restauranteId, eventos)
       if (errorReferencia) {
         const status = errorReferencia === 'Restaurante no encontrado' ? 404 : 400
@@ -1423,7 +1431,7 @@ function crearRepositorioResultadosDrizzle(): RepositorioResultadosMarketing {
   const oportunidades = crearRepositorioOportunidadesDrizzle()
   return {
     async cargar(restauranteId) {
-      const [pedidos, campanas, atribuciones, sesiones, eventos, contactos, enlaces] = await Promise.all([
+      const [pedidos, campanas, atribuciones, sesiones, eventos, contactos, enlaces, itemsPedido] = await Promise.all([
         db.select({ id: PedidoUnificadoTable.id, clienteId: PedidoUnificadoTable.clienteId, sucursalId: PedidoUnificadoTable.sucursalId, total: PedidoUnificadoTable.total, montoDescuento: PedidoUnificadoTable.montoDescuento, marketingCampanaId: PedidoUnificadoTable.marketingCampanaId, createdAt: PedidoUnificadoTable.createdAt, pagado: PedidoUnificadoTable.pagado }).from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.restauranteId, restauranteId)),
         db.select({ id: MarketingCampanaTable.id, nombre: MarketingCampanaTable.nombre, slug: MarketingCampanaTable.slug, tipo: MarketingCampanaTable.tipo, productoId: MarketingCampanaTable.productoId, visitas: MarketingCampanaTable.visitas, inversionManual: MarketingCampanaTable.inversionManual, usaGrupoControl: MarketingCampanaTable.usaGrupoControl }).from(MarketingCampanaTable).where(eq(MarketingCampanaTable.restauranteId, restauranteId)),
         db.select({ pedidoUnificadoId: PedidoMarketingAtribucionTable.pedidoUnificadoId, campanaId: PedidoMarketingAtribucionTable.campanaId, recetaCodigo: PedidoMarketingAtribucionTable.recetaCodigo, revenueAtribuido: PedidoMarketingAtribucionTable.revenueAtribuido, descuentoAtribuido: PedidoMarketingAtribucionTable.descuentoAtribuido, createdAt: PedidoMarketingAtribucionTable.createdAt }).from(PedidoMarketingAtribucionTable).where(eq(PedidoMarketingAtribucionTable.restauranteId, restauranteId)),
@@ -1431,8 +1439,12 @@ function crearRepositorioResultadosDrizzle(): RepositorioResultadosMarketing {
         db.select({ id: MarketingEventoTable.id, marketingSesionId: MarketingEventoTable.marketingSesionId, sesionUuid: MarketingEventoTable.sesionUuid, campanaId: MarketingEventoTable.campanaId, tipo: MarketingEventoTable.tipo, productoId: MarketingEventoTable.productoId, pedidoUnificadoId: MarketingEventoTable.pedidoUnificadoId, ocurridoAt: MarketingEventoTable.ocurridoAt }).from(MarketingEventoTable).where(eq(MarketingEventoTable.restauranteId, restauranteId)),
         db.select({ id: MarketingContactoTable.id, enlaceId: MarketingContactoTable.enlaceId, canal: MarketingContactoTable.canal, estado: MarketingContactoTable.estado, costoMensajes: MarketingContactoTable.costoMensajes, createdAt: MarketingContactoTable.createdAt }).from(MarketingContactoTable).where(eq(MarketingContactoTable.restauranteId, restauranteId)),
         db.select({ id: MarketingEnlaceTable.id, campanaId: MarketingEnlaceTable.campanaId, recetaCodigo: MarketingEnlaceTable.recetaCodigo, createdAt: MarketingEnlaceTable.createdAt }).from(MarketingEnlaceTable).where(eq(MarketingEnlaceTable.restauranteId, restauranteId)),
+        db.select({ pedidoId: ItemPedidoUnificadoTable.pedidoId, productoId: ItemPedidoUnificadoTable.productoId })
+          .from(ItemPedidoUnificadoTable)
+          .innerJoin(PedidoUnificadoTable, eq(ItemPedidoUnificadoTable.pedidoId, PedidoUnificadoTable.id))
+          .where(eq(PedidoUnificadoTable.restauranteId, restauranteId)),
       ])
-      return { pedidos, campanas, atribuciones, sesiones, eventos, contactos, enlaces } as Omit<DatosResultadosMarketing, 'oportunidades'>
+      return { pedidos, campanas, atribuciones, sesiones, eventos, contactos, enlaces, itemsPedido } as Omit<DatosResultadosMarketing, 'oportunidades'>
     },
     async cargarOportunidades(restauranteId) {
       const [datos, enlaces] = await Promise.all([oportunidades.cargarDatos(restauranteId), oportunidades.cargarEnlaces(restauranteId)])

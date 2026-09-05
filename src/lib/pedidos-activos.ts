@@ -80,6 +80,9 @@ export const PEDIDO_LIST_PROJECTION = {
   consumoEnLocal: PedidoUnificadoTable.consumoEnLocal,
   creadoPorUsuarioId: PedidoUnificadoTable.creadoPorUsuarioId,
   sucursalNombre: SucursalTable.nombre,
+  // Campo aditivo para que las comandas de transferencia manual usen el
+  // alias de la sucursal del pedido en vez del alias global del restaurante.
+  transferenciaAliasDestino: SucursalTable.transferenciaAlias,
   codigoDescuentoCodigo: CodigoDescuentoTable.codigo,
   demoraMinutos: PedidoUnificadoTable.demoraMinutos,
   notificarWhatsapp: PedidoUnificadoTable.notificarWhatsapp,

@@ -46,6 +46,14 @@ describe('POST /public/marketing/events', () => {
     expect(await response.json()).toMatchObject({ success: true, data: { procesados: 1, insertados: 1, duplicados: 0 } })
   })
 
+  test('acepta el envío inmediato sendBeacon sin preflight JSON', async () => {
+    const response = await app().request('/public/marketing/events', {
+      method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(payload()),
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ success: true, data: { insertados: 1 } })
+  })
+
   test('acepta resultados duplicados de un reintento sin reinsertar', async () => {
     const response = await app(dependencias({
       guardarEventos: async () => [{ eventoUuid: 'evento-1', estado: 'duplicado', sesionId: 10 }],
@@ -79,10 +87,23 @@ describe('POST /public/marketing/events', () => {
       },
     })).request('/public/marketing/events', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload({ eventos: [{ ...payload().eventos[0], tipo: 'checkout_start', metadata: { campaniaSlug: 'promo-smash' } }] })),
+      body: JSON.stringify(payload({ eventos: [{ ...payload().eventos[0], tipo: 'product_view', productoId: 10, metadata: { campaniaSlug: 'promo-smash' } }] })),
     })
     expect(response.status).toBe(200)
     expect(guardados[0].touch).toEqual({ tipo: 'campana', campanaId: 99 })
+  })
+
+  test('descarta los pasos retirados de bundles instalados sin romper su envío', async () => {
+    let persistencias = 0
+    const response = await app(dependencias({
+      guardarEventos: async () => { persistencias++; return [] },
+    })).request('/public/marketing/events', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload({ eventos: [{ ...payload().eventos[0], tipo: 'add_to_cart', productoId: 10, cantidad: 1 }] })),
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ success: true, data: { procesados: 0, insertados: 0 } })
+    expect(persistencias).toBe(0)
   })
 
   test('rechaza batches de más de veinte eventos', async () => {
