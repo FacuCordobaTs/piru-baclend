@@ -95,10 +95,15 @@ test.skipIf(!url)('MySQL: migraciones, POST POS, carrera, clientes, edición, í
     const [impresion] = await db.query<any[]>('SELECT p.impreso, i.cantidad_impresa FROM pedido_unificado p JOIN item_pedido_unificado i ON i.pedido_id=p.id WHERE p.id=?', [offline.data.id])
     expect(impresion[0].impreso).toBe(1); expect(impresion[0].cantidad_impresa).toBe(2)
     expect(eventos.at(-1).shouldPrint).toBe(false)
+    // Un pedido web también se puede editar; conserva origen y descuento.
+    await db.query('UPDATE pedido_unificado SET anotado_manualmente=0, monto_descuento=25 WHERE id=?', [pedidoId])
     // Edición actualiza el vínculo sin modificar snapshots de pedidos anteriores.
     const edit = await pedidoUnificadoRoute.request(`/${pedidoId}/datos-pos`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer 1' }, body: JSON.stringify({ version: 1, nombreCliente: 'Editado', telefono: '22223333' }) })
     expect(edit.status).toBe(200)
     const edited = await edit.json() as any
+    expect(edited.data.anotadoManualmente).toBe(false)
+    expect(edited.data.editable).toBe(true)
+    expect(edited.data.total).toBe('175.00')
     expect(edited.data.clienteId).not.toBe(perfiles[0]!.id)
     expect(edited.data.clienteIndice.telefonoNormalizado).toBe('22223333')
     const editCompleto = await pedidoUnificadoRoute.request(`/${pedidoId}/pos`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer 1' }, body: JSON.stringify({

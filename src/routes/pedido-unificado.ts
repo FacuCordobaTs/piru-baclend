@@ -129,6 +129,15 @@ const updateEstadoSchema = z.object({
   estado: z.enum(['pending', 'preparing', 'ready', 'dispatched', 'delivered', 'cancelled', 'archived']),
 })
 
+const liberarImpresionSchema = z.object({
+  // Snapshot devuelto por el claim. Permite deshacer sólo las cantidades que
+  // intentó imprimir este equipo sin pisar ediciones posteriores del pedido.
+  claimedItems: z.array(z.object({
+    id: z.number().int().positive(),
+    cantidad: z.number().int().positive(),
+  })).max(500).default([]),
+})
+
 const posItemSchema = z.object({
   // Aditivo: admins nuevos conservan la identidad de la fila al guardar el
   // borrador completo. Los instalados anteriores pueden seguir omitiéndolo.
@@ -267,7 +276,6 @@ async function resolverCreadorPos(db: any, restauranteId: number) {
 
 function motivosPedidoNoEditable(pedido: any): string[] {
   const motivos: string[] = []
-  if (!pedido.anotadoManualmente) motivos.push('El pedido no fue creado desde el POS')
   if (!(POS_ESTADOS_EDITABLES as readonly string[]).includes(pedido.estado)) motivos.push('El estado del pedido no permite edición')
   if (pedido.afipFacturado) motivos.push('El pedido ya fue facturado')
   if (pedido.rapiboyTripId) motivos.push('El pedido ya fue enviado a Rapiboy')
@@ -1654,6 +1662,53 @@ const pedidoUnificadoRoute = new Hono()
       printFull: claim.printFull,
       // Campo aditivo: los admins nuevos imprimen sólo el delta de cada fila.
       pendingItems: claim.pendingItems,
+    }, 200)
+  })
+
+  // Compensación aditiva del claim: el pedido no puede quedar marcado como
+  // impreso cuando Tauri/Windows rechazó el trabajo antes de encolarlo.
+  .post('/:id/impreso/liberar', requireModulo(MODULE_KEYS.IMPRESION_COMANDAS), zValidator('json', liberarImpresionSchema), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const pedidoId = Number(c.req.param('id'))
+    const { claimedItems } = c.req.valid('json')
+
+    const liberado = await db.transaction(async (tx: any) => {
+      await tx.execute(sql`SELECT id FROM pedido_unificado WHERE id = ${pedidoId} AND restaurante_id = ${restauranteId} FOR UPDATE`)
+      const [pedido] = await tx.select({ id: PedidoUnificadoTable.id })
+        .from(PedidoUnificadoTable)
+        .where(and(eq(PedidoUnificadoTable.id, pedidoId), eq(PedidoUnificadoTable.restauranteId, restauranteId)))
+        .limit(1)
+      if (!pedido) return false
+
+      if (claimedItems.length > 0) {
+        const claimedById = new Map(claimedItems.map((item) => [item.id, item.cantidad]))
+        const actuales = await tx.select({
+          id: ItemPedidoUnificadoTable.id,
+          cantidadImpresa: ItemPedidoUnificadoTable.cantidadImpresa,
+        }).from(ItemPedidoUnificadoTable).where(and(
+          eq(ItemPedidoUnificadoTable.pedidoId, pedidoId),
+          inArray(ItemPedidoUnificadoTable.id, [...claimedById.keys()]),
+        ))
+
+        for (const item of actuales) {
+          const cantidadClaimed = claimedById.get(item.id) ?? 0
+          await tx.update(ItemPedidoUnificadoTable)
+            .set({ cantidadImpresa: Math.max(0, Number(item.cantidadImpresa ?? 0) - cantidadClaimed) })
+            .where(and(eq(ItemPedidoUnificadoTable.id, item.id), eq(ItemPedidoUnificadoTable.pedidoId, pedidoId)))
+        }
+      }
+
+      await tx.update(PedidoUnificadoTable)
+        .set({ impreso: false })
+        .where(and(eq(PedidoUnificadoTable.id, pedidoId), eq(PedidoUnificadoTable.restauranteId, restauranteId)))
+      return true
+    })
+
+    return c.json({
+      success: true,
+      liberado,
+      message: liberado ? 'Claim de impresión liberado' : 'Pedido no encontrado',
     }, 200)
   })
 
