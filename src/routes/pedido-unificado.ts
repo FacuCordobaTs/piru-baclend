@@ -49,6 +49,8 @@ import { consumirMensaje, estadoEnvioUtility, avisarSaldoBajoSiCorresponde } fro
 import { asegurarOwnerStaff } from '../lib/staff'
 import { asegurarTurnoAbierto, cerrarTurnoActual, listarTurnos, obtenerTurno, TurnoCajaDesactualizadoError } from '../lib/turnos-caja'
 import { cantidadImpresaTrasEdicion, cantidadesPendientes, mismaConfiguracionItem } from '../lib/comanda-impresion'
+import { resolverClienteParaPedido, indiceCliente, bloquearIdentidadesRestaurante } from '../lib/clientes-identidad'
+import { buscarPedidoPorRequest, crearPedidoPosUnaVez } from '../lib/pos-idempotencia'
 
 const itemSchema = z.object({
   productoId: z.number().int().positive(),
@@ -66,6 +68,8 @@ const itemSchema = z.object({
 
 // Campos comunes para pedidos anotados manualmente desde el POS del local
 const manualFields = {
+  clientRequestId: z.string().uuid().optional(),
+  impresoOffline: z.boolean().optional(),
   // Si viene true, el pedido se marca como anotado manualmente (POS) y por defecto pagado en el local
   anotadoManualmente: z.boolean().optional(),
   pagado: z.boolean().optional(),
@@ -102,6 +106,8 @@ const createTakeawaySchema = z.object({
 })
 
 const createMesaSchema = z.object({
+  clientRequestId: z.string().uuid().optional(),
+  impresoOffline: z.boolean().optional(),
   tipo: z.literal('mesa'),
   mesaLocalId: z.number().int().positive(),
   consumoEnLocal: z.literal(true).optional().default(true),
@@ -361,7 +367,8 @@ export async function respuestaPedidoEditable(db: any, restauranteId: number, pe
       .where(and(eq(MesaLocalTable.id, pedido.mesaLocalId), eq(MesaLocalTable.restauranteId, restauranteId))).limit(1)
     mesaNombre = mesa?.nombre ?? null
   }
-  return { ...pedido, ...campana, mesaNombre, items, totalItems: items.reduce((sum, item: any) => sum + (item.cantidad || 1), 0), version: pedido.version, editable: motivosNoEditable.length === 0, motivosNoEditable }
+  return { ...pedido, ...campana, mesaNombre, items, totalItems: items.reduce((sum, item: any) => sum + (item.cantidad || 1), 0), version: pedido.version, editable: motivosNoEditable.length === 0, motivosNoEditable,
+    clienteIndice: await indiceCliente(db, restauranteId, pedido.clienteId) }
 }
 
 export async function ejecutarMutacionPos(
@@ -373,6 +380,8 @@ export async function ejecutarMutacionPos(
   actor?: { id: number; tipo: string },
 ): Promise<any> {
   return db.transaction(async (tx: any) => {
+    // Mismo orden que altas y mantenimiento: restaurante → pedido → identidad.
+    await bloquearIdentidadesRestaurante(tx, restauranteId)
     // Bloquea la comanda completa hasta asentar ítem, total, versión y auditoría.
     await tx.execute(sql`SELECT id FROM pedido_unificado WHERE id = ${pedidoId} AND restaurante_id = ${restauranteId} FOR UPDATE`)
     const [pedido] = await tx.select().from(PedidoUnificadoTable).where(and(
@@ -738,6 +747,13 @@ const pedidoUnificadoRoute = new Hono()
       const antes = { nombreCliente: pedido.nombreCliente, telefono: pedido.telefono, notas: pedido.notas, tipo: pedido.tipo, direccion: pedido.direccion, latitud: pedido.latitud, longitud: pedido.longitud, deliveryFee: pedido.deliveryFee, metodoPago: pedido.metodoPago, pagado: pedido.pagado }
       const cambios: any = {}
       for (const campo of ['nombreCliente', 'telefono', 'notas', 'metodoPago'] as const) if (body[campo] !== undefined) cambios[campo] = body[campo] || null
+      if (body.nombreCliente !== undefined || body.telefono !== undefined) {
+        const perfil = await resolverClienteParaPedido(tx, {
+          restauranteId, nombre: body.nombreCliente !== undefined ? body.nombreCliente : pedido.nombreCliente,
+          telefono: body.telefono !== undefined ? body.telefono : pedido.telefono,
+        })
+        cambios.clienteId = perfil?.id ?? null
+      }
       if (body.pagado !== undefined) cambios.pagado = body.pagado
       if (body.tipo !== undefined) cambios.tipo = tipo
       if (tipo === 'delivery') {
@@ -801,12 +817,17 @@ const pedidoUnificadoRoute = new Hono()
         itemsResueltos.push({ inputId: input.id, item })
       }
 
+      const perfil = await resolverClienteParaPedido(tx, {
+        restauranteId, nombre: body.nombreCliente !== undefined ? body.nombreCliente : pedido.nombreCliente,
+        telefono: body.telefono !== undefined ? body.telefono : pedido.telefono,
+      })
       const cambios = {
+        clienteId: perfil?.id ?? null,
         tipo: body.tipo,
         mesaLocalId: body.tipo === 'mesa' ? body.mesaLocalId! : null,
         consumoEnLocal: body.tipo === 'mesa',
-        nombreCliente: body.nombreCliente || null,
-        telefono: body.telefono || null,
+        nombreCliente: body.nombreCliente !== undefined ? body.nombreCliente || null : pedido.nombreCliente,
+        telefono: body.telefono !== undefined ? body.telefono || null : pedido.telefono,
         notas: body.notas || null,
         metodoPago: body.metodoPago || null,
         pagado: body.pagado ?? pedido.pagado,
@@ -863,6 +884,14 @@ const pedidoUnificadoRoute = new Hono()
     const restauranteId = (c as any).user.id
     const body = c.req.valid('json')
     const { items } = body
+
+    const responderReintento = async (pedido: any) => {
+      console.info('[pos_create]', { restauranteId, resultado: 'reintento' })
+      return c.json({ success: true, message: 'Pedido ya creado', data: pedido,
+        idempotente: true, clienteIndice: await indiceCliente(db, restauranteId, pedido.clienteId) }, 200)
+    }
+    const existente = await buscarPedidoPorRequest(db, restauranteId, body.clientRequestId)
+    if (existente) return responderReintento(existente)
 
     const uniqueProductosIds = [...new Set(items.map((i) => i.productoId))]
     const productos = await db
@@ -944,6 +973,8 @@ const pedidoUnificadoRoute = new Hono()
     }
 
     const baseValues: any = {
+      clientRequestId: body.clientRequestId ?? null,
+      impreso: body.impresoOffline === true,
       restauranteId,
       tipo: body.tipo,
       estado: 'pending',
@@ -969,12 +1000,13 @@ const pedidoUnificadoRoute = new Hono()
       baseValues.deliveryFee = deliveryFee.toFixed(2)
     }
 
-    const creado = await db.transaction(async (tx: any) => {
+    const resultadoAlta = await crearPedidoPosUnaVez(db, restauranteId, body.clientRequestId, async (tx: any) => {
       if (body.mesaLocalId != null) {
         const reserva = await reservarMesaLocal(tx, restauranteId, body.mesaLocalId, body.sucursalId)
         if ('error' in reserva) return reserva
       }
-      const nuevoPedido = await tx.insert(PedidoUnificadoTable).values(baseValues)
+      const perfil = await resolverClienteParaPedido(tx, { restauranteId, nombre: body.nombreCliente, telefono: body.telefono })
+      const nuevoPedido = await tx.insert(PedidoUnificadoTable).values({ ...baseValues, clienteId: perfil?.id ?? null })
       const pedidoId = Number(nuevoPedido[0].insertId)
       for (const item of items) {
         await tx.insert(ItemPedidoUnificadoTable).values({
@@ -985,14 +1017,17 @@ const pedidoUnificadoRoute = new Hono()
           varianteSecundariaId: item.varianteSecundariaId || null,
           varianteSecundariaNombre: item.varianteSecundariaId && variantesSecundariasMap.has(item.varianteSecundariaId) ? variantesSecundariasMap.get(item.varianteSecundariaId).nombre : null,
           cantidad: item.cantidad,
+          cantidadImpresa: body.impresoOffline ? item.cantidad : 0,
           precioUnitario: computeItemPrecio(item).toFixed(2),
           ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
           agregados: item.agregados?.length ? item.agregados : null,
           nota: item.nota?.trim() || null,
         })
       }
-      return { pedidoId }
+      return { pedidoId, clienteId: perfil?.id ?? null }
     })
+    if (resultadoAlta.repetido) return responderReintento(resultadoAlta.repetido)
+    const creado = resultadoAlta.creado!
     if (!('pedidoId' in creado)) {
       const status = creado.error === 'MESA_OCUPADA' ? 409 : 422
       return c.json({ message: creado.message, code: creado.error, success: false }, status)
@@ -1007,7 +1042,7 @@ const pedidoUnificadoRoute = new Hono()
       sucursalId: body.sucursalId ?? null,
       event: 'upsert',
       reason: 'created',
-      shouldPrint: pagado,
+      shouldPrint: pagado && !body.impresoOffline,
     })
 
     // ── Onboarding: enviar el pedido de prueba al WhatsApp del dueño ──
@@ -1058,11 +1093,14 @@ const pedidoUnificadoRoute = new Hono()
       }
     }
 
+    console.info('[pos_create]', { restauranteId, resultado: 'nuevo' })
     return c.json({
+      clienteIndice: await indiceCliente(db, restauranteId, creado.clienteId ?? null),
       message: `Pedido de ${body.tipo} creado correctamente`,
       success: true,
       data: {
         id: pedidoId,
+        clienteId: creado.clienteId ?? null,
         tipo: body.tipo,
         direccion: body.tipo === 'delivery' ? body.direccion : undefined,
         nombreCliente: body.nombreCliente,

@@ -1,5 +1,6 @@
 // src/websocket/manager.ts
 import { drizzle } from 'drizzle-orm/mysql2';
+import { resolverClienteParaPedido } from '../lib/clientes-identidad'
 import { eq, desc, and, or, lt, isNull, sql } from 'drizzle-orm';
 import { pool } from '../db';
 import {
@@ -1399,22 +1400,10 @@ class WebSocketManager {
       // Sala confirma un checkout real (delivery/takeaway), por lo que también
       // consolida el cliente igual que los endpoints públicos. El token de
       // receta nunca decide quién es: la identidad sale de estos datos.
-      let clienteId: number | null = null;
-      const [clienteExistente] = await this.db.select({ id: ClienteTable.id }).from(ClienteTable).where(and(
-        eq(ClienteTable.restauranteId, sala[0].restauranteId!),
-        eq(ClienteTable.telefono, checkoutData.telefono),
-      )).limit(1);
-      if (clienteExistente) {
-        clienteId = clienteExistente.id;
-      } else {
-        const nuevoCliente = await this.db.insert(ClienteTable).values({
-          restauranteId: sala[0].restauranteId!,
-          nombre: checkoutData.nombre,
-          telefono: checkoutData.telefono,
-          direccion: checkoutData.tipoPedido === 'delivery' ? checkoutData.direccion : null,
-        });
-        clienteId = Number(nuevoCliente[0].insertId);
-      }
+      const perfilCliente = await this.db.transaction((tx) => resolverClienteParaPedido(tx, {
+        restauranteId: sala[0].restauranteId!, nombre: checkoutData.nombre, telefono: checkoutData.telefono,
+      }));
+      const clienteId = perfilCliente?.id ?? null;
 
       // `checkoutData.total` es una instantánea visual y puede quedar vieja si el grupo
       // modifica el carrito. Además ya incluía el cupón del frontend, por lo que usarla

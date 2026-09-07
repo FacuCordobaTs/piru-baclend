@@ -40,6 +40,7 @@ import {
 import {
   coincideTokenMarketingSeguro,
   ErrorPrepararEnlaceMarketing,
+  esCarritoPrearmadoValido,
   hashTokenMarketing,
   prepararEnlaceMarketing,
   type RepositorioEnlacesMarketing,
@@ -310,7 +311,7 @@ function destinoSmartLink(campana: CampanaSmartLinkPublica) {
   if (campana.destinoTipo === 'producto' && campana.productoId != null) {
     return { tipo: 'producto' as const, productoId: campana.productoId }
   }
-  if (campana.destinoTipo === 'carrito' && campana.carritoRep && /^\d+x\d+(?:-\d+x\d+)*$/.test(campana.carritoRep)) {
+  if (campana.destinoTipo === 'carrito' && campana.carritoRep && esCarritoPrearmadoValido(campana.carritoRep)) {
     return { tipo: 'carrito' as const, carritoRep: campana.carritoRep }
   }
   return { tipo: 'tienda' as const }
@@ -334,7 +335,8 @@ export function crearMarketingSmartLinksRoute(dependencias: DependenciasSmartLin
     const campana = await dependencias.repositorio.buscarCampanaActiva(username, slug)
     const ahora = dependencias.ahora?.() ?? new Date()
     const vigente = Boolean(campana
-      && (campana.destinoTipo !== 'producto' || campana.productoId != null)
+    && (campana.destinoTipo !== 'producto' || campana.productoId != null)
+    && (campana.destinoTipo !== 'carrito' || (campana.carritoRep != null && esCarritoPrearmadoValido(campana.carritoRep)))
       && (!campana.fechaInicio || campana.fechaInicio <= ahora)
       && (!campana.fechaFin || campana.fechaFin >= ahora)
       && (campana.limiteUsos == null || campana.usosActuales < campana.limiteUsos))
@@ -360,7 +362,10 @@ export function crearMarketingSmartLinksRoute(dependencias: DependenciasSmartLin
         encontrada: true,
         destino: destinoSmartLink(campana),
         beneficio: beneficioSmartLink(campana),
-        campana: campana.productoId == null ? undefined : {
+        // También se entrega para un link de seguimiento sin promoción. El
+        // storefront usa este contexto para no convertir la visita en
+        // orgánica, pero sólo muestra el hero/oferta si hay producto.
+        campana: {
           campanaId: campana.id,
           nombre: campana.nombre,
           slug: campana.slug,
@@ -655,8 +660,8 @@ const camposCampanaSchema = z.object({
   if (valor.destinoTipo === 'carrito' && !valor.carritoRep) {
     ctx.addIssue({ code: 'custom', path: ['carritoRep'], message: 'El destino carrito requiere carritoRep' })
   }
-  if (valor.carritoRep && !/^\d+x\d+(?:-\d+x\d+)*$/.test(valor.carritoRep)) {
-    ctx.addIssue({ code: 'custom', path: ['carritoRep'], message: 'El carrito no tiene el formato canónico' })
+  if (valor.carritoRep && !esCarritoPrearmadoValido(valor.carritoRep)) {
+    ctx.addIssue({ code: 'custom', path: ['carritoRep'], message: 'El carrito prearmado no tiene un formato válido' })
   }
   if (valor.fechaInicio && valor.fechaFin && valor.fechaFin <= valor.fechaInicio) {
     ctx.addIssue({ code: 'custom', path: ['fechaFin'], message: 'La fecha de fin debe ser posterior al inicio' })
@@ -689,6 +694,15 @@ function valoresCampana(input: Partial<CampanaInput>) {
   const valores: Record<string, unknown> = {}
   const campos = ['nombre', 'tipo', 'recetaCodigo', 'estado', 'destinoTipo', 'productoId', 'carritoRep', 'codigoDescuentoId', 'descuentoProductoPorcentaje', 'limiteUsos', 'fechaInicio', 'fechaFin', 'utmSource', 'utmMedium', 'utmCampaign', 'utmTerm', 'utmContent', 'usaGrupoControl'] as const
   for (const campo of campos) if (input[campo] !== undefined) valores[campo] = input[campo]
+  // Una campaña que abre la tienda es estrictamente de seguimiento. Limpiar
+  // estos campos evita que un payload malformado conserve una oferta o un
+  // cupo de una promoción anterior al cambiarla a campaña normal.
+  if (input.destinoTipo === 'tienda') {
+    valores.productoId = null
+    valores.carritoRep = null
+    valores.descuentoProductoPorcentaje = 0
+    valores.limiteUsos = null
+  }
   if (input.inversionManual !== undefined) valores.inversionManual = input.inversionManual.toFixed(2)
   return valores
 }

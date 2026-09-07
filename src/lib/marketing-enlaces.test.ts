@@ -1,9 +1,25 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  esCarritoPrearmadoValido,
   hashTokenMarketing,
+  parseCarritoPrearmado,
   prepararEnlaceMarketing,
   type RepositorioEnlacesMarketing,
 } from './marketing-enlaces'
+
+describe('carrito prearmado versionado', () => {
+  test('conserva variantes primarias, secundarias y extras, sin romper el formato legado', () => {
+    const v2 = 'v2:[{"p":12,"q":2,"v":31,"s":32,"a":[41,42]}]'
+    expect(parseCarritoPrearmado(v2)).toEqual([{
+      productoId: 12, cantidad: 2, varianteId: 31, varianteSecundariaId: 32, agregadoIds: [41, 42],
+    }])
+    expect(parseCarritoPrearmado('12x2-15x1')).toEqual([
+      { productoId: 12, cantidad: 2, agregadoIds: [] }, { productoId: 15, cantidad: 1, agregadoIds: [] },
+    ])
+    expect(esCarritoPrearmadoValido('v2:[{"p":12,"q":1,"a":[41]}]')).toBe(true)
+    expect(esCarritoPrearmadoValido('v2:[{"p":12,"q":0}]')).toBe(false)
+  })
+})
 
 function repositorio(): RepositorioEnlacesMarketing & { enlaces: any[]; cupones: any[]; controles: number[] } {
   const enlaces: any[] = []; const cupones: any[] = []; const controles: number[] = []

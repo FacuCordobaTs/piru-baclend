@@ -1,6 +1,7 @@
 // schema.ts
 import {
   mysqlTable,
+  char,
   varchar,
   int,
   timestamp,
@@ -257,6 +258,7 @@ export const verificacionStaff = mysqlTable("verificacion_staff", {
 ]);
 
 export const pedidoUnificado = mysqlTable("pedido_unificado", {
+  clientRequestId: char("client_request_id", { length: 36 }),
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
   sucursalId: int("sucursal_id").references(() => sucursal.id),
@@ -346,6 +348,7 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   afipPdfUrl: varchar("afip_pdf_url", { length: 512 }),
 }, (table) => [
   index("idx_pedido_unificado_mesa_local_estado").on(table.mesaLocalId, table.estado),
+  uniqueIndex("uq_pedido_restaurante_request").on(table.restauranteId, table.clientRequestId),
   index("idx_pedido_unificado_creado_por_usuario").on(table.creadoPorUsuarioId),
   index("idx_pedido_unificado_marketing_campana").on(table.restauranteId, table.marketingCampanaId, table.createdAt),
 ]);
@@ -541,6 +544,8 @@ export const etiqueta = mysqlTable(
 
 
 export const cliente = mysqlTable("cliente", {
+  telefonoNormalizado: varchar("telefono_normalizado", { length: 20 }),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id")
     .references(() => restaurante.id)
@@ -557,6 +562,9 @@ export const cliente = mysqlTable("cliente", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("uq_cliente_restaurante_id").on(table.restauranteId, table.id),
+  index("idx_cliente_restaurante_telefono").on(table.restauranteId, table.telefonoNormalizado),
+  // Se aplica sólo en la segunda migración, después de consolidar y auditar.
+  uniqueIndex("uq_cliente_restaurante_telefono").on(table.restauranteId, table.telefonoNormalizado),
 ]);
 
 // Verificación de registro por WhatsApp (onboarding self-serve por código OTP).

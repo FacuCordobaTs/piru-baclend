@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { pool } from '../db'
 import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable, codigoDescuento as CodigoDescuentoTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable, marketingCampana as MarketingCampanaTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
+import { resolverClienteParaPedido } from '../lib/clientes-identidad'
 import type { MySql2Database } from 'drizzle-orm/mysql2'
 import { eq, and, desc, or, lt, lte, gte, isNull, sql, inArray } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
@@ -44,6 +45,7 @@ async function resolverOfertaProductoCampana(
   if (!campaniaSlug) return null
   const [oferta] = await db.select({
     id: MarketingCampanaTable.id,
+    destinoTipo: MarketingCampanaTable.destinoTipo,
     productoId: MarketingCampanaTable.productoId,
     descuentoProductoPorcentaje: MarketingCampanaTable.descuentoProductoPorcentaje,
     limiteUsos: MarketingCampanaTable.limiteUsos,
@@ -55,7 +57,10 @@ async function resolverOfertaProductoCampana(
     eq(MarketingCampanaTable.slug, campaniaSlug),
     eq(MarketingCampanaTable.estado, 'activa'),
   )).limit(1)
-  if (!oferta?.productoId) return null
+  // Un link de seguimiento no modifica nunca el precio, aunque un dato legacy
+  // haya dejado producto/descuento en la fila. Sólo las promociones de
+  // producto pueden constituir una oferta en el checkout.
+  if (!oferta?.productoId || oferta.destinoTipo !== 'producto') return null
   const normalizada = { ...oferta, productoId: oferta.productoId }
   return ofertaProductoEstaVigente(normalizada) ? normalizada : null
 }
@@ -986,37 +991,16 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             if (puntosUsados > 0) return c.json({ message: 'El sistema de puntos está inactivo', success: false }, 400);
         }
 
-        let clienteId: number | null = null;
-        if (telefono && nombreCliente) {
-            const clienteExistente = await db.select().from(ClienteTable).where(
-                and(
-                    eq(ClienteTable.telefono, telefono),
-                    eq(ClienteTable.restauranteId, restauranteId)
-                )
-            ).limit(1);
-
-            if (clienteExistente.length > 0) {
-                clienteId = clienteExistente[0].id;
-                if (puntosUsados > clienteExistente[0].puntos) {
-                    return c.json({ message: 'Puntos insuficientes para realizar el canje', success: false }, 400);
-                }
-                const nuevosPuntos = clienteExistente[0].puntos - puntosUsados + puntosGanados;
-                await db.update(ClienteTable).set({ puntos: nuevosPuntos }).where(eq(ClienteTable.id, clienteId));
-            } else {
-                if (puntosUsados > 0) {
-                    return c.json({ message: 'Cliente no encontrado, no se pueden usar puntos', success: false }, 400);
-                }
-                const nuevoCliente = await db.insert(ClienteTable).values({
-                    restauranteId,
-                    nombre: nombreCliente,
-                    telefono,
-                    direccion,
-                    puntos: puntosGanados,
-                });
-                clienteId = Number(nuevoCliente[0].insertId);
-            }
-        } else if (puntosUsados > 0) {
-            return c.json({ message: 'Debes ingresar datos de cliente para canjear puntos', success: false }, 400);
+        const perfilCliente = await db.transaction((tx) => resolverClienteParaPedido(tx, {
+            restauranteId, nombre: nombreCliente, telefono,
+        }));
+        const clienteId = perfilCliente?.id ?? null;
+        if (puntosUsados > (perfilCliente?.puntos ?? 0)) {
+            return c.json({ message: 'Puntos insuficientes para realizar el canje', success: false }, 400);
+        }
+        if (clienteId && (puntosUsados || puntosGanados)) {
+            await db.update(ClienteTable).set({ puntos: sql`${ClienteTable.puntos} - ${puntosUsados} + ${puntosGanados}` })
+                .where(and(eq(ClienteTable.id, clienteId), eq(ClienteTable.restauranteId, restauranteId)));
         }
 
         let montoDescuento = 0
@@ -1485,36 +1469,16 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             if (puntosUsados > 0) return c.json({ message: 'El sistema de puntos está inactivo', success: false }, 400);
         }
 
-        let clienteId: number | null = null;
-        if (telefono && nombreCliente) {
-            const clienteExistente = await db.select().from(ClienteTable).where(
-                and(
-                    eq(ClienteTable.telefono, telefono),
-                    eq(ClienteTable.restauranteId, restauranteId)
-                )
-            ).limit(1);
-
-            if (clienteExistente.length > 0) {
-                clienteId = clienteExistente[0].id;
-                if (puntosUsados > clienteExistente[0].puntos) {
-                    return c.json({ message: 'Puntos insuficientes para realizar el canje', success: false }, 400);
-                }
-                const nuevosPuntos = clienteExistente[0].puntos - puntosUsados + puntosGanados;
-                await db.update(ClienteTable).set({ puntos: nuevosPuntos }).where(eq(ClienteTable.id, clienteId));
-            } else {
-                if (puntosUsados > 0) {
-                    return c.json({ message: 'Cliente no encontrado, no se pueden usar puntos', success: false }, 400);
-                }
-                const nuevoCliente = await db.insert(ClienteTable).values({
-                    restauranteId,
-                    nombre: nombreCliente,
-                    telefono,
-                    puntos: puntosGanados,
-                });
-                clienteId = Number(nuevoCliente[0].insertId);
-            }
-        } else if (puntosUsados > 0) {
-            return c.json({ message: 'Debes ingresar datos de cliente para canjear puntos', success: false }, 400);
+        const perfilCliente = await db.transaction((tx) => resolverClienteParaPedido(tx, {
+            restauranteId, nombre: nombreCliente, telefono,
+        }));
+        const clienteId = perfilCliente?.id ?? null;
+        if (puntosUsados > (perfilCliente?.puntos ?? 0)) {
+            return c.json({ message: 'Puntos insuficientes para realizar el canje', success: false }, 400);
+        }
+        if (clienteId && (puntosUsados || puntosGanados)) {
+            await db.update(ClienteTable).set({ puntos: sql`${ClienteTable.puntos} - ${puntosUsados} + ${puntosGanados}` })
+                .where(and(eq(ClienteTable.id, clienteId), eq(ClienteTable.restauranteId, restauranteId)));
         }
 
         let montoDescuentoTk = 0

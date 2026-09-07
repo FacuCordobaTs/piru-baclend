@@ -194,6 +194,27 @@ describe('GET /public/marketing/campanas/:username/:slug', () => {
     expect(await (await app.request('/public/marketing/campanas/pizzeria/producto-sin-id')).json()).toMatchObject({ data: { destino: { tipo: 'tienda' } } })
   })
 
+  test('resuelve un link de seguimiento sin producto y conserva su contexto atribuible', async () => {
+    const base = dependenciasSmartLinks()
+    base.repositorio.buscarCampanaActiva = async (_username, slug) => ({
+      restauranteId: 7, id: 77, nombre: 'Historias septiembre', slug, destinoTipo: 'tienda' as const,
+      productoId: null, carritoRep: null, descuentoProductoPorcentaje: 0, limiteUsos: null, usosActuales: 0,
+      fechaInicio: null, fechaFin: null, visitas: 0, utmSource: null, utmMedium: null, utmCampaign: null, utmTerm: null, utmContent: null,
+    })
+    const app = new Hono().route('/public', crearMarketingSmartLinksRoute(base))
+    const body = await (await app.request('/public/marketing/campanas/pizzeria/historias-septiembre?visitorId=visitor-1&sesionUuid=sesion-1&eventoUuid=evento-1')).json()
+    expect(body).toMatchObject({
+      success: true,
+      data: {
+        encontrada: true,
+        destino: { tipo: 'tienda' },
+        contexto: { campaniaSlug: 'historias-septiembre', campanaId: 77 },
+        campana: { campanaId: 77, productoId: null, descuentoPorcentaje: 0 },
+      },
+    })
+    expect(base.contextos).toEqual([{ restauranteId: 7, campanaId: 77, visitorId: 'visitor-1', sesionUuid: 'sesion-1', eventoUuid: 'evento-1' }])
+  })
+
   test('un slug inexistente, inactivo o de otro tenant cae a tienda sin revelar su estado', async () => {
     const { app } = appSmartLinks()
     for (const path of [
@@ -359,6 +380,27 @@ describe('CRUD de campañas de marketing', () => {
     const response = await app.request('/marketing/campanas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(campanaPayload({ productoId: 99 })) })
     expect(response.status).toBe(400)
     expect((await response.json()).message).toContain('producto')
+  })
+
+  test('acepta una campaña normal de seguimiento sin producto ni oferta', async () => {
+    const { app, repo } = appCampanas()
+    const response = await app.request('/marketing/campanas', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(campanaPayload({ slug: 'historias-septiembre', destinoTipo: 'tienda', productoId: null, codigoDescuentoId: null, descuentoProductoPorcentaje: 0, limiteUsos: null })),
+    })
+    expect(response.status).toBe(201)
+    expect(repo.campanas[0]).toMatchObject({ destinoTipo: 'tienda', productoId: null, descuentoProductoPorcentaje: 0 })
+  })
+
+  test('acepta un carrito prearmado con variantes dobles y extras', async () => {
+    const { app, repo } = appCampanas()
+    const carritoRep = 'v2:[{"p":10,"q":2,"v":31,"s":32,"a":[41,42]}]'
+    const response = await app.request('/marketing/campanas', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(campanaPayload({ slug: 'combo-casa', destinoTipo: 'carrito', productoId: null, codigoDescuentoId: null, carritoRep })),
+    })
+    expect(response.status).toBe(201)
+    expect(repo.campanas[0]).toMatchObject({ destinoTipo: 'carrito', carritoRep })
   })
 
   test('mantiene el slug al editar y no permite atravesar tenants', async () => {

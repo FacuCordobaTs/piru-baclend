@@ -3,6 +3,62 @@ import type { CodigoRecetaCrecimiento, IncentivoReceta, ItemCarritoReceta, Produ
 import { RECETAS_CRECIMIENTO, recomendarRecetaCrecimiento, type RecomendacionRecetaCrecimiento } from './recetas-crecimiento'
 import type { SegmentoCliente } from './clientes-rfm'
 
+/**
+ * Formato durable de un carrito de campaña. `v2:` permite conservar las
+ * opciones que cambian el ítem (dos grupos de variantes y extras) sin romper
+ * los links `12x2-15x1` ya emitidos por recetas de recompra.
+ *
+ * Nunca incluye precios ni nombres: al abrir el link el storefront vuelve a
+ * resolver cada id contra el menú actual del restaurante.
+ */
+export interface ItemCarritoPrearmado {
+  productoId: number
+  cantidad: number
+  varianteId?: number
+  varianteSecundariaId?: number
+  agregadoIds: number[]
+}
+
+const CARRITO_REP_LEGACY = /^\d+x\d+(?:-\d+x\d+)*$/
+const esEnteroPositivo = (valor: unknown) => typeof valor === 'number' && Number.isInteger(valor) && valor > 0
+
+export function parseCarritoPrearmado(valor: string): ItemCarritoPrearmado[] | null {
+  if (CARRITO_REP_LEGACY.test(valor)) {
+    return valor.split('-').map((parte) => {
+      const [productoId, cantidad] = parte.split('x').map(Number)
+      return { productoId, cantidad, agregadoIds: [] }
+    })
+  }
+  if (!valor.startsWith('v2:')) return null
+  try {
+    const bruto: unknown = JSON.parse(valor.slice(3))
+    if (!Array.isArray(bruto) || bruto.length === 0 || bruto.length > 30) return null
+    const items: ItemCarritoPrearmado[] = []
+    for (const item of bruto) {
+      if (!item || typeof item !== 'object') return null
+      const raw = item as Record<string, unknown>
+      if (!esEnteroPositivo(raw.p) || !esEnteroPositivo(raw.q) || raw.q > 99) return null
+      if (raw.v !== undefined && !esEnteroPositivo(raw.v)) return null
+      if (raw.s !== undefined && !esEnteroPositivo(raw.s)) return null
+      if (raw.a !== undefined && (!Array.isArray(raw.a) || raw.a.length > 30 || raw.a.some((id) => !esEnteroPositivo(id)))) return null
+      const agregadoIds = (raw.a ?? []) as number[]
+      if (new Set(agregadoIds).size !== agregadoIds.length) return null
+      items.push({
+        productoId: raw.p,
+        cantidad: raw.q,
+        ...(raw.v === undefined ? {} : { varianteId: raw.v as number }),
+        ...(raw.s === undefined ? {} : { varianteSecundariaId: raw.s as number }),
+        agregadoIds,
+      })
+    }
+    return items
+  } catch {
+    return null
+  }
+}
+
+export const esCarritoPrearmadoValido = (valor: string) => parseCarritoPrearmado(valor) !== null
+
 /** Nunca se persiste el token público; el hash es la única representación durable. */
 export function hashTokenMarketing(token: string): string {
   return createHash('sha256').update(token).digest('hex')
