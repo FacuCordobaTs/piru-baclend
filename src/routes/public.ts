@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { pool } from '../db'
 import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable, codigoDescuento as CodigoDescuentoTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable, marketingCampana as MarketingCampanaTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
-import { resolverClienteParaPedido } from '../lib/clientes-identidad'
+import { normalizarTelefonoCliente, resolverClienteParaPedido } from '../lib/clientes-identidad'
 import type { MySql2Database } from 'drizzle-orm/mysql2'
 import { eq, and, desc, or, lt, lte, gte, isNull, sql, inArray } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
@@ -1957,12 +1957,38 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
     const db = drizzle(pool)
     const restauranteId = parseInt(c.req.param('id'), 10)
     const telefono = c.req.param('telefono')
+    const telefonoNormalizado = normalizarTelefonoCliente(telefono)
 
-    if (isNaN(restauranteId) || !telefono) {
+    if (isNaN(restauranteId) || !telefonoNormalizado) {
         return c.json({ success: false, message: 'Parámetros inválidos' }, 400)
     }
 
     try {
+        // Clientes y pedidos históricos no siempre conservaron el teléfono con
+        // el mismo formato. La pantalla Clientes ya vincula el historial por
+        // cliente_id; este endpoint público debe resolver la misma identidad.
+        // La normalización sigue siendo deliberadamente conservadora: sólo
+        // quita separadores, sin inferir 54, 9, 0 ni 15.
+        const clientesCoincidentes = await db
+            .select({ id: ClienteTable.id })
+            .from(ClienteTable)
+            .where(and(
+                eq(ClienteTable.restauranteId, restauranteId),
+                or(
+                    eq(ClienteTable.telefonoNormalizado, telefonoNormalizado),
+                    sql`REGEXP_REPLACE(COALESCE(${ClienteTable.telefono}, ''), '[^0-9]', '') = ${telefonoNormalizado}`
+                )
+            ))
+        const clienteIds = clientesCoincidentes.map((cliente) => cliente.id)
+
+        let identidadPedido: any = sql`REGEXP_REPLACE(COALESCE(${PedidoUnificadoTable.telefono}, ''), '[^0-9]', '') = ${telefonoNormalizado}`
+        if (clienteIds.length > 0) {
+            identidadPedido = or(
+                identidadPedido,
+                inArray(PedidoUnificadoTable.clienteId, clienteIds),
+            )
+        }
+
         const pedidosDT = await db
             .select({
                 id: PedidoUnificadoTable.id,
@@ -1984,7 +2010,7 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
             .from(PedidoUnificadoTable)
             .where(and(
                 eq(PedidoUnificadoTable.restauranteId, restauranteId),
-                eq(PedidoUnificadoTable.telefono, telefono),
+                identidadPedido,
                 eq(PedidoUnificadoTable.pagado, true)
             ))
             .orderBy(desc(PedidoUnificadoTable.createdAt))
