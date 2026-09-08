@@ -24,6 +24,7 @@ import {
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { columnasIndiceCliente } from '../lib/clientes-identidad'
+import { requirePosConsulta } from '../middleware/pos-evento'
 import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS } from '../lib/modulos'
 import { eq, desc, inArray, notInArray, and } from 'drizzle-orm'
@@ -67,7 +68,7 @@ async function borrarPedidosUnificados(tx: any, restauranteId: number, pedidoIds
 
 clientesRoute.use('*', authMiddleware)
 
-clientesRoute.get('/indice-pos', requireModulo(MODULE_KEYS.POS), async (c) => {
+clientesRoute.get('/indice-pos', requirePosConsulta, async (c) => {
     const inicio = performance.now()
     const restauranteId = Number((c as any).user.id)
     const data = await drizzle(pool).select(columnasIndiceCliente).from(ClienteTable)

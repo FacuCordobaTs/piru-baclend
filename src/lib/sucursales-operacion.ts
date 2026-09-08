@@ -1,9 +1,26 @@
 import { and, eq, sql } from 'drizzle-orm'
 import type { MySql2Database } from 'drizzle-orm/mysql2'
-import { pedidoUnificado, sucursal } from '../db/schema'
+import { pedidoUnificado, sucursal, suscripcion } from '../db/schema'
+import { moduloEstaActivoAhora, type PoliticaModuloInput } from './modulos'
 
 type Db = MySql2Database<Record<string, never>>
 export type SucursalOperacion = { id: number; activo: boolean; soloPos: boolean }
+
+/** La sede habilita sólo su POS, conservando la política de suscripción incluida. */
+export function eventoHabilitaPos(sede: SucursalOperacion | undefined, estadoSuscripcion: PoliticaModuloInput['estadoSuscripcion']): boolean {
+  return !!sede?.soloPos && sede.activo && moduloEstaActivoAhora({
+    tipo: 'incluido', estado: 'activo', origen: 'usuario', precioMensualCongelado: null, vigenteHasta: null, estadoSuscripcion,
+  })
+}
+
+export async function tienePosDeEvento(db: Db, restauranteId: number, sucursalId: number | undefined) {
+  if (!Number.isInteger(sucursalId) || !sucursalId || sucursalId < 1) return false
+  const [sede] = await db.select({ id: sucursal.id, activo: sucursal.activo, soloPos: sucursal.soloPos,
+    estadoSuscripcion: suscripcion.estado }).from(sucursal)
+    .leftJoin(suscripcion, eq(suscripcion.restauranteId, sucursal.restauranteId))
+    .where(and(eq(sucursal.id, sucursalId), eq(sucursal.restauranteId, restauranteId))).limit(1)
+  return eventoHabilitaPos(sede, sede?.estadoSuscripcion ?? null)
+}
 
 export function resolverSucursalOperacion(sucursales: SucursalOperacion[], raw?: string) {
   const id = Number(raw)

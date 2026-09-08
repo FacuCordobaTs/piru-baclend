@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite'
 import { and, eq, sql } from 'drizzle-orm'
 import { MySqlDialect } from 'drizzle-orm/mysql-core'
 import { pedidoUnificado, sucursal } from '../db/schema'
-import { errorSucursalPos, filtroPedidosPorSede, sucursalPublica, type SucursalOperacion } from './sucursales-operacion'
+import { eventoHabilitaPos, errorSucursalPos, filtroPedidosPorSede, sucursalPublica, type SucursalOperacion } from './sucursales-operacion'
 
 const dialect = new MySqlDialect()
 const sedes: SucursalOperacion[] = [
@@ -81,4 +81,13 @@ describe('local + evento sin mezclar pedidos', () => {
     expect(errorSucursalPos(sedes, 20)).toBeNull()
     for (const id of [undefined, 10, 11, 21, 30, 999]) expect(errorSucursalPos(sedes, id)).not.toBeNull()
   })
+})
+
+test('el permiso POS propio del evento respeta actividad y suscripción, sin entitlement global', () => {
+  const evento = { id: 20, activo: true, soloPos: true }
+  for (const estado of ['trial', 'activa', 'pago_pendiente', null] as const) expect(eventoHabilitaPos(evento, estado)).toBe(true)
+  for (const estado of ['suspendida', 'cancelada'] as const) expect(eventoHabilitaPos(evento, estado)).toBe(false)
+  expect(eventoHabilitaPos({ ...evento, activo: false }, 'activa')).toBe(false)
+  expect(eventoHabilitaPos({ ...evento, soloPos: false }, 'activa')).toBe(false)
+  expect(eventoHabilitaPos(undefined, 'activa')).toBe(false)
 })

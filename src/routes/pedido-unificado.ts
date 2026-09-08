@@ -44,6 +44,7 @@ import {
   buildClienteContexto,
   buildCampanaPedido,
 } from '../lib/pedidos-activos'
+import { requirePosEnSucursal, requirePosDelPedido } from '../middleware/pos-evento'
 import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { consumirMensaje, estadoEnvioUtility, avisarSaldoBajoSiCorresponde } from '../lib/mensajes-wallet'
@@ -217,8 +218,8 @@ export async function reservarMesaLocal(tx: any, restauranteId: number, mesaLoca
 
 /**
  * `/create` es el endpoint autenticado del pedido anotado desde el POS. El
- * único caso que puede usarlo sin el módulo es el pedido de prueba durante el
- * onboarding, antes de que el restaurante entre al panel. No se usa el flag
+ * evento activo puede usarlo sin activar el módulo general. También conserva
+ * el pedido de prueba durante el onboarding. No se usa ese flag
  * como un bypass general: debe ser el pedido de prueba explícito y el
  * onboarding debe seguir incompleto.
  */
@@ -241,7 +242,7 @@ async function requirePosOPruebaOnboarding(c: Context, next: Next) {
     }
   }
 
-  return requireModulo(MODULE_KEYS.POS)(c, next)
+  return requirePosEnSucursal(c, next, body.sucursalId)
 }
 
 function esMetodoAutomatico(metodo: string | null) {
@@ -693,7 +694,7 @@ const pedidoUnificadoRoute = new Hono()
   })
 
   // Edición transaccional de comandas POS. No modifica los flujos web, sala ni IA.
-  .post('/:id/items', requireModulo(MODULE_KEYS.POS), zValidator('json', posItemSchema), async (c) => {
+  .post('/:id/items', requirePosDelPedido, zValidator('json', posItemSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))
@@ -710,7 +711,7 @@ const pedidoUnificadoRoute = new Hono()
     return c.json({ success: true, data }, 200)
   })
 
-  .put('/:id/items/:itemId', requireModulo(MODULE_KEYS.POS), zValidator('json', posItemSchema), async (c) => {
+  .put('/:id/items/:itemId', requirePosDelPedido, zValidator('json', posItemSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))
@@ -730,7 +731,7 @@ const pedidoUnificadoRoute = new Hono()
     return c.json({ success: true, data }, 200)
   })
 
-  .delete('/:id/items/:itemId', requireModulo(MODULE_KEYS.POS), zValidator('json', deletePosItemSchema), async (c) => {
+  .delete('/:id/items/:itemId', requirePosDelPedido, zValidator('json', deletePosItemSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))
@@ -749,7 +750,7 @@ const pedidoUnificadoRoute = new Hono()
     return c.json({ success: true, data }, 200)
   })
 
-  .put('/:id/datos-pos', requireModulo(MODULE_KEYS.POS), zValidator('json', datosPosSchema), async (c) => {
+  .put('/:id/datos-pos', requirePosDelPedido, zValidator('json', datosPosSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))
@@ -790,7 +791,7 @@ const pedidoUnificadoRoute = new Hono()
 
   // Guarda en una sola transacción el borrador completo del POS. Este endpoint
   // aditivo evita que una edición de varios productos quede aplicada a medias.
-  .put('/:id/pos', requireModulo(MODULE_KEYS.POS), zValidator('json', posPedidoSchema), async (c) => {
+  .put('/:id/pos', requirePosDelPedido, zValidator('json', posPedidoSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))

@@ -75,7 +75,7 @@ test.skipIf(!url)('MySQL: migraciones, POST POS, carrera, clientes, edición, í
     mock.module('../src/lib/pedidos-activos', () => ({ ...pedidos, emitirEventoPedido: async (_db: any, event: any) => { eventos.push(event) } }))
     const { pedidoUnificadoRoute } = await import('../src/routes/pedido-unificado')
     const { clientesRoute } = await import('../src/routes/clientes')
-    const post = (body: any, tenant = 1) => pedidoUnificadoRoute.request('/create', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tenant}` }, body: JSON.stringify(body) })
+    const post = (body: any, tenant = 1, sinPos = false) => pedidoUnificadoRoute.request('/create', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tenant}`, ...(sinPos ? { 'X-Sin-Pos': '1' } : {}) }, body: JSON.stringify(body) })
     const input = { tipo: 'takeaway', clientRequestId: crypto.randomUUID(), nombreCliente: 'Caja', telefono: '(11) 5555-8888', anotadoManualmente: true, pagado: true, items: [{ productoId: 1, cantidad: 2 }] }
     const carrera = await Promise.all([post(input), post(input)])
     expect(carrera.map(r => r.status).sort()).toEqual([200, 201])
@@ -179,9 +179,20 @@ test.skipIf(!url)('MySQL: migraciones, POST POS, carrera, clientes, edición, í
     // Evento opt-in sobre el mismo tenant: NULL histórico y pedidos web quedan en el local.
     await db.query("INSERT INTO sucursal (id,restaurante_id,nombre,solo_pos) VALUES (10,1,'Evento fixture',1),(20,2,'Otro local',0)")
     const eventoRequestId = crypto.randomUUID()
-    const evento = await (await post({ ...input, clientRequestId: eventoRequestId, sucursalId: 10 })).json() as any
+    const evento = await (await post({ ...input, clientRequestId: eventoRequestId, sucursalId: 10 }, 1, true)).json() as any
     expect(evento.success).toBe(true)
     expect(evento.data.sucursalId).toBe(10)
+    expect((await post({ ...input, clientRequestId: crypto.randomUUID() }, 1, true)).status).toBe(403)
+    expect((await post({ ...input, clientRequestId: crypto.randomUUID(), sucursalId: 20 }, 1, true)).status).toBe(403)
+    const headersSinPos = { Authorization: 'Bearer 1', 'Content-Type': 'application/json', 'X-Sin-Pos': '1' }
+    expect((await pedidoUnificadoRoute.request(`/${evento.data.id}/datos-pos`, { method: 'PUT', headers: headersSinPos,
+      body: JSON.stringify({ version: 1, nombreCliente: 'Evento sin módulo' }) })).status).toBe(200)
+    // Mandar el ID del evento en el body/query no habilita editar un pedido web.
+    expect((await pedidoUnificadoRoute.request(`/${pedidoId}/datos-pos?sucursalId=10`, { method: 'PUT', headers: headersSinPos,
+      body: JSON.stringify({ version: 1, sucursalId: 10, nombreCliente: 'No debe cambiar' }) })).status).toBe(403)
+    expect((await clientesRoute.request('/indice-pos?sucursalId=10', { headers: headersSinPos })).status).toBe(200)
+    expect((await clientesRoute.request('/indice-pos?sucursalId=20', { headers: headersSinPos })).status).toBe(403)
+
     expect((await post({ ...input, clientRequestId: crypto.randomUUID() })).status).toBe(422)
     expect((await post({ ...input, clientRequestId: crypto.randomUUID(), sucursalId: 20 })).status).toBe(422)
     const list = async (scope = '') => (await (await pedidoUnificadoRoute.request(`/list?limit=500${scope}`, { headers: { Authorization: 'Bearer 1' } })).json() as any).data

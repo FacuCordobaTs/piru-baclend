@@ -39,7 +39,7 @@ const sucursalesRoute = new Hono()
 
 sucursalesRoute.use('*', authMiddleware)
 
-function moduloRequerido(c: Context, modulo: typeof MODULE_KEYS.MULTISUCURSAL | typeof MODULE_KEYS.RAPIBOY | typeof MODULE_KEYS.POS, message: string) {
+function moduloRequerido(c: Context, modulo: typeof MODULE_KEYS.MULTISUCURSAL | typeof MODULE_KEYS.RAPIBOY, message: string) {
   return c.json(
     {
       success: false,
@@ -76,9 +76,6 @@ async function crearSucursal(c: Context, body: z.infer<typeof createSucursalSche
   const restauranteId = (c as any).user.id
 
   try {
-    if (body.soloPos && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.POS))) {
-      return moduloRequerido(c, MODULE_KEYS.POS, 'Activá el módulo POS para crear una sede de evento')
-    }
     // La suscripción base permite una sucursal. Crear una segunda o más requiere
     // el módulo incluido opt-in, sin alterar las sucursales existentes.
     // El gate va acá (no como middleware) porque depende de cuántas ya existen.
