@@ -1,3 +1,5 @@
+import { sucursalPublica } from '../lib/sucursales-operacion'
+import { sucursal as SucursalTable } from '../db/schema'
 import { Hono } from 'hono'
 import { pool } from '../db'
 import { zonaDelivery as ZonaDeliveryTable } from '../db/schema'
@@ -56,6 +58,11 @@ zonaDeliveryRoute.post('/create', zValidator('json', createZonaSchema), async (c
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const { nombre, precio, poligono, color, sucursalId } = c.req.valid('json')
+    if (sucursalId != null) {
+        const [sede] = await db.select({ id: SucursalTable.id }).from(SucursalTable)
+            .where(and(eq(SucursalTable.id, sucursalId), sucursalPublica(restauranteId))).limit(1)
+        if (!sede) return c.json({ success: false, message: 'Elegí un local de atención web; los eventos no reciben delivery de la tienda.' }, 400)
+    }
 
     try {
         const result = await db.insert(ZonaDeliveryTable).values({
@@ -93,6 +100,11 @@ zonaDeliveryRoute.put('/:id', zValidator('json', updateZonaSchema), async (c) =>
     }
 
     const { nombre, precio, poligono, color, sucursalId } = c.req.valid('json')
+    if (sucursalId != null) {
+        const [sede] = await db.select({ id: SucursalTable.id }).from(SucursalTable)
+            .where(and(eq(SucursalTable.id, sucursalId), sucursalPublica(restauranteId))).limit(1)
+        if (!sede) return c.json({ success: false, message: 'Elegí un local de atención web; los eventos no reciben delivery de la tienda.' }, 400)
+    }
 
     try {
         // Verificar que la zona pertenece al restaurante

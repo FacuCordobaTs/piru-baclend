@@ -22,6 +22,7 @@ import {
   METODOS_PAGO_AUTOMATICOS_EN_PEDIDO,
   METODOS_PAGO_MANUAL_VERIFICABLE_EN_PEDIDO,
 } from './metodos-pago'
+import { filtroSucursalOperacion } from './sucursales-operacion'
 import { wsManager } from '../websocket/manager'
 
 type Db = MySql2Database<Record<string, never>>
@@ -80,6 +81,7 @@ export const PEDIDO_LIST_PROJECTION = {
   consumoEnLocal: PedidoUnificadoTable.consumoEnLocal,
   creadoPorUsuarioId: PedidoUnificadoTable.creadoPorUsuarioId,
   sucursalNombre: SucursalTable.nombre,
+  sucursalSoloPos: SucursalTable.soloPos,
   // Campo aditivo para que las comandas de transferencia manual usen el
   // alias de la sucursal del pedido en vez del alias global del restaurante.
   transferenciaAliasDestino: SucursalTable.transferenciaAlias,
@@ -198,28 +200,7 @@ export async function buildPedidosWhere(
   }
   if (opts?.desde) whereCondition = and(whereCondition, sql`${PedidoUnificadoTable.createdAt} >= ${opts.desde}`)
   if (opts?.hasta) whereCondition = and(whereCondition, sql`${PedidoUnificadoTable.createdAt} < ${opts.hasta}`)
-  if (sucursalIdParam !== undefined && sucursalIdParam !== '') {
-    const sid = Number(sucursalIdParam)
-    if (!Number.isNaN(sid) && sid > 0) {
-      // Admins ya instalados pueden conservar en localStorage una sucursal que
-      // fue eliminada o desactivada. Aplicar ese id obsoleto deja la operación
-      // completa en blanco, aunque los pedidos actuales tengan sucursal_id NULL.
-      // Sólo respetamos el filtro cuando todavía identifica una sucursal activa
-      // del restaurante autenticado; de lo contrario devolvemos todas.
-      const [sucursalActiva] = await db
-        .select({ id: SucursalTable.id })
-        .from(SucursalTable)
-        .where(and(
-          eq(SucursalTable.id, sid),
-          eq(SucursalTable.restauranteId, restauranteId),
-          eq(SucursalTable.activo, true),
-        ))
-        .limit(1)
-      if (sucursalActiva) {
-        whereCondition = and(whereCondition, eq(PedidoUnificadoTable.sucursalId, sid))
-      }
-    }
-  }
+  whereCondition = and(whereCondition, await filtroSucursalOperacion(db, restauranteId, sucursalIdParam))
   return whereCondition
 }
 

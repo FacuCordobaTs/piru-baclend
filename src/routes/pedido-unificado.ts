@@ -1,4 +1,5 @@
 // pedido-unificado.ts - Gestión unificada de pedidos delivery, takeaway y mesa
+import { cargarSucursalesOperacion, errorSucursalPos } from '../lib/sucursales-operacion'
 import { Hono, type Context, type Next } from 'hono'
 import { pool } from '../db'
 import {
@@ -456,7 +457,13 @@ const pedidoUnificadoRoute = new Hono()
     // `turnoId` es aditivo: los admins instalados que todavía no lo mandan
     // conservan el contrato anterior. Los nuevos evitan cerrar por error un
     // turno que otro dispositivo acaba de abrir.
-    const body = await c.req.json().catch(() => ({})) as { turnoId?: unknown }
+    const body = await c.req.json().catch(() => ({})) as { turnoId?: unknown; sucursalId?: number }
+    if (body.sucursalId != null) {
+      const sedes = await cargarSucursalesOperacion(db, restauranteId)
+      if (sedes.some(s => s.id === body.sucursalId && s.soloPos)) {
+        return c.json({ success: false, message: 'El evento consulta su caja por día; el cierre de turno corresponde al local.' }, 422)
+      }
+    }
     const turnoId = Number(body.turnoId)
     const turnoEsperadoId = Number.isInteger(turnoId) && turnoId > 0 ? turnoId : undefined
     try {
@@ -900,6 +907,9 @@ const pedidoUnificadoRoute = new Hono()
     }
     const existente = await buscarPedidoPorRequest(db, restauranteId, body.clientRequestId)
     if (existente) return responderReintento(existente)
+
+    const errorSede = errorSucursalPos(await cargarSucursalesOperacion(db, restauranteId), body.sucursalId)
+    if (errorSede) return c.json({ success: false, message: errorSede, code: 'SUCURSAL_POS_NO_DISPONIBLE' }, 422)
 
     const uniqueProductosIds = [...new Set(items.map((i) => i.productoId))]
     const productos = await db

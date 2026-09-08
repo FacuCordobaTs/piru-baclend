@@ -1,4 +1,5 @@
 // pedido.ts
+import { cargarSucursalesOperacion, filtroSucursalOperacion, resolverSucursalOperacion } from '../lib/sucursales-operacion'
 import { Hono } from 'hono'
 import { pool } from '../db'
 import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable, mesaLocal as MesaLocalTable, pago as PagoTable, ingrediente as IngredienteTable, pedidoUnificado as PedidoUnificadoTable, itemPedidoUnificado as ItemPedidoUnificadoTable, repartidor as RepartidorTable } from '../db/schema'
@@ -53,6 +54,10 @@ const pedidoRoute = new Hono()
     const restauranteId = Number(rawId)
     const fechaStr = c.req.query('fecha') // YYYY-MM-DD format
     const turnoId = Number(c.req.query('turnoId'))
+    const sedes = await cargarSucursalesOperacion(db, restauranteId)
+    const tieneEventos = sedes.some(s => s.soloPos)
+    const sedeEvento = resolverSucursalOperacion(sedes, c.req.query('sucursalId'))?.soloPos === true
+    const filtroSede = tieneEventos ? await filtroSucursalOperacion(db, restauranteId, c.req.query('sucursalId')) : sql`TRUE`
 
     console.log(`📊 Cierre de turno - rawId: ${rawId}, restauranteId: ${restauranteId}, type: ${typeof rawId}, fecha: ${fechaStr || 'hoy'}`)
 
@@ -118,6 +123,7 @@ const pedidoRoute = new Hono()
         .leftJoin(MesaTable, eq(PedidoTable.mesaId, MesaTable.id))
         .where(and(
           eq(PedidoTable.restauranteId, restauranteId),
+          sedeEvento ? sql`FALSE` : sql`TRUE`,
           eq(PedidoTable.pagado, true)
         ))
 
@@ -198,6 +204,7 @@ const pedidoRoute = new Hono()
         .leftJoin(MesaLocalTable, eq(PedidoUnificadoTable.mesaLocalId, MesaLocalTable.id))
         .where(and(
           eq(PedidoUnificadoTable.restauranteId, restauranteId),
+          filtroSede,
           eq(PedidoUnificadoTable.pagado, true),
           gte(PedidoUnificadoTable.createdAt, startOfDay),
           lt(PedidoUnificadoTable.createdAt, endOfDay)
@@ -255,6 +262,7 @@ const pedidoRoute = new Hono()
         .from(PedidoTable)
         .where(and(
           eq(PedidoTable.restauranteId, restauranteId),
+          sedeEvento ? sql`FALSE` : sql`TRUE`,
           eq(PedidoTable.pagado, true),
           gte(PedidoTable.createdAt, ninetyDaysAgo)
         ))
@@ -279,6 +287,7 @@ const pedidoRoute = new Hono()
         .from(PedidoUnificadoTable)
         .where(and(
           eq(PedidoUnificadoTable.restauranteId, restauranteId),
+          filtroSede,
           eq(PedidoUnificadoTable.pagado, true),
           gte(PedidoUnificadoTable.createdAt, ninetyDaysAgo)
         ))

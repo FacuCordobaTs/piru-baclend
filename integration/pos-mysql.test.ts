@@ -25,7 +25,8 @@ test.skipIf(!url)('MySQL: migraciones, POST POS, carrera, clientes, edición, í
       if (!is(table, MySqlTable)) continue
       const config = getTableConfig(table)
       const columns = config.columns.filter(c => !(config.name === 'cliente' && ['telefono_normalizado', 'updated_at'].includes(c.name))
-        && !(config.name === 'pedido_unificado' && c.name === 'client_request_id'))
+        && !(config.name === 'pedido_unificado' && c.name === 'client_request_id')
+        && !(config.name === 'sucursal' && c.name === 'solo_pos'))
       const defs = columns.map((c: any) => {
         let def = `\`${c.name}\` ${c.getSQLType()}${c.notNull ? ' NOT NULL' : ''}${c.autoIncrement ? ' AUTO_INCREMENT' : ''}${c.primary ? ' PRIMARY KEY' : ''}`
         if (c.default !== undefined) {
@@ -38,6 +39,8 @@ test.skipIf(!url)('MySQL: migraciones, POST POS, carrera, clientes, edición, í
       // esa tabla auxiliar necesita latin1 para caber; cliente/POS usan utf8mb4.
       await db.query(`CREATE TABLE \`${config.name}\` (${defs.join(',')}) ENGINE=InnoDB DEFAULT CHARSET=${config.name === 'restaurante' ? 'latin1' : 'utf8mb4'}`)
     }
+    const eventosMigration = sentenciasMigracion(await Bun.file(new URL('../migrations/add_sucursal_solo_pos.sql', import.meta.url)).text())
+    for (let i = 0; i < 2; i++) for (const statement of eventosMigration) await db.query(statement)
     await db.query("INSERT INTO restaurante (id,nombre,email,completed_onboarding) VALUES (1,'Local A','a@example.test',1),(2,'Local B','b@example.test',1)")
     await db.query("INSERT INTO producto (id,restaurante_id,nombre,precio) VALUES (1,1,'Pizza',100),(2,2,'Pizza B',200)")
     await db.query("INSERT INTO cliente (id,restaurante_id,nombre,telefono,puntos,marketing_opt_out) VALUES (1,1,'Viejo','341 5123456',3,1),(2,1,'Reciente','(341)5123456',4,0),(3,2,'Otro tenant','3415123456',0,0),(4,1,'Sin identidad','123',0,0)")
@@ -173,6 +176,28 @@ test.skipIf(!url)('MySQL: migraciones, POST POS, carrera, clientes, edición, í
     expect(historico[0].telefono).toBe('44445555')
     expect(historico[1].cliente_id).toBeNull(); expect(historico[2].cliente_id).toBeNull()
     expect(Number((await auditarClientesPos(db)).pedidosVinculables)).toBe(0)
+    // Evento opt-in sobre el mismo tenant: NULL histórico y pedidos web quedan en el local.
+    await db.query("INSERT INTO sucursal (id,restaurante_id,nombre,solo_pos) VALUES (10,1,'Evento fixture',1),(20,2,'Otro local',0)")
+    const eventoRequestId = crypto.randomUUID()
+    const evento = await (await post({ ...input, clientRequestId: eventoRequestId, sucursalId: 10 })).json() as any
+    expect(evento.success).toBe(true)
+    expect(evento.data.sucursalId).toBe(10)
+    expect((await post({ ...input, clientRequestId: crypto.randomUUID() })).status).toBe(422)
+    expect((await post({ ...input, clientRequestId: crypto.randomUUID(), sucursalId: 20 })).status).toBe(422)
+    const list = async (scope = '') => (await (await pedidoUnificadoRoute.request(`/list?limit=500${scope}`, { headers: { Authorization: 'Bearer 1' } })).json() as any).data
+    expect((await list()).some((p: any) => p.id === evento.data.id)).toBe(false)
+    expect((await list('&sucursalId=10')).map((p: any) => p.id)).toEqual([evento.data.id])
+    const { sucursalesRoute } = await import('../src/routes/sucursales')
+    const legacySedes = await (await sucursalesRoute.request('/list', { headers: { Authorization: 'Bearer 1' } })).json() as any
+    expect(legacySedes.data).toHaveLength(0)
+    const nuevasSedes = await (await sucursalesRoute.request('/list?incluirEventos=1', { headers: { Authorization: 'Bearer 1' } })).json() as any
+    expect(nuevasSedes.data[0].soloPos).toBe(true)
+    await db.query('UPDATE sucursal SET activo=0 WHERE id=10')
+    expect((await list()).some((p: any) => p.id === evento.data.id)).toBe(false)
+    expect((await list('&sucursalId=10')).map((p: any) => p.id)).toEqual([evento.data.id])
+    expect((await post({ ...input, clientRequestId: crypto.randomUUID(), sucursalId: 10 })).status).toBe(422)
+    // Reintentar un pedido ya confirmado sigue siendo idempotente después de terminar el evento.
+    expect((await post({ ...input, clientRequestId: eventoRequestId, sucursalId: 10 })).status).toBe(200)
     console.info('[pos_mysql_verificado]', { version: (await db.query<any[]>('SELECT VERSION() AS v'))[0][0].v, migracionAditiva: 2, migracionUnicidad: 2, duplicados: 0, eventos: eventos.length })
   } finally {
     await db.end(); await pool.end()

@@ -1,3 +1,4 @@
+import { sucursalPublica } from '../lib/sucursales-operacion'
 import { Hono } from 'hono'
 import { pool } from '../db'
 import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable, codigoDescuento as CodigoDescuentoTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable, marketingCampana as MarketingCampanaTable } from '../db/schema'
@@ -370,10 +371,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
                 transferenciaAlias: SucursalTable.transferenciaAlias,
             })
             .from(SucursalTable)
-            .where(and(
-                eq(SucursalTable.restauranteId, restauranteId),
-                eq(SucursalTable.activo, true),
-            ))
+            .where(sucursalPublica(restauranteId))
 
         // Productos sin joins (evita bug Drizzle orderSelectedFields con leftJoin null)
         const productosRaw = await db
@@ -964,7 +962,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 const [sc] = await db
                     .select({ activo: SucursalTable.activo })
                     .from(SucursalTable)
-                    .where(eq(SucursalTable.id, zonaMatch.sucursalId))
+                    .where(and(eq(SucursalTable.id, zonaMatch.sucursalId), sucursalPublica(restauranteId)))
                     .limit(1)
                 if (!sc || !sc.activo) {
                     return c.json({
@@ -1547,8 +1545,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 .from(SucursalTable)
                 .where(and(
                     eq(SucursalTable.id, sucursalId),
-                    eq(SucursalTable.restauranteId, restauranteId),
-                    eq(SucursalTable.activo, true),
+                    sucursalPublica(restauranteId),
                 ))
                 .limit(1)
             if (!scRow) {
@@ -1929,7 +1926,7 @@ publicRoute.get('/restaurante/:id/check-zona', async (c) => {
             const [sc] = await db
                 .select({ activo: SucursalTable.activo })
                 .from(SucursalTable)
-                .where(eq(SucursalTable.id, zonaMatch.sucursalId))
+                .where(and(eq(SucursalTable.id, zonaMatch.sucursalId), sucursalPublica(restauranteId)))
                 .limit(1)
             if (!sc || !sc.activo) {
                 return c.json({

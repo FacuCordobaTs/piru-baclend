@@ -1,3 +1,4 @@
+import { sucursalPublica } from '../lib/sucursales-operacion'
 // src/websocket/manager.ts
 import { drizzle } from 'drizzle-orm/mysql2';
 import { resolverClienteParaPedido } from '../lib/clientes-identidad'
@@ -1395,6 +1396,17 @@ class WebSocketManager {
           payload: { message: 'Falta dirección de entrega válida.' }
         });
         return;
+      }
+
+      // El checkout grupal escribe directamente: comparte la misma barrera que
+      // la tienda HTTP para que una sede interna jamás reciba pedidos web.
+      if (checkoutData.sucursalId != null) {
+        const [sede] = await this.db.select({ id: SucursalTable.id }).from(SucursalTable)
+          .where(and(eq(SucursalTable.id, checkoutData.sucursalId), sucursalPublica(sala[0].restauranteId!))).limit(1);
+        if (!sede) {
+          this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'El local elegido no está disponible para pedidos web.' } });
+          return;
+        }
       }
 
       // Sala confirma un checkout real (delivery/takeaway), por lo que también

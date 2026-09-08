@@ -10,6 +10,7 @@ import { eq, and, count } from 'drizzle-orm'
 
 const createSucursalSchema = z.object({
   nombre: z.string().min(1, 'El nombre es requerido'),
+  soloPos: z.boolean().optional().default(false),
   direccion: z.string().max(512).optional().nullable(),
   direccionLat: z.number().min(-90).max(90).optional().nullable(),
   direccionLng: z.number().min(-180).max(180).optional().nullable(),
@@ -38,7 +39,7 @@ const sucursalesRoute = new Hono()
 
 sucursalesRoute.use('*', authMiddleware)
 
-function moduloRequerido(c: Context, modulo: typeof MODULE_KEYS.MULTISUCURSAL | typeof MODULE_KEYS.RAPIBOY, message: string) {
+function moduloRequerido(c: Context, modulo: typeof MODULE_KEYS.MULTISUCURSAL | typeof MODULE_KEYS.RAPIBOY | typeof MODULE_KEYS.POS, message: string) {
   return c.json(
     {
       success: false,
@@ -60,7 +61,8 @@ sucursalesRoute.get('/list', async (c) => {
     const sucursales = await db
       .select()
       .from(SucursalTable)
-      .where(eq(SucursalTable.restauranteId, restauranteId))
+      .where(and(eq(SucursalTable.restauranteId, restauranteId),
+        c.req.query('incluirEventos') === '1' ? undefined : eq(SucursalTable.soloPos, false)))
 
     return c.json({ success: true, data: sucursales }, 200)
   } catch (error) {
@@ -69,12 +71,14 @@ sucursalesRoute.get('/list', async (c) => {
   }
 })
 
-sucursalesRoute.post('/create', zValidator('json', createSucursalSchema), async (c) => {
+async function crearSucursal(c: Context, body: z.infer<typeof createSucursalSchema>) {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const body = c.req.valid('json')
 
   try {
+    if (body.soloPos && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.POS))) {
+      return moduloRequerido(c, MODULE_KEYS.POS, 'Activá el módulo POS para crear una sede de evento')
+    }
     // La suscripción base permite una sucursal. Crear una segunda o más requiere
     // el módulo incluido opt-in, sin alterar las sucursales existentes.
     // El gate va acá (no como middleware) porque depende de cuántas ya existen.
@@ -98,6 +102,7 @@ sucursalesRoute.post('/create', zValidator('json', createSucursalSchema), async 
     const result = await db.insert(SucursalTable).values({
       restauranteId,
       nombre: body.nombre,
+      soloPos: body.soloPos,
       direccion: body.direccion ?? null,
       direccionLat: body.direccionLat != null ? String(body.direccionLat) : null,
       direccionLng: body.direccionLng != null ? String(body.direccionLng) : null,
@@ -121,7 +126,14 @@ sucursalesRoute.post('/create', zValidator('json', createSucursalSchema), async 
     console.error('Error creando sucursal:', error)
     return c.json({ success: false, message: 'Error al crear sucursal' }, 500)
   }
+}
+
+sucursalesRoute.post('/create', zValidator('json', createSucursalSchema), c => {
+  const body = c.req.valid('json')
+  if (body.soloPos) return c.json({ success: false, message: 'Usá la creación de eventos para una sede exclusiva del POS.' }, 400)
+  return crearSucursal(c, body)
 })
+sucursalesRoute.post('/evento-pos', zValidator('json', createSucursalSchema), c => crearSucursal(c, { ...c.req.valid('json'), soloPos: true }))
 
 sucursalesRoute.put('/:id', zValidator('json', updateSucursalSchema), async (c) => {
   const db = drizzle(pool)

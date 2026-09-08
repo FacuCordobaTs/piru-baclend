@@ -154,6 +154,8 @@ export const sucursal = mysqlTable("sucursal", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
   nombre: varchar("nombre", { length: 255 }).notNull(),
+  // Sede interna de eventos: nunca se ofrece en la tienda ni se mezcla con el local.
+  soloPos: boolean("solo_pos").default(false).notNull(),
   direccion: varchar("direccion", { length: 512 }),
   direccionLat: decimal("direccion_lat", { precision: 10, scale: 7 }),
   direccionLng: decimal("direccion_lng", { precision: 10, scale: 7 }),
