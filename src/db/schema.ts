@@ -236,7 +236,9 @@ export const sesionStaff = mysqlTable("sesion_staff", {
   id: int("id").primaryKey().autoincrement(),
   usuarioRestauranteId: int("usuario_restaurante_id").references(() => usuarioRestaurante.id, { onDelete: "cascade" }).notNull(),
   tokenHash: varchar("token_hash", { length: 64 }).notNull().unique(),
-  expiraAt: timestamp("expira_at").notNull(),
+  // NULL representa una sesión sin vencimiento. La revocación explícita sigue
+  // siendo obligatoria para invalidarla.
+  expiraAt: timestamp("expira_at"),
   revocadaAt: timestamp("revocada_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [

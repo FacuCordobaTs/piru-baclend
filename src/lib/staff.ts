@@ -1,12 +1,14 @@
 import { createHash, randomBytes } from 'node:crypto'
 import * as bcrypt from 'bcrypt'
 import * as jwt from 'jsonwebtoken'
-import { and, eq, gt, isNull } from 'drizzle-orm'
+import { and, eq, gt, isNull, or } from 'drizzle-orm'
 import { restaurante as RestauranteTable, sesionStaff as SesionStaffTable, usuarioRestaurante as UsuarioRestauranteTable } from '../db/schema'
 
 export const STAFF_ROLES = ['owner', 'admin', 'mozo'] as const
 export type StaffRole = typeof STAFF_ROLES[number]
-export const STAFF_SESSION_HOURS = 12
+// Las sesiones de la PWA de mozos no vencen por tiempo. Siguen siendo
+// revocables desde el panel al desactivar el usuario o cambiar su PIN.
+export const STAFF_SESSION_HOURS: number | null = null
 const MAX_PIN_ATTEMPTS = 5
 const PIN_LOCK_MINUTES = 15
 
@@ -45,7 +47,7 @@ export async function asegurarOwnerStaff(db: any, restauranteId: number) {
 }
 
 export async function crearSesionStaff(db: any, usuario: any) {
-  const expiraAt = new Date(Date.now() + STAFF_SESSION_HOURS * 60 * 60 * 1000)
+  const expiraAt = null
   const raw = randomBytes(32).toString('base64url')
   const result = await db.insert(SesionStaffTable).values({
     usuarioRestauranteId: usuario.id,
@@ -56,7 +58,7 @@ export async function crearSesionStaff(db: any, usuario: any) {
   const token = jwt.sign({
     typ: 'staff', sid: sesionId, uid: usuario.id, rid: usuario.restauranteId,
     rol: usuario.rol, sucursalId: usuario.sucursalId, nonce: raw,
-  }, process.env.JWT_SECRET || 'fallback-secret', { expiresIn: `${STAFF_SESSION_HOURS}h` })
+  }, process.env.JWT_SECRET || 'fallback-secret')
   await db.update(UsuarioRestauranteTable).set({ ultimoAccesoAt: new Date(), intentosPinFallidos: 0, bloqueadoHasta: null, updatedAt: new Date() })
     .where(eq(UsuarioRestauranteTable.id, usuario.id))
   return { token, expiraAt, sesionId }
@@ -84,11 +86,19 @@ export async function autenticarStaffConPin(db: any, codigoAcceso: string, pin: 
 
 export async function resolverSesionStaff(db: any, token: string): Promise<StaffPrincipal | null> {
   let decoded: any
-  try { decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret') } catch { return null }
+  // Las sesiones emitidas antes de esta versión tienen un claim `exp` de 12 h.
+  // Su vigencia se decide exclusivamente por la sesión persistida, lo que
+  // permite extenderlas sin forzar otro OTP y conserva la revocación server-side.
+  try { decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret', { ignoreExpiration: true }) } catch { return null }
   if (decoded?.typ !== 'staff' || !Number.isInteger(decoded.sid) || !Number.isInteger(decoded.uid) || !Number.isInteger(decoded.rid) || typeof decoded.nonce !== 'string') return null
   const [sesion] = await db.select({ id: SesionStaffTable.id, usuarioId: SesionStaffTable.usuarioRestauranteId })
     .from(SesionStaffTable)
-    .where(and(eq(SesionStaffTable.id, decoded.sid), eq(SesionStaffTable.tokenHash, tokenHash(decoded.nonce)), isNull(SesionStaffTable.revocadaAt), gt(SesionStaffTable.expiraAt, new Date())))
+    .where(and(
+      eq(SesionStaffTable.id, decoded.sid),
+      eq(SesionStaffTable.tokenHash, tokenHash(decoded.nonce)),
+      isNull(SesionStaffTable.revocadaAt),
+      or(isNull(SesionStaffTable.expiraAt), gt(SesionStaffTable.expiraAt, new Date())),
+    ))
     .limit(1)
   if (!sesion || sesion.usuarioId !== decoded.uid) return null
   const [usuario] = await db.select().from(UsuarioRestauranteTable).where(and(
