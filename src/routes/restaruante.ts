@@ -265,6 +265,8 @@ restauranteRoute.get('/profile', async (c) => {
       descripcion: p.descripcion,
       precio: p.precio,
       activo: p.activo,
+      // El admin recarga este perfil después de guardar y lo usa en el POS.
+      eventoSucursalId: p.eventoSucursalId,
       imagenUrl: p.imagenUrl,
       createdAt: p.createdAt,
       categoria: p.categoriaNombre || null,
