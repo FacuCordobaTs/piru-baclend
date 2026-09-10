@@ -1,3 +1,4 @@
+import { isNull } from 'drizzle-orm'
 // mesa.ts
 import { Hono } from 'hono'
 import { pool } from '../db'
@@ -106,7 +107,7 @@ const mesaRoute = new Hono()
       })
       .from(ProductoTable)
       .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
-      .where(and(eq(ProductoTable.restauranteId, mesa[0].restauranteId!), eq(ProductoTable.activo, true)))
+      .where(and(eq(ProductoTable.restauranteId, mesa[0].restauranteId!), isNull(ProductoTable.eventoSucursalId), eq(ProductoTable.activo, true)))
 
     // Obtener ingredientes, agregados y variantes para cada producto
     const productosConIngredientes = await Promise.all(

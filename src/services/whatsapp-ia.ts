@@ -1,3 +1,4 @@
+import { isNull } from 'drizzle-orm'
 // Backend/src/services/whatsapp-ia.ts
 // Agente IA que maneja conversaciones de pedidos por WhatsApp
 
@@ -85,7 +86,7 @@ async function obtenerMenuParaPrompt(db: any, restauranteId: number): Promise<st
     .from(ProductoTable)
     .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
     .where(and(
-      eq(ProductoTable.restauranteId, restauranteId),
+      eq(ProductoTable.restauranteId, restauranteId), isNull(ProductoTable.eventoSucursalId),
       eq(ProductoTable.activo, true)
     ))
 
@@ -152,7 +153,7 @@ async function construirMensajeCarta(db: any, restauranteId: number): Promise<st
     .from(ProductoTable)
     .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
     .where(and(
-      eq(ProductoTable.restauranteId, restauranteId),
+      eq(ProductoTable.restauranteId, restauranteId), isNull(ProductoTable.eventoSucursalId),
       eq(ProductoTable.activo, true)
     ))
 
@@ -1018,7 +1019,7 @@ async function crearPedidoYObtenerPago(
     .from(ProductoTable)
     .where(and(
       inArray(ProductoTable.id, productoIds),
-      eq(ProductoTable.restauranteId, restauranteId)
+      eq(ProductoTable.restauranteId, restauranteId), isNull(ProductoTable.eventoSucursalId)
     ))
   const productosMap = new Map(productosRaw.map((p: any) => [p.id, p]))
 

@@ -1,5 +1,6 @@
 // pedido-unificado.ts - Gestión unificada de pedidos delivery, takeaway y mesa
 import { cargarSucursalesOperacion, errorSucursalPos } from '../lib/sucursales-operacion'
+import { productoDisponibleEnPos } from '../lib/productos-evento'
 import { Hono, type Context, type Next } from 'hono'
 import { pool } from '../db'
 import {
@@ -47,6 +48,7 @@ import {
 import { requirePosEnSucursal, requirePosDelPedido } from '../middleware/pos-evento'
 import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
+import { acreditarPuntosPedidoAprobado, revertirPuntosPedidoCancelado } from '../lib/puntos'
 import { consumirMensaje, estadoEnvioUtility, avisarSaldoBajoSiCorresponde } from '../lib/mensajes-wallet'
 import { asegurarOwnerStaff } from '../lib/staff'
 import { asegurarTurnoAbierto, cerrarTurnoActual, listarTurnos, obtenerTurno, TurnoCajaDesactualizadoError } from '../lib/turnos-caja'
@@ -286,9 +288,10 @@ function motivosPedidoNoEditable(pedido: any): string[] {
   return motivos
 }
 
-export async function resolverItemPos(tx: any, restauranteId: number, input: Omit<z.infer<typeof posItemSchema>, 'version'> & { version?: number }) {
+export async function resolverItemPos(tx: any, restauranteId: number, input: Omit<z.infer<typeof posItemSchema>, 'version'> & { version?: number }, sucursalId?: number | null) {
   const [producto] = await tx.select().from(ProductoTable).where(and(
     eq(ProductoTable.id, input.productoId),
+    productoDisponibleEnPos(sucursalId),
     eq(ProductoTable.restauranteId, restauranteId),
   )).limit(1)
   if (!producto) return { error: 'ITEM_INVALIDO', message: 'El producto no pertenece al restaurante' } as const
@@ -699,8 +702,8 @@ const pedidoUnificadoRoute = new Hono()
     const restauranteId = (c as any).user.id
     const pedidoId = Number(c.req.param('id'))
     const body = c.req.valid('json')
-    const resultado = await ejecutarMutacionPos(db, restauranteId, pedidoId, body.version, async (tx) => {
-      const item = await resolverItemPos(tx, restauranteId, body)
+    const resultado = await ejecutarMutacionPos(db, restauranteId, pedidoId, body.version, async (tx, pedido) => {
+      const item = await resolverItemPos(tx, restauranteId, body, pedido.sucursalId)
       if ('error' in item) return item
       const inserted = await tx.insert(ItemPedidoUnificadoTable).values({ ...item, pedidoId })
       return { operacion: 'agregar_item' as const, itemPedidoId: Number(inserted[0].insertId), despues: item, reimprimeCocina: true }
@@ -720,7 +723,7 @@ const pedidoUnificadoRoute = new Hono()
     const resultado = await ejecutarMutacionPos(db, restauranteId, pedidoId, body.version, async (tx, _pedido, items) => {
       const anterior = items.find((item: any) => item.id === itemId)
       if (!anterior) return { error: 'ITEM_NO_ENCONTRADO', message: 'El ítem no pertenece al pedido' }
-      const item = await resolverItemPos(tx, restauranteId, body)
+      const item = await resolverItemPos(tx, restauranteId, body, _pedido.sucursalId)
       if ('error' in item) return item
       await tx.update(ItemPedidoUnificadoTable).set(item).where(and(eq(ItemPedidoUnificadoTable.id, itemId), eq(ItemPedidoUnificadoTable.pedidoId, pedidoId)))
       return { operacion: 'editar_item' as const, itemPedidoId: itemId, antes: anterior, despues: item, reimprimeCocina: true }
@@ -828,7 +831,7 @@ const pedidoUnificadoRoute = new Hono()
 
       const itemsResueltos: Array<{ inputId?: number; item: any }> = []
       for (const input of body.items) {
-        const item = await resolverItemPos(tx, restauranteId, input)
+        const item = await resolverItemPos(tx, restauranteId, input, pedido.sucursalId)
         if ('error' in item) return item
         itemsResueltos.push({ inputId: input.id, item })
       }
@@ -918,6 +921,7 @@ const pedidoUnificadoRoute = new Hono()
       .from(ProductoTable)
       .where(and(
         inArray(ProductoTable.id, uniqueProductosIds),
+        productoDisponibleEnPos(body.sucursalId),
         eq(ProductoTable.restauranteId, restauranteId)
       ))
 
@@ -1164,6 +1168,12 @@ const pedidoUnificadoRoute = new Hono()
       .set(updateData)
       .where(eq(PedidoUnificadoTable.id, pedidoId))
 
+    if (estado === 'cancelled') {
+      void revertirPuntosPedidoCancelado(db, pedidoId).catch((err) =>
+        console.error('Error revirtiendo puntos en cancelación de pedido:', err)
+      )
+    }
+
     // La mesa se libera por estado cerrado, sin borrar mesa_local_id: el pedido
     // conserva su historial y todos los grids conectados reciben el cambio.
     await emitirEventoPedido(db, {
@@ -1225,6 +1235,9 @@ const pedidoUnificadoRoute = new Hono()
     const tipo = pedido[0].tipo
     const becamePaid = newPagado && !pedido[0].pagado
     if (becamePaid) {
+      void acreditarPuntosPedidoAprobado(db, pedidoId).catch((err) =>
+        console.error('Error acreditando puntos al marcar pagado:', err)
+      )
       wsManager.broadcastAdminUpdate(restauranteId, tipo, { sucursalId: pedido[0].sucursalId ?? null })
     }
 

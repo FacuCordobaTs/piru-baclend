@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { producto as ProductoTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, itemPedido as ItemPedidoTable, itemPedidoUnificado as ItemPedidoUnificadoTable, itemPedidoDelivery as ItemPedidoDeliveryTable, itemPedidoTakeaway as ItemPedidoTakeawayTable, etiqueta as EtiquetaTable, productoPuntos as ProductoPuntosTable, productoAgregado as ProductoAgregadoTable, agregado as AgregadoTable, varianteProducto as VarianteProductoTable } from '../db/schema'
+import { sucursal as SucursalTable, producto as ProductoTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, itemPedido as ItemPedidoTable, itemPedidoUnificado as ItemPedidoUnificadoTable, itemPedidoDelivery as ItemPedidoDeliveryTable, itemPedidoTakeaway as ItemPedidoTakeawayTable, etiqueta as EtiquetaTable, productoPuntos as ProductoPuntosTable, productoAgregado as ProductoAgregadoTable, agregado as AgregadoTable, varianteProducto as VarianteProductoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
@@ -166,7 +166,8 @@ const createProductSchema = z.object({
   descripcion: z.string().min(3).max(255),
   precio: z.number().min(0),
   image: z.string().min(10).optional(),
-  categoriaId: z.number().optional(),
+  eventoSucursalId: z.number().int().positive().nullable().optional(),
+  categoriaId: z.number().nullable().optional(),
   ingredienteIds: z.array(z.number().int().positive()).optional(),
   agregadoIds: z.array(z.number().int().positive()).optional(),
   agregadoIdsSecundarios: z.array(z.number().int().positive()).optional(),
@@ -200,7 +201,8 @@ const updateProductSchema = z.object({
   descripcion: z.string().min(3).max(255).optional(),
   precio: z.number().min(0).optional(),
   image: z.string().min(10).optional(),
-  categoriaId: z.number().optional(),
+  eventoSucursalId: z.number().int().positive().nullable().optional(),
+  categoriaId: z.number().nullable().optional(),
   ingredienteIds: z.array(z.number().int().positive()).optional(),
   agregadoIds: z.array(z.number().int().positive()).optional(),
   agregadoIdsSecundarios: z.array(z.number().int().positive()).optional(),
@@ -247,6 +249,7 @@ const productoRoute = new Hono()
         descripcion: ProductoTable.descripcion,
         precio: ProductoTable.precio,
         activo: ProductoTable.activo,
+        eventoSucursalId: ProductoTable.eventoSucursalId,
         imagenUrl: ProductoTable.imagenUrl,
         descuento: ProductoTable.descuento,
         descuentoFechaInicio: ProductoTable.descuentoFechaInicio,
@@ -338,7 +341,14 @@ const productoRoute = new Hono()
   .post('/create', zValidator('json', createProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota } = c.req.valid('json')
+    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota, eventoSucursalId } = c.req.valid('json')
+
+    if (eventoSucursalId != null) {
+      const [evento] = await db.select({ id: SucursalTable.id }).from(SucursalTable).where(and(
+        eq(SucursalTable.id, eventoSucursalId), eq(SucursalTable.restauranteId, restauranteId), eq(SucursalTable.soloPos, true),
+      )).limit(1)
+      if (!evento) return c.json({ success: false, message: 'El evento no existe o no pertenece al restaurante' }, 400)
+    }
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId) {
@@ -386,6 +396,7 @@ const productoRoute = new Hono()
       imagenUrl: newImageUrl,
       restauranteId,
       categoriaId: categoriaId || null,
+      eventoSucursalId: eventoSucursalId ?? null,
       descuento: descuento || 0,
       descuentoFechaInicio: descuentoFechaInicio ? new Date(descuentoFechaInicio) : null,
       descuentoFechaFin: descuentoFechaFin ? new Date(descuentoFechaFin) : null,
@@ -527,7 +538,14 @@ const productoRoute = new Hono()
   .put('/update', zValidator('json', updateProductSchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota } = c.req.valid('json')
+    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota, eventoSucursalId } = c.req.valid('json')
+
+    if (eventoSucursalId != null) {
+      const [evento] = await db.select({ id: SucursalTable.id }).from(SucursalTable).where(and(
+        eq(SucursalTable.id, eventoSucursalId), eq(SucursalTable.restauranteId, restauranteId), eq(SucursalTable.soloPos, true),
+      )).limit(1)
+      if (!evento) return c.json({ success: false, message: 'El evento no existe o no pertenece al restaurante' }, 400)
+    }
 
     // Validar que la categoría pertenece al restaurante si se proporciona
     if (categoriaId !== undefined) {
@@ -577,6 +595,7 @@ const productoRoute = new Hono()
     if (newImageUrl) updateData.imagenUrl = newImageUrl;
     if (categoriaId !== undefined) updateData.categoriaId = categoriaId;
     if (activo !== undefined) updateData.activo = activo;
+    if (eventoSucursalId !== undefined) updateData.eventoSucursalId = eventoSucursalId;
     if (descuento !== undefined) updateData.descuento = descuento;
     if (descuentoFechaInicio !== undefined) updateData.descuentoFechaInicio = descuentoFechaInicio ? new Date(descuentoFechaInicio) : null;
     if (descuentoFechaFin !== undefined) updateData.descuentoFechaFin = descuentoFechaFin ? new Date(descuentoFechaFin) : null;
@@ -833,6 +852,7 @@ const productoRoute = new Hono()
         descripcion: ProductoTable.descripcion,
         precio: ProductoTable.precio,
         activo: ProductoTable.activo,
+        eventoSucursalId: ProductoTable.eventoSucursalId,
         imagenUrl: ProductoTable.imagenUrl,
         descuento: ProductoTable.descuento,
         tituloVariantesPrimarias: ProductoTable.tituloVariantesPrimarias,

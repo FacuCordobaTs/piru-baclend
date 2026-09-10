@@ -1,3 +1,4 @@
+import { isNull } from 'drizzle-orm'
 import { createHash } from 'node:crypto'
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -105,7 +106,7 @@ mozosRoute.get('/menu', async (c) => {
     tituloExtrasPrimarios: ProductoTable.tituloExtrasPrimarios,
     tituloExtrasSecundarios: ProductoTable.tituloExtrasSecundarios,
     permiteNota: ProductoTable.permiteNota, tituloNota: ProductoTable.tituloNota,
-  }).from(ProductoTable).where(and(eq(ProductoTable.restauranteId, principal.restauranteId), eq(ProductoTable.activo, true)))
+  }).from(ProductoTable).where(and(eq(ProductoTable.restauranteId, principal.restauranteId), isNull(ProductoTable.eventoSucursalId), eq(ProductoTable.activo, true)))
     .orderBy(asc(ProductoTable.orden), asc(ProductoTable.id))
   const categorias = await db.select({ id: CategoriaTable.id, nombre: CategoriaTable.nombre })
     .from(CategoriaTable).where(eq(CategoriaTable.restauranteId, principal.restauranteId)).orderBy(asc(CategoriaTable.nombre))

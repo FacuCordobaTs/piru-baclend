@@ -12,6 +12,7 @@ import { notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
 import { confirmarRecarga } from '../lib/mensajes-wallet'
 import { confirmarPagoSuscripcion } from '../lib/suscripciones'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
+import { acreditarPuntosPedidoAprobado, revertirPuntosPedidoCancelado } from '../lib/puntos'
 
 const MP_CLIENT_ID = process.env.MP_CLIENT_ID
 const MP_CLIENT_SECRET = process.env.MP_CLIENT_SECRET
@@ -398,6 +399,10 @@ mercadopagoRoute.post('/process-brick', async (c) => {
         mpPaymentId: String(paymentData.id)
       })
 
+      void acreditarPuntosPedidoAprobado(db, pedidoId).catch((err) =>
+        console.error('Error acreditando puntos en MP brick:', err)
+      )
+
       const mesaNombre = tipoPedido === 'delivery' ? 'Delivery' : 'Take Away'
       void wsManager.notifyAdmins(pedido.restauranteId!, {
         id: `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
@@ -733,6 +738,10 @@ mercadopagoRoute.post('/webhook', async (c) => {
 
       console.log(`✅ [Webhook] Pago actualizado: pedido=${pedidoId}, estado=paid`)
 
+      void acreditarPuntosPedidoAprobado(db, pedidoId).catch((err) =>
+        console.error('Error acreditando puntos en MP webhook:', err)
+      )
+
       const mesaNombre = tipoPedido === 'delivery' ? 'Delivery' : 'Take Away'
 
       void wsManager.notifyAdmins(restauranteId, {
@@ -825,6 +834,11 @@ mercadopagoRoute.post('/webhook', async (c) => {
         await db.update(PagoTable)
           .set({ estado: 'failed' })
           .where(eq(PagoTable.mpPaymentId, String(paymentId)))
+      }
+      if (pedidoId) {
+        void revertirPuntosPedidoCancelado(db, pedidoId).catch((err) =>
+          console.error('Error revirtiendo puntos en MP webhook:', err)
+        )
       }
     }
 

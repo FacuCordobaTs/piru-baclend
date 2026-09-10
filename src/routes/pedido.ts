@@ -1,3 +1,4 @@
+import { isNull } from 'drizzle-orm'
 // pedido.ts
 import { cargarSucursalesOperacion, filtroSucursalOperacion, resolverSucursalOperacion } from '../lib/sucursales-operacion'
 import { Hono } from 'hono'
@@ -804,7 +805,7 @@ const pedidoRoute = new Hono()
       .from(ProductoTable)
       .where(and(
         eq(ProductoTable.id, productoId),
-        eq(ProductoTable.restauranteId, restauranteId)
+        eq(ProductoTable.restauranteId, restauranteId), isNull(ProductoTable.eventoSucursalId)
       ))
       .limit(1)
 

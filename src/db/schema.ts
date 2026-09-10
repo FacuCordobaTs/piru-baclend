@@ -310,6 +310,10 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   // Puntos y Descuentos
   codigoDescuentoId: int("codigo_descuento_id").references(() => codigoDescuento.id),
   montoDescuento: decimal("monto_descuento", { precision: 10, scale: 2 }).default("0.00"),
+  puntosGanados: int("puntos_ganados").default(0).notNull(),
+  puntosUsados: int("puntos_usados").default(0).notNull(),
+  puntosCanjeTipo: varchar("puntos_canje_tipo", { length: 50 }),
+  descuentoPuntos: decimal("descuento_puntos", { precision: 10, scale: 2 }).default("0.00").notNull(),
 
   // Trazabilidad
   impreso: boolean("impreso").default(false).notNull(),
@@ -397,6 +401,8 @@ export const pedidoUnificadoAuditoria = mysqlTable("pedido_unificado_auditoria",
 
 export const producto = mysqlTable("producto", {
   id: int("id").primaryKey().autoincrement(),
+  // NULL conserva el catálogo habitual; asignado, sólo se vende en ese evento.
+  eventoSucursalId: int("evento_sucursal_id").references(() => sucursal.id, { onDelete: "restrict" }),
   restauranteId: int("restaurante_id").references(() => restaurante.id),
   categoriaId: int("categoria_id").references(() => categoria.id),
   nombre: varchar("nombre", { length: 255 }).notNull(),
@@ -422,6 +428,7 @@ export const producto = mysqlTable("producto", {
 }, (table) => [
   // Permite que las entidades Growth referencien producto junto con su tenant.
   uniqueIndex("uq_producto_restaurante_id").on(table.restauranteId, table.id),
+  index("idx_producto_evento_sucursal").on(table.eventoSucursalId),
 ]);
 
 export const varianteProducto = mysqlTable("variante_producto", {
@@ -1073,6 +1080,60 @@ export const productoPuntos = mysqlTable("producto_puntos", {
   puntosGanados: int("puntos_ganados").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+export const configuracionPuntos = mysqlTable("configuracion_puntos", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id")
+    .references(() => restaurante.id, { onDelete: "cascade" })
+    .unique()
+    .notNull(),
+  activo: boolean("activo").default(true).notNull(),
+  modoAcumulacion: mysqlEnum("modo_acumulacion", ["monto", "producto", "ambos"]).default("monto").notNull(),
+  pesosPorPunto: int("pesos_por_punto").default(100).notNull(),
+  puntosPrimerPedido: int("puntos_primer_pedido").default(0).notNull(),
+  puntosMinimosCanje: int("puntos_minimos_canje").default(0).notNull(),
+  permitirCanjeEnvioGratis: boolean("permitir_canje_envio_gratis").default(false).notNull(),
+  puntosEnvioGratis: int("puntos_envio_gratis").default(300).notNull(),
+  permitirCanjeDescuento: boolean("permitir_canje_descuento").default(false).notNull(),
+  descuentoTipo: mysqlEnum("descuento_tipo", ["fijo", "porcentaje"]).default("fijo").notNull(),
+  descuentoValor: decimal("descuento_valor", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  descuentoPuntosCosto: int("descuento_puntos_costo").default(0).notNull(),
+  descuentoMontoMinimo: decimal("descuento_monto_minimo", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  descuentoTope: decimal("descuento_tope", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  vencimientoDias: int("vencimiento_dias"),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const transaccionPuntos = mysqlTable("transaccion_puntos", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id")
+    .references(() => restaurante.id, { onDelete: "cascade" })
+    .notNull(),
+  clienteId: int("cliente_id")
+    .references(() => cliente.id, { onDelete: "cascade" })
+    .notNull(),
+  pedidoUnificadoId: int("pedido_unificado_id")
+    .references(() => pedidoUnificado.id, { onDelete: "set null" }),
+  tipo: mysqlEnum("tipo", [
+    "suma_compra",
+    "canje_producto",
+    "canje_envio",
+    "canje_descuento",
+    "bonus_bienvenida",
+    "ajuste_manual",
+    "devolucion_cancelacion",
+    "expiracion",
+  ]).notNull(),
+  puntos: int("puntos").notNull(),
+  saldoResultante: int("saldo_resultante").notNull(),
+  motivo: varchar("motivo", { length: 255 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_transaccion_puntos_cliente").on(table.restauranteId, table.clienteId, table.createdAt),
+  index("idx_transaccion_puntos_pedido").on(table.pedidoUnificadoId),
+]);
+
 
 export const whatsappConversacion = mysqlTable("whatsapp_conversacion", {
   id: int("id").primaryKey().autoincrement(),

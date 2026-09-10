@@ -599,6 +599,18 @@ class WebSocketManager {
 
   // Agregar item al pedido
   async agregarItem(pedidoId: number, mesaId: number, item: ItemPedidoWS) {
+    const [origen] = mesaId >= 1000000
+      ? await this.db.select({ restauranteId: SalaTable.restauranteId }).from(SalaTable).where(eq(SalaTable.id, mesaId - 1000000)).limit(1)
+      : await this.db.select({ restauranteId: MesaTable.restauranteId }).from(MesaTable).where(eq(MesaTable.id, mesaId)).limit(1);
+    if (!origen?.restauranteId) return null;
+    const [disponible] = await this.db.select({ id: ProductoTable.id }).from(ProductoTable).where(and(
+      eq(ProductoTable.id, item.productoId), eq(ProductoTable.restauranteId, origen.restauranteId),
+      isNull(ProductoTable.eventoSucursalId), eq(ProductoTable.activo, true),
+    )).limit(1);
+    if (!disponible) {
+      this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'El producto no está disponible en la tienda.' } });
+      return null;
+    }
     // Sala (pedido grupal): items en memoria, sin DB legacy
     if (mesaId >= 1000000) {
       const session = this.sessions.get(mesaId);
@@ -1373,6 +1385,18 @@ class WebSocketManager {
       const sala = await this.db.select().from(SalaTable).where(eq(SalaTable.id, salaId)).limit(1);
       if (!sala[0]) {
         this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'Sala no encontrada.' } });
+        return;
+      }
+
+      // Volver a validar: el carrito puede ser anterior a la asignación al evento.
+      const { inArray } = await import('drizzle-orm');
+      const idsProductos = Array.from(new Set(items.map(i => i.productoId)));
+      const disponibles = await this.db.select({ id: ProductoTable.id }).from(ProductoTable).where(and(
+        inArray(ProductoTable.id, idsProductos), eq(ProductoTable.restauranteId, sala[0].restauranteId!),
+        isNull(ProductoTable.eventoSucursalId), eq(ProductoTable.activo, true),
+      ));
+      if (disponibles.length !== idsProductos.length) {
+        this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'Hay productos que ya no están disponibles en la tienda. Revisá el pedido.' } });
         return;
       }
 

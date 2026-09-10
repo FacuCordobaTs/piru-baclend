@@ -19,6 +19,7 @@ import { consultarPagoTalo } from '../services/talo'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { procesarMensajeIA, notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
 import { procesarComandoOptOut } from '../lib/proteccion-base'
+import { acreditarPuntosPedidoAprobado } from '../lib/puntos'
 
 const webhookRoute = new Hono()
 
@@ -458,16 +459,21 @@ webhookRoute.post('/talo', async (c) => {
         monto: String(taloData.price?.amount ?? pedido.total),
         mpPaymentId: paymentId,
       });
+
+      void acreditarPuntosPedidoAprobado(db, pedido.id).catch((err) =>
+        console.error('Error acreditando puntos en Talo webhook:', err)
+      );
+
       console.log('[Talo Webhook] Pago insertado en PagoTable. Notificando WebSockets...');
 
       const mesaNombre = pedido.tipo === 'delivery' ? 'Delivery' : 'Take Away';
       wsManager.notifyAdmins(restauranteId, {
-        id: `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+        id: "notif-" + Date.now() + "-" + Math.floor(Math.random() * 10000),
         tipo: 'NUEVO_PEDIDO',
         mesaId: 0,
         mesaNombre,
-        mensaje: `Nuevo pedido de ${mesaNombre} (Pagado)`,
-        detalles: `${pedido.nombreCliente || 'Cliente'} - $${pedido.total}`,
+        mensaje: "Nuevo pedido de " + mesaNombre + " (Pagado)",
+        detalles: (pedido.nombreCliente || "Cliente") + " - $" + pedido.total,
         timestamp: new Date().toISOString(),
         leida: false,
         pedidoId: pedido.id,

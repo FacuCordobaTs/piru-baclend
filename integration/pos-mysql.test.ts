@@ -26,7 +26,8 @@ test.skipIf(!url)('MySQL: migraciones, POST POS, carrera, clientes, edición, í
       const config = getTableConfig(table)
       const columns = config.columns.filter(c => !(config.name === 'cliente' && ['telefono_normalizado', 'updated_at'].includes(c.name))
         && !(config.name === 'pedido_unificado' && c.name === 'client_request_id')
-        && !(config.name === 'sucursal' && c.name === 'solo_pos'))
+        && !(config.name === 'sucursal' && c.name === 'solo_pos')
+        && !(config.name === 'producto' && c.name === 'evento_sucursal_id'))
       const defs = columns.map((c: any) => {
         let def = `\`${c.name}\` ${c.getSQLType()}${c.notNull ? ' NOT NULL' : ''}${c.autoIncrement ? ' AUTO_INCREMENT' : ''}${c.primary ? ' PRIMARY KEY' : ''}`
         if (c.default !== undefined) {
@@ -41,6 +42,8 @@ test.skipIf(!url)('MySQL: migraciones, POST POS, carrera, clientes, edición, í
     }
     const eventosMigration = sentenciasMigracion(await Bun.file(new URL('../migrations/add_sucursal_solo_pos.sql', import.meta.url)).text())
     for (let i = 0; i < 2; i++) for (const statement of eventosMigration) await db.query(statement)
+    const productosEventoMigration = sentenciasMigracion(await Bun.file(new URL('../migrations/add_producto_evento_sucursal.sql', import.meta.url)).text())
+    for (let i = 0; i < 2; i++) for (const statement of productosEventoMigration) await db.query(statement)
     await db.query("INSERT INTO restaurante (id,nombre,email,completed_onboarding) VALUES (1,'Local A','a@example.test',1),(2,'Local B','b@example.test',1)")
     await db.query("INSERT INTO producto (id,restaurante_id,nombre,precio) VALUES (1,1,'Pizza',100),(2,2,'Pizza B',200)")
     await db.query("INSERT INTO cliente (id,restaurante_id,nombre,telefono,puntos,marketing_opt_out) VALUES (1,1,'Viejo','341 5123456',3,1),(2,1,'Reciente','(341)5123456',4,0),(3,2,'Otro tenant','3415123456',0,0),(4,1,'Sin identidad','123',0,0)")
@@ -73,7 +76,7 @@ test.skipIf(!url)('MySQL: migraciones, POST POS, carrera, clientes, edición, í
     const eventos: any[] = []
     const pedidos = await import('../src/lib/pedidos-activos')
     mock.module('../src/lib/pedidos-activos', () => ({ ...pedidos, emitirEventoPedido: async (_db: any, event: any) => { eventos.push(event) } }))
-    const { pedidoUnificadoRoute } = await import('../src/routes/pedido-unificado')
+    const { pedidoUnificadoRoute, resolverItemPos } = await import('../src/routes/pedido-unificado')
     const { clientesRoute } = await import('../src/routes/clientes')
     const post = (body: any, tenant = 1, sinPos = false) => pedidoUnificadoRoute.request('/create', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tenant}`, ...(sinPos ? { 'X-Sin-Pos': '1' } : {}) }, body: JSON.stringify(body) })
     const input = { tipo: 'takeaway', clientRequestId: crypto.randomUUID(), nombreCliente: 'Caja', telefono: '(11) 5555-8888', anotadoManualmente: true, pagado: true, items: [{ productoId: 1, cantidad: 2 }] }
@@ -182,6 +185,15 @@ test.skipIf(!url)('MySQL: migraciones, POST POS, carrera, clientes, edición, í
     const evento = await (await post({ ...input, clientRequestId: eventoRequestId, sucursalId: 10 }, 1, true)).json() as any
     expect(evento.success).toBe(true)
     expect(evento.data.sucursalId).toBe(10)
+    await db.query("INSERT INTO producto (id,restaurante_id,nombre,precio,evento_sucursal_id) VALUES (3,1,'Exclusivo evento',300,10)")
+    const exclusivo = { productoId: 3, cantidad: 1, agregados: [], ingredientesExcluidos: [] }
+    expect('error' in await resolverItemPos(orm, 1, exclusivo, 10)).toBe(false)
+    for (const sede of [undefined, null, 20]) expect('error' in await resolverItemPos(orm, 1, exclusivo, sede)).toBe(true)
+    expect('error' in await resolverItemPos(orm, 2, exclusivo, 10)).toBe(true)
+    const [publicos] = await db.query<any[]>('SELECT id FROM producto WHERE restaurante_id=1 AND evento_sucursal_id IS NULL')
+    expect(publicos.map(p => p.id)).not.toContain(3)
+    await expect(db.query('DELETE FROM sucursal WHERE id=10')).rejects.toThrow()
+
     expect((await post({ ...input, clientRequestId: crypto.randomUUID() }, 1, true)).status).toBe(403)
     expect((await post({ ...input, clientRequestId: crypto.randomUUID(), sucursalId: 20 }, 1, true)).status).toBe(403)
     const headersSinPos = { Authorization: 'Bearer 1', 'Content-Type': 'application/json', 'X-Sin-Pos': '1' }

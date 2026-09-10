@@ -1,3 +1,4 @@
+import { isNull } from 'drizzle-orm'
 // delivery.ts - Rutas para pedidos de delivery
 import { Hono } from 'hono'
 import { pool } from '../db'
@@ -218,7 +219,7 @@ const deliveryRoute = new Hono()
             .from(ProductoTable)
             .where(and(
                 inArray(ProductoTable.id, uniqueProductosIds),
-                eq(ProductoTable.restauranteId, restauranteId)
+                eq(ProductoTable.restauranteId, restauranteId), isNull(ProductoTable.eventoSucursalId)
             ))
 
         if (productos.length !== uniqueProductosIds.length) {

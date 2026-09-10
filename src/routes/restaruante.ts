@@ -150,6 +150,7 @@ restauranteRoute.get('/profile', async (c) => {
         descripcion: ProductoTable.descripcion,
         precio: ProductoTable.precio,
         activo: ProductoTable.activo,
+        eventoSucursalId: ProductoTable.eventoSucursalId,
         imagenUrl: ProductoTable.imagenUrl,
         createdAt: ProductoTable.createdAt,
         categoriaNombre: CategoriaTable.nombre,
@@ -309,17 +310,23 @@ restauranteRoute.get('/profile', async (c) => {
       precioBaseMensual: suscripcionResuelta.precioBaseMensual,
       montoModulosMensual: suscripcionResuelta.montoModulosMensual,
       montoTotalMensual: suscripcionResuelta.montoTotalMensual,
-      // Hard paywall: ¿puede entrar al panel? El admin lo usa para el gate (→ /suscribir).
       requiereSuscripcion,
       accesoPanel: tieneAccesoAlPanelSuscripcion(requiereSuscripcion, suscripcionResuelta),
     }
 
-    return c.json({ message: 'Profile retrieved successfully', success: true, data: { restaurante, mesas, productos, suscripcion } }, 200)
+    const sistemaPuntosActivo = await tieneModuloActivo(db, restauranteId, MODULE_KEYS.PUNTOS_CLIENTES)
+    const restauranteEnriquecido = {
+      ...restaurante[0],
+      sistemaPuntos: sistemaPuntosActivo,
+    }
+
+    return c.json({ message: 'Profile retrieved successfully', success: true, data: { restaurante: restauranteEnriquecido, mesas, productos, suscripcion } }, 200)
   } catch (error) {
     console.error('Error getting profile:', error)
     return c.json({ message: 'Error getting profile', error: (error as Error).message }, 500)
   }
 })
+
 
 // Inventario del claim para la cuenta AUTENTICADA (checklist "esto ya está listo" del onboarding
 // outbound, Tarea 5). Reusa el mismo cómputo que el preview público del claim (lib/claim.ts) pero

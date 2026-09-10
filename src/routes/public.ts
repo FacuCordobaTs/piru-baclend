@@ -25,6 +25,12 @@ import {
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { contarPedidosPagadosFranja } from '../lib/franjas'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
+import {
+  obtenerConfiguracionPuntos,
+  calcularPuntosGanados,
+  registrarTransaccionPuntos,
+  acreditarPuntosPedidoAprobado,
+} from '../lib/puntos'
 import { estaPausadoPorSuscripcion } from '../lib/suscripciones'
 import { salirDeColaPorPedido } from '../lib/motor-recompra'
 import { atribuirPedidoMarketingBestEffort } from '../lib/marketing-atribucion'
@@ -282,11 +288,14 @@ publicRoute.get('/restaurante/:username', async (c) => {
 
         const restauranteId = restaurante[0].id
         const r0 = restaurante[0]
-        const [mercadopagoActivo, taloActivo, descuentosActivos] = await Promise.all([
+        const [mercadopagoActivo, taloActivo, descuentosActivos, puntosModuloActivo] = await Promise.all([
             tieneModuloActivo(db, restauranteId, MODULE_KEYS.MERCADOPAGO),
             tieneModuloActivo(db, restauranteId, MODULE_KEYS.TALO),
             tieneModuloActivo(db, restauranteId, MODULE_KEYS.CODIGOS_DESCUENTO),
+            tieneModuloActivo(db, restauranteId, MODULE_KEYS.PUNTOS_CLIENTES),
         ])
+        const configPuntos = puntosModuloActivo ? await obtenerConfiguracionPuntos(db, restauranteId) : null
+        const sistemaPuntosHabilitado = Boolean(puntosModuloActivo && configPuntos?.activo)
         const pagoRowPerfil = rowToPagoRow({
             metodosPagoConfig: r0.metodosPagoConfig,
             cardsPaymentsEnabled: r0.cardsPaymentsEnabled,
@@ -315,6 +324,8 @@ publicRoute.get('/restaurante/:username', async (c) => {
         // El toggle histórico se conserva, pero el catálogo público sólo
         // ofrece cupones cuando también existe el entitlement explícito.
         restauranteSeguro.codigoDescuentoEnabled = r0.codigoDescuentoEnabled && descuentosActivos
+        restauranteSeguro.sistemaPuntos = sistemaPuntosHabilitado
+        restauranteSeguro.configuracionPuntos = sistemaPuntosHabilitado ? configPuntos : null
 
         // Obtener horarios de atención
         const horarios = await db
@@ -377,7 +388,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
         const productosRaw = await db
             .select()
             .from(ProductoTable)
-            .where(and(eq(ProductoTable.restauranteId, restauranteId), eq(ProductoTable.activo, true)))
+            .where(and(eq(ProductoTable.restauranteId, restauranteId), isNull(ProductoTable.eventoSucursalId), eq(ProductoTable.activo, true)))
             .orderBy(ProductoTable.orden, ProductoTable.id)
 
         // Categorías y puntos en consultas separadas
@@ -586,7 +597,7 @@ publicRoute.get('/sala/join/:token', async (c) => {
             .from(ProductoTable)
             .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
             .where(and(
-                eq(ProductoTable.restauranteId, sala[0].restauranteId!),
+                eq(ProductoTable.restauranteId, sala[0].restauranteId!), isNull(ProductoTable.eventoSucursalId),
                 eq(ProductoTable.activo, true)
             ))
             .orderBy(ProductoTable.orden, ProductoTable.id)
@@ -770,6 +781,8 @@ const createDeliverySchema = z.object({
     notas: z.string().optional(),
     metodoPago: z.string().optional(),
     codigoDescuentoId: z.number().int().positive().optional(),
+    canjeEnvioGratis: z.boolean().optional().default(false),
+    canjeDescuento: z.boolean().optional().default(false),
     notificarWhatsapp: z.boolean().optional().default(false),
     horarioProgramado: z.string().max(20).optional(),
     grupal: z.boolean().optional().default(false),
@@ -799,7 +812,7 @@ const createDeliverySchema = z.object({
 
 publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado, grupal, visitorId, sesionUuid, campaniaSlug, campanaId, recetaToken } = c.req.valid('json')
+    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, canjeEnvioGratis, canjeDescuento, items, notificarWhatsapp, horarioProgramado, grupal, visitorId, sesionUuid, campaniaSlug, campanaId, recetaToken } = c.req.valid('json')
 
     try {
         const [deliveryCheck] = await db.select({
@@ -829,7 +842,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
         const productosRaw = await db.select().from(ProductoTable).where(and(
             inArray(ProductoTable.id, uniqueProductosIds),
-            eq(ProductoTable.restauranteId, restauranteId)
+            eq(ProductoTable.restauranteId, restauranteId), isNull(ProductoTable.eventoSucursalId)
         ))
         const puntosRows = await db.select().from(ProductoPuntosTable).where(inArray(ProductoPuntosTable.productoId, uniqueProductosIds))
         const puntosMap = new Map(puntosRows.map(pp => [pp.productoId, pp]))
@@ -981,25 +994,79 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             deliveryFeeAplicado = parseFloat(resRestaurante[0].deliveryFee)
         }
 
-        total += deliveryFeeAplicado
-        const sistemaPuntosActivo = false; // sistemaPuntos comentado en schema
+        const sistemaPuntosModuloActivo = await tieneModuloActivo(db, restauranteId, MODULE_KEYS.PUNTOS_CLIENTES)
+        const configPuntos = sistemaPuntosModuloActivo ? await obtenerConfiguracionPuntos(db, restauranteId) : null
+        const sistemaPuntosActivo = Boolean(sistemaPuntosModuloActivo && configPuntos?.activo)
 
-        if (!sistemaPuntosActivo) {
-            puntosGanados = 0;
-            if (puntosUsados > 0) return c.json({ message: 'El sistema de puntos está inactivo', success: false }, 400);
+        const puntosUsadosProductos = puntosUsados
+        let puntosUsadosEnvio = 0
+        let puntosUsadosDescuento = 0
+        let descuentoPuntosEnvio = 0
+        let descuentoPuntosDinero = 0
+        const tiposCanje: string[] = []
+        if (puntosUsadosProductos > 0) tiposCanje.push('producto')
+
+        if (sistemaPuntosActivo && configPuntos) {
+            // Canje por Envío Gratis
+            if (canjeEnvioGratis && configPuntos.permitirCanjeEnvioGratis && deliveryFeeAplicado > 0) {
+                puntosUsadosEnvio = configPuntos.puntosEnvioGratis
+                descuentoPuntosEnvio = deliveryFeeAplicado
+                deliveryFeeAplicado = 0
+                tiposCanje.push('envio')
+            }
+
+            // Canje por Descuento en Dinero o Porcentaje
+            if (canjeDescuento && configPuntos.permitirCanjeDescuento) {
+                const montoMinimoReq = parseFloat(configPuntos.descuentoMontoMinimo || '0')
+                if (total >= montoMinimoReq) {
+                    let descPuntos = 0
+                    if (configPuntos.descuentoTipo === 'porcentaje') {
+                        descPuntos = total * (parseFloat(configPuntos.descuentoValor) / 100)
+                        const tope = parseFloat(configPuntos.descuentoTope || '0')
+                        if (tope > 0) descPuntos = Math.min(descPuntos, tope)
+                    } else {
+                        descPuntos = parseFloat(configPuntos.descuentoValor || '0')
+                    }
+                    descuentoPuntosDinero = Math.min(descPuntos, total)
+                    puntosUsadosDescuento = configPuntos.descuentoPuntosCosto
+                    total = Math.max(0, total - descuentoPuntosDinero)
+                    tiposCanje.push('descuento')
+                }
+            }
+
+            puntosUsados = puntosUsadosProductos + puntosUsadosEnvio + puntosUsadosDescuento
+
+            // Calcular puntos ganados según configuración
+            const puntosMapParaCalculo = new Map<number, { puntosGanados: number; puntosNecesarios: number }>()
+            for (const [prodId, data] of productosMap.entries()) {
+                if (data.puntos) {
+                    puntosMapParaCalculo.set(prodId, {
+                        puntosGanados: Number(data.puntos.puntosGanados || 0),
+                        puntosNecesarios: Number(data.puntos.puntosNecesarios || 0),
+                    })
+                }
+            }
+            puntosGanados = calcularPuntosGanados(configPuntos, total, items, puntosMapParaCalculo)
+        } else {
+            puntosGanados = 0
+            if (puntosUsados > 0 || canjeEnvioGratis || canjeDescuento) {
+                return c.json({ message: 'El sistema de puntos está inactivo', success: false }, 400)
+            }
         }
+
+        total += deliveryFeeAplicado
 
         const perfilCliente = await db.transaction((tx) => resolverClienteParaPedido(tx, {
             restauranteId, nombre: nombreCliente, telefono,
-        }));
-        const clienteId = perfilCliente?.id ?? null;
+        }))
+        const clienteId = perfilCliente?.id ?? null
+
         if (puntosUsados > (perfilCliente?.puntos ?? 0)) {
-            return c.json({ message: 'Puntos insuficientes para realizar el canje', success: false }, 400);
+            return c.json({ message: 'Puntos insuficientes para realizar el canje', success: false }, 400)
         }
-        if (clienteId && (puntosUsados || puntosGanados)) {
-            await db.update(ClienteTable).set({ puntos: sql`${ClienteTable.puntos} - ${puntosUsados} + ${puntosGanados}` })
-                .where(and(eq(ClienteTable.id, clienteId), eq(ClienteTable.restauranteId, restauranteId)));
-        }
+
+        const puntosCanjeTipo = tiposCanje.length > 1 ? 'mixto' : (tiposCanje[0] ?? null)
+        const descuentoPuntosTotal = descuentoPuntosEnvio + descuentoPuntosDinero
 
         let montoDescuento = 0
         let codigoDescuentoIdFinal: number | null = null
@@ -1083,10 +1150,41 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             notificarWhatsapp: notificarWhatsapp || false,
             horarioProgramado: horarioProgramado || null,
             deliveryFee: deliveryFeeAplicado.toFixed(2),
+            puntosGanados,
+            puntosUsados,
+            puntosCanjeTipo,
+            descuentoPuntos: descuentoPuntosTotal.toFixed(2),
             grupal: grupal || false,
         })
 
         const pedidoId = Number(nuevoPedido[0].insertId)
+
+        if (clienteId && puntosUsados > 0) {
+            const motivoCanje = tiposCanje.length > 1
+                ? `Canje combinado en pedido #${pedidoId}`
+                : tiposCanje[0] === 'envio'
+                ? `Canje de envío gratis en pedido #${pedidoId}`
+                : tiposCanje[0] === 'descuento'
+                ? `Canje de descuento en pedido #${pedidoId}`
+                : `Canje de producto en pedido #${pedidoId}`
+
+            await db.transaction(async (tx) => {
+                await registrarTransaccionPuntos(tx, {
+                    restauranteId,
+                    clienteId,
+                    pedidoUnificadoId: pedidoId,
+                    tipo: (tiposCanje[0] ? `canje_${tiposCanje[0]}` : 'canje_producto') as any,
+                    puntos: -puntosUsados,
+                    motivo: motivoCanje,
+                })
+            })
+        }
+
+        if (isMetodoManualVerificable(metodoPagoEfectivoDelivery) && puntosGanados > 0) {
+            void acreditarPuntosPedidoAprobado(db, pedidoId).catch((err) =>
+                console.error('Error acreditando puntos pedido manual:', err)
+            )
+        }
 
         // Motor de Recompra · regla sagrada: si el cliente pidió, sale YA de la cola de recupero
         // (nada peor que un "te extrañamos" a quien acaba de pedir). Best-effort, no frena el pedido.
@@ -1304,6 +1402,7 @@ const createTakeawaySchema = z.object({
     notas: z.string().optional(),
     metodoPago: z.string().optional(),
     codigoDescuentoId: z.number().int().positive().optional(),
+    canjeDescuento: z.boolean().optional().default(false),
     notificarWhatsapp: z.boolean().optional().default(false),
     horarioProgramado: z.string().max(20).optional(),
     grupal: z.boolean().optional().default(false),
@@ -1331,7 +1430,7 @@ const createTakeawaySchema = z.object({
 
 publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, sucursalId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, items, notificarWhatsapp, horarioProgramado, grupal, visitorId, sesionUuid, campaniaSlug, campanaId, recetaToken } = c.req.valid('json')
+    const { restauranteId, sucursalId, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, canjeDescuento, items, notificarWhatsapp, horarioProgramado, grupal, visitorId, sesionUuid, campaniaSlug, campanaId, recetaToken } = c.req.valid('json')
 
     try {
         const [takeawayCheck] = await db.select({ takeawayEnabled: RestauranteTable.takeawayEnabled })
@@ -1354,7 +1453,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
         const productosRaw = await db.select().from(ProductoTable).where(and(
             inArray(ProductoTable.id, uniqueProductosIds),
-            eq(ProductoTable.restauranteId, restauranteId)
+            eq(ProductoTable.restauranteId, restauranteId), isNull(ProductoTable.eventoSucursalId)
         ))
         const puntosRows = await db.select().from(ProductoPuntosTable).where(inArray(ProductoPuntosTable.productoId, uniqueProductosIds))
         const puntosMap = new Map(puntosRows.map(pp => [pp.productoId, pp]))
@@ -1460,24 +1559,67 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             notificarClientesWhatsapp: RestauranteTable.notificarClientesWhatsapp,
             modoConfirmacionManual: RestauranteTable.modoConfirmacionManual,
         }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
-        const sistemaPuntosActivo = false; // sistemaPuntos comentado en schema
+        const sistemaPuntosModuloActivo = await tieneModuloActivo(db, restauranteId, MODULE_KEYS.PUNTOS_CLIENTES)
+        const configPuntos = sistemaPuntosModuloActivo ? await obtenerConfiguracionPuntos(db, restauranteId) : null
+        const sistemaPuntosActivo = Boolean(sistemaPuntosModuloActivo && configPuntos?.activo)
 
-        if (!sistemaPuntosActivo) {
-            puntosGanados = 0;
-            if (puntosUsados > 0) return c.json({ message: 'El sistema de puntos está inactivo', success: false }, 400);
+        const puntosUsadosProductos = puntosUsados
+        let puntosUsadosDescuento = 0
+        let descuentoPuntosDinero = 0
+        const tiposCanje: string[] = []
+        if (puntosUsadosProductos > 0) tiposCanje.push('producto')
+
+        if (sistemaPuntosActivo && configPuntos) {
+            // Canje por Descuento en Dinero o Porcentaje
+            if (canjeDescuento && configPuntos.permitirCanjeDescuento) {
+                const montoMinimoReq = parseFloat(configPuntos.descuentoMontoMinimo || '0')
+                if (total >= montoMinimoReq) {
+                    let descPuntos = 0
+                    if (configPuntos.descuentoTipo === 'porcentaje') {
+                        descPuntos = total * (parseFloat(configPuntos.descuentoValor) / 100)
+                        const tope = parseFloat(configPuntos.descuentoTope || '0')
+                        if (tope > 0) descPuntos = Math.min(descPuntos, tope)
+                    } else {
+                        descPuntos = parseFloat(configPuntos.descuentoValor || '0')
+                    }
+                    descuentoPuntosDinero = Math.min(descPuntos, total)
+                    puntosUsadosDescuento = configPuntos.descuentoPuntosCosto
+                    total = Math.max(0, total - descuentoPuntosDinero)
+                    tiposCanje.push('descuento')
+                }
+            }
+
+            puntosUsados = puntosUsadosProductos + puntosUsadosDescuento
+
+            // Calcular puntos ganados según configuración
+            const puntosMapParaCalculo = new Map<number, { puntosGanados: number; puntosNecesarios: number }>()
+            for (const [prodId, data] of productosMap.entries()) {
+                if (data.puntos) {
+                    puntosMapParaCalculo.set(prodId, {
+                        puntosGanados: Number(data.puntos.puntosGanados || 0),
+                        puntosNecesarios: Number(data.puntos.puntosNecesarios || 0),
+                    })
+                }
+            }
+            puntosGanados = calcularPuntosGanados(configPuntos, total, items, puntosMapParaCalculo)
+        } else {
+            puntosGanados = 0
+            if (puntosUsados > 0 || canjeDescuento) {
+                return c.json({ message: 'El sistema de puntos está inactivo', success: false }, 400)
+            }
         }
 
         const perfilCliente = await db.transaction((tx) => resolverClienteParaPedido(tx, {
             restauranteId, nombre: nombreCliente, telefono,
-        }));
-        const clienteId = perfilCliente?.id ?? null;
+        }))
+        const clienteId = perfilCliente?.id ?? null
+
         if (puntosUsados > (perfilCliente?.puntos ?? 0)) {
-            return c.json({ message: 'Puntos insuficientes para realizar el canje', success: false }, 400);
+            return c.json({ message: 'Puntos insuficientes para realizar el canje', success: false }, 400)
         }
-        if (clienteId && (puntosUsados || puntosGanados)) {
-            await db.update(ClienteTable).set({ puntos: sql`${ClienteTable.puntos} - ${puntosUsados} + ${puntosGanados}` })
-                .where(and(eq(ClienteTable.id, clienteId), eq(ClienteTable.restauranteId, restauranteId)));
-        }
+
+        const puntosCanjeTipo = tiposCanje.length > 1 ? 'mixto' : (tiposCanje[0] ?? null)
+        const descuentoPuntosTotal = descuentoPuntosDinero
 
         let montoDescuentoTk = 0
         let codigoDescuentoIdFinalTk: number | null = null
@@ -1573,10 +1715,40 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             montoDescuento: montoDescuentoTotalTk.toFixed(2),
             notificarWhatsapp: notificarWhatsapp || false,
             horarioProgramado: horarioProgramado || null,
+            deliveryFee: '0.00',
+            puntosGanados,
+            puntosUsados,
+            puntosCanjeTipo,
+            descuentoPuntos: descuentoPuntosTotal.toFixed(2),
             grupal: grupal || false,
         })
 
         const pedidoId = Number(nuevoPedido[0].insertId)
+
+        if (clienteId && puntosUsados > 0) {
+            const motivoCanje = tiposCanje.length > 1
+                ? `Canje combinado en pedido #${pedidoId}`
+                : tiposCanje[0] === 'descuento'
+                ? `Canje de descuento en pedido #${pedidoId}`
+                : `Canje de producto en pedido #${pedidoId}`
+
+            await db.transaction(async (tx) => {
+                await registrarTransaccionPuntos(tx, {
+                    restauranteId,
+                    clienteId,
+                    pedidoUnificadoId: pedidoId,
+                    tipo: (tiposCanje[0] ? `canje_${tiposCanje[0]}` : 'canje_producto') as any,
+                    puntos: -puntosUsados,
+                    motivo: motivoCanje,
+                })
+            })
+        }
+
+        if (isMetodoManualVerificable(metodoPagoEfectivo) && puntosGanados > 0) {
+            void acreditarPuntosPedidoAprobado(db, pedidoId).catch((err) =>
+                console.error('Error acreditando puntos pedido manual takeaway:', err)
+            )
+        }
 
         // Motor de Recompra · regla sagrada: si el cliente pidió, sale YA de la cola de recupero
         // (nada peor que un "te extrañamos" a quien acaba de pedir). Best-effort, no frena el pedido.
@@ -1853,7 +2025,8 @@ publicRoute.put('/takeaway/:id/metodo-pago', zValidator('json', setMetodoPagoSch
 publicRoute.get('/restaurante/:id/cliente/:telefono', async (c) => {
     const db = drizzle(pool)
     const id = parseInt(c.req.param('id'))
-    const telefono = c.req.param('telefono')
+    const telefonoRaw = c.req.param('telefono')
+    const telNorm = normalizarTelefonoCliente(telefonoRaw)
 
     try {
         const cliente = await db.select({
@@ -1863,7 +2036,9 @@ publicRoute.get('/restaurante/:id/cliente/:telefono', async (c) => {
         }).from(ClienteTable).where(
             and(
                 eq(ClienteTable.restauranteId, id),
-                eq(ClienteTable.telefono, telefono)
+                telNorm
+                    ? or(eq(ClienteTable.telefonoNormalizado, telNorm), eq(ClienteTable.telefono, telefonoRaw))
+                    : eq(ClienteTable.telefono, telefonoRaw)
             )
         ).limit(1)
 
