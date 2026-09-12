@@ -528,7 +528,8 @@ import {
 
 const createSalaSchema = z.object({
     restauranteId: z.number().int().positive(),
-    nombreCliente: z.string().min(1) // we might not really use it for the table but good to know
+    nombreCliente: z.string().min(1), // we might not really use it for the table but good to know
+    telefono: z.string().optional(),
 })
 
 publicRoute.get('/sala/:token/order-created', async (c) => {
@@ -808,6 +809,8 @@ const createDeliverySchema = z.object({
         })).optional(),
         esCanjePuntos: z.boolean().optional().default(false),
         clienteNombre: z.string().optional(),
+        clienteTelefono: z.string().optional(),
+        clienteId: z.number().int().positive().optional(),
         nota: z.string().trim().max(500).optional(),
     })).min(1)
 })
@@ -1193,6 +1196,38 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         // (nada peor que un "te extrañamos" a quien acaba de pedir). Best-effort, no frena el pedido.
         if (clienteId) { salirDeColaPorPedido(db, restauranteId, clienteId).catch(() => {}) }
 
+        const participantClientIds = new Map<string, number>()
+        if (clienteId && telefono?.trim()) {
+            if (nombreCliente?.trim()) {
+                participantClientIds.set(`${nombreCliente.trim()}:${telefono.trim()}`, clienteId)
+            }
+            participantClientIds.set(telefono.trim(), clienteId)
+        }
+
+        for (const item of items) {
+            const itemNombre = item.clienteNombre?.trim() || nombreCliente?.trim()
+            const itemTel = item.clienteTelefono?.trim() || (itemNombre === nombreCliente?.trim() ? telefono?.trim() : null)
+            if (itemTel && itemNombre) {
+                const key = `${itemNombre}:${itemTel}`
+                if (!participantClientIds.has(key)) {
+                    try {
+                        const perfil = await db.transaction((tx) => resolverClienteParaPedido(tx, {
+                            restauranteId,
+                            nombre: itemNombre,
+                            telefono: itemTel,
+                        }))
+                        if (perfil?.id) {
+                            participantClientIds.set(key, perfil.id)
+                            participantClientIds.set(itemTel, perfil.id)
+                            salirDeColaPorPedido(db, restauranteId, perfil.id).catch(() => {})
+                        }
+                    } catch (err) {
+                        console.error('Error resolviendo participante delivery:', err)
+                    }
+                }
+            }
+        }
+
         for (const item of items) {
             const row = productosMap.get(item.productoId)!
             let precioUnitario = item.esCanjePuntos ? '0.00' : row.producto.precio
@@ -1214,6 +1249,16 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 }
                 precioUnitario = precioVal.toFixed(2)
             }
+            const itemNombre = item.clienteNombre?.trim() || null
+            const itemTelefono = item.clienteTelefono?.trim() || (itemNombre && itemNombre === nombreCliente?.trim() ? telefono?.trim() || null : null)
+            let itemClienteId: number | null = item.clienteId || null
+            if (!itemClienteId && itemTelefono) {
+                itemClienteId = (itemNombre ? participantClientIds.get(`${itemNombre}:${itemTelefono}`) : null)
+                    || participantClientIds.get(itemTelefono)
+                    || (itemTelefono === telefono?.trim() ? clienteId : null)
+                    || null
+            }
+
             await db.insert(ItemPedidoUnificadoTable).values({
                 pedidoId,
                 productoId: item.productoId,
@@ -1227,7 +1272,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 agregados: item.agregados?.length ? item.agregados : null,
                 nota: row.producto.permiteNota ? (item.nota?.trim() || null) : null,
                 esCanjePuntos: item.esCanjePuntos || false,
-                clienteNombre: item.clienteNombre || null,
+                clienteNombre: itemNombre,
+                clienteTelefono: itemTelefono,
+                clienteId: itemClienteId,
             })
         }
 
@@ -1427,6 +1474,8 @@ const createTakeawaySchema = z.object({
         })).optional(),
         esCanjePuntos: z.boolean().optional().default(false),
         clienteNombre: z.string().optional(),
+        clienteTelefono: z.string().optional(),
+        clienteId: z.number().int().positive().optional(),
         nota: z.string().trim().max(500).optional(),
     })).min(1)
 })
@@ -1758,6 +1807,38 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         // (nada peor que un "te extrañamos" a quien acaba de pedir). Best-effort, no frena el pedido.
         if (clienteId) { salirDeColaPorPedido(db, restauranteId, clienteId).catch(() => {}) }
 
+        const participantClientIds = new Map<string, number>()
+        if (clienteId && telefono?.trim()) {
+            if (nombreCliente?.trim()) {
+                participantClientIds.set(`${nombreCliente.trim()}:${telefono.trim()}`, clienteId)
+            }
+            participantClientIds.set(telefono.trim(), clienteId)
+        }
+
+        for (const item of items) {
+            const itemNombre = item.clienteNombre?.trim() || nombreCliente?.trim()
+            const itemTel = item.clienteTelefono?.trim() || (itemNombre === nombreCliente?.trim() ? telefono?.trim() : null)
+            if (itemTel && itemNombre) {
+                const key = `${itemNombre}:${itemTel}`
+                if (!participantClientIds.has(key)) {
+                    try {
+                        const perfil = await db.transaction((tx) => resolverClienteParaPedido(tx, {
+                            restauranteId,
+                            nombre: itemNombre,
+                            telefono: itemTel,
+                        }))
+                        if (perfil?.id) {
+                            participantClientIds.set(key, perfil.id)
+                            participantClientIds.set(itemTel, perfil.id)
+                            salirDeColaPorPedido(db, restauranteId, perfil.id).catch(() => {})
+                        }
+                    } catch (err) {
+                        console.error('Error resolviendo participante takeaway:', err)
+                    }
+                }
+            }
+        }
+
         for (const item of items) {
             const row = productosMap.get(item.productoId)!
             let precioUnitario = item.esCanjePuntos ? '0.00' : row.producto.precio
@@ -1779,6 +1860,16 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 }
                 precioUnitario = precioVal.toFixed(2)
             }
+            const itemNombre = item.clienteNombre?.trim() || null
+            const itemTelefono = item.clienteTelefono?.trim() || (itemNombre && itemNombre === nombreCliente?.trim() ? telefono?.trim() || null : null)
+            let itemClienteId: number | null = item.clienteId || null
+            if (!itemClienteId && itemTelefono) {
+                itemClienteId = (itemNombre ? participantClientIds.get(`${itemNombre}:${itemTelefono}`) : null)
+                    || participantClientIds.get(itemTelefono)
+                    || (itemTelefono === telefono?.trim() ? clienteId : null)
+                    || null
+            }
+
             await db.insert(ItemPedidoUnificadoTable).values({
                 pedidoId,
                 productoId: item.productoId,
@@ -1792,7 +1883,9 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 agregados: item.agregados?.length ? item.agregados : null,
                 nota: row.producto.permiteNota ? (item.nota?.trim() || null) : null,
                 esCanjePuntos: item.esCanjePuntos || false,
-                clienteNombre: item.clienteNombre || null,
+                clienteNombre: itemNombre,
+                clienteTelefono: itemTelefono,
+                clienteId: itemClienteId,
             })
         }
 
@@ -2157,11 +2250,31 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
             ))
         const clienteIds = clientesCoincidentes.map((cliente) => cliente.id)
 
+        const matchingItemConditions = [
+            sql`REGEXP_REPLACE(COALESCE(${ItemPedidoUnificadoTable.clienteTelefono}, ''), '[^0-9]', '') = ${telefonoNormalizado}`
+        ]
+        if (clienteIds.length > 0) {
+            matchingItemConditions.push(inArray(ItemPedidoUnificadoTable.clienteId, clienteIds))
+        }
+
+        const pedidosConItemsGrupal = await db
+            .selectDistinct({ pedidoId: ItemPedidoUnificadoTable.pedidoId })
+            .from(ItemPedidoUnificadoTable)
+            .where(or(...matchingItemConditions))
+
+        const groupOrderIds = pedidosConItemsGrupal.map(r => r.pedidoId).filter((id): id is number => id !== null)
+
         let identidadPedido: any = sql`REGEXP_REPLACE(COALESCE(${PedidoUnificadoTable.telefono}, ''), '[^0-9]', '') = ${telefonoNormalizado}`
         if (clienteIds.length > 0) {
             identidadPedido = or(
                 identidadPedido,
                 inArray(PedidoUnificadoTable.clienteId, clienteIds),
+            )
+        }
+        if (groupOrderIds.length > 0) {
+            identidadPedido = or(
+                identidadPedido,
+                inArray(PedidoUnificadoTable.id, groupOrderIds),
             )
         }
 
@@ -2172,6 +2285,9 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
                 estado: PedidoUnificadoTable.estado,
                 total: PedidoUnificadoTable.total,
                 nombreCliente: PedidoUnificadoTable.nombreCliente,
+                telefono: PedidoUnificadoTable.telefono,
+                clienteId: PedidoUnificadoTable.clienteId,
+                grupal: PedidoUnificadoTable.grupal,
                 direccion: PedidoUnificadoTable.direccion,
                 latitud: PedidoUnificadoTable.latitud,
                 longitud: PedidoUnificadoTable.longitud,
@@ -2207,14 +2323,28 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
                         agregados: ItemPedidoUnificadoTable.agregados,
                         nota: ItemPedidoUnificadoTable.nota,
                         esCanjePuntos: ItemPedidoUnificadoTable.esCanjePuntos,
+                        clienteNombre: ItemPedidoUnificadoTable.clienteNombre,
+                        clienteTelefono: ItemPedidoUnificadoTable.clienteTelefono,
+                        clienteId: ItemPedidoUnificadoTable.clienteId,
                         productoNombre: ProductoTable.nombre,
                     })
                     .from(ItemPedidoUnificadoTable)
                     .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
                     .where(eq(ItemPedidoUnificadoTable.pedidoId, p.id))
 
-                const totalItems = items.reduce((sum, i) => sum + (i.cantidad ?? 1), 0)
-                return { ...p, items, totalItems }
+                let itemsResultado = items
+                if (p.grupal) {
+                    const itemsParticipante = items.filter(i =>
+                        (i.clienteId && clienteIds.includes(i.clienteId)) ||
+                        (i.clienteTelefono && normalizarTelefonoCliente(i.clienteTelefono) === telefonoNormalizado)
+                    )
+                    if (itemsParticipante.length > 0) {
+                        itemsResultado = itemsParticipante
+                    }
+                }
+
+                const totalItems = itemsResultado.reduce((sum, i) => sum + (i.cantidad ?? 1), 0)
+                return { ...p, items: itemsResultado, totalItems }
             })
         )
 

@@ -24,6 +24,7 @@ import {
 import { MesaSession, WebSocketMessage, ItemPedidoWS, AdminSession, AdminNotification, AdminNotificationType, CheckoutDeliveryData } from '../types/websocket';
 import { asignarAliasAPedido } from '../services/cucuru';
 import { atribuirPedidoMarketingBestEffort } from '../lib/marketing-atribucion';
+import { salirDeColaPorPedido } from '../lib/motor-recompra';
 
 // Definir tipo para estado de item
 type ItemEstado = 'pending' | 'preparing' | 'delivered' | 'served' | 'cancelled';
@@ -336,7 +337,7 @@ class WebSocketManager {
   // ==================== MESA/CLIENT METHODS ====================
 
   // Agregar cliente a la sesión de la mesa
-  async addClient(mesaId: number, pedidoId: number, ws: any, clienteId: string, nombre: string) {
+  async addClient(mesaId: number, pedidoId: number, ws: any, clienteId: string, nombre: string, telefono?: string) {
     const isSala = mesaId >= 1000000;
     let session = this.sessions.get(mesaId);
 
@@ -359,20 +360,31 @@ class WebSocketManager {
 
     // Agregar cliente si no existe (y no es admin)
     const isAdmin = clienteId.startsWith('admin-') || nombre.includes('Admin');
-    if (!isAdmin && !session.clientes.find(c => c.id === clienteId)) {
-      session.clientes.push({
-        id: clienteId,
-        nombre,
-        socketId: clienteId
-      });
+    if (!isAdmin) {
+      const existing = session.clientes.find(c => c.id === clienteId);
+      if (!existing) {
+        session.clientes.push({
+          id: clienteId,
+          nombre,
+          telefono: telefono?.trim() || undefined,
+          socketId: clienteId
+        });
 
-      // Modo carrito: solo aplica a mesas legacy, no a sala
-      if (!isSala) {
-        await this.asignarNombrePedidoSiCarrito(mesaId, pedidoId, nombre);
+        // Modo carrito: solo aplica a mesas legacy, no a sala
+        if (!isSala) {
+          await this.asignarNombrePedidoSiCarrito(mesaId, pedidoId, nombre);
+        }
+
+        // Solo actualizar estado de mesas para admins (sin notificación)
+        this.broadcastEstadoToAdmins(mesaId);
+      } else {
+        if (telefono?.trim() && !existing.telefono) {
+          existing.telefono = telefono.trim();
+        }
+        if (nombre && existing.nombre !== nombre) {
+          existing.nombre = nombre;
+        }
       }
-
-      // Solo actualizar estado de mesas para admins (sin notificación)
-      this.broadcastEstadoToAdmins(mesaId);
     }
 
     return session;
@@ -640,10 +652,15 @@ class WebSocketManager {
       const nombresVariantes = [item.varianteNombre, item.varianteSecundariaNombre].filter(Boolean).join(' · ')
       const nombreProducto = nombresVariantes ? `${baseNombre} - ${nombresVariantes}` : baseNombre;
 
+      const clienteTelefono = item.clienteTelefono
+        || session.clientes.find(c => c.nombre === item.clienteNombre)?.telefono
+        || undefined;
+
       const newItem: ItemPedidoWS = {
         id: this.salaItemIdCounter++,
         productoId: item.productoId,
         clienteNombre: item.clienteNombre,
+        clienteTelefono,
         cantidad: item.cantidad,
         precioUnitario: item.precioUnitario,
         nombreProducto,
@@ -684,11 +701,17 @@ class WebSocketManager {
 
     const isPostConfirmacion = ['preparing', 'delivered', 'served'].includes(pedidoActual[0]?.estado || '');
 
+    const legacySession = this.sessions.get(mesaId);
+    const clienteTelefonoLegacy = item.clienteTelefono
+      || legacySession?.clientes.find(c => c.nombre === item.clienteNombre)?.telefono
+      || null;
+
     // Insertar en la BD
     const result = await this.db.insert(ItemPedidoTable).values({
       pedidoId,
       productoId: item.productoId,
       clienteNombre: item.clienteNombre,
+      clienteTelefono: clienteTelefonoLegacy,
       cantidad: item.cantidad,
       precioUnitario: item.precioUnitario,
       ingredientesExcluidos: item.ingredientesExcluidos || null,
@@ -1361,21 +1384,27 @@ class WebSocketManager {
 
     try {
       // Items desde memoria (no desde DB legacy)
-      const items = (session.items || []).map(i => ({
-        productoId: i.productoId,
-        clienteNombre: i.clienteNombre,
-        cantidad: i.cantidad || 1,
-        precioUnitario: i.precioUnitario,
-        ingredientesExcluidos: i.ingredientesExcluidos || null,
-        ingredientesExcluidosNombres: i.ingredientesExcluidosNombres || [],
-        agregados: i.agregados || null,
-        nombreProducto: i.nombreProducto || 'Producto',
-        varianteId: i.varianteId || null,
-        varianteNombre: i.varianteNombre || null,
-        varianteSecundariaId: i.varianteSecundariaId || null,
-        varianteSecundariaNombre: i.varianteSecundariaNombre || null,
-        nota: i.nota?.trim() || null,
-      }));
+      const items = (session.items || []).map(i => {
+        const clienteTelefono = i.clienteTelefono
+          || session.clientes.find(c => c.nombre === i.clienteNombre)?.telefono
+          || (i.clienteNombre === checkoutData.nombre ? checkoutData.telefono : null);
+        return {
+          productoId: i.productoId,
+          clienteNombre: i.clienteNombre,
+          clienteTelefono: clienteTelefono || null,
+          cantidad: i.cantidad || 1,
+          precioUnitario: i.precioUnitario,
+          ingredientesExcluidos: i.ingredientesExcluidos || null,
+          ingredientesExcluidosNombres: i.ingredientesExcluidosNombres || [],
+          agregados: i.agregados || null,
+          nombreProducto: i.nombreProducto || 'Producto',
+          varianteId: i.varianteId || null,
+          varianteNombre: i.varianteNombre || null,
+          varianteSecundariaId: i.varianteSecundariaId || null,
+          varianteSecundariaNombre: i.varianteSecundariaNombre || null,
+          nota: i.nota?.trim() || null,
+        };
+      });
 
       if (items.length === 0) {
         this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'El pedido está vacío.' } });
@@ -1440,6 +1469,33 @@ class WebSocketManager {
         restauranteId: sala[0].restauranteId!, nombre: checkoutData.nombre, telefono: checkoutData.telefono,
       }));
       const clienteId = perfilCliente?.id ?? null;
+
+      // Resolver clientes individuales para cada participante del grupo
+      const participantClientIds = new Map<string, number>();
+      if (clienteId && checkoutData.telefono?.trim()) {
+        participantClientIds.set(`${checkoutData.nombre.trim()}:${checkoutData.telefono.trim()}`, clienteId);
+        participantClientIds.set(checkoutData.telefono.trim(), clienteId);
+      }
+
+      for (const item of items) {
+        const itemNombre = item.clienteNombre?.trim() || checkoutData.nombre.trim();
+        const itemTel = item.clienteTelefono?.trim() || (itemNombre === checkoutData.nombre.trim() ? checkoutData.telefono.trim() : null);
+        if (itemTel && itemNombre) {
+          const key = `${itemNombre}:${itemTel}`;
+          if (!participantClientIds.has(key)) {
+            const perfil = await this.db.transaction((tx) => resolverClienteParaPedido(tx, {
+              restauranteId: sala[0].restauranteId!,
+              nombre: itemNombre,
+              telefono: itemTel,
+            }));
+            if (perfil?.id) {
+              participantClientIds.set(key, perfil.id);
+              participantClientIds.set(itemTel, perfil.id);
+              salirDeColaPorPedido(this.db, sala[0].restauranteId!, perfil.id).catch(() => {});
+            }
+          }
+        }
+      }
 
       // `checkoutData.total` es una instantánea visual y puede quedar vieja si el grupo
       // modifica el carrito. Además ya incluía el cupón del frontend, por lo que usarla
@@ -1516,6 +1572,11 @@ class WebSocketManager {
       });
 
       for (const item of items) {
+        const itemNombre = item.clienteNombre?.trim() || checkoutData.nombre.trim();
+        const itemTel = item.clienteTelefono?.trim() || (itemNombre === checkoutData.nombre.trim() ? checkoutData.telefono.trim() : null);
+        const itemKey = itemTel && itemNombre ? `${itemNombre}:${itemTel}` : (itemTel || null);
+        const itemClienteId = itemKey ? (participantClientIds.get(itemKey) ?? null) : (itemNombre === checkoutData.nombre.trim() ? clienteId : null);
+
         await this.db.insert(ItemPedidoUnificadoTable).values({
           pedidoId: pedidoUnificadoId,
           productoId: item.productoId,
@@ -1530,6 +1591,8 @@ class WebSocketManager {
           nota: item.nota,
           esCanjePuntos: false,
           clienteNombre: item.clienteNombre || null,
+          clienteTelefono: itemTel || null,
+          clienteId: itemClienteId ?? null,
         });
       }
 

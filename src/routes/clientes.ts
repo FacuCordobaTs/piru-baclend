@@ -23,7 +23,7 @@ import {
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
-import { columnasIndiceCliente } from '../lib/clientes-identidad'
+import { columnasIndiceCliente, normalizarTelefonoCliente } from '../lib/clientes-identidad'
 import { requirePosConsulta } from '../middleware/pos-evento'
 import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS } from '../lib/modulos'
@@ -103,6 +103,7 @@ clientesRoute.get('/list', async (c) => {
             pagado: PedidoUnificadoTable.pagado,
             createdAt: PedidoUnificadoTable.createdAt,
             tipo: PedidoUnificadoTable.tipo,
+            grupal: PedidoUnificadoTable.grupal,
         }).from(PedidoUnificadoTable)
             .where(and(
                 eq(PedidoUnificadoTable.restauranteId, restauranteId),
@@ -113,7 +114,15 @@ clientesRoute.get('/list', async (c) => {
 
         // 3. Traer todos los items de esos pedidos
         const pedidoIds = pedidos.map(p => p.id)
-        let itemsRaw: { pedidoId: number, productoId: number, cantidad: number | null, precioUnitario: string }[] = []
+        let itemsRaw: {
+            pedidoId: number,
+            productoId: number,
+            cantidad: number | null,
+            precioUnitario: string,
+            clienteNombre: string | null,
+            clienteTelefono: string | null,
+            clienteId: number | null,
+        }[] = []
         
         if (pedidoIds.length > 0) {
             itemsRaw = await db.select({
@@ -121,6 +130,9 @@ clientesRoute.get('/list', async (c) => {
                 productoId: ItemPedidoUnificadoTable.productoId,
                 cantidad: ItemPedidoUnificadoTable.cantidad,
                 precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
+                clienteNombre: ItemPedidoUnificadoTable.clienteNombre,
+                clienteTelefono: ItemPedidoUnificadoTable.clienteTelefono,
+                clienteId: ItemPedidoUnificadoTable.clienteId,
             }).from(ItemPedidoUnificadoTable)
                 .where(inArray(ItemPedidoUnificadoTable.pedidoId, pedidoIds))
         }
@@ -139,13 +151,23 @@ clientesRoute.get('/list', async (c) => {
         }
 
         // 5. Armar el mapa de items por pedido unificado
-        const itemsMap: Record<number, { nombreProducto: string, cantidad: number, precioUnitario: string }[]> = {}
+        const itemsMap: Record<number, {
+            nombreProducto: string,
+            cantidad: number,
+            precioUnitario: string,
+            clienteNombre: string | null,
+            clienteTelefono: string | null,
+            clienteId: number | null,
+        }[]> = {}
         for (const item of itemsRaw) {
             if (!itemsMap[item.pedidoId]) itemsMap[item.pedidoId] = []
             itemsMap[item.pedidoId].push({
                 nombreProducto: productosMap[item.productoId] || 'Producto eliminado',
                 cantidad: item.cantidad ?? 1,
                 precioUnitario: item.precioUnitario,
+                clienteNombre: item.clienteNombre || null,
+                clienteTelefono: item.clienteTelefono || null,
+                clienteId: item.clienteId || null,
             })
         }
 
@@ -154,18 +176,49 @@ clientesRoute.get('/list', async (c) => {
             ...p,
             // Casteamos el tipo explícitamente para que coincida con lo que espera el frontend
             tipo: p.tipo as 'delivery' | 'takeaway' | 'mesa',
+            grupal: Boolean(p.grupal),
             items: itemsMap[p.id] || []
         }))
+
+        // Helper para resolver los pedidos atribuidos a un cliente (individuales o grupales)
+        const resolverPedidosCliente = (cliente: typeof clientes[0]) => {
+            const telNorm = cliente.telefonoNormalizado || (cliente.telefono ? normalizarTelefonoCliente(cliente.telefono) : null)
+            const matched: typeof allPedidos = []
+
+            for (const p of allPedidos) {
+                if (p.grupal) {
+                    const clientItems = p.items.filter(it => {
+                        if (it.clienteId && it.clienteId === cliente.id) return true
+                        if (it.clienteTelefono && telNorm && normalizarTelefonoCliente(it.clienteTelefono) === telNorm) return true
+                        return false
+                    })
+
+                    if (clientItems.length > 0) {
+                        const totalGastadoItems = clientItems.reduce(
+                            (sum, it) => sum + (parseFloat(it.precioUnitario || '0') * it.cantidad),
+                            0
+                        )
+                        matched.push({
+                            ...p,
+                            items: clientItems,
+                            total: totalGastadoItems.toFixed(2),
+                        })
+                    }
+                } else if (p.clienteId === cliente.id) {
+                    matched.push(p)
+                }
+            }
+
+            return deduplicarPedidosHistorial(matched)
+        }
 
         // 7. Mostrar sólo clientes con al menos un pedido despachado y calcular
         // todas sus métricas a partir de ese mismo historial.
         const clientesParaRespuesta = soloDespachados
-            ? clientes.filter(cliente => allPedidos.some(pedido => pedido.clienteId === cliente.id))
+            ? clientes.filter(cliente => resolverPedidosCliente(cliente).length > 0)
             : clientes
         const base = clientesParaRespuesta.map(cliente => {
-            const clientPedidos = deduplicarPedidosHistorial(
-                allPedidos.filter(p => p.clienteId === cliente.id),
-            )
+            const clientPedidos = resolverPedidosCliente(cliente)
             const cantidadPedidos = clientPedidos.length
             const totalGastado = clientPedidos.reduce((acc, current) => acc + parseFloat(current.total || '0'), 0)
 

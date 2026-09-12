@@ -1183,6 +1183,9 @@ const idempotenciaSchema = z.string().trim().min(8).max(128)
 const prepararEnlaceSchema = z.object({
   clienteId: z.number().int().positive(),
   campanaId: z.number().int().positive().nullable().optional(),
+  tipoCampana: z.enum(['lo_mismo', 'reactivacion']).optional(),
+  descuentoPorcentaje: z.number().int().min(0).max(100).optional(),
+  expiraHoras: z.number().int().positive().max(24 * 30).nullable().optional(),
   recetaCodigo: z.enum(recetaCodigos).optional(),
   codigoDescuentoId: z.number().int().positive().nullable().optional(),
   incentivo: z.object({
@@ -1325,8 +1328,155 @@ export function crearMarketingEnlacesRoute(
     try {
       const restauranteId = (c as any).user.id as number
       const input = c.req.valid('json')
-      const resultado = await prepararEnlaceMarketing(repositorio, restauranteId, input)
-      const esHabitual = resultado.recomendacion.receta.codigo === 'segunda_compra' || resultado.recomendacion.receta.codigo === 'volver_a_tiempo'
+      const db = drizzle(pool)
+
+      if (input.tipoCampana) {
+        const campanaCodigo = input.tipoCampana
+        const campanaSlug = campanaCodigo === 'lo_mismo' ? 'lo-mismo' : 'reactivacion'
+        const modalidad = campanaCodigo === 'lo_mismo' ? 'drawer_habitual' : 'descuento_banner'
+        const dto = campanaCodigo === 'reactivacion' ? (input.descuentoPorcentaje ?? 10) : 0
+        const expiraHoras = input.expiraHoras ?? (dto >= 20 ? 48 : null)
+        const expiraAt = expiraHoras ? new Date(Date.now() + expiraHoras * 3600 * 1000) : null
+        const expiraAtMs = expiraAt ? expiraAt.getTime() : null
+
+        const campanaMaestra = await asegurarCampanaMaestra(db, restauranteId, campanaCodigo)
+
+        // Buscar último pedido del cliente para derivar carrito habitual
+        const [ultimoPedido] = await db.select({
+          id: PedidoUnificadoTable.id,
+          items: PedidoUnificadoTable.items,
+        }).from(PedidoUnificadoTable).where(and(
+          eq(PedidoUnificadoTable.restauranteId, restauranteId),
+          eq(PedidoUnificadoTable.clienteId, input.clienteId),
+          ne(PedidoUnificadoTable.estado, 'cancelled'),
+        )).orderBy(desc(PedidoUnificadoTable.id)).limit(1)
+
+        let rep: string | undefined = undefined
+        if (ultimoPedido?.items && Array.isArray(ultimoPedido.items)) {
+          try {
+            const specs = (ultimoPedido.items as any[])
+              .filter((it: any) => it && (it.productoId || it.id))
+              .map((it: any) => `${it.productoId || it.id}x${it.cantidad || 1}`)
+            if (specs.length > 0) rep = specs.join('-')
+          } catch (e) {
+            console.warn('Error derivando rep de último pedido:', e)
+          }
+        }
+
+        const tokenCifrado = cifrarGrowthPayload({
+          rId: restauranteId,
+          cId: input.clienteId,
+          campana: campanaCodigo,
+          modalidad,
+          rep,
+          dto,
+          exp: expiraAtMs,
+        })
+
+        const [existente] = await db.select().from(MarketingEnlaceTable).where(and(
+          eq(MarketingEnlaceTable.restauranteId, restauranteId),
+          eq(MarketingEnlaceTable.idempotenciaClave, input.idempotenciaClave),
+        )).limit(1)
+
+        if (existente) {
+          return c.json({
+            success: true,
+            data: {
+              enlace: existente,
+              token: tokenCifrado,
+              idempotente: true,
+              campanaSlug,
+              campanaCodigo,
+              modalidad,
+              dto,
+              textoSugerido: existente.textoSugerido || '',
+              destino: { tipo: modalidad === 'drawer_habitual' ? 'carrito' : 'tienda', carritoRep: rep },
+            }
+          }, 200)
+        }
+
+        const [cliente] = await db.select({ nombre: ClienteTable.nombre }).from(ClienteTable).where(and(
+          eq(ClienteTable.restauranteId, restauranteId),
+          eq(ClienteTable.id, input.clienteId),
+        )).limit(1)
+
+        if (!cliente) {
+          return c.json({ success: false, code: 'CLIENTE_NO_ENCONTRADO', message: 'Cliente no encontrado' }, 404)
+        }
+
+        const [rest] = await db.select({ nombre: RestauranteTable.nombre, username: RestauranteTable.username }).from(RestauranteTable).where(
+          eq(RestauranteTable.id, restauranteId)
+        ).limit(1)
+
+        const primerNombre = cliente.nombre ? cliente.nombre.split(' ')[0] : 'Hola'
+        const nombreRestaurante = rest?.nombre || 'nuestro local'
+        let textoSugerido = ''
+        if (campanaCodigo === 'lo_mismo') {
+          textoSugerido = `¡Hola ${primerNombre}! Te dejamos listo tu pedido de siempre en ${nombreRestaurante} para pedir en un toque: `
+        } else if (dto >= 20) {
+          textoSugerido = `¡Hola ${primerNombre}! Te extrañamos en ${nombreRestaurante}. Tenés un 20% OFF exclusivo por 48 horas en tu próximo pedido: `
+        } else {
+          textoSugerido = `¡Hola ${primerNombre}! Te extrañamos en ${nombreRestaurante}. Te dejamos un ${dto}% OFF exclusivo para tu próximo pedido: `
+        }
+
+        const tokenHash = hashTokenMarketing(tokenCifrado)
+        const [insertRes] = await db.insert(MarketingEnlaceTable).values({
+          restauranteId,
+          campanaId: campanaMaestra?.id ?? null,
+          clienteId: input.clienteId,
+          recetaCodigo: campanaCodigo,
+          tokenHash,
+          idempotenciaClave: input.idempotenciaClave,
+          destinoTipo: modalidad === 'drawer_habitual' ? 'carrito' : 'tienda',
+          carritoRep: rep || null,
+          codigoDescuentoId: null,
+          textoSugerido,
+          expiraAt,
+          activo: true,
+        })
+
+        const enlacePersistido = {
+          id: Number(insertRes.insertId),
+          restauranteId,
+          campanaId: campanaMaestra?.id ?? null,
+          clienteId: input.clienteId,
+          recetaCodigo: campanaCodigo,
+          tokenHash,
+          idempotenciaClave: input.idempotenciaClave,
+          destinoTipo: modalidad === 'drawer_habitual' ? 'carrito' : 'tienda',
+          productoId: null,
+          carritoRep: rep || null,
+          codigoDescuentoId: null,
+          textoSugerido,
+          expiraAt,
+          activo: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }
+
+        await registrarContactoManual(db, restauranteId, input.clienteId).catch(() => {})
+
+        return c.json({
+          success: true,
+          data: {
+            enlace: enlacePersistido,
+            token: tokenCifrado,
+            idempotente: false,
+            campanaSlug,
+            campanaCodigo,
+            modalidad,
+            dto,
+            textoSugerido,
+            destino: { tipo: modalidad === 'drawer_habitual' ? 'carrito' : 'tienda', carritoRep: rep },
+          }
+        }, 201)
+      }
+
+      const resultado = await prepararEnlaceMarketing(repositorio, restauranteId, {
+        ...input,
+        incentivoConfirmado: input.incentivoConfirmado ?? true,
+      })
+      const esHabitual = resultado.recomendacion.receta.codigo === 'segunda_compra' || resultado.recomendacion.receta.codigo === 'volver_a_tiempo' || resultado.recomendacion.receta.codigo === 'mantener_ritmo' || resultado.recomendacion.receta.codigo === 'beneficio_vip'
       const campanaCodigo = esHabitual ? 'lo_mismo' : 'reactivacion'
       const campanaSlug = esHabitual ? 'lo-mismo' : 'reactivacion'
       const modalidad = esHabitual ? 'drawer_habitual' : 'descuento_banner'
@@ -1352,6 +1502,9 @@ export function crearMarketingEnlacesRoute(
         destino: resultado.recomendacion.destino,
         textoSugerido: resultado.recomendacion.textoSugerido,
         campanaSlug,
+        campanaCodigo,
+        modalidad,
+        dto,
       } }, resultado.idempotente ? 200 : 201)
     } catch (error) {
       if (error instanceof ErrorPrepararEnlaceMarketing) {

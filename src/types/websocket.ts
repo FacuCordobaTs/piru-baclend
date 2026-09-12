@@ -2,6 +2,7 @@
 export interface ClienteConectado {
   id: string;
   nombre: string;
+  telefono?: string;
   socketId: string;
 }
 
@@ -9,6 +10,8 @@ export interface ItemPedidoWS {
   id?: number;
   productoId: number;
   clienteNombre: string;
+  clienteTelefono?: string;
+  clienteId?: number;
   cantidad: number;
   precioUnitario: string;
   nombreProducto?: string;

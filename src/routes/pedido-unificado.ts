@@ -68,6 +68,9 @@ const itemSchema = z.object({
     precio: z.union([z.string(), z.number()]),
   })).optional(),
   nota: z.string().trim().max(500).optional(),
+  clienteNombre: z.string().optional(),
+  clienteTelefono: z.string().optional(),
+  clienteId: z.number().int().positive().optional(),
 })
 
 // Campos comunes para pedidos anotados manualmente desde el POS del local
@@ -369,6 +372,8 @@ export async function respuestaPedidoEditable(db: any, restauranteId: number, pe
     ingredientesExcluidos: ItemPedidoUnificadoTable.ingredientesExcluidos, agregados: ItemPedidoUnificadoTable.agregados,
     nota: ItemPedidoUnificadoTable.nota,
     clienteNombre: ItemPedidoUnificadoTable.clienteNombre,
+    clienteTelefono: ItemPedidoUnificadoTable.clienteTelefono,
+    clienteId: ItemPedidoUnificadoTable.clienteId,
   }).from(ItemPedidoUnificadoTable).leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
     .where(eq(ItemPedidoUnificadoTable.pedidoId, pedidoId))
   const items = await enrichItemsWithProductInfo(db, itemsRaw)
@@ -629,6 +634,8 @@ const pedidoUnificadoRoute = new Hono()
         agregados: ItemPedidoUnificadoTable.agregados,
         nota: ItemPedidoUnificadoTable.nota,
         clienteNombre: ItemPedidoUnificadoTable.clienteNombre,
+        clienteTelefono: ItemPedidoUnificadoTable.clienteTelefono,
+        clienteId: ItemPedidoUnificadoTable.clienteId,
       })
       .from(ItemPedidoUnificadoTable)
       .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
@@ -1045,6 +1052,9 @@ const pedidoUnificadoRoute = new Hono()
           ingredientesExcluidos: item.ingredientesExcluidos?.length ? item.ingredientesExcluidos : null,
           agregados: item.agregados?.length ? item.agregados : null,
           nota: item.nota?.trim() || null,
+          clienteNombre: item.clienteNombre || null,
+          clienteTelefono: item.clienteTelefono || null,
+          clienteId: item.clienteId || null,
         })
       }
       return { pedidoId, clienteId: perfil?.id ?? null }

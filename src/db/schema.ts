@@ -375,6 +375,10 @@ export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {
   nota: varchar("nota", { length: 500 }),
   // Nombre del cliente que agregó este item (solo relevante en pedidos grupales)
   clienteNombre: varchar("cliente_nombre", { length: 255 }),
+  // Teléfono del cliente que agregó este item (pedidos grupales / sala)
+  clienteTelefono: varchar("cliente_telefono", { length: 50 }),
+  // Cliente registrado en la base de clientes asociado a este item
+  clienteId: int("cliente_id").references(() => cliente.id, { onDelete: 'set null' }),
 });
 
 // Ledger de mutaciones POS. El actor se mantiene nullable para el historial previo.
@@ -1657,6 +1661,7 @@ export const itemPedido = mysqlTable("item_pedido", {
   pedidoId: int("pedido_id").notNull(),
   productoId: int("producto_id").notNull(),
   clienteNombre: varchar("cliente_nombre", { length: 100 }).notNull(),
+  clienteTelefono: varchar("cliente_telefono", { length: 50 }),
   cantidad: int("cantidad").default(1),
   precioUnitario: decimal("precio_unitario", {
     precision: 10,

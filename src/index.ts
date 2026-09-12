@@ -597,7 +597,8 @@ app.get(
                 currentPedidoId,
                 ws,
                 data.payload.clienteId,
-                data.payload.nombre
+                data.payload.nombre,
+                data.payload.telefono
               );
 
               // Enviar estado inicial
@@ -618,7 +619,7 @@ app.get(
                 }
               }));
 
-              console.log(`👤 Cliente "${data.payload.nombre}" unido a mesa ${currentMesaId}`);
+              console.log(`👤 Cliente "${data.payload.nombre}" (${data.payload.telefono || 'sin tel'}) unido a mesa ${currentMesaId}`);
 
               // Notificar a otros clientes
               wsManager.broadcast(currentMesaId, {
@@ -626,7 +627,8 @@ app.get(
                 payload: {
                   cliente: {
                     id: data.payload.clienteId,
-                    nombre: data.payload.nombre
+                    nombre: data.payload.nombre,
+                    telefono: data.payload.telefono
                   },
                   clientes: session.clientes
                 }
