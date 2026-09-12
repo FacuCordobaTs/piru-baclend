@@ -5,6 +5,7 @@ import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
 import {
   marketingCampana as MarketingCampanaTable,
+  CATEGORIAS_CAMPANA,
   marketingEnlace as MarketingEnlaceTable,
   marketingContacto as MarketingContactoTable,
   cliente as ClienteTable,
@@ -19,7 +20,14 @@ import {
   marketingEvento as MarketingEventoTable,
   producto as ProductoTable,
   restaurante as RestauranteTable,
+  agregado as AgregadoTable,
+  varianteProducto as VarianteProductoTable,
 } from '../db/schema'
+import {
+  cifrarGrowthPayload,
+  descifrarGrowthPayload,
+  type GrowthTokenPayload,
+} from '../lib/marketing-crypto'
 import {
   ErrorMarketingTracking,
   guardarEventosMarketing,
@@ -255,6 +263,7 @@ export interface CampanaSmartLinkPublica {
   id: number
   nombre: string
   slug: string
+  tipo?: 'adquisicion' | 'recompra' | 'retencion' | 'lo_mismo' | 'reactivacion'
   destinoTipo: 'tienda' | 'producto' | 'carrito'
   productoId: number | null
   carritoRep: string | null
@@ -369,6 +378,7 @@ export function crearMarketingSmartLinksRoute(dependencias: DependenciasSmartLin
           campanaId: campana.id,
           nombre: campana.nombre,
           slug: campana.slug,
+          tipo: campana.tipo,
           productoId: campana.productoId,
           descuentoPorcentaje: campana.descuentoProductoPorcentaje,
           limiteUsos: campana.limiteUsos,
@@ -404,6 +414,8 @@ function crearRepositorioSmartLinksDrizzle(): RepositorioSmartLinksMarketing {
         id: MarketingCampanaTable.id,
         nombre: MarketingCampanaTable.nombre,
         slug: MarketingCampanaTable.slug,
+        tipo: MarketingCampanaTable.tipo,
+        categoria: MarketingCampanaTable.categoria,
         destinoTipo: MarketingCampanaTable.destinoTipo,
         productoId: MarketingCampanaTable.productoId,
         carritoRep: MarketingCampanaTable.carritoRep,
@@ -618,12 +630,338 @@ const marketingRecetasPublicRoute = crearMarketingRecetasPublicasRoute({
   },
 })
 
+export async function asegurarCampanasMaestras(db: any, restauranteId: number) {
+  try {
+    const existentes = await db.select({ id: MarketingCampanaTable.id, slug: MarketingCampanaTable.slug })
+      .from(MarketingCampanaTable)
+      .where(and(
+        eq(MarketingCampanaTable.restauranteId, restauranteId),
+        inArray(MarketingCampanaTable.slug, ['lo-mismo', 'reactivacion']),
+      ))
+
+    const slugsExistentes = new Set(existentes.map((c: any) => c.slug))
+
+    if (!slugsExistentes.has('lo-mismo')) {
+      await db.insert(MarketingCampanaTable).values({
+        restauranteId,
+        nombre: '¿Lo mismo de siempre?',
+        slug: 'lo-mismo',
+        tipo: 'lo_mismo',
+        estado: 'activa',
+        destinoTipo: 'tienda',
+      } as any)
+    }
+
+    if (!slugsExistentes.has('reactivacion')) {
+      await db.insert(MarketingCampanaTable).values({
+        restauranteId,
+        nombre: 'Reactivación con Descuento',
+        slug: 'reactivacion',
+        tipo: 'reactivacion',
+        estado: 'activa',
+        destinoTipo: 'tienda',
+        descuentoProductoPorcentaje: 10,
+      } as any)
+    }
+  } catch (err) {
+    console.error('[marketing] Error asegurando campañas maestras:', err)
+  }
+}
+
+export async function asegurarCampanaMaestra(
+  db: any,
+  restauranteId: number,
+  tipo: 'lo_mismo' | 'reactivacion',
+) {
+  const slug = tipo === 'lo_mismo' ? 'lo-mismo' : 'reactivacion'
+  const [campana] = await db.select()
+    .from(MarketingCampanaTable)
+    .where(and(
+      eq(MarketingCampanaTable.restauranteId, restauranteId),
+      eq(MarketingCampanaTable.slug, slug),
+    ))
+    .limit(1)
+
+  if (campana) return campana
+
+  await asegurarCampanasMaestras(db, restauranteId)
+
+  const [creada] = await db.select()
+    .from(MarketingCampanaTable)
+    .where(and(
+      eq(MarketingCampanaTable.restauranteId, restauranteId),
+      eq(MarketingCampanaTable.slug, slug),
+    ))
+    .limit(1)
+
+  return creada ?? null
+}
+
+export function crearMarketingGrowthPublicRoute(db = drizzle(pool)): Hono {
+  const route = new Hono()
+  route.post('/growth/resolver-enlace', zValidator('json', z.object({
+    token: z.string().trim().min(1),
+    restauranteSlug: z.string().trim().min(1),
+  })), async (c) => {
+    const { token, restauranteSlug } = c.req.valid('json')
+    const payload = descifrarGrowthPayload(token)
+    if (!payload) {
+      return c.json({ success: false, code: 'TOKEN_INVALIDO', message: 'El enlace no es válido o ha sido modificado.' }, 400)
+    }
+
+    if (payload.exp != null && Date.now() > payload.exp) {
+      return c.json({ success: false, code: 'TOKEN_EXPIRADO', message: 'Este beneficio exclusivo ha expirado.' }, 410)
+    }
+
+    // 1. Buscar restaurante por slug/username o id
+    const [restaurante] = await db.select({
+      id: RestauranteTable.id,
+      nombre: RestauranteTable.nombre,
+      username: RestauranteTable.username,
+      deliveryEnabled: RestauranteTable.deliveryEnabled,
+      takeawayEnabled: RestauranteTable.takeawayEnabled,
+      deliveryFee: RestauranteTable.deliveryFee,
+      direccionSoloTexto: RestauranteTable.direccionSoloTexto,
+    }).from(RestauranteTable).where(
+      or(eq(RestauranteTable.username, restauranteSlug), eq(RestauranteTable.id, payload.rId))
+    ).limit(1)
+
+    if (!restaurante || restaurante.id !== payload.rId) {
+      return c.json({ success: false, code: 'RESTAURANTE_NO_COINCIDE', message: 'El enlace no corresponde a este restaurante.' }, 404)
+    }
+
+    // 2. Buscar cliente
+    const [cliente] = await db.select({
+      id: ClienteTable.id,
+      nombre: ClienteTable.nombre,
+      telefono: ClienteTable.telefono,
+      direccion: ClienteTable.direccion,
+    }).from(ClienteTable).where(and(
+      eq(ClienteTable.id, payload.cId),
+      eq(ClienteTable.restauranteId, payload.rId),
+    )).limit(1)
+
+    if (!cliente) {
+      return c.json({ success: false, code: 'CLIENTE_NO_ENCONTRADO', message: 'El cliente no fue encontrado.' }, 404)
+    }
+
+    // 3. Buscar último pedido para dirección habitual y método de pago
+    const [ultimoPedido] = await db.select({
+      id: PedidoUnificadoTable.id,
+      tipo: PedidoUnificadoTable.tipo,
+      direccion: PedidoUnificadoTable.direccion,
+      latitud: PedidoUnificadoTable.latitud,
+      longitud: PedidoUnificadoTable.longitud,
+      metodoPago: PedidoUnificadoTable.metodoPago,
+      sucursalId: PedidoUnificadoTable.sucursalId,
+      deliveryFee: PedidoUnificadoTable.deliveryFee,
+    }).from(PedidoUnificadoTable).where(and(
+      eq(PedidoUnificadoTable.restauranteId, payload.rId),
+      or(eq(PedidoUnificadoTable.clienteId, cliente.id), eq(PedidoUnificadoTable.telefono, cliente.telefono)),
+      ne(PedidoUnificadoTable.estado, 'cancelled'),
+    )).orderBy(desc(PedidoUnificadoTable.id)).limit(1)
+
+    // 4. Reconstruir items del carrito
+    let itemsParaProcesar: Array<{
+      productoId: number
+      cantidad: number
+      varianteId?: number
+      varianteSecundariaId?: number
+      agregados?: Array<{ id: number; nombre?: string; precio?: number }> | number[]
+      ingredientesExcluidos?: number[]
+      nota?: string
+    }> = []
+
+    if (payload.rep) {
+      const parsed = parseCarritoPrearmado(payload.rep)
+      if (parsed) {
+        itemsParaProcesar = parsed.map((p) => ({
+          productoId: p.productoId,
+          cantidad: p.cantidad,
+          varianteId: p.varianteId,
+          varianteSecundariaId: p.varianteSecundariaId,
+          agregados: p.agregadoIds,
+        }))
+      }
+    } else if (ultimoPedido) {
+      const itemsDb = await db.select().from(ItemPedidoUnificadoTable)
+        .where(eq(ItemPedidoUnificadoTable.pedidoId, ultimoPedido.id))
+
+      itemsParaProcesar = itemsDb.map((item) => ({
+        productoId: item.productoId,
+        cantidad: item.cantidad,
+        varianteId: item.varianteId ?? undefined,
+        varianteSecundariaId: item.varianteSecundariaId ?? undefined,
+        agregados: Array.isArray(item.agregados)
+          ? (item.agregados as any[]).map((a) => (typeof a === 'object' && a !== null ? Number(a.id) : Number(a))).filter(Number.isFinite)
+          : [],
+        ingredientesExcluidos: Array.isArray(item.ingredientesExcluidos) ? (item.ingredientesExcluidos as number[]) : [],
+        nota: item.nota || undefined,
+      }))
+    }
+
+    // 5. Cargar productos vigentes y validar precios
+    const productoIds = [...new Set(itemsParaProcesar.map((i) => i.productoId))]
+    const productosDb = productoIds.length > 0
+      ? await db.select().from(ProductoTable).where(and(
+          eq(ProductoTable.restauranteId, payload.rId),
+          inArray(ProductoTable.id, productoIds),
+          eq(ProductoTable.activo, true),
+        ))
+      : []
+    const productosMap = new Map(productosDb.map((p) => [p.id, p]))
+
+    const varianteIds = itemsParaProcesar.flatMap((i) => [i.varianteId, i.varianteSecundariaId].filter((id): id is number => id != null))
+    const variantesDb = varianteIds.length > 0
+      ? await db.select().from(VarianteProductoTable).where(inArray(VarianteProductoTable.id, varianteIds))
+      : []
+    const variantesMap = new Map(variantesDb.map((v) => [v.id, v]))
+
+    const agregadoIds = itemsParaProcesar.flatMap((i) => (Array.isArray(i.agregados) ? i.agregados.map(Number) : []))
+    const agregadosDb = agregadoIds.length > 0
+      ? await db.select().from(AgregadoTable).where(inArray(AgregadoTable.id, agregadoIds))
+      : []
+    const agregadosMap = new Map(agregadosDb.map((a) => [a.id, a]))
+
+    const carritoReconstruido = itemsParaProcesar.map((item, index) => {
+      const prod = productosMap.get(item.productoId)
+      if (!prod) return null
+      const var1 = item.varianteId ? variantesMap.get(item.varianteId) : null
+      const var2 = item.varianteSecundariaId ? variantesMap.get(item.varianteSecundariaId) : null
+
+      const agregadosObj = (item.agregados || []).map((id) => agregadosMap.get(Number(id))).filter(Boolean) as Array<{ id: number; nombre: string; precio: string | number }>
+
+      let precioUnitario = var1 ? Number(var1.precio) : Number(prod.precio)
+      precioUnitario += var2 ? Number(var2.precio) : 0
+      if (prod.descuento && prod.descuento > 0) {
+        precioUnitario *= (1 - prod.descuento / 100)
+      }
+      precioUnitario += agregadosObj.reduce((acc, a) => acc + Number(a.precio || 0), 0)
+
+      const nombresVariantes = [var1?.nombre, var2?.nombre].filter(Boolean).join(' · ')
+      const nombreCompleto = nombresVariantes ? `${prod.nombre} - ${nombresVariantes}` : prod.nombre
+
+      return {
+        id: `growth-${payload.campana}-${index}`,
+        productoId: prod.id,
+        categoria: prod.categoria,
+        productoNombre: prod.nombre,
+        nombre: nombreCompleto,
+        precio: precioUnitario.toFixed(2),
+        precioOriginal: (var1?.precio || prod.precio).toString(),
+        descuento: prod.descuento || 0,
+        imagenUrl: prod.imagenUrl,
+        cantidad: item.cantidad ?? 1,
+        varianteId: var1?.id,
+        varianteNombre: var1?.nombre,
+        varianteSecundariaId: var2?.id,
+        varianteSecundariaNombre: var2?.nombre,
+        agregados: agregadosObj,
+        ingredientesExcluidos: item.ingredientesExcluidos || [],
+        nota: item.nota,
+        esCanjePuntos: false,
+        puntosNecesarios: 0,
+        puntosGanados: prod.puntosGanados ?? 0,
+      }
+    }).filter(Boolean)
+
+    const itemsTotal = carritoReconstruido.reduce((sum, it) => sum + Number(it.precio) * it.cantidad, 0)
+    const lat = ultimoPedido?.latitud ? Number(ultimoPedido.latitud) : null
+    const lng = ultimoPedido?.longitud ? Number(ultimoPedido.longitud) : null
+    const deliveryFee = Number(ultimoPedido?.deliveryFee || 0)
+
+    let cuponCodigo: string | null = null
+    let cuponId: number | null = null
+    if (payload.dto && payload.dto > 0) {
+      try {
+        const [enlaceConCupon] = await db.select({
+          cuponId: CodigoDescuentoTable.id,
+          codigo: CodigoDescuentoTable.codigo,
+          activo: CodigoDescuentoTable.activo,
+          fechaFin: CodigoDescuentoTable.fechaFin,
+        })
+          .from(MarketingEnlaceTable)
+          .innerJoin(CodigoDescuentoTable, eq(CodigoDescuentoTable.id, MarketingEnlaceTable.codigoDescuentoId))
+          .where(and(
+            eq(MarketingEnlaceTable.restauranteId, payload.rId),
+            eq(MarketingEnlaceTable.clienteId, payload.cId),
+            eq(CodigoDescuentoTable.activo, true),
+          ))
+          .orderBy(desc(MarketingEnlaceTable.id))
+          .limit(1)
+
+        if (enlaceConCupon && (!enlaceConCupon.fechaFin || new Date(enlaceConCupon.fechaFin) > new Date())) {
+          cuponCodigo = enlaceConCupon.codigo
+          cuponId = enlaceConCupon.cuponId
+        } else {
+          const codigo = `GROWTH-${payload.cId}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`
+          const expiraAt = payload.exp ? new Date(payload.exp) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+          const [insertRes] = await db.insert(CodigoDescuentoTable).values({
+            restauranteId: payload.rId,
+            codigo,
+            tipo: 'porcentaje',
+            valor: String(payload.dto),
+            limiteUsos: 1,
+            usosActuales: 0,
+            montoMinimo: '0.00',
+            fechaInicio: new Date(),
+            fechaFin: expiraAt,
+            activo: true,
+          })
+          cuponCodigo = codigo
+          cuponId = Number(insertRes.insertId)
+        }
+      } catch (err) {
+        console.error('Error resolviendo cupón para growth payload:', err)
+      }
+    }
+
+    const campanaSlug = payload.campana === 'lo_mismo' ? 'lo-mismo' : 'reactivacion'
+    const campanaRecord = await asegurarCampanaMaestra(db, payload.rId, payload.campana)
+
+    return c.json({
+      success: true,
+      data: {
+        modalidad: payload.modalidad,
+        campana: payload.campana,
+        campanaSlug,
+        campanaId: campanaRecord?.id ?? null,
+        cliente: {
+          id: cliente.id,
+          nombre: cliente.nombre,
+          telefono: cliente.telefono,
+          direccionHabitual: ultimoPedido ? {
+            tipoPedido: ultimoPedido.tipo,
+            direccion: ultimoPedido.direccion,
+            lat,
+            lng,
+            metodoPago: ultimoPedido.metodoPago,
+            sucursalId: ultimoPedido.sucursalId,
+            deliveryFee,
+          } : null,
+        },
+        carrito: carritoReconstruido,
+        itemsTotal: itemsTotal.toFixed(2),
+        descuento: {
+          activo: (payload.dto ?? 0) > 0,
+          porcentaje: payload.dto ?? 0,
+          expiraAt: payload.exp ?? null,
+          codigoCupon: cuponCodigo,
+          codigoDescuentoId: cuponId,
+        },
+      },
+    })
+  })
+  return route
+}
+
 // Se conserva el export histórico y se montan los resolvedores públicos junto
 // al endpoint de eventos, bajo el mismo prefijo /public del servidor.
 export const marketingPublicRoute = new Hono()
   .route('/', marketingRoute)
   .route('/', marketingSmartLinksRoute)
   .route('/', marketingRecetasPublicRoute)
+  .route('/', crearMarketingGrowthPublicRoute())
 
 const recetaCodigos = Object.values(RECETAS_CRECIMIENTO).map((receta) => receta.codigo) as [string, ...string[]]
 const slugSchema = z.string().trim().min(3).max(191)
@@ -635,7 +973,8 @@ const fechaOpcionalSchema = z.coerce.date().nullable().optional().transform((val
 
 const camposCampanaSchema = z.object({
   nombre: z.string().trim().min(1).max(255),
-  tipo: z.enum(['adquisicion', 'recompra']),
+  tipo: z.enum(['adquisicion', 'recompra', 'retencion', 'lo_mismo', 'reactivacion']),
+  categoria: z.enum(CATEGORIAS_CAMPANA).nullable().optional().transform((valor) => valor ?? null),
   recetaCodigo: z.enum(recetaCodigos).nullable().optional().transform((valor) => valor ?? null),
   estado: z.enum(['borrador', 'activa', 'inactiva']).optional(),
   destinoTipo: z.enum(['tienda', 'producto', 'carrito']),
@@ -692,7 +1031,7 @@ export interface RepositorioCampanasMarketing {
 
 function valoresCampana(input: Partial<CampanaInput>) {
   const valores: Record<string, unknown> = {}
-  const campos = ['nombre', 'tipo', 'recetaCodigo', 'estado', 'destinoTipo', 'productoId', 'carritoRep', 'codigoDescuentoId', 'descuentoProductoPorcentaje', 'limiteUsos', 'fechaInicio', 'fechaFin', 'utmSource', 'utmMedium', 'utmCampaign', 'utmTerm', 'utmContent', 'usaGrupoControl'] as const
+  const campos = ['nombre', 'tipo', 'categoria', 'recetaCodigo', 'estado', 'destinoTipo', 'productoId', 'carritoRep', 'codigoDescuentoId', 'descuentoProductoPorcentaje', 'limiteUsos', 'fechaInicio', 'fechaFin', 'utmSource', 'utmMedium', 'utmCampaign', 'utmTerm', 'utmContent', 'usaGrupoControl'] as const
   for (const campo of campos) if (input[campo] !== undefined) valores[campo] = input[campo]
   // Una campaña que abre la tienda es estrictamente de seguimiento. Limpiar
   // estos campos evita que un payload malformado conserve una oferta o un
@@ -716,8 +1055,11 @@ function crearRepositorioCampanasDrizzle(): RepositorioCampanasMarketing {
     return campana ?? null
   }
   return {
-    listar: (restauranteId) => db.select().from(MarketingCampanaTable)
-      .where(eq(MarketingCampanaTable.restauranteId, restauranteId)).orderBy(MarketingCampanaTable.createdAt),
+    listar: async (restauranteId) => {
+      await asegurarCampanasMaestras(db, restauranteId)
+      return db.select().from(MarketingCampanaTable)
+        .where(eq(MarketingCampanaTable.restauranteId, restauranteId)).orderBy(MarketingCampanaTable.createdAt)
+    },
     buscar,
     async slugExiste(restauranteId, slug) {
       const [campana] = await db.select({ id: MarketingCampanaTable.id }).from(MarketingCampanaTable).where(and(
@@ -981,14 +1323,35 @@ export function crearMarketingEnlacesRoute(
   for (const middleware of middlewares) route.use('*', middleware)
   route.post('/enlaces', zValidator('json', prepararEnlaceSchema), async (c) => {
     try {
-      const resultado = await prepararEnlaceMarketing(repositorio, (c as any).user.id, c.req.valid('json'))
+      const restauranteId = (c as any).user.id as number
+      const input = c.req.valid('json')
+      const resultado = await prepararEnlaceMarketing(repositorio, restauranteId, input)
+      const esHabitual = resultado.recomendacion.receta.codigo === 'segunda_compra' || resultado.recomendacion.receta.codigo === 'volver_a_tiempo'
+      const campanaCodigo = esHabitual ? 'lo_mismo' : 'reactivacion'
+      const campanaSlug = esHabitual ? 'lo-mismo' : 'reactivacion'
+      const modalidad = esHabitual ? 'drawer_habitual' : 'descuento_banner'
+      const dto = resultado.recomendacion.incentivoSeleccionado?.descuentoPorcentaje || 0
+      const expiraAtMs = resultado.enlace.expiraAt ? new Date(resultado.enlace.expiraAt).getTime() : null
+
+      const tokenCifrado = cifrarGrowthPayload({
+        rId: restauranteId,
+        cId: input.clienteId,
+        campana: campanaCodigo,
+        modalidad,
+        rep: resultado.recomendacion.destino.tipo === 'carrito' ? resultado.recomendacion.destino.carritoRep : undefined,
+        dto,
+        exp: expiraAtMs,
+      })
+
       return c.json({ success: true, data: {
         enlace: resultado.enlace,
-        token: resultado.token || undefined,
+        token: tokenCifrado,
+        tokenLegacy: resultado.token || undefined,
         idempotente: resultado.idempotente,
         receta: resultado.recomendacion.receta,
         destino: resultado.recomendacion.destino,
         textoSugerido: resultado.recomendacion.textoSugerido,
+        campanaSlug,
       } }, resultado.idempotente ? 200 : 201)
     } catch (error) {
       if (error instanceof ErrorPrepararEnlaceMarketing) {
@@ -1042,7 +1405,7 @@ export interface RepositorioContactosMarketing {
 }
 
 const contactoSchema = z.object({
-  token: z.string().trim().min(20).max(200).regex(tokenRecetaPublicoRegex),
+  token: z.string().trim().min(20).max(500),
   idempotenciaClave: idempotenciaSchema,
 }).strict()
 
@@ -1053,7 +1416,11 @@ function telefonoWaMe(telefono: string | null): string | null {
   return /^\d{8,15}$/.test(normalizado) ? normalizado : null
 }
 
-function urlEnlaceReceta(username: string, token: string): string {
+function urlEnlaceReceta(username: string, token: string, campanaSlug?: string): string {
+  if (token.startsWith('v1.')) {
+    const slug = campanaSlug || 'lo-mismo'
+    return `https://piru.app/${encodeURIComponent(username)}?c=${encodeURIComponent(slug)}&tk=${encodeURIComponent(token)}`
+  }
   return `https://my.piru.app/${encodeURIComponent(username)}/r/${encodeURIComponent(token)}`
 }
 
@@ -1082,16 +1449,24 @@ export function crearMarketingContactosRoute(
     if (!enlace || !enlace.activo || (enlace.expiraAt != null && enlace.expiraAt <= ahora()) || enlace.clienteId == null) {
       return c.json({ success: false, message: 'Enlace no disponible para contacto' }, 404)
     }
-    if (!coincideTokenMarketingSeguro(input.token, enlace.tokenHash)) {
+
+    const esTokenCifradoValido = input.token.startsWith('v1.') && (() => {
+      const payload = descifrarGrowthPayload(input.token)
+      return payload !== null && payload.rId === restauranteId && payload.cId === enlace.clienteId
+    })()
+
+    if (!esTokenCifradoValido && !coincideTokenMarketingSeguro(input.token, enlace.tokenHash)) {
       return c.json({ success: false, message: 'Enlace no disponible para contacto' }, 404)
     }
+
+    const campanaSlug = (enlace.recetaCodigo === 'segunda_compra' || enlace.recetaCodigo === 'volver_a_tiempo') ? 'lo-mismo' : 'reactivacion'
 
     const existente = await repositorio.buscarContactoPorIdempotencia(restauranteId, input.idempotenciaClave)
     if (existente) {
       if (existente.enlaceId !== enlace.id || existente.canal !== canal) {
         return c.json({ success: false, message: 'La clave de idempotencia ya pertenece a otra acción' }, 409)
       }
-      const url = urlEnlaceReceta(enlace.username, input.token)
+      const url = urlEnlaceReceta(enlace.username, input.token, campanaSlug)
       const telefono = canal === 'wa_me' ? telefonoWaMe(enlace.telefono) : null
       if (canal === 'wa_me' && !telefono) return c.json({ success: false, code: 'telefono_invalido', message: 'El cliente no tiene un teléfono válido para WhatsApp' }, 422)
       return c.json({ success: true, data: {
@@ -1134,11 +1509,11 @@ export function crearMarketingContactosRoute(
       if (error?.code !== 'ER_DUP_ENTRY') throw error
       const creadoEnParalelo = await repositorio.buscarContactoPorIdempotencia(restauranteId, input.idempotenciaClave)
       if (!creadoEnParalelo || creadoEnParalelo.enlaceId !== enlace.id || creadoEnParalelo.canal !== canal) throw error
-      const url = urlEnlaceReceta(enlace.username, input.token)
+      const url = urlEnlaceReceta(enlace.username, input.token, campanaSlug)
       const texto = `${enlace.textoSugerido ?? ''}\n\n${url}`.trim()
       return c.json({ success: true, data: { contacto: creadoEnParalelo, url, waMeUrl: telefono ? urlWaMe(telefono, texto) : undefined, entregado: false, idempotente: true } })
     }
-    const url = urlEnlaceReceta(enlace.username, input.token)
+    const url = urlEnlaceReceta(enlace.username, input.token, campanaSlug)
     const texto = `${enlace.textoSugerido ?? ''}\n\n${url}`.trim()
     return c.json({ success: true, data: {
       contacto,
@@ -1252,7 +1627,12 @@ export function crearMarketingEnvioWhatsappRoute(
     const input = c.req.valid('json') as z.infer<typeof enviarWhatsappSchema>
     const enlace = await dependencias.repositorio.buscarEnlace(restauranteId, enlaceId)
     const noDisponible = !enlace || !enlace.activo || enlace.clienteId == null || (enlace.expiraAt != null && enlace.expiraAt <= dependencias.ahora())
-    if (noDisponible || !coincideTokenMarketingSeguro(input.token, enlace!.tokenHash)) {
+    const esTokenCifradoValido = input.token.startsWith('v1.') && (() => {
+      const payload = descifrarGrowthPayload(input.token)
+      return payload !== null && payload.rId === restauranteId && payload.cId === enlace?.clienteId
+    })()
+
+    if (noDisponible || (!esTokenCifradoValido && !coincideTokenMarketingSeguro(input.token, enlace!.tokenHash))) {
       return c.json({ success: false, message: 'Enlace no disponible para contacto' }, 404)
     }
 
@@ -1307,7 +1687,8 @@ export function crearMarketingEnvioWhatsappRoute(
       return c.json({ success: false, code: 'envio_no_reintentable', message: 'La acción ya fue revertida.' }, 409)
     }
 
-    const recipeUrl = urlEnlaceReceta(enlace.username, input.token)
+    const campanaSlug = (enlace.recetaCodigo === 'segunda_compra' || enlace.recetaCodigo === 'volver_a_tiempo') ? 'lo-mismo' : 'reactivacion'
+    const recipeUrl = urlEnlaceReceta(enlace.username, input.token, campanaSlug)
     const envio = await dependencias.enviar({ phone: telefono, customerName: enlace.clienteNombre, restaurantName: enlace.restauranteNombre, texto: enlace.textoSugerido ?? '', recipeUrl, creds: enlace.creds })
     if (!envio.success || !envio.id) {
       await dependencias.compensar(dependencias.walletDb as any, restauranteId, operacionId)
@@ -1330,6 +1711,7 @@ function crearRepositorioEnvioWhatsappDrizzle(): RepositorioEnvioWhatsappMarketi
     async buscarEnlace(restauranteId, enlaceId) {
       const [enlace] = await db.select({
         id: MarketingEnlaceTable.id, restauranteId: MarketingEnlaceTable.restauranteId, clienteId: MarketingEnlaceTable.clienteId,
+        recetaCodigo: MarketingEnlaceTable.recetaCodigo,
         tokenHash: MarketingEnlaceTable.tokenHash, textoSugerido: MarketingEnlaceTable.textoSugerido, activo: MarketingEnlaceTable.activo,
         expiraAt: MarketingEnlaceTable.expiraAt, telefono: ClienteTable.telefono, marketingOptOut: ClienteTable.marketingOptOut,
         clienteNombre: ClienteTable.nombre, username: RestauranteTable.username, restauranteNombre: RestauranteTable.nombre,

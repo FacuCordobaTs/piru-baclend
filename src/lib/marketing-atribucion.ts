@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
-import { and, eq, gt, isNull, or } from 'drizzle-orm'
+import { and, desc, eq, gt, isNull, or } from 'drizzle-orm'
 import type { MySql2Database } from 'drizzle-orm/mysql2'
+import { descifrarGrowthPayload } from './marketing-crypto'
 import {
   cliente as ClienteTable,
   marketingCampana as MarketingCampanaTable,
@@ -44,6 +45,7 @@ export interface RepositorioAtribucionMarketing {
   buscarSesion(restauranteId: number, sesionUuid: string): Promise<SesionAtribuible | null>
   buscarCampaniaPorSlug(restauranteId: number, slug: string): Promise<CampaniaAtribuible | null>
   buscarEnlacePorTokenHash(restauranteId: number, tokenHash: string, ahora: Date): Promise<EnlaceAtribuible | null>
+  buscarEnlacePorClienteId?(restauranteId: number, clienteId: number, ahora: Date): Promise<EnlaceAtribuible | null>
   insertarAtribucion(input: {
     restauranteId: number
     pedidoUnificadoId: number
@@ -102,10 +104,25 @@ export async function atribuirPedidoMarketing(
     : null
   if (campaniaSlug && !campaniaExplicita) throw new Error('la campaña no pertenece al restaurante')
 
-  const enlace = recetaToken
-    ? await repositorio.buscarEnlacePorTokenHash(contexto.restauranteId, hashTokenMarketing(recetaToken), ahora)
-    : null
-  if (recetaToken && !enlace) throw new Error('el enlace de receta no pertenece al restaurante o venció')
+  let enlace: EnlaceAtribuible | null = null
+  if (recetaToken) {
+    if (recetaToken.startsWith('v1.')) {
+      const payload = descifrarGrowthPayload(recetaToken)
+      if (payload && payload.rId === contexto.restauranteId && (payload.exp == null || ahora.getTime() <= payload.exp)) {
+        const enlaceDb = repositorio.buscarEnlacePorClienteId
+          ? await repositorio.buscarEnlacePorClienteId(contexto.restauranteId, payload.cId, ahora)
+          : null
+        enlace = enlaceDb ?? {
+          campanaId: null,
+          clienteId: payload.cId,
+          recetaCodigo: payload.campana === 'lo_mismo' ? 'segunda_compra' : 'recupero_dormido',
+        }
+      }
+    } else {
+      enlace = await repositorio.buscarEnlacePorTokenHash(contexto.restauranteId, hashTokenMarketing(recetaToken), ahora)
+    }
+    if (!enlace) throw new Error('el enlace de receta no pertenece al restaurante o venció')
+  }
 
   const recetaCodigo = enlace?.recetaCodigo ?? sesion.lastTouchRecetaCodigo
   const campanaId = campaniaExplicita?.id ?? enlace?.campanaId ?? sesion.lastTouchCampanaId
@@ -162,6 +179,14 @@ export function crearRepositorioAtribucionMarketing(db: Db): RepositorioAtribuci
           eq(MarketingEnlaceTable.restauranteId, restauranteId), eq(MarketingEnlaceTable.tokenHash, tokenHash),
           eq(MarketingEnlaceTable.activo, true), or(isNull(MarketingEnlaceTable.expiraAt), gt(MarketingEnlaceTable.expiraAt, ahora)),
         )).limit(1)
+      return row ?? null
+    },
+    async buscarEnlacePorClienteId(restauranteId, clienteId, ahora) {
+      const [row] = await db.select({ campanaId: MarketingEnlaceTable.campanaId, clienteId: MarketingEnlaceTable.clienteId, recetaCodigo: MarketingEnlaceTable.recetaCodigo })
+        .from(MarketingEnlaceTable).where(and(
+          eq(MarketingEnlaceTable.restauranteId, restauranteId), eq(MarketingEnlaceTable.clienteId, clienteId),
+          eq(MarketingEnlaceTable.activo, true), or(isNull(MarketingEnlaceTable.expiraAt), gt(MarketingEnlaceTable.expiraAt, ahora)),
+        )).orderBy(desc(MarketingEnlaceTable.id)).limit(1)
       return row ?? null
     },
     async insertarAtribucion(input) {

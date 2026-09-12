@@ -700,14 +700,6 @@ publicRoute.post('/descuentos/validar', zValidator('json', validarDescuentoSchem
             return c.json({ success: false, message: 'Restaurante no encontrado' }, 404)
         }
 
-        if (!restauranteCfg.codigoDescuentoEnabled) {
-            return c.json({ success: false, message: 'Este local no tiene habilitados los códigos de descuento' }, 200)
-        }
-
-        if (!(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.CODIGOS_DESCUENTO))) {
-            return c.json({ success: false, message: 'Este local no tiene habilitados los códigos de descuento' }, 200)
-        }
-
         const [cupon] = await db
             .select()
             .from(CodigoDescuentoTable)
@@ -721,6 +713,16 @@ publicRoute.post('/descuentos/validar', zValidator('json', validarDescuentoSchem
 
         if (!cupon) {
             return c.json({ success: false, message: 'Código no encontrado' }, 200)
+        }
+
+        const esCuponGrowth = cupon.codigo.startsWith('CRECE-') || cupon.codigo.startsWith('GROWTH-') || cupon.codigo.startsWith('VOLVE')
+        if (!esCuponGrowth) {
+            if (!restauranteCfg.codigoDescuentoEnabled) {
+                return c.json({ success: false, message: 'Este local no tiene habilitados los códigos de descuento' }, 200)
+            }
+            if (!(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.CODIGOS_DESCUENTO))) {
+                return c.json({ success: false, message: 'Este local no tiene habilitados los códigos de descuento' }, 200)
+            }
         }
         if (!cupon.activo) {
             return c.json({ success: false, message: 'Este código ya no está activo' }, 200)
@@ -1071,12 +1073,13 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         let montoDescuento = 0
         let codigoDescuentoIdFinal: number | null = null
         if (codigoDescuentoId) {
-            if (!(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.CODIGOS_DESCUENTO))) {
-                return c.json({ message: 'Este local no tiene habilitados los códigos de descuento', success: false }, 400)
-            }
             const [cupon] = await db.select().from(CodigoDescuentoTable).where(eq(CodigoDescuentoTable.id, codigoDescuentoId)).limit(1)
             if (!cupon || cupon.restauranteId !== restauranteId) {
                 return c.json({ message: 'Código de descuento inválido', success: false }, 400)
+            }
+            const esCuponGrowth = cupon.codigo.startsWith('CRECE-') || cupon.codigo.startsWith('GROWTH-') || cupon.codigo.startsWith('VOLVE')
+            if (!esCuponGrowth && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.CODIGOS_DESCUENTO))) {
+                return c.json({ message: 'Este local no tiene habilitados los códigos de descuento', success: false }, 400)
             }
             const ahoraCupon = new Date()
             if (!cupon.activo || (cupon.fechaInicio && new Date(cupon.fechaInicio) > ahoraCupon) || (cupon.fechaFin && new Date(cupon.fechaFin) < ahoraCupon)) {
@@ -1624,12 +1627,13 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         let montoDescuentoTk = 0
         let codigoDescuentoIdFinalTk: number | null = null
         if (codigoDescuentoId) {
-            if (!(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.CODIGOS_DESCUENTO))) {
-                return c.json({ message: 'Este local no tiene habilitados los códigos de descuento', success: false }, 400)
-            }
             const [cupon] = await db.select().from(CodigoDescuentoTable).where(eq(CodigoDescuentoTable.id, codigoDescuentoId)).limit(1)
             if (!cupon || cupon.restauranteId !== restauranteId) {
                 return c.json({ message: 'Código de descuento inválido', success: false }, 400)
+            }
+            const esCuponGrowth = cupon.codigo.startsWith('CRECE-') || cupon.codigo.startsWith('GROWTH-') || cupon.codigo.startsWith('VOLVE')
+            if (!esCuponGrowth && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.CODIGOS_DESCUENTO))) {
+                return c.json({ message: 'Este local no tiene habilitados los códigos de descuento', success: false }, 400)
             }
             const ahoraCupon = new Date()
             if (!cupon.activo || (cupon.fechaInicio && new Date(cupon.fechaInicio) > ahoraCupon) || (cupon.fechaFin && new Date(cupon.fechaFin) < ahoraCupon)) {

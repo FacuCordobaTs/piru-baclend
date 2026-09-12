@@ -139,15 +139,7 @@ export const restaurante = mysqlTable("restaurante", {
   afipPuntoDeVenta: int("afip_punto_de_venta"),
   afipCondicionIva: mysqlEnum("afip_condicion_iva", ["RI", "MO"]).default("RI"),
 
-  // ------ COLUMNAS A ELIMINAR ------
-
-  // sistemaPuntos: boolean("sistema_puntos").default(false).notNull(),
-  // mercadoPagoPublicKey: varchar("mercado_pago_public_key", { length: 255 }),
-  // mercadoPagoPrivateKey: varchar("mercado_pago_private_key", { length: 255 }),
-  // esCarrito: boolean("es_carrito").default(false).notNull(),
-  // splitPayment: boolean("split_payment").default(true).notNull(),
-  // itemTracking: boolean("item_tracking").default(false).notNull(),
-  // soloCartaDigital: boolean("solo_carta_digital").default(false).notNull(),
+ 
 });
 
 export const sucursal = mysqlTable("sucursal", {
@@ -620,6 +612,17 @@ export const codigoDescuento = mysqlTable(
   ]
 );
 
+export const CATEGORIAS_CAMPANA = [
+  "historias_instagram",
+  "reels_tiktok",
+  "pauta_digital",
+  "qr_salon_mostrador",
+  "volantes_packaging",
+  "whatsapp_difusion",
+  "influencers_colaboraciones",
+] as const;
+export type CategoriaCampana = (typeof CATEGORIAS_CAMPANA)[number];
+
 // Crecimiento · campañas y Smart Links. Los enlaces personalizados viven en
 // `marketing_enlace` (T06); esta tabla contiene la definición durable de la
 // campaña y sus parámetros de adquisición/recompra.
@@ -629,7 +632,16 @@ export const marketingCampana = mysqlTable("marketing_campana", {
   nombre: varchar("nombre", { length: 255 }).notNull(),
   // Estable después de publicar: editar el nombre nunca regenera el slug.
   slug: varchar("slug", { length: 191 }).notNull(),
-  tipo: mysqlEnum("tipo", ["adquisicion", "recompra"]).notNull(),
+  tipo: mysqlEnum("tipo", ["adquisicion", "recompra", "retencion", "lo_mismo", "reactivacion"]).notNull(),
+  categoria: mysqlEnum("categoria", [
+    "historias_instagram",
+    "reels_tiktok",
+    "pauta_digital",
+    "qr_salon_mostrador",
+    "volantes_packaging",
+    "whatsapp_difusion",
+    "influencers_colaboraciones",
+  ]),
   recetaCodigo: varchar("receta_codigo", { length: 64 }),
   estado: mysqlEnum("estado", ["borrador", "activa", "inactiva"])
     .default("borrador")

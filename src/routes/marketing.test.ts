@@ -1,6 +1,23 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, test, it } from 'bun:test'
 import { Hono } from 'hono'
-import { crearMarketingCampanasRoute, crearMarketingContactosRoute, crearMarketingEnvioWhatsappRoute, crearMarketingOportunidadesRoute, crearMarketingRecetasPublicasRoute, crearMarketingRoute, crearMarketingSmartLinksRoute, type DependenciasEnvioWhatsappMarketing, type DependenciasMarketingRoute, type DependenciasRecetasPublicasMarketing, type DependenciasSmartLinksMarketing, type RepositorioCampanasMarketing, type RepositorioContactosMarketing, type RepositorioOportunidadesMarketing } from './marketing'
+import {
+  crearMarketingCampanasRoute,
+  crearMarketingContactosRoute,
+  crearMarketingEnvioWhatsappRoute,
+  crearMarketingGrowthPublicRoute,
+  crearMarketingOportunidadesRoute,
+  crearMarketingRecetasPublicasRoute,
+  crearMarketingRoute,
+  crearMarketingSmartLinksRoute,
+  type DependenciasEnvioWhatsappMarketing,
+  type DependenciasMarketingRoute,
+  type DependenciasRecetasPublicasMarketing,
+  type DependenciasSmartLinksMarketing,
+  type RepositorioCampanasMarketing,
+  type RepositorioContactosMarketing,
+  type RepositorioOportunidadesMarketing,
+} from './marketing'
+import { cifrarGrowthPayload } from '../lib/marketing-crypto'
 import type { EventoMarketingInput, ResultadoEventoMarketing } from '../lib/marketing-tracking'
 import { hashTokenMarketing } from '../lib/marketing-enlaces'
 import type { DatosOportunidadesMarketing, EnlaceOportunidadInput } from '../lib/marketing-oportunidades'
@@ -423,6 +440,46 @@ describe('CRUD de campañas de marketing', () => {
     const response = await app.request('/marketing/campanas/2', { method: 'DELETE' })
     expect(await response.json()).toMatchObject({ success: true, desactivada: true, data: { estado: 'inactiva' } })
   })
+
+  test('acepta tipos de campaña lo_mismo, reactivacion y retencion', async () => {
+    const { app, repo } = appCampanas()
+    const r1 = await app.request('/marketing/campanas', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(campanaPayload({ slug: 'lo-mismo', tipo: 'lo_mismo', destinoTipo: 'tienda', productoId: null, codigoDescuentoId: null })),
+    })
+    expect(r1.status).toBe(201)
+    expect(repo.campanas[0].tipo).toBe('lo_mismo')
+
+    const r2 = await app.request('/marketing/campanas', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(campanaPayload({ slug: 'reactivacion', tipo: 'reactivacion', destinoTipo: 'tienda', productoId: null, codigoDescuentoId: null })),
+    })
+    expect(r2.status).toBe(201)
+    expect(repo.campanas[1].tipo).toBe('reactivacion')
+  })
+
+  test('acepta y persiste categorías canónicas en creación y edición', async () => {
+    const { app, repo } = appCampanas()
+    const responseCrear = await app.request('/marketing/campanas', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(campanaPayload({ slug: 'stories-promo', categoria: 'historias_instagram' })),
+    })
+    expect(responseCrear.status).toBe(201)
+    expect(repo.campanas[0]).toMatchObject({ categoria: 'historias_instagram' })
+
+    const responseEditar = await app.request('/marketing/campanas/1', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ categoria: 'qr_salon_mostrador' }),
+    })
+    expect(responseEditar.status).toBe(200)
+    expect(repo.campanas[0]).toMatchObject({ categoria: 'qr_salon_mostrador' })
+
+    const responseInvalida = await app.request('/marketing/campanas', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(campanaPayload({ slug: 'categoria-invalida', categoria: 'categoria_falsa' })),
+    })
+    expect(responseInvalida.status).toBe(400)
+  })
 })
 
 function repositorioContactos(optOut = false): RepositorioContactosMarketing & { contactos: any[]; controles: number; walletMovimientos: number } {
@@ -576,3 +633,37 @@ describe('POST /marketing/enlaces/:id/enviar-whatsapp', () => {
     expect(listo.deps.movimientos).toMatchObject({ reservas: 1, confirmaciones: 2, envios: 1 })
   })
 })
+
+describe('POST /public/growth/resolver-enlace', () => {
+  it('rechaza tokens adulterados o con formato inválido con 400', async () => {
+    const app = new Hono().route('/public', crearMarketingGrowthPublicRoute({} as any))
+    const response = await app.request('/public/growth/resolver-enlace', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: 'v1.token-invalido.123.456', restauranteSlug: 'pizzeria' }),
+    })
+    expect(response.status).toBe(400)
+    const json = await response.json()
+    expect(json).toMatchObject({ success: false, code: 'TOKEN_INVALIDO' })
+  })
+
+  it('rechaza tokens expirados con 410', async () => {
+    const tokenExpirado = cifrarGrowthPayload({
+      rId: 1,
+      cId: 10,
+      campana: 'reactivacion',
+      modalidad: 'descuento_banner',
+      exp: Date.now() - 10000, // expiró hace 10 seg
+    })
+    const app = new Hono().route('/public', crearMarketingGrowthPublicRoute({} as any))
+    const response = await app.request('/public/growth/resolver-enlace', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: tokenExpirado, restauranteSlug: 'pizzeria' }),
+    })
+    expect(response.status).toBe(410)
+    const json = await response.json()
+    expect(json).toMatchObject({ success: false, code: 'TOKEN_EXPIRADO' })
+  })
+})
+
