@@ -17,6 +17,16 @@ export const puntosRoute = new Hono()
 
 puntosRoute.use('*', authMiddleware)
 
+const decimalString = z.union([z.string(), z.number()]).transform((val) => {
+  if (typeof val === 'number') {
+    return val.toFixed(2)
+  }
+  const clean = String(val).trim()
+  if (!clean) return '0.00'
+  const num = parseFloat(clean)
+  return isNaN(num) ? '0.00' : num.toFixed(2)
+})
+
 const guardarConfigSchema = z.object({
   activo: z.boolean().optional(),
   modoAcumulacion: z.enum(['monto', 'producto', 'ambos']).optional(),
@@ -24,13 +34,15 @@ const guardarConfigSchema = z.object({
   puntosPrimerPedido: z.number().int().min(0).optional(),
   puntosMinimosCanje: z.number().int().min(0).optional(),
   permitirCanjeEnvioGratis: z.boolean().optional(),
+  permiteCanjeEnvioGratis: z.boolean().optional(),
   puntosEnvioGratis: z.number().int().min(1).optional(),
   permitirCanjeDescuento: z.boolean().optional(),
-  descuentoTipo: z.enum(['fijo', 'porcentaje']).optional(),
-  descuentoValor: z.string().optional(),
-  descuentoPuntosCosto: z.number().int().min(1).optional(),
-  descuentoMontoMinimo: z.string().optional(),
-  descuentoTope: z.string().optional(),
+  permiteCanjeDescuento: z.boolean().optional(),
+  descuentoTipo: z.enum(['fijo', 'porcentaje', 'monto_fijo']).transform((v) => (v === 'monto_fijo' ? 'fijo' : v)).optional(),
+  descuentoValor: decimalString.optional(),
+  descuentoPuntosCosto: z.number().int().min(0).optional(),
+  descuentoMontoMinimo: decimalString.optional(),
+  descuentoTope: decimalString.optional(),
   vencimientoDias: z.number().int().min(1).nullable().optional(),
 })
 
@@ -62,8 +74,20 @@ puntosRoute.put('/config', requireModulo(MODULE_KEYS.PUNTOS_CLIENTES), zValidato
   const restauranteId = Number((c as any).user.id)
   const payload = c.req.valid('json')
 
+  const {
+    permiteCanjeEnvioGratis,
+    permiteCanjeDescuento,
+    ...rest
+  } = payload
+
+  const datosParaGuardar: any = {
+    ...rest,
+    ...(permiteCanjeEnvioGratis !== undefined && { permitirCanjeEnvioGratis: permiteCanjeEnvioGratis }),
+    ...(permiteCanjeDescuento !== undefined && { permitirCanjeDescuento: permiteCanjeDescuento }),
+  }
+
   try {
-    const configActualizada = await guardarConfiguracionPuntos(db, restauranteId, payload)
+    const configActualizada = await guardarConfiguracionPuntos(db, restauranteId, datosParaGuardar)
     return c.json({
       success: true,
       message: 'Configuración de puntos guardada correctamente',

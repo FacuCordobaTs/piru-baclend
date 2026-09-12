@@ -28,8 +28,10 @@ export interface ConfiguracionPuntosData {
   puntosPrimerPedido: number
   puntosMinimosCanje: number
   permitirCanjeEnvioGratis: boolean
+  permiteCanjeEnvioGratis?: boolean
   puntosEnvioGratis: number
   permitirCanjeDescuento: boolean
+  permiteCanjeDescuento?: boolean
   descuentoTipo: TipoDescuentoPuntos
   descuentoValor: string
   descuentoPuntosCosto: number
@@ -45,8 +47,10 @@ export const DEFAULT_CONFIG_PUNTOS: Omit<ConfiguracionPuntosData, 'restauranteId
   puntosPrimerPedido: 0,
   puntosMinimosCanje: 0,
   permitirCanjeEnvioGratis: false,
+  permiteCanjeEnvioGratis: false,
   puntosEnvioGratis: 300,
   permitirCanjeDescuento: false,
+  permiteCanjeDescuento: false,
   descuentoTipo: 'fijo',
   descuentoValor: '0.00',
   descuentoPuntosCosto: 0,
@@ -76,8 +80,10 @@ export async function obtenerConfiguracionPuntos(db: any, restauranteId: number)
       puntosPrimerPedido: row.puntosPrimerPedido,
       puntosMinimosCanje: row.puntosMinimosCanje,
       permitirCanjeEnvioGratis: row.permitirCanjeEnvioGratis,
+      permiteCanjeEnvioGratis: row.permitirCanjeEnvioGratis,
       puntosEnvioGratis: row.puntosEnvioGratis,
       permitirCanjeDescuento: row.permitirCanjeDescuento,
+      permiteCanjeDescuento: row.permitirCanjeDescuento,
       descuentoTipo: row.descuentoTipo,
       descuentoValor: row.descuentoValor,
       descuentoPuntosCosto: row.descuentoPuntosCosto,
@@ -101,6 +107,18 @@ export async function guardarConfiguracionPuntos(
   restauranteId: number,
   config: Partial<Omit<ConfiguracionPuntosData, 'id' | 'restauranteId'>>
 ): Promise<ConfiguracionPuntosData> {
+  const {
+    permiteCanjeEnvioGratis,
+    permiteCanjeDescuento,
+    ...cleanConfig
+  } = config as any
+
+  const dataToSave: any = {
+    ...cleanConfig,
+    ...(permiteCanjeEnvioGratis !== undefined && { permitirCanjeEnvioGratis: Boolean(permiteCanjeEnvioGratis) }),
+    ...(permiteCanjeDescuento !== undefined && { permitirCanjeDescuento: Boolean(permiteCanjeDescuento) }),
+  }
+
   const existente = await db
     .select({ id: ConfiguracionPuntosTable.id })
     .from(ConfiguracionPuntosTable)
@@ -110,12 +128,12 @@ export async function guardarConfiguracionPuntos(
   if (existente.length > 0) {
     await db
       .update(ConfiguracionPuntosTable)
-      .set(config)
+      .set(dataToSave)
       .where(eq(ConfiguracionPuntosTable.restauranteId, restauranteId))
   } else {
     await db.insert(ConfiguracionPuntosTable).values({
       ...DEFAULT_CONFIG_PUNTOS,
-      ...config,
+      ...dataToSave,
       restauranteId,
     })
   }

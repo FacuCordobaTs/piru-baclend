@@ -1602,7 +1602,7 @@ function telefonoWaMe(telefono: string | null): string | null {
 function urlEnlaceReceta(username: string, token: string, campanaSlug?: string): string {
   if (token.startsWith('v1.')) {
     const slug = campanaSlug || 'lo-mismo'
-    return `https://piru.app/${encodeURIComponent(username)}?c=${encodeURIComponent(slug)}&tk=${encodeURIComponent(token)}`
+    return `https://my.piru.app/${encodeURIComponent(username)}/c/${encodeURIComponent(slug)}?tk=${encodeURIComponent(token)}`
   }
   return `https://my.piru.app/${encodeURIComponent(username)}/r/${encodeURIComponent(token)}`
 }
