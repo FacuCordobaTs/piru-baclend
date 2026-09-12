@@ -642,26 +642,51 @@ export async function asegurarCampanasMaestras(db: any, restauranteId: number) {
     const slugsExistentes = new Set(existentes.map((c: any) => c.slug))
 
     if (!slugsExistentes.has('lo-mismo')) {
-      await db.insert(MarketingCampanaTable).values({
-        restauranteId,
-        nombre: '¿Lo mismo de siempre?',
-        slug: 'lo-mismo',
-        tipo: 'lo_mismo',
-        estado: 'activa',
-        destinoTipo: 'tienda',
-      } as any)
+      try {
+        await db.insert(MarketingCampanaTable).values({
+          restauranteId,
+          nombre: '¿Lo mismo de siempre?',
+          slug: 'lo-mismo',
+          tipo: 'lo_mismo',
+          estado: 'activa',
+          destinoTipo: 'tienda',
+        } as any)
+      } catch (e) {
+        console.warn('[marketing] Fallback inserción lo-mismo:', e)
+        await db.insert(MarketingCampanaTable).values({
+          restauranteId,
+          nombre: '¿Lo mismo de siempre?',
+          slug: 'lo-mismo',
+          tipo: 'recompra',
+          estado: 'activa',
+          destinoTipo: 'tienda',
+        } as any).catch(() => {})
+      }
     }
 
     if (!slugsExistentes.has('reactivacion')) {
-      await db.insert(MarketingCampanaTable).values({
-        restauranteId,
-        nombre: 'Reactivación con Descuento',
-        slug: 'reactivacion',
-        tipo: 'reactivacion',
-        estado: 'activa',
-        destinoTipo: 'tienda',
-        descuentoProductoPorcentaje: 10,
-      } as any)
+      try {
+        await db.insert(MarketingCampanaTable).values({
+          restauranteId,
+          nombre: 'Reactivación con Descuento',
+          slug: 'reactivacion',
+          tipo: 'reactivacion',
+          estado: 'activa',
+          destinoTipo: 'tienda',
+          descuentoProductoPorcentaje: 10,
+        } as any)
+      } catch (e) {
+        console.warn('[marketing] Fallback inserción reactivacion:', e)
+        await db.insert(MarketingCampanaTable).values({
+          restauranteId,
+          nombre: 'Reactivación con Descuento',
+          slug: 'reactivacion',
+          tipo: 'retencion',
+          estado: 'activa',
+          destinoTipo: 'tienda',
+          descuentoProductoPorcentaje: 10,
+        } as any).catch(() => {})
+      }
     }
   } catch (err) {
     console.error('[marketing] Error asegurando campañas maestras:', err)
@@ -1321,6 +1346,7 @@ function crearRepositorioEnlacesDrizzle(): RepositorioEnlacesMarketing {
 export function crearMarketingEnlacesRoute(
   repositorio: RepositorioEnlacesMarketing,
   middlewares: MiddlewareHandler[] = [],
+  dbInstancia?: any,
 ) {
   const route = new Hono()
   for (const middleware of middlewares) route.use('*', middleware)
@@ -1328,7 +1354,7 @@ export function crearMarketingEnlacesRoute(
     try {
       const restauranteId = (c as any).user.id as number
       const input = c.req.valid('json')
-      const db = drizzle(pool)
+      const db = dbInstancia || drizzle(pool)
 
       if (input.tipoCampana) {
         const campanaCodigo = input.tipoCampana
@@ -1344,7 +1370,6 @@ export function crearMarketingEnlacesRoute(
         // Buscar último pedido del cliente para derivar carrito habitual
         const [ultimoPedido] = await db.select({
           id: PedidoUnificadoTable.id,
-          items: PedidoUnificadoTable.items,
         }).from(PedidoUnificadoTable).where(and(
           eq(PedidoUnificadoTable.restauranteId, restauranteId),
           eq(PedidoUnificadoTable.clienteId, input.clienteId),
@@ -1352,11 +1377,16 @@ export function crearMarketingEnlacesRoute(
         )).orderBy(desc(PedidoUnificadoTable.id)).limit(1)
 
         let rep: string | undefined = undefined
-        if (ultimoPedido?.items && Array.isArray(ultimoPedido.items)) {
+        if (ultimoPedido) {
           try {
-            const specs = (ultimoPedido.items as any[])
-              .filter((it: any) => it && (it.productoId || it.id))
-              .map((it: any) => `${it.productoId || it.id}x${it.cantidad || 1}`)
+            const itemsDb = await db.select({
+              productoId: ItemPedidoUnificadoTable.productoId,
+              cantidad: ItemPedidoUnificadoTable.cantidad,
+            }).from(ItemPedidoUnificadoTable).where(eq(ItemPedidoUnificadoTable.pedidoId, ultimoPedido.id))
+
+            const specs = itemsDb
+              .filter((it: any) => it && it.productoId != null)
+              .map((it: any) => `${it.productoId}x${it.cantidad || 1}`)
             if (specs.length > 0) rep = specs.join('-')
           } catch (e) {
             console.warn('Error derivando rep de último pedido:', e)
@@ -1436,7 +1466,7 @@ export function crearMarketingEnlacesRoute(
         })
 
         const enlacePersistido = {
-          id: Number(insertRes.insertId),
+          id: Number((insertRes as any)?.insertId || 0),
           restauranteId,
           campanaId: campanaMaestra?.id ?? null,
           clienteId: input.clienteId,
@@ -1512,7 +1542,7 @@ export function crearMarketingEnlacesRoute(
         return c.json({ success: false, code: error.codigo, message: error.message }, status)
       }
       console.error('Error preparando enlace de marketing:', error)
-      return c.json({ success: false, message: 'No se pudo preparar el enlace' }, 500)
+      return c.json({ success: false, message: (error as any)?.message || 'No se pudo preparar el enlace' }, 500)
     }
   })
   return route

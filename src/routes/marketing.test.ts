@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import {
   crearMarketingCampanasRoute,
   crearMarketingContactosRoute,
+  crearMarketingEnlacesRoute,
   crearMarketingEnvioWhatsappRoute,
   crearMarketingGrowthPublicRoute,
   crearMarketingOportunidadesRoute,
@@ -664,6 +665,117 @@ describe('POST /public/growth/resolver-enlace', () => {
     expect(response.status).toBe(410)
     const json = await response.json()
     expect(json).toMatchObject({ success: false, code: 'TOKEN_EXPIRADO' })
+  })
+})
+
+describe('POST /marketing/enlaces (micro-campañas lo_mismo y reactivacion)', () => {
+  function crearMockDb(overrides: { ultimoPedidoId?: number; items?: any[] } = {}) {
+    let callCount = 0
+    return {
+      select: (fields?: any) => ({
+        from: (table: any) => {
+          const chain: any = {
+            where: () => chain,
+            orderBy: () => chain,
+            limit: () => {
+              if (fields && 'id' in fields && !('nombre' in fields) && !('productoId' in fields)) {
+                // ultimoPedido
+                return Promise.resolve(overrides.ultimoPedidoId ? [{ id: overrides.ultimoPedidoId }] : [{ id: 10 }])
+              }
+              if (fields && 'nombre' in fields && 'username' in fields) {
+                // Restaurante
+                return Promise.resolve([{ nombre: 'Pizzería Piru', username: 'pizzeria' }])
+              }
+              if (fields && 'nombre' in fields) {
+                // Cliente
+                return Promise.resolve([{ nombre: 'Carlos Gomez' }])
+              }
+              if (fields && 'productoId' in fields) {
+                return Promise.resolve(overrides.items || [{ productoId: 10, cantidad: 2 }])
+              }
+              // campanaMaestra o enlace existente
+              callCount++
+              if (callCount === 1) {
+                return Promise.resolve([{ id: 99, slug: 'lo-mismo', tipo: 'lo_mismo' }])
+              }
+              // enlace existente -> null
+              return Promise.resolve([])
+            },
+            then: (resolve: any) => {
+              if (fields && 'productoId' in fields) {
+                return resolve(overrides.items || [{ productoId: 10, cantidad: 2 }])
+              }
+              return resolve([])
+            }
+          }
+          return chain
+        }
+      }),
+      insert: () => ({
+        values: () => Promise.resolve([{ insertId: 55 }])
+      }),
+      update: () => ({
+        set: () => ({
+          where: () => Promise.resolve([{ affectedRows: 1 }])
+        })
+      })
+    }
+  }
+
+  const autenticar = async (c: any, next: any) => {
+    c.user = { id: 7 }
+    await next()
+  }
+
+  it('genera enlace cifrado AES-256 para micro-campaña lo_mismo con carrito precargado', async () => {
+    const mockDb = crearMockDb({ ultimoPedidoId: 88, items: [{ productoId: 12, cantidad: 3 }] })
+    const app = new Hono().route('/marketing', crearMarketingEnlacesRoute({} as any, [autenticar], mockDb))
+
+    const res = await app.request('/marketing/enlaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clienteId: 5,
+        tipoCampana: 'lo_mismo',
+        idempotenciaClave: 'idem-lo-mismo-1',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const json = await res.json()
+    expect(json.success).toBe(true)
+    expect(json.data.campanaCodigo).toBe('lo_mismo')
+    expect(json.data.modalidad).toBe('drawer_habitual')
+    expect(json.data.token).toMatch(/^v1\./)
+    expect(json.data.dto).toBe(0)
+    expect(json.data.destino.carritoRep).toBe('12x3')
+    expect(json.data.textoSugerido).toContain('Carlos')
+  })
+
+  it('genera enlace cifrado AES-256 para micro-campaña reactivacion con 20% OFF', async () => {
+    const mockDb = crearMockDb()
+    const app = new Hono().route('/marketing', crearMarketingEnlacesRoute({} as any, [autenticar], mockDb))
+
+    const res = await app.request('/marketing/enlaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clienteId: 5,
+        tipoCampana: 'reactivacion',
+        descuentoPorcentaje: 20,
+        expiraHoras: 48,
+        idempotenciaClave: 'idem-reactivacion-1',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const json = await res.json()
+    expect(json.success).toBe(true)
+    expect(json.data.campanaCodigo).toBe('reactivacion')
+    expect(json.data.modalidad).toBe('descuento_banner')
+    expect(json.data.token).toMatch(/^v1\./)
+    expect(json.data.dto).toBe(20)
+    expect(json.data.textoSugerido).toContain('20% OFF')
   })
 })
 
