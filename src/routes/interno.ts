@@ -371,9 +371,9 @@ internoRoute.put(
 internoRoute.get('/modulos', async (c) => {
   const db = drizzle(pool)
   try {
-    const modulos = resolverRepresentacionCanonicaCrecimiento(await db.select().from(ModuloTable)
+    const modulos = await db.select().from(ModuloTable)
       .where(eq(ModuloTable.activo, true))
-      .orderBy(asc(ModuloTable.orden), asc(ModuloTable.id)))
+      .orderBy(asc(ModuloTable.orden), asc(ModuloTable.id))
     return c.json({ success: true, data: modulos }, 200)
   } catch (error) {
     console.error('Error obteniendo módulos (interno):', error)

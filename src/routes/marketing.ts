@@ -2059,14 +2059,15 @@ export function crearMarketingResultadosRoute(repositorio: RepositorioResultados
 }
 
 const marketingMiddlewares = [authMiddleware, requireModulo(MODULE_KEYS.CRECIMIENTO)]
+const retencionMiddlewares = [authMiddleware, requireModulo(MODULE_KEYS.MOTOR_RECOMPRA)]
 const dependenciasEnvioWhatsappDrizzle: DependenciasEnvioWhatsappMarketing = {
   repositorio: crearRepositorioEnvioWhatsappDrizzle(), walletDb: drizzle(pool), reservar: reservarCreditoMarketing, confirmar: confirmarReservaCreditoMarketing, compensar: compensarReservaCreditoMarketing,
   enviar: ({ creds, ...input }) => sendClientGrowthRecipeWhatsApp({ env: process.env } as any, input, creds), ahora: () => new Date(),
 }
 export const marketingCampanasRoute = new Hono()
   .route('/', crearMarketingCampanasRoute(crearRepositorioCampanasDrizzle(), marketingMiddlewares))
-  .route('/', crearMarketingEnlacesRoute(crearRepositorioEnlacesDrizzle(), marketingMiddlewares))
-  .route('/', crearMarketingContactosRoute(crearRepositorioContactosDrizzle(), marketingMiddlewares))
-  .route('/', crearMarketingEnvioWhatsappRoute(dependenciasEnvioWhatsappDrizzle, marketingMiddlewares))
-  .route('/', crearMarketingOportunidadesRoute(crearRepositorioOportunidadesDrizzle(), marketingMiddlewares))
+  .route('/', crearMarketingEnlacesRoute(crearRepositorioEnlacesDrizzle(), retencionMiddlewares))
+  .route('/', crearMarketingContactosRoute(crearRepositorioContactosDrizzle(), retencionMiddlewares))
+  .route('/', crearMarketingEnvioWhatsappRoute(dependenciasEnvioWhatsappDrizzle, retencionMiddlewares))
+  .route('/', crearMarketingOportunidadesRoute(crearRepositorioOportunidadesDrizzle(), retencionMiddlewares))
   .route('/', crearMarketingResultadosRoute(crearRepositorioResultadosDrizzle(), marketingMiddlewares))

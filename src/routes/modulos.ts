@@ -45,11 +45,11 @@ modulosRoute.get('/catalogo', async (c) => {
       .from(CategoriaModuloTable)
       .where(eq(CategoriaModuloTable.activo, true))
       .orderBy(asc(CategoriaModuloTable.orden), asc(CategoriaModuloTable.id))
-    const modulos = resolverRepresentacionCanonicaCrecimiento(await db
+    const modulos = await db
       .select()
       .from(ModuloTable)
       .where(eq(ModuloTable.activo, true))
-      .orderBy(asc(ModuloTable.orden), asc(ModuloTable.id)))
+      .orderBy(asc(ModuloTable.orden), asc(ModuloTable.id))
 
     return c.json({
       success: true,
@@ -78,9 +78,7 @@ modulosRoute.get('/mis-modulos', async (c) => {
       resolverModulosRestaurante(db, restauranteId),
     ])
 
-    const visibles = resolverRepresentacionCanonicaCrecimiento(
-      resueltos.filter((modulo) => modulo.activoCatalogo),
-    )
+    const visibles = resueltos.filter((modulo) => modulo.activoCatalogo)
     return c.json({
       success: true,
       data: categorias.map((categoria) => ({
