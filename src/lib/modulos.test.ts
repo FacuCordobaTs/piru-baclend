@@ -41,6 +41,24 @@ describe('matriz de acceso de módulos', () => {
     ], MODULE_KEYS.MOTOR_RECOMPRA)).toBe(false)
   })
 
+  test('Puntos para clientes requiere exclusivamente el módulo Herramientas de retención', () => {
+    // Si sólo tiene la fila legacy de puntos activa pero no motor_recompra, NO se habilita
+    expect(listadoHabilitaModulo([
+      { codigo: MODULE_KEYS.PUNTOS_CLIENTES, activoAhora: true },
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: false },
+    ], MODULE_KEYS.PUNTOS_CLIENTES)).toBe(false)
+
+    // Si tiene motor_recompra activo, SI se habilita
+    expect(listadoHabilitaModulo([
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: true },
+    ], MODULE_KEYS.PUNTOS_CLIENTES)).toBe(true)
+
+    // Sin motor_recompra activo, NO se habilita
+    expect(listadoHabilitaModulo([
+      { codigo: MODULE_KEYS.POS, activoAhora: true },
+    ], MODULE_KEYS.PUNTOS_CLIENTES)).toBe(false)
+  })
+
   test('trial, suspensión y vencimiento bloquean también el acceso por alias', () => {
     for (const politica of [
       { ...BASE, estadoSuscripcion: 'trial' as const },

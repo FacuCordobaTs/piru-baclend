@@ -14,7 +14,7 @@ import {
   suscripcion as SuscripcionTable,
 } from '../db/schema'
 import { authMiddleware } from '../middleware/auth'
-import { resolverModulosRestaurante, resolverRepresentacionCanonicaCrecimiento } from '../lib/modulos'
+import { MODULE_KEYS, resolverModulosRestaurante, resolverRepresentacionCanonicaCrecimiento } from '../lib/modulos'
 import { crearFacturaSuscripcionPendiente } from '../lib/facturacion-suscripcion'
 import { crearPreferenciaSuscripcionMP, pagosSuscripcionDisponibles } from '../lib/mp-suscripcion'
 import { sendPaymentLinkWhatsApp } from '../services/whatsapp'
@@ -55,7 +55,7 @@ modulosRoute.get('/catalogo', async (c) => {
       success: true,
       data: categorias.map((categoria) => ({
         ...categoria,
-        modulos: modulos.filter((modulo) => modulo.categoriaId === categoria.id),
+        modulos: modulos.filter((modulo) => modulo.categoriaId === categoria.id && modulo.codigo !== MODULE_KEYS.PUNTOS_CLIENTES),
       })),
     })
   } catch (error) {
@@ -78,7 +78,7 @@ modulosRoute.get('/mis-modulos', async (c) => {
       resolverModulosRestaurante(db, restauranteId),
     ])
 
-    const visibles = resueltos.filter((modulo) => modulo.activoCatalogo)
+    const visibles = resueltos.filter((modulo) => modulo.activoCatalogo && modulo.codigo !== MODULE_KEYS.PUNTOS_CLIENTES)
     return c.json({
       success: true,
       data: categorias.map((categoria) => ({
@@ -97,6 +97,13 @@ modulosRoute.put('/:codigo/activar', zValidator('param', codigoSchema), async (c
   const restauranteId = (c as any).user.id as number
   const { codigo } = c.req.valid('param')
   try {
+    if (codigo === MODULE_KEYS.PUNTOS_CLIENTES) {
+      return c.json({
+        success: false,
+        message: 'El programa de puntos forma parte del módulo Herramientas de retención (+ $20.000/mes)',
+      }, 409)
+    }
+
     const modulo = await buscarModuloActivo(db, codigo)
     if (!modulo) return c.json({ success: false, message: 'Módulo no encontrado' }, 404)
     if (!modulo.activable) return c.json({ success: false, message: 'Este módulo todavía no se puede activar' }, 409)

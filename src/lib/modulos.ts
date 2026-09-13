@@ -48,6 +48,12 @@ const ALIASES_ACCESO_MODULO: Partial<Record<ModuleKey, readonly ModuleKey[]>> = 
  * contrato hasta que la migración de rutas se haga en una tarea posterior.
  */
 export function codigosQueHabilitanModulo(modulo: ModuleKey): readonly ModuleKey[] {
+  if (modulo === MODULE_KEYS.PUNTOS_CLIENTES) {
+    // Club de Puntos ahora forma parte exclusiva del módulo pago
+    // "Herramientas de retención" (motor_recompra, +$20.000/mes).
+    // Ya no se habilita como módulo incluido gratuito individual.
+    return [MODULE_KEYS.MOTOR_RECOMPRA]
+  }
   return [modulo, ...(ALIASES_ACCESO_MODULO[modulo] ?? [])]
 }
 
@@ -203,6 +209,18 @@ export async function resolverModulosRestaurante(
       }, ahora),
     }
   })
+
+  // Sincronizar puntos_clientes con el estado de motor_recompra (Herramientas de retención)
+  const retencionActiva = resueltos.some(
+    (m) => m.codigo === MODULE_KEYS.MOTOR_RECOMPRA && m.activoAhora,
+  )
+  for (const m of resueltos) {
+    if (m.codigo === MODULE_KEYS.PUNTOS_CLIENTES) {
+      m.activoAhora = retencionActiva
+    }
+  }
+
+  return resueltos
 }
 
 export async function tieneModuloActivo(
