@@ -30,12 +30,14 @@ INSERT INTO `modulo`
    `mensajes_marketing_incluidos`, `estado_producto`, `activable`, `icono`,
    `orden`, `activo`)
 SELECT
-  'crecimiento', `categoria_id`, 'Crecimiento',
-  'Adquirí clientes, activá recompra y medí resultados.', `tipo_modulo`,
-  `precio_mensual`, 0, 0, `estado_producto`, true, 'TrendingUp', `orden`, true
+  'crecimiento', `categoria_id`, 'Campañas de adquisición',
+  'Adquirí clientes y medí resultados de cada canal.', `tipo_modulo`,
+  20000.00, 0, 0, `estado_producto`, true, 'TrendingUp', `orden`, true
 FROM `modulo`
 WHERE `codigo` = 'motor_recompra'
 ON DUPLICATE KEY UPDATE
+  `nombre` = 'Campañas de adquisición',
+  `precio_mensual` = 20000.00,
   `mensajes_utility_incluidos` = 0,
   `mensajes_marketing_incluidos` = 0,
   `activable` = true,
@@ -60,7 +62,13 @@ JOIN `modulo` growth
 ON DUPLICATE KEY UPDATE
   `modulo_id` = VALUES(`modulo_id`);
 
-SET `activable` = false
+UPDATE `modulo`
+SET
+  `nombre` = 'Herramientas de retención',
+  `descripcion` = 'Segmentación inteligente de clientes, micro-campañas de recompra y Club de Puntos.',
+  `precio_mensual` = 20000.00,
+  `activable` = true,
+  `activo` = true
 WHERE `codigo` = 'motor_recompra';
 
 COMMIT;

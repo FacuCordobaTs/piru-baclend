@@ -50,6 +50,7 @@ import {
   ErrorPrepararEnlaceMarketing,
   esCarritoPrearmadoValido,
   hashTokenMarketing,
+  parseCarritoPrearmado,
   prepararEnlaceMarketing,
   type RepositorioEnlacesMarketing,
 } from '../lib/marketing-enlaces'
@@ -728,11 +729,12 @@ export function crearMarketingGrowthPublicRoute(db = drizzle(pool)): Hono {
     token: z.string().trim().min(1),
     restauranteSlug: z.string().trim().min(1),
   })), async (c) => {
-    const { token, restauranteSlug } = c.req.valid('json')
-    const payload = descifrarGrowthPayload(token)
-    if (!payload) {
-      return c.json({ success: false, code: 'TOKEN_INVALIDO', message: 'El enlace no es válido o ha sido modificado.' }, 400)
-    }
+    try {
+      const { token, restauranteSlug } = c.req.valid('json')
+      const payload = descifrarGrowthPayload(token)
+      if (!payload) {
+        return c.json({ success: false, code: 'TOKEN_INVALIDO', message: 'El enlace no es válido o ha sido modificado.' }, 400)
+      }
 
     if (payload.exp != null && Date.now() > payload.exp) {
       return c.json({ success: false, code: 'TOKEN_EXPIRADO', message: 'Este beneficio exclusivo ha expirado.' }, 410)
@@ -976,8 +978,16 @@ export function crearMarketingGrowthPublicRoute(db = drizzle(pool)): Hono {
         },
       },
     })
-  })
-  return route
+  } catch (err: any) {
+    console.error('[marketing] Error en resolver-enlace:', err)
+    return c.json({
+      success: false,
+      code: 'ERROR_RESOLVER_ENLACE',
+      message: err?.message || 'No se pudo resolver el enlace de la micro-campaña.'
+    }, 500)
+  }
+})
+return route
 }
 
 // Se conserva el export histórico y se montan los resolvedores públicos junto

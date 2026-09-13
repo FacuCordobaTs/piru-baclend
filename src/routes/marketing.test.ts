@@ -666,6 +666,65 @@ describe('POST /public/growth/resolver-enlace', () => {
     const json = await response.json()
     expect(json).toMatchObject({ success: false, code: 'TOKEN_EXPIRADO' })
   })
+
+  it('resuelve correctamente un token válido con carrito prearmado de micro-campaña', async () => {
+    const token = cifrarGrowthPayload({
+      rId: 1,
+      cId: 10,
+      campana: 'lo_mismo',
+      modalidad: 'drawer_habitual',
+      rep: '12x2',
+      dto: 0,
+    })
+
+    const mockDb: any = {
+      select: (fields?: any) => ({
+        from: (table: any) => {
+          const chain: any = {
+            where: () => chain,
+            orderBy: () => chain,
+            limit: () => {
+              if (fields && 'deliveryEnabled' in fields) {
+                // Restaurante
+                return Promise.resolve([{ id: 1, nombre: 'Pizzería Piru', username: 'pizzeria', deliveryEnabled: true, takeawayEnabled: true, deliveryFee: '150.00', direccionSoloTexto: false }])
+              }
+              if (fields && 'telefono' in fields && 'direccion' in fields) {
+                // Cliente
+                return Promise.resolve([{ id: 10, nombre: 'Carlos Gomez', telefono: '5491155551234', direccion: 'Calle 123' }])
+              }
+              if (fields && 'tipo' in fields && 'metodoPago' in fields) {
+                // PedidoUnificado
+                return Promise.resolve([{ id: 99, tipo: 'delivery', direccion: 'Calle 123', latitud: '-34.6', longitud: '-58.4', metodoPago: 'efectivo', sucursalId: 1, deliveryFee: '150.00' }])
+              }
+              // Campana
+              return Promise.resolve([{ id: 50, slug: 'lo-mismo', tipo: 'lo_mismo' }])
+            },
+            then: (resolve: any) => {
+              // Producto, Variante, Agregado (without limit)
+              return resolve([{ id: 12, nombre: 'Pizza Napolitana', precio: '8500.00', activo: true, categoria: 'Pizzas' }])
+            }
+          }
+          return chain
+        }
+      })
+    }
+
+    const app = new Hono().route('/public', crearMarketingGrowthPublicRoute(mockDb))
+    const response = await app.request('/public/growth/resolver-enlace', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, restauranteSlug: 'pizzeria' }),
+    })
+
+    expect(response.status).toBe(200)
+    const json = await response.json()
+    expect(json.success).toBe(true)
+    expect(json.data.modalidad).toBe('drawer_habitual')
+    expect(json.data.cliente.nombre).toBe('Carlos Gomez')
+    expect(json.data.carrito).toHaveLength(1)
+    expect(json.data.carrito[0].productoId).toBe(12)
+    expect(json.data.carrito[0].cantidad).toBe(2)
+  })
 })
 
 describe('POST /marketing/enlaces (micro-campañas lo_mismo y reactivacion)', () => {

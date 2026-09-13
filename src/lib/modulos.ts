@@ -39,6 +39,7 @@ export type ModuleKey = (typeof MODULE_KEYS)[keyof typeof MODULE_KEYS]
 
 const ALIASES_ACCESO_MODULO: Partial<Record<ModuleKey, readonly ModuleKey[]>> = {
   [MODULE_KEYS.CRECIMIENTO]: [MODULE_KEYS.MOTOR_RECOMPRA],
+  [MODULE_KEYS.PUNTOS_CLIENTES]: [MODULE_KEYS.MOTOR_RECOMPRA],
 }
 
 /**
