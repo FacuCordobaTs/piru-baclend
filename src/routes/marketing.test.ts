@@ -1,5 +1,5 @@
 import { describe, expect, test, it } from 'bun:test'
-import { Hono } from 'hono'
+import { Hono, type MiddlewareHandler } from 'hono'
 import {
   crearMarketingCampanasRoute,
   crearMarketingContactosRoute,
@@ -8,6 +8,7 @@ import {
   crearMarketingGrowthPublicRoute,
   crearMarketingOportunidadesRoute,
   crearMarketingRecetasPublicasRoute,
+  crearMarketingResultadosRoute,
   crearMarketingRoute,
   crearMarketingSmartLinksRoute,
   type DependenciasEnvioWhatsappMarketing,
@@ -376,6 +377,79 @@ function campanaPayload(overrides: Record<string, unknown> = {}) {
     ...overrides,
   }
 }
+
+describe('permisos de adquisición y retención en rutas combinadas', () => {
+  function appModulos(activos: string[], autenticado = true) {
+    const chequeos: string[] = []
+    const autenticar: MiddlewareHandler = async (c, next) => {
+      if (!autenticado) return c.json({ success: false }, 401)
+      ;(c as any).user = { id: 7 }
+      await next()
+    }
+    const gate = (modulo: string): MiddlewareHandler => async (c, next) => {
+      chequeos.push(modulo)
+      if (!activos.includes(modulo)) return c.json({ moduleRequired: true, module: modulo }, 403)
+      await next()
+    }
+    const adquisicion = [autenticar, gate('crecimiento')]
+    const retencion = [autenticar, gate('motor_recompra')]
+    const oportunidades: RepositorioOportunidadesMarketing = {
+      cargarDatos: async () => ({ clientes: [], pedidos: [], items: [], productos: [], recuperos: [], contactos: [] }),
+      cargarEnlaces: async () => [],
+    }
+    const route = new Hono()
+      .route('/', crearMarketingCampanasRoute(repositorioCampanas(), adquisicion))
+      // No debe acceder al repositorio de enlaces en las consultas de resultados.
+      .route('/', crearMarketingEnlacesRoute({} as Parameters<typeof crearMarketingEnlacesRoute>[0], retencion))
+      .route('/', crearMarketingContactosRoute(repositorioContactos(), retencion))
+      .route('/', crearMarketingEnvioWhatsappRoute(dependenciasEnvio().deps, retencion))
+      .route('/', crearMarketingOportunidadesRoute(oportunidades, retencion))
+      .route('/', crearMarketingResultadosRoute({
+        cargar: async (restauranteId) => {
+          expect(restauranteId).toBe(7)
+          return { pedidos: [], campanas: [], atribuciones: [], sesiones: [], eventos: [], contactos: [], enlaces: [] }
+        },
+        cargarOportunidades: async () => [],
+      }, adquisicion))
+    return { app: new Hono().route('/marketing', route), chequeos }
+  }
+
+  for (const path of ['/campanas', '/resumen', '/organico/resultados', '/campanas/1/resultados']) {
+    test(`permite ${path} con adquisición activa y retención inactiva`, async () => {
+      const { app, chequeos } = appModulos(['crecimiento'])
+      const response = await app.request(`/marketing${path}`)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ success: true })
+      expect(chequeos).toEqual(['crecimiento'])
+    })
+
+    test(`protege ${path} sin autenticación o sin módulo`, async () => {
+      expect((await appModulos(['crecimiento'], false).app.request(`/marketing${path}`)).status).toBe(401)
+      const response = await appModulos([]).app.request(`/marketing${path}`)
+      expect(response.status).toBe(403)
+      expect(await response.json()).toMatchObject({ moduleRequired: true, module: 'crecimiento' })
+    })
+  }
+
+  test('retención sigue exigiendo su propio módulo', async () => {
+    for (const [path, method] of [
+      ['/enlaces', 'POST'], ['/enlaces/1/copiar', 'POST'], ['/enlaces/1/wa-me', 'POST'],
+      ['/enlaces/1/enviar-whatsapp', 'POST'], ['/oportunidades', 'GET'], ['/clientes/1/recomendacion', 'GET'],
+    ]) {
+      const { app, chequeos } = appModulos(['crecimiento'])
+      const response = await app.request(`/marketing${path}`, { method })
+      expect(response.status).toBe(403)
+      expect(await response.json()).toMatchObject({ module: 'motor_recompra' })
+      expect(chequeos).toEqual(['motor_recompra'])
+    }
+  })
+
+  test('las oportunidades de retención no exigen adquisición', async () => {
+    const { app, chequeos } = appModulos(['motor_recompra'])
+    expect((await app.request('/marketing/oportunidades')).status).toBe(200)
+    expect(chequeos).toEqual(['motor_recompra'])
+  })
+})
 
 describe('CRUD de campañas de marketing', () => {
   test('requiere autenticación antes de acceder al CRUD', async () => {
@@ -837,4 +911,3 @@ describe('POST /marketing/enlaces (micro-campañas lo_mismo y reactivacion)', ()
     expect(json.data.textoSugerido).toContain('20% OFF')
   })
 })
-

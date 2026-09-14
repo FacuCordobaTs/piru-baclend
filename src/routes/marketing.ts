@@ -1170,38 +1170,39 @@ async function validarReferenciasCampana(repositorio: RepositorioCampanasMarketi
 
 const idParamSchema = z.object({ id: z.coerce.number().int().positive() })
 
+// Estas subrutas comparten /marketing. Los middlewares se registran por endpoint:
+// use('*') también alcanzaría rutas hermanas y exigiría módulos ajenos.
 export function crearMarketingCampanasRoute(
   repositorio: RepositorioCampanasMarketing,
   middlewares: MiddlewareHandler[] = [],
 ) {
   const route = new Hono()
-  for (const middleware of middlewares) route.use('*', middleware)
 
-  route.get('/campanas', async (c) => c.json({ success: true, data: await repositorio.listar((c as any).user.id) }))
-  route.post('/campanas', zValidator('json', crearCampanaSchema), async (c) => {
+  route.get('/campanas', ...middlewares, async (c) => c.json({ success: true, data: await repositorio.listar((c as any).user.id) }))
+  route.post('/campanas', ...middlewares, zValidator('json', crearCampanaSchema), async (c) => {
     const restauranteId = (c as any).user.id as number; const input = c.req.valid('json')
     if (await repositorio.slugExiste(restauranteId, input.slug)) return c.json({ success: false, message: 'Ya existe una campaña con ese slug' }, 409)
     const error = await validarReferenciasCampana(repositorio, restauranteId, input)
     if (error) return c.json({ success: false, message: error }, 400)
     return c.json({ success: true, data: await repositorio.crear(restauranteId, input) }, 201)
   })
-  route.get('/campanas/:id', zValidator('param', idParamSchema), async (c) => {
+  route.get('/campanas/:id', ...middlewares, zValidator('param', idParamSchema), async (c) => {
     const campana = await repositorio.buscar((c as any).user.id, c.req.valid('param').id)
     return campana ? c.json({ success: true, data: campana }) : c.json({ success: false, message: 'Campaña no encontrada' }, 404)
   })
-  route.put('/campanas/:id', zValidator('param', idParamSchema), zValidator('json', editarCampanaSchema), async (c) => {
+  route.put('/campanas/:id', ...middlewares, zValidator('param', idParamSchema), zValidator('json', editarCampanaSchema), async (c) => {
     const restauranteId = (c as any).user.id as number; const id = c.req.valid('param').id; const input = c.req.valid('json')
     if (!await repositorio.buscar(restauranteId, id)) return c.json({ success: false, message: 'Campaña no encontrada' }, 404)
     const error = await validarReferenciasCampana(repositorio, restauranteId, input)
     if (error) return c.json({ success: false, message: error }, 400)
     return c.json({ success: true, data: await repositorio.actualizar(restauranteId, id, input) })
   })
-  route.post('/campanas/:id/desactivar', zValidator('param', idParamSchema), async (c) => {
+  route.post('/campanas/:id/desactivar', ...middlewares, zValidator('param', idParamSchema), async (c) => {
     const campana = await repositorio.buscar((c as any).user.id, c.req.valid('param').id)
     if (!campana) return c.json({ success: false, message: 'Campaña no encontrada' }, 404)
     return c.json({ success: true, data: await repositorio.desactivar((c as any).user.id, c.req.valid('param').id) })
   })
-  route.delete('/campanas/:id', zValidator('param', idParamSchema), async (c) => {
+  route.delete('/campanas/:id', ...middlewares, zValidator('param', idParamSchema), async (c) => {
     const restauranteId = (c as any).user.id as number; const id = c.req.valid('param').id
     if (!await repositorio.buscar(restauranteId, id)) return c.json({ success: false, message: 'Campaña no encontrada' }, 404)
     if (await repositorio.tieneAtribucion(restauranteId, id)) {
@@ -1359,8 +1360,7 @@ export function crearMarketingEnlacesRoute(
   dbInstancia?: any,
 ) {
   const route = new Hono()
-  for (const middleware of middlewares) route.use('*', middleware)
-  route.post('/enlaces', zValidator('json', prepararEnlaceSchema), async (c) => {
+  route.post('/enlaces', ...middlewares, zValidator('json', prepararEnlaceSchema), async (c) => {
     try {
       const restauranteId = (c as any).user.id as number
       const input = c.req.valid('json')
@@ -1632,7 +1632,6 @@ export function crearMarketingContactosRoute(
   ahora: () => Date = () => new Date(),
 ) {
   const route = new Hono()
-  for (const middleware of middlewares) route.use('*', middleware)
 
   const registrar = (canal: CanalContactoMarketing, estado: EstadoContactoMarketing) => async (c: any) => {
     const restauranteId = c.user.id as number
@@ -1718,8 +1717,8 @@ export function crearMarketingContactosRoute(
     } }, 201)
   }
 
-  route.post('/enlaces/:id/copiar', zValidator('param', idParamSchema), zValidator('json', contactoSchema), registrar('copiado', 'preparado'))
-  route.post('/enlaces/:id/wa-me', zValidator('param', idParamSchema), zValidator('json', contactoSchema), registrar('wa_me', 'abierto'))
+  route.post('/enlaces/:id/copiar', ...middlewares, zValidator('param', idParamSchema), zValidator('json', contactoSchema), registrar('copiado', 'preparado'))
+  route.post('/enlaces/:id/wa-me', ...middlewares, zValidator('param', idParamSchema), zValidator('json', contactoSchema), registrar('wa_me', 'abierto'))
   return route
 }
 
@@ -1813,8 +1812,7 @@ export function crearMarketingEnvioWhatsappRoute(
   middlewares: MiddlewareHandler[] = [],
 ) {
   const route = new Hono()
-  for (const middleware of middlewares) route.use('*', middleware)
-  route.post('/enlaces/:id/enviar-whatsapp', zValidator('param', idParamSchema), zValidator('json', enviarWhatsappSchema), async (c: any) => {
+  route.post('/enlaces/:id/enviar-whatsapp', ...middlewares, zValidator('param', idParamSchema), zValidator('json', enviarWhatsappSchema), async (c: any) => {
     const restauranteId = c.user.id as number
     const enlaceId = Number(c.req.param('id'))
     const input = c.req.valid('json') as z.infer<typeof enviarWhatsappSchema>
@@ -1981,17 +1979,16 @@ export function crearMarketingOportunidadesRoute(
   ahora: () => Date = () => new Date(),
 ) {
   const route = new Hono()
-  for (const middleware of middlewares) route.use('*', middleware)
 
   const resolver = async (restauranteId: number) => {
     const [datos, enlaces] = await Promise.all([repositorio.cargarDatos(restauranteId), repositorio.cargarEnlaces(restauranteId)])
     return resolverOportunidadesMarketing(datos, enlaces, ahora())
   }
-  route.get('/oportunidades', zValidator('query', oportunidadesQuerySchema), async (c: any) => {
+  route.get('/oportunidades', ...middlewares, zValidator('query', oportunidadesQuerySchema), async (c: any) => {
     const oportunidades = filtrarOportunidadesMarketing(await resolver(c.user.id), c.req.valid('query'))
     return c.json({ success: true, data: { oportunidades, total: oportunidades.length } })
   })
-  route.get('/clientes/:clienteId/recomendacion', zValidator('param', z.object({ clienteId: z.coerce.number().int().positive() })), async (c: any) => {
+  route.get('/clientes/:clienteId/recomendacion', ...middlewares, zValidator('param', z.object({ clienteId: z.coerce.number().int().positive() })), async (c: any) => {
     const clienteId = c.req.valid('param').clienteId
     const recomendacion = (await resolver(c.user.id)).find((oportunidad) => oportunidad.cliente.id === clienteId)
     return recomendacion
@@ -2044,16 +2041,15 @@ function crearRepositorioResultadosDrizzle(): RepositorioResultadosMarketing {
 
 export function crearMarketingResultadosRoute(repositorio: RepositorioResultadosMarketing, middlewares: MiddlewareHandler[] = []) {
   const route = new Hono()
-  for (const middleware of middlewares) route.use('*', middleware)
   const responder = async (c: any, filtros = c.req.valid('query') as FiltrosResultadosMarketing) => {
     const restauranteId = c.user.id as number
     const [datos, oportunidades] = await Promise.all([repositorio.cargar(restauranteId), repositorio.cargarOportunidades(restauranteId)])
     return c.json({ success: true, data: resumirResultadosMarketing({ ...datos, oportunidades }, filtros) })
   }
-  route.get('/resumen', zValidator('query', resultadosQuerySchema), async (c: any) => responder(c, c.req.valid('query')))
-  route.get('/organico/resultados', zValidator('query', resultadosQuerySchema), async (c: any) =>
+  route.get('/resumen', ...middlewares, zValidator('query', resultadosQuerySchema), async (c: any) => responder(c, c.req.valid('query')))
+  route.get('/organico/resultados', ...middlewares, zValidator('query', resultadosQuerySchema), async (c: any) =>
     responder(c, { ...c.req.valid('query'), campaniaId: undefined, fuente: 'organico' }))
-  route.get('/campanas/:id/resultados', zValidator('param', idParamSchema), zValidator('query', resultadosQuerySchema), async (c: any) =>
+  route.get('/campanas/:id/resultados', ...middlewares, zValidator('param', idParamSchema), zValidator('query', resultadosQuerySchema), async (c: any) =>
     responder(c, { ...c.req.valid('query'), campaniaId: c.req.valid('param').id }))
   return route
 }
