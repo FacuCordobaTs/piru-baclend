@@ -209,7 +209,12 @@ describe('GET /public/marketing/campanas/:username/:slug', () => {
       utmSource: null, utmMedium: null, utmCampaign: null, utmTerm: null, utmContent: null,
     })
     const app = new Hono().route('/public', crearMarketingSmartLinksRoute(base))
-    expect(await (await app.request('/public/marketing/campanas/pizzeria/carrito')).json()).toMatchObject({ data: { destino: { tipo: 'carrito', carritoRep: '10x2-15x1' } } })
+    expect(await (await app.request('/public/marketing/campanas/pizzeria/carrito')).json()).toMatchObject({
+      data: {
+        destino: { tipo: 'carrito', carritoRep: '10x2-15x1' },
+        campana: { destinoTipo: 'carrito', carritoRep: '10x2-15x1' },
+      },
+    })
     expect(await (await app.request('/public/marketing/campanas/pizzeria/producto-sin-id')).json()).toMatchObject({ data: { destino: { tipo: 'tienda' } } })
   })
 

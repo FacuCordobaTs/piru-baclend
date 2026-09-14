@@ -380,7 +380,9 @@ export function crearMarketingSmartLinksRoute(dependencias: DependenciasSmartLin
           nombre: campana.nombre,
           slug: campana.slug,
           tipo: campana.tipo,
+          destinoTipo: campana.destinoTipo,
           productoId: campana.productoId,
+          carritoRep: campana.carritoRep,
           descuentoPorcentaje: campana.descuentoProductoPorcentaje,
           limiteUsos: campana.limiteUsos,
           usosActuales: campana.usosActuales,
@@ -1076,6 +1078,14 @@ function valoresCampana(input: Partial<CampanaInput>) {
     valores.carritoRep = null
     valores.descuentoProductoPorcentaje = 0
     valores.limiteUsos = null
+  }
+  if (input.destinoTipo === 'carrito') {
+    valores.productoId = null
+    valores.descuentoProductoPorcentaje = 0
+    valores.limiteUsos = null
+  }
+  if (input.destinoTipo === 'producto') {
+    valores.carritoRep = null
   }
   if (input.inversionManual !== undefined) valores.inversionManual = input.inversionManual.toFixed(2)
   return valores
