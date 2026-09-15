@@ -307,25 +307,7 @@ export async function procesarColaDiaria(
   // Solo se detecta y encola el flujo para que el admin lo vea y lo mande él mismo.
   if (campana.modo === 'manual') {
     if (campana.estado === 'activa' || campana.estado === 'completada') {
-      const nuevosFlujo = await detectarFlujo(db, restauranteId, campana.id)
-      for (const cl of nuevosFlujo) {
-        const ticket = cl.cantidadPedidos > 0 ? cl.totalGastado / cl.cantidadPedidos : cl.totalGastado
-        const patron = calcularPatronEnvio(cl.fechasPedidosMs ?? [], cl.segmento, ahora, cl.clienteId)
-        await db.insert(ColaRecompraTable).values({
-          restauranteId,
-          campanaId: campana.id,
-          clienteId: cl.clienteId,
-          telefono: cl.telefono,
-          segmento: cl.segmento,
-          prioridad: calcularPrioridadStock(cl.segmento, ticket).toFixed(2),
-          poblacion: 'flujo',
-          rol: 'contactado',
-          dueDate: patron.dueDate,
-          horarioSugerido: patron.horarioSugerido,
-          estado: 'pendiente',
-          ...snapshot(cl),
-        })
-      }
+      await sincronizarFlujo(db, restauranteId, campana.id)
     }
     return {
       ok: true,
@@ -367,25 +349,7 @@ export async function procesarColaDiaria(
   // (1) FLUJO — detectar y encolar a los que cruzan HOY su umbral. El drenaje común de abajo
   // los procesa antes que Stock, sin exceder el cupo diario.
   if (campana.estado === 'activa' || campana.estado === 'completada') {
-    const nuevosFlujo = await detectarFlujo(db, restauranteId, campana.id)
-    for (const cl of nuevosFlujo) {
-      const ticket = cl.cantidadPedidos > 0 ? cl.totalGastado / cl.cantidadPedidos : cl.totalGastado
-      const patron = calcularPatronEnvio(cl.fechasPedidosMs ?? [], cl.segmento, ahora, cl.clienteId)
-      await db.insert(ColaRecompraTable).values({
-        restauranteId,
-        campanaId: campana.id,
-        clienteId: cl.clienteId,
-        telefono: cl.telefono,
-        segmento: cl.segmento,
-        prioridad: calcularPrioridadStock(cl.segmento, ticket).toFixed(2),
-        poblacion: 'flujo',
-        rol: 'contactado',
-        dueDate: patron.dueDate,
-        horarioSugerido: patron.horarioSugerido,
-        estado: 'pendiente',
-        ...snapshot(cl),
-      })
-    }
+    await sincronizarFlujo(db, restauranteId, campana.id)
   }
 
   // (2) Drenaje común — Flujo tiene prioridad absoluta; dentro de cada población manda el score.
@@ -561,6 +525,41 @@ async function detectarFlujo(
     .where(and(eq(ColaRecompraTable.campanaId, campanaId), inArray(ColaRecompraTable.clienteId, flujo.map((c) => c.clienteId))))
   const set = new Set(yaEnCola.map((r) => r.clienteId))
   return flujo.filter((c) => !set.has(c.clienteId))
+}
+
+/**
+ * Detecta y encola a los clientes de flujo (en_riesgo y primer_pedido) que todavía no están
+ * en la cola de esta campaña. Se invoca tanto en el scheduler diario como al consultar
+ * la cola u observabilidad para asegurar que clientes calificados aparezcan de inmediato.
+ */
+export async function sincronizarFlujo(
+  db: Db,
+  restauranteId: number,
+  campanaId: number,
+): Promise<number> {
+  const nuevosFlujo = await detectarFlujo(db, restauranteId, campanaId)
+  if (nuevosFlujo.length === 0) return 0
+
+  const ahora = Date.now()
+  for (const cl of nuevosFlujo) {
+    const ticket = cl.cantidadPedidos > 0 ? cl.totalGastado / cl.cantidadPedidos : cl.totalGastado
+    const patron = calcularPatronEnvio(cl.fechasPedidosMs ?? [], cl.segmento, ahora, cl.clienteId)
+    await db.insert(ColaRecompraTable).values({
+      restauranteId,
+      campanaId,
+      clienteId: cl.clienteId,
+      telefono: cl.telefono,
+      segmento: cl.segmento,
+      prioridad: calcularPrioridadStock(cl.segmento, ticket).toFixed(2),
+      poblacion: 'flujo',
+      rol: 'contactado',
+      dueDate: patron.dueDate,
+      horarioSugerido: patron.horarioSugerido,
+      estado: 'pendiente',
+      ...snapshot(cl),
+    })
+  }
+  return nuevosFlujo.length
 }
 
 /** Pausa la campaña por saldo agotado. Aviso ÚNICO (o 1/semana): nunca súplica, nunca deuda. */
@@ -824,6 +823,12 @@ export async function estadoMotor(db: Db, restauranteId: number): Promise<Estado
     return { activa: false, campana: null, plan, saldoMarketing }
   }
 
+  try {
+    await sincronizarFlujo(db, restauranteId, campana.id)
+  } catch (err) {
+    console.error('Error sincronizando flujo en estadoMotor:', err)
+  }
+
   const dashboard = await construirDashboard(db, restauranteId, campana, saldoMarketing)
   return { activa: true, campana: dashboard, plan: null, saldoMarketing }
 }
@@ -985,6 +990,12 @@ export async function listarColaRecompra(
   const { pagina, limite, offset } = paginacion(filtros)
   if (!campana) return { items: [], pagina, limite, total: 0, paginas: 0 }
 
+  try {
+    await sincronizarFlujo(db, restauranteId, campana.id)
+  } catch (err) {
+    console.error('Error sincronizando flujo en listarColaRecompra:', err)
+  }
+
   const condicionesBase = [
     eq(ColaRecompraTable.restauranteId, restauranteId),
     eq(ColaRecompraTable.campanaId, campana.id),
@@ -1137,6 +1148,13 @@ export async function listarClientesRecompra(
   const campana = await getCampanaActual(db, restauranteId)
   const { pagina, limite, offset } = paginacion(filtros)
   if (!campana) return { items: [], pagina, limite, total: 0, paginas: 0 }
+
+  try {
+    await sincronizarFlujo(db, restauranteId, campana.id)
+  } catch (err) {
+    console.error('Error sincronizando flujo en listarClientesRecompra:', err)
+  }
+
   const condiciones = [
     eq(ColaRecompraTable.restauranteId, restauranteId),
     eq(ColaRecompraTable.campanaId, campana.id),

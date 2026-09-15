@@ -695,13 +695,13 @@ export async function cargarCohorteRecompra(
     const g = porCliente[cl.id]
     const ultimoPedidoMs = g.fechasMs.length > 0 ? Math.max(...g.fechasMs) : null
 
-    // Clasificación para recompra: clientes de 1 solo pedido con >= 7 días se incorporan como 'primer_pedido'
+    // Clasificación para recompra: clientes de 1 solo pedido se incorporan como 'primer_pedido'
     let segmentoRecompra: SegmentoRecompra | null = null
-    if (perfil.segmento === 'nuevo' || g.fechasMs.length === 1) {
-      if (perfil.diasDesdeUltimo != null && perfil.diasDesdeUltimo >= 7) {
+    if (g.fechasMs.length === 1 || perfil.segmento === 'nuevo') {
+      if (g.fechasMs.length === 1) {
         segmentoRecompra = 'primer_pedido'
       } else {
-        return // todavía muy reciente para volver a contactar
+        return // todavía sin compras realizadas
       }
     } else if (perfil.segmento === 'en_riesgo' || perfil.segmento === 'dormido' || perfil.segmento === 'perdido') {
       segmentoRecompra = perfil.segmento

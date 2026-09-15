@@ -13,11 +13,11 @@ describe('prioridad del stock del Motor de Recompra', () => {
   })
 })
 
-describe('modos de operación del Motor de Recompra', () => {
-  test('soporta modo automatico y modo manual como contratos válidos', () => {
-    const modos: ('automatico' | 'manual')[] = ['automatico', 'manual']
-    expect(modos).toContain('automatico')
-    expect(modos).toContain('manual')
+describe('segmento primer_pedido en el Motor de Recompra', () => {
+  test('tiene la máxima prioridad sobre en_riesgo, dormido y perdido', () => {
+    expect(calcularPrioridadStock('primer_pedido', 1)).toBeGreaterThan(calcularPrioridadStock('en_riesgo', 9_999_999))
+    expect(calcularPrioridadStock('primer_pedido', 1)).toBeGreaterThan(calcularPrioridadStock('dormido', 9_999_999))
+    expect(calcularPrioridadStock('primer_pedido', 1)).toBeGreaterThan(calcularPrioridadStock('perdido', 9_999_999))
   })
 })
 
