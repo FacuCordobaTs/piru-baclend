@@ -630,6 +630,23 @@ describe('Canales copiar y wa.me de enlaces de marketing', () => {
     expect(repo.contactos).toHaveLength(0)
     expect(repo.controles).toBe(0)
   })
+
+  test('copiar no es bloqueado por cooldown y permite copiar múltiples veces', async () => {
+    const repo = repositorioContactos()
+    repo.contactos.push({
+      id: 99, restauranteId: 7, enlaceId: 31, clienteId: 11, canal: 'wa_me', estado: 'abierto',
+      createdAt: new Date('2026-08-28T14:00:00.000Z'), idempotenciaClave: 'previo-001',
+    })
+    const { app } = appContactos(repo)
+    const response = await app.request('/marketing/enlaces/31/copiar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(contactoPayload({ idempotenciaClave: 'copiar-sin-cooldown' })),
+    })
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body.success).toBe(true)
+  })
 })
 
 function dependenciasEnvio(overrides: Partial<DependenciasEnvioWhatsappMarketing> = {}) {

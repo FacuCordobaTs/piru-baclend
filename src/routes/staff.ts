@@ -12,8 +12,15 @@ import {
   usuarioRestaurante as UsuarioRestauranteTable,
   verificacionStaff as VerificacionStaffTable,
 } from '../db/schema'
-import { authMiddleware } from '../middleware/auth'
-import { autenticarStaffConPin, asegurarOwnerStaff, crearSesionStaff, generarCodigoAccesoStaff, revocarSesionesStaff } from '../lib/staff'
+import {
+  autenticarStaffConPin,
+  asegurarOwnerStaff,
+  crearSesionStaff,
+  formatearParaWhatsApp,
+  generarCodigoAccesoStaff,
+  revocarSesionesStaff,
+  telefonosCoinciden,
+} from '../lib/staff'
 import { sendVerificationCodeWhatsApp } from '../services/whatsapp'
 
 const pinSchema = z.string().regex(/^\d{4,8}$/, 'El PIN debe tener entre 4 y 8 dígitos')
@@ -71,34 +78,90 @@ const staffLoginRoute = new Hono().post('/login', zValidator('json', loginSchema
   } })
 })
 
-// Login simple de la PWA: el numero identifica al mozo dentro del restaurante
-// y la posesion del WhatsApp verificado del local reemplaza codigo largo + PIN.
+// Login simple de la PWA: el número identifica al mozo dentro del restaurante
+// y la posesión del WhatsApp del local permite recibir el código OTP de inicio de turno.
 staffLoginRoute.post('/login-otp/start', zValidator('json', loginOtpStartSchema), async (c) => {
   const db = drizzle(pool)
   const body = c.req.valid('json')
-  const telefono = normalizarTelefono(body.telefono)
-  if (telefono.length < 8) return c.json({ success: false, message: 'El número de WhatsApp no es válido' }, 400)
+  const telefonoLimpio = body.telefono.replace(/\D/g, '')
+  if (telefonoLimpio.length < 8) return c.json({ success: false, message: 'El número de WhatsApp no es válido' }, 400)
 
   try {
-    const [identidad] = await db.select({ usuarioId: UsuarioRestauranteTable.id })
+    // 1. Buscamos usuarios de staff activos con ese numeroMozo en todos los restaurantes
+    const candidatos = await db.select({
+      usuarioId: UsuarioRestauranteTable.id,
+      nombreMozo: UsuarioRestauranteTable.nombre,
+      restauranteId: RestauranteTable.id,
+      restauranteNombre: RestauranteTable.nombre,
+      restauranteTelefono: RestauranteTable.telefono,
+      restauranteWhatsapp: RestauranteTable.whatsappNumber,
+      comprobantesWhatsapp: RestauranteTable.comprobantesWhatsapp,
+      sucursalId: UsuarioRestauranteTable.sucursalId,
+      sucursalWhatsapp: SucursalTable.whatsappNumber,
+    })
       .from(UsuarioRestauranteTable)
       .innerJoin(RestauranteTable, eq(RestauranteTable.id, UsuarioRestauranteTable.restauranteId))
+      .leftJoin(SucursalTable, eq(SucursalTable.id, UsuarioRestauranteTable.sucursalId))
       .where(and(
-        eq(RestauranteTable.telefono, telefono),
-        eq(RestauranteTable.telefonoVerificado, true),
         eq(UsuarioRestauranteTable.numeroMozo, body.numeroMozo),
         eq(UsuarioRestauranteTable.activo, true),
       ))
-      .limit(1)
 
-    // Mensaje deliberadamente indistinguible para no enumerar mozos/locales.
-    if (!identidad) return c.json({ success: false, message: 'No encontramos ese mozo en el local' }, 404)
+    // 2. Evaluamos coincidencia de teléfono con cualquiera de los campos configurados en el local
+    let identidad: { usuarioId: number; restauranteId: number; telefonoDestino: string } | null = null
 
+    for (const cand of candidatos) {
+      const telefonosDirectos = [
+        cand.restauranteTelefono,
+        cand.restauranteWhatsapp,
+        cand.comprobantesWhatsapp,
+        cand.sucursalWhatsapp,
+      ]
+
+      const telMatch = telefonosDirectos.find((tel) => telefonosCoinciden(body.telefono, tel))
+      if (telMatch) {
+        identidad = {
+          usuarioId: cand.usuarioId,
+          restauranteId: cand.restauranteId,
+          telefonoDestino: formatearParaWhatsApp(telMatch || body.telefono),
+        }
+        break
+      }
+
+      // Si el mozo no tiene sucursal asignada o el número ingresado corresponde a otra sucursal del mismo local:
+      const otrasSucursales = await db.select({ whatsappNumber: SucursalTable.whatsappNumber })
+        .from(SucursalTable)
+        .where(eq(SucursalTable.restauranteId, cand.restauranteId))
+
+      const sucursalMatch = otrasSucursales.find((s) => telefonosCoinciden(body.telefono, s.whatsappNumber))
+      if (sucursalMatch?.whatsappNumber) {
+        identidad = {
+          usuarioId: cand.usuarioId,
+          restauranteId: cand.restauranteId,
+          telefonoDestino: formatearParaWhatsApp(sucursalMatch.whatsappNumber || body.telefono),
+        }
+        break
+      }
+    }
+
+    if (!identidad) {
+      console.warn(
+        `⚠️ [Staff Login OTP] Mozo #${body.numeroMozo} no encontrado para teléfono "${body.telefono}". Candidatos evaluados: ${candidatos.length}`,
+      )
+      return c.json({ success: false, message: 'No encontramos ese mozo en el local' }, 404)
+    }
+
+    const telefonoDestino = identidad.telefonoDestino
+    console.log(
+      `📲 [Staff Login OTP] Enviando código mozo #${body.numeroMozo} (usuario ${identidad.usuarioId}) en restaurante ${identidad.restauranteId} a ${telefonoDestino}`,
+    )
+
+    // Anti-spam: cooldown por usuario de staff
     const desde = new Date(Date.now() - OTP_REENVIO_COOLDOWN_MS)
     const [reciente] = await db.select({ id: VerificacionStaffTable.id })
       .from(VerificacionStaffTable)
       .where(and(
-        eq(VerificacionStaffTable.telefono, telefono),
+        eq(VerificacionStaffTable.usuarioRestauranteId, identidad.usuarioId),
         eq(VerificacionStaffTable.verificado, false),
         gt(VerificacionStaffTable.createdAt, desde),
       ))
@@ -110,13 +173,15 @@ staffLoginRoute.post('/login-otp/start', zValidator('json', loginOtpStartSchema)
     await db.insert(VerificacionStaffTable).values({
       id: verificationId,
       usuarioRestauranteId: identidad.usuarioId,
-      telefono,
+      telefono: telefonoDestino,
       codigoHash: await bcrypt.hash(codigo, 10),
       expiraEn: new Date(Date.now() + OTP_EXPIRACION_MS),
     })
-    const envio = await sendVerificationCodeWhatsApp(c, { phone: telefono, code: codigo })
+
+    const envio = await sendVerificationCodeWhatsApp(c, { phone: telefonoDestino, code: codigo })
     if (!envio.success) {
       await db.delete(VerificacionStaffTable).where(eq(VerificacionStaffTable.id, verificationId))
+      console.error(`❌ [Staff Login OTP] Error enviando WhatsApp a ${telefonoDestino}:`, envio.error)
       return c.json({ success: false, message: 'No pudimos enviar el código por WhatsApp. Intentá de nuevo.' }, 502)
     }
     return c.json({ success: true, data: { verificationId, expiraEnSegundos: OTP_EXPIRACION_MS / 1000 } })

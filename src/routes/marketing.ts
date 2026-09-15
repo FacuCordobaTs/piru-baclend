@@ -957,11 +957,11 @@ export function crearMarketingGrowthPublicRoute(db = drizzle(pool)): Hono {
         campanaId: campanaRecord?.id ?? null,
         cliente: {
           id: cliente.id,
-          nombre: cliente.nombre,
-          telefono: cliente.telefono,
+          nombre: cliente.nombre || '',
+          telefono: cliente.telefono || '',
           direccionHabitual: ultimoPedido ? {
             tipoPedido: ultimoPedido.tipo,
-            direccion: ultimoPedido.direccion,
+            direccion: ultimoPedido.direccion || '',
             lat,
             lng,
             metodoPago: ultimoPedido.metodoPago,
@@ -1681,18 +1681,20 @@ export function crearMarketingContactosRoute(
     }
 
     const instante = ahora()
-    const desde = new Date(instante.getTime() - VENTANA_TOPE_DIAS * 24 * 60 * 60 * 1000)
-    const proteccion = chequearProteccionMarketing({
-      optOut: enlace.marketingOptOut,
-      toques: await repositorio.cargarToques(restauranteId, enlace.clienteId, desde),
-      ahora: instante.getTime(),
-    })
-    if (!proteccion.permitido) return c.json({ success: false, code: proteccion.motivo, message: proteccion.mensaje }, 409)
+    if (canal !== 'copiado') {
+      const desde = new Date(instante.getTime() - VENTANA_TOPE_DIAS * 24 * 60 * 60 * 1000)
+      const proteccion = chequearProteccionMarketing({
+        optOut: enlace.marketingOptOut,
+        toques: await repositorio.cargarToques(restauranteId, enlace.clienteId, desde),
+        ahora: instante.getTime(),
+      })
+      if (!proteccion.permitido) return c.json({ success: false, code: proteccion.motivo, message: proteccion.mensaje }, 409)
 
-    const toques = await repositorio.cargarToques(restauranteId, enlace.clienteId, new Date(0))
-    const ultimoToque = toques.reduce<Date | null>((ultimo, toque) => !ultimo || toque.createdAt > ultimo ? toque.createdAt : ultimo, null)
-    if (ultimoToque && instante.getTime() - ultimoToque.getTime() < COOLDOWN_HORAS * 60 * 60 * 1000) {
-      return c.json({ success: false, code: 'cooldown', message: `Esperá ${COOLDOWN_HORAS} hs antes de volver a contactar a este cliente` }, 409)
+      const toques = await repositorio.cargarToques(restauranteId, enlace.clienteId, new Date(0))
+      const ultimoToque = toques.reduce<Date | null>((ultimo, toque) => !ultimo || toque.createdAt > ultimo ? toque.createdAt : ultimo, null)
+      if (ultimoToque && instante.getTime() - ultimoToque.getTime() < COOLDOWN_HORAS * 60 * 60 * 1000) {
+        return c.json({ success: false, code: 'cooldown', message: `Esperá ${COOLDOWN_HORAS} hs antes de volver a contactar a este cliente` }, 409)
+      }
     }
 
     const telefono = canal === 'wa_me' ? telefonoWaMe(enlace.telefono) : null
@@ -1756,7 +1758,7 @@ function crearRepositorioContactosDrizzle(): RepositorioContactosMarketing {
     async cargarToques(restauranteId, clienteId, desde) {
       const [recuperos, contactos] = await Promise.all([
         db.select({ createdAt: RecuperoClienteTable.createdAt }).from(RecuperoClienteTable).where(and(eq(RecuperoClienteTable.restauranteId, restauranteId), eq(RecuperoClienteTable.clienteId, clienteId), gte(RecuperoClienteTable.createdAt, desde))),
-        db.select({ createdAt: MarketingContactoTable.createdAt }).from(MarketingContactoTable).where(and(eq(MarketingContactoTable.restauranteId, restauranteId), eq(MarketingContactoTable.clienteId, clienteId), gte(MarketingContactoTable.createdAt, desde), inArray(MarketingContactoTable.estado, ['preparado', 'abierto', 'reservado', 'enviado']))),
+        db.select({ createdAt: MarketingContactoTable.createdAt }).from(MarketingContactoTable).where(and(eq(MarketingContactoTable.restauranteId, restauranteId), eq(MarketingContactoTable.clienteId, clienteId), gte(MarketingContactoTable.createdAt, desde), inArray(MarketingContactoTable.estado, ['abierto', 'reservado', 'enviado']))),
       ])
       return [...recuperos, ...contactos].map((toque) => ({ createdAt: new Date(toque.createdAt) }))
     },

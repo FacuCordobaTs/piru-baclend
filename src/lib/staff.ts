@@ -112,3 +112,89 @@ export async function revocarSesionesStaff(db: any, usuarioId: number) {
   await db.update(SesionStaffTable).set({ revocadaAt: new Date() })
     .where(and(eq(SesionStaffTable.usuarioRestauranteId, usuarioId), isNull(SesionStaffTable.revocadaAt)))
 }
+
+/**
+ * Extrae el número nacional argentino de 10 dígitos (código de área + número local)
+ * tolerando prefijos internacionales (+54, 549, 54), interurbanos (0) y móviles (9, 15).
+ */
+export function extraerTelefonoArgentino10(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  let d = raw.replace(/\D/g, '')
+  if (!d) return null
+
+  // 1) Si empieza con 549 (WhatsApp internacional Argentina, ej: 5493415123456)
+  if (d.startsWith('549')) {
+    const resto = d.slice(3)
+    if (resto.length === 10) return resto
+    d = resto
+  } else if (d.startsWith('540')) {
+    d = d.slice(3)
+  } else if (d.startsWith('54')) {
+    const resto = d.slice(2)
+    if (resto.length === 10) return resto
+    d = resto
+  }
+
+  // 2) Quitar 0 inicial si existe
+  if (d.startsWith('0')) {
+    d = d.slice(1)
+  }
+
+  // 3) Si tiene 10 dígitos exactos, es el número nacional
+  if (d.length === 10) {
+    return d
+  }
+
+  // 4) Si tiene 11 dígitos y empieza con 9 (ej: 9 351 123 4567)
+  if (d.length === 11 && d.startsWith('9')) {
+    return d.slice(1)
+  }
+
+  // 5) Formato con "15" móvil (12 dígitos tras quitar 0):
+  // Área de 2 dígitos (11), 3 dígitos (341, 351, etc.) o 4 dígitos (3476, etc.)
+  if (d.length === 12) {
+    if (d.slice(2, 4) === '15') return d.slice(0, 2) + d.slice(4)
+    if (d.slice(3, 5) === '15') return d.slice(0, 3) + d.slice(5)
+    if (d.slice(4, 6) === '15') return d.slice(0, 4) + d.slice(6)
+  }
+
+  return null
+}
+
+/**
+ * Formatea un número al estándar internacional para WhatsApp (549 + 10 dígitos para Argentina).
+ */
+export function formatearParaWhatsApp(raw: string): string {
+  const n10 = extraerTelefonoArgentino10(raw)
+  if (n10) return `549${n10}`
+  const d = raw.replace(/\D/g, '')
+  if (d.startsWith('54') && !d.startsWith('549') && d.length === 12) {
+    return `549${d.slice(2)}`
+  }
+  return d
+}
+
+/**
+ * Determina si dos representaciones de teléfono corresponden al mismo número,
+ * tolerando diferencias de código de país, prefijo móvil, prefijo 0, espacios o símbolos.
+ */
+export function telefonosCoinciden(telA: string | null | undefined, telB: string | null | undefined): boolean {
+  if (!telA || !telB) return false
+  const cleanA = telA.replace(/\D/g, '')
+  const cleanB = telB.replace(/\D/g, '')
+  if (!cleanA || !cleanB) return false
+
+  if (cleanA === cleanB) return true
+
+  const n10A = extraerTelefonoArgentino10(telA)
+  const n10B = extraerTelefonoArgentino10(telB)
+  if (n10A && n10B && n10A === n10B) return true
+
+  // Fallback: si uno termina con el otro (mínimo 8 dígitos)
+  if (cleanA.length >= 8 && cleanB.length >= 8) {
+    if (cleanA.endsWith(cleanB) || cleanB.endsWith(cleanA)) return true
+  }
+
+  return false
+}
+
