@@ -12,6 +12,7 @@ import {
   usuarioRestaurante as UsuarioRestauranteTable,
   verificacionStaff as VerificacionStaffTable,
 } from '../db/schema'
+import { authMiddleware } from '../middleware/auth'
 import {
   autenticarStaffConPin,
   asegurarOwnerStaff,
