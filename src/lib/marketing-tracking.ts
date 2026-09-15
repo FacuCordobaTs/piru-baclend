@@ -1,4 +1,4 @@
-import { and, eq, lte } from 'drizzle-orm'
+import { and, eq, lte, sql } from 'drizzle-orm'
 import type { MySql2Database } from 'drizzle-orm/mysql2'
 import {
   marketingEvento as MarketingEventoTable,
@@ -422,7 +422,9 @@ export function crearRepositorioMarketingTracking(db: Db): RepositorioMarketingT
   return {
     buscarSesion,
     async crearOEncontrarSesion(sesion) {
-      await db.insert(MarketingSesionTable).values(sesion).ignore()
+      await db.insert(MarketingSesionTable).values(sesion).onDuplicateKeyUpdate({
+        set: { id: sql`${MarketingSesionTable.id}` },
+      })
       const persistida = await buscarSesion(sesion.restauranteId, sesion.sesionUuid)
       if (!persistida) throw new Error('no se pudo crear la sesión de marketing')
       return persistida
@@ -448,11 +450,13 @@ export function crearRepositorioMarketingTracking(db: Db): RepositorioMarketingT
         valor: evento.valor,
         metadata: evento.metadata,
         ocurridoAt: evento.ocurridoAt,
-      }).ignore()
+      }).onDuplicateKeyUpdate({
+        set: { id: sql`${MarketingEventoTable.id}` },
+      })
       const insertado = Number((result as any)[0]?.affectedRows ?? 0) === 1
       if (insertado) return true
-      // INSERT IGNORE también puede omitir errores que no sean la clave de
-      // idempotencia. Sólo se considera duplicado si la fila realmente existe.
+      // El upsert es un no-op sólo ante la clave idempotente. La lectura posterior
+      // confirma que el caso no insertado fue realmente un duplicado válido.
       const [existente] = await db.select({ id: MarketingEventoTable.id }).from(MarketingEventoTable).where(and(
         eq(MarketingEventoTable.restauranteId, restauranteId),
         eq(MarketingEventoTable.eventoUuid, evento.eventoUuid),

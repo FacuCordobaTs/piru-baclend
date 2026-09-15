@@ -42,7 +42,7 @@ describe('atribuirPedidoMarketing', () => {
     await expect(atribuirPedidoMarketingSinPropagar(repositorio, base, () => {})).resolves.toBeNull()
   })
 
-  test('el repositorio de producción inserta con ignore y el token nunca queda plano', () => {
+  test('la clave idempotente es opaca y el token nunca queda plano', () => {
     expect(hashTokenMarketing('token-opaco')).toHaveLength(64)
     expect(hashTokenMarketing('token-opaco')).not.toContain('token-opaco')
   })

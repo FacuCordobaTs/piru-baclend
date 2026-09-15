@@ -1003,6 +1003,8 @@ export const campanaRecompra = mysqlTable("campana_recompra", {
   // local (una a la vez). Las filas viejas (estado null) son los encendidos batch legacy.
   // 'activa' | 'pausada_sin_saldo' | 'pausada_manual' | 'completada'
   estado: varchar("estado", { length: 20 }),
+  // 'automatico' | 'manual' — en manual el admin copia y envía él mismo; en automático drena con Meta API.
+  modo: varchar("modo", { length: 20 }).default("automatico").notNull(),
   // Cupo diario de envíos (warm-up del número + cocina sin picos). Configurable por local, con tope duro de sistema.
   cupoDiario: int("cupo_diario").default(30).notNull(),
   // Contador del día en curso (día de Argentina "YYYY-MM-DD") y cuántos se enviaron ese día.
@@ -1057,6 +1059,8 @@ export const colaRecompra = mysqlTable("cola_recompra", {
   rol: varchar("rol", { length: 20 }).default("contactado").notNull(),
   // Cuándo debería salir: flujo → hoy; stock → lo antes posible ajustado a su mejor día/franja.
   dueDate: timestamp("due_date"),
+  // Indicador de cuándo enviar: ej. "Viernes 21:00 hs (habitual)" o "Martes 20:00 hs (día valle)".
+  horarioSugerido: varchar("horario_sugerido", { length: 100 }),
   // 'pendiente' | 'enviado' | 'salido' | 'fallido' | 'control'
   estado: varchar("estado", { length: 20 }).default("pendiente").notNull(),
   // Escalón de la escalera que se le mandó (se resuelve al enviar).

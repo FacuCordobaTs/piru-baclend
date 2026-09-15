@@ -43,6 +43,7 @@ import {
   TOPE_MARKETING_POR_CLIENTE,
   type MotivoBloqueoMarketing,
 } from './proteccion-base'
+import { normalizarTelefonoCliente } from './clientes-identidad'
 
 type Db = MySql2Database<Record<string, never>>
 
@@ -280,20 +281,37 @@ export interface OpcionesEnvioRecupero {
 
 export const PLANTILLA_RECUPERO_WHATSAPP = 'recupero_dormido_v1'
 
+export interface DatosMensajeRecupero {
+  clienteId: number
+  clienteNombre: string
+  telefono: string | null
+  telefonoNormalizado: string | null
+  restauranteNombre: string
+  tiempoSinPedir: string
+  productoFavorito: string
+  incentivo: string
+  descuento: number
+  codigoDescuento: string | null
+  nivel: number
+  urlTienda: string
+  texto: string
+  waMeUrl: string | null
+  imagenProducto: string | null
+  usernameSuffix: string
+  escalon: EscalonRecupero
+  estado: EstadoRecupero
+  horarioSugerido?: string | null
+}
+
 /**
- * Orquesta el envío de un toque de recupero al cliente: resuelve el escalón, arma el antojo
- * (producto top + foto), genera el cupón si corresponde, manda el WhatsApp de marketing con la
- * marca del local, registra el toque y descuenta el bucket marketing (best-effort).
- *
- * El gating del módulo Motor de Recompra lo aplica la ruta o el scheduler, no esta función.
+ * Prepara los datos del mensaje de recupero (copy, cupón, producto favorito, deep link y wa.me).
+ * No realiza envíos ni consume saldo. Se usa tanto en modo manual como antes de enviar automático.
  */
-export async function enviarRecuperoDormido(
-  c: any,
+export async function prepararMensajeRecupero(
   db: Db,
   restauranteId: number,
   clienteId: number,
-  opciones: OpcionesEnvioRecupero = {},
-): Promise<ResultadoEnvioRecupero> {
+): Promise<{ ok: true; data: DatosMensajeRecupero } | { ok: false; motivo: string; mensaje: string; estado?: EstadoRecupero }> {
   // 1. Cliente + local
   const [cli] = await db
     .select()
@@ -308,8 +326,6 @@ export async function enviarRecuperoDormido(
       nombre: RestauranteTable.nombre,
       username: RestauranteTable.username,
       imagenUrl: RestauranteTable.imagenUrl,
-      whatsappPhoneId: RestauranteTable.whatsappPhoneId,
-      whatsappAccessToken: RestauranteTable.whatsappAccessToken,
     })
     .from(RestauranteTable)
     .where(eq(RestauranteTable.id, restauranteId))
@@ -318,13 +334,6 @@ export async function enviarRecuperoDormido(
   if (!rest) {
     return { ok: false, motivo: 'cliente_no_encontrado', mensaje: 'Local no encontrado' }
   }
-
-  // Marca del local vs número de Piru: lo ideal es enviar con las credenciales de Meta del propio
-  // local (OAuth) para que el mensaje salga con su marca. Mientras el OAuth de Meta NO esté
-  // disponible (se implementa más adelante), permitimos enviar igual usando el número del bot de
-  // Piru (fallback en `sendClientRecuperoWhatsApp`: si `creds` es undefined usa WHATSAPP_PHONE_ID/
-  // WHATSAPP_API_TOKEN). Cuando el local ya tenga OAuth, se usan sus credenciales.
-  const credsLocal = resolverCredsRestaurante(rest)
 
   // 2. Pedidos del cliente (no cancelados) → último pedido + producto favorito.
   const pedidos = await db
@@ -336,7 +345,7 @@ export async function enviarRecuperoDormido(
         eq(PedidoUnificadoTable.clienteId, clienteId),
       ),
     )
-  const pedidosValidos = pedidos // (los cancelados igual no molestan para recencia; contamos por fecha)
+  const pedidosValidos = pedidos
   const fechasMs = pedidosValidos.map((p) => new Date(p.createdAt).getTime())
   const ultimoPedidoMs = fechasMs.length > 0 ? Math.max(...fechasMs) : null
   const diasDesdeUltimo = ultimoPedidoMs != null
@@ -368,9 +377,7 @@ export async function enviarRecuperoDormido(
     }
   }
 
-  // Deep link con carrito precargado (4.3): reconstruimos el ÚLTIMO pedido del cliente para que el
-  // botón del mensaje abra la tienda con ese carrito ya armado ("repetí tu pedido"). Fallback: el
-  // producto favorito solo. El sufijo se cuelga del username en el botón URL de la plantilla.
+  // Deep link con carrito precargado (4.3): reconstruimos el ÚLTIMO pedido del cliente
   let repParam = ''
   if (ultimoPedidoMs != null && pedidoIds.length > 0) {
     const ultimoPedidoId = pedidosValidos
@@ -390,7 +397,6 @@ export async function enviarRecuperoDormido(
   }
   if (!repParam && topProductoId) repParam = `${topProductoId}x1`
 
-  // Sufijo dinámico del botón URL: username (+ carrito precargado si lo pudimos reconstruir).
   const usernameSuffix = rest.username
     ? (repParam ? `${rest.username}?rep=${repParam}` : rest.username)
     : ''
@@ -398,35 +404,112 @@ export async function enviarRecuperoDormido(
   // 3. Estado de la escalera → escalón a enviar.
   const toquesMap = await cargarToquesPorCliente(db, restauranteId, [clienteId])
   const estado = estadoRecupero(toquesMap[clienteId] ?? [], ultimoPedidoMs)
+  const escalon = ESCALERA[estado.proximoNivel - 1]
 
-  // 3.a Protección de la base (4.5): opt-out respetado + tope por cliente/mes + horario de silencio.
-  //     Es un cimiento no negociable: el motor no debe poder quemar la base ni la reputación del número.
+  // 4. Cupón si corresponde (upsert determinístico)
+  let codigo: string | null = null
+  if (escalon.descuento > 0) {
+    codigo = await upsertCuponRecupero(db, restauranteId, clienteId, escalon)
+  }
+
+  const tiempoSinPedir = tiempoSinPedirTexto(diasDesdeUltimo)
+  const incentivo = incentivoTexto(escalon, codigo)
+  const urlTienda = rest.username ? `https://my.piru.app/${usernameSuffix}` : 'https://my.piru.app'
+  const nombreCliente = cli.nombre?.trim() || 'Cliente'
+  const nombreLocal = rest.nombre?.trim() || 'El local'
+
+  const texto = `¡Hola ${nombreCliente}! 👋\n\nEn ${nombreLocal} hace ${tiempoSinPedir} que no te vemos y se nos antojó tentarte con ${productoFavorito}. 😋\n\n${incentivo}\n\nPedí en segundos desde acá 👇\n${urlTienda}`
+
+  const norm = normalizarTelefonoCliente(cli.telefono)
+  const telWa = norm ? (norm.startsWith('54') ? norm : norm.length === 10 ? `549${norm}` : norm) : null
+  const waMeUrl = telWa ? `https://wa.me/${telWa}?text=${encodeURIComponent(texto)}` : null
+
+  return {
+    ok: true,
+    data: {
+      clienteId,
+      clienteNombre: nombreCliente,
+      telefono: cli.telefono,
+      telefonoNormalizado: telWa,
+      restauranteNombre: nombreLocal,
+      tiempoSinPedir,
+      productoFavorito,
+      incentivo,
+      descuento: escalon.descuento,
+      codigoDescuento: codigo,
+      nivel: escalon.nivel,
+      urlTienda,
+      texto,
+      waMeUrl,
+      imagenProducto: imagenProducto || rest.imagenUrl || null,
+      usernameSuffix,
+      escalon,
+      estado,
+    },
+  }
+}
+
+/**
+ * Orquesta el envío de un toque de recupero al cliente por Meta API: resuelve el escalón,
+ * arma el antojo, genera el cupón si corresponde, manda el WhatsApp de marketing con la
+ * marca del local, registra el toque y descuenta el bucket marketing (best-effort).
+ */
+export async function enviarRecuperoDormido(
+  c: any,
+  db: Db,
+  restauranteId: number,
+  clienteId: number,
+  opciones: OpcionesEnvioRecupero = {},
+): Promise<ResultadoEnvioRecupero> {
+  const prep = await prepararMensajeRecupero(db, restauranteId, clienteId)
+  if (!prep.ok) {
+    return { ok: false, motivo: prep.motivo as any, mensaje: prep.mensaje, estado: prep.estado }
+  }
+  const { data } = prep
+
+  // 1. Local y credenciales de Meta
+  const [rest] = await db
+    .select({
+      whatsappPhoneId: RestauranteTable.whatsappPhoneId,
+      whatsappAccessToken: RestauranteTable.whatsappAccessToken,
+    })
+    .from(RestauranteTable)
+    .where(eq(RestauranteTable.id, restauranteId))
+    .limit(1)
+  const credsLocal = rest ? resolverCredsRestaurante(rest) : undefined
+
+  // 2. Protección de la base (opt-out + cooldown + tope)
+  const [cli] = await db
+    .select({ marketingOptOut: ClienteTable.marketingOptOut })
+    .from(ClienteTable)
+    .where(and(eq(ClienteTable.id, clienteId), eq(ClienteTable.restauranteId, restauranteId)))
+    .limit(1)
+
+  const toquesMap = await cargarToquesPorCliente(db, restauranteId, [clienteId])
   const proteccion = chequearProteccionMarketing({
-    optOut: !!cli.marketingOptOut,
+    optOut: !!cli?.marketingOptOut,
     toques: toquesMap[clienteId] ?? [],
   })
   if (!proteccion.permitido) {
-    return { ok: false, motivo: proteccion.motivo, mensaje: proteccion.mensaje, estado }
+    return { ok: false, motivo: proteccion.motivo, mensaje: proteccion.mensaje, estado: data.estado }
   }
 
-  if (!estado.puedeEnviar) {
+  if (!data.estado.puedeEnviar) {
     return {
       ok: false,
       motivo: 'cooldown',
       mensaje: `Ya le enviaste un mensaje hace poco. Esperá ${COOLDOWN_HORAS} hs antes de insistir.`,
-      estado,
+      estado: data.estado,
     }
   }
-  const escalon = ESCALERA[estado.proximoNivel - 1]
 
-  // 4. Reservar antes de crear beneficios o llamar al proveedor. Una operación ya confirmada se responde de
-  // forma idempotente; una compensada representa un intento fallido ya cerrado.
+  // 3. Reservar antes de enviar
   const operacionId = opciones.operacionId ?? `recupero:${restauranteId}:${clienteId}:${crypto.randomUUID()}`
   const reserva = await reservarCreditoMarketing(
     db,
     restauranteId,
     operacionId,
-    `reserva_recupero_nivel_${escalon.nivel}`,
+    `reserva_recupero_nivel_${data.escalon.nivel}`,
   )
   if (reserva.estado === 'sin_saldo') {
     return {
@@ -435,7 +518,7 @@ export async function enviarRecuperoDormido(
       mensaje: 'No hay saldo de mensajes de marketing disponible',
       saldoMarketing: reserva.saldoMarketingDisponible,
       plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
-      estado,
+      estado: data.estado,
     }
   }
   if (reserva.estado === 'confirmada') {
@@ -448,11 +531,11 @@ export async function enviarRecuperoDormido(
     )).orderBy(desc(RecuperoClienteTable.createdAt)).limit(1)
     return {
       ok: true,
-      nivel: toqueConfirmado?.nivel ?? estado.ultimoNivel ?? escalon.nivel,
+      nivel: toqueConfirmado?.nivel ?? data.estado.ultimoNivel ?? data.escalon.nivel,
       codigoDescuento: toqueConfirmado?.codigoDescuento ?? null,
       saldoMarketing: reserva.saldoMarketingDisponible,
       plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
-      estado,
+      estado: data.estado,
     }
   }
   if (reserva.estado === 'compensada') {
@@ -462,35 +545,24 @@ export async function enviarRecuperoDormido(
       mensaje: 'Este intento ya había fallado y su crédito fue devuelto',
       saldoMarketing: reserva.saldoMarketingDisponible,
       plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
-      estado,
+      estado: data.estado,
     }
   }
 
-  // 5. Cupón (nivel 2/3). Si falla su persistencia se devuelve la reserva.
-  let codigo: string | null = null
-  try {
-    codigo = escalon.descuento > 0
-      ? await upsertCuponRecupero(db, restauranteId, clienteId, escalon)
-      : null
-  } catch (error) {
-    await compensarReservaCreditoMarketing(db, restauranteId, operacionId)
-    throw error
-  }
-
-  // 6. Envío del WhatsApp de marketing con la marca del local.
+  // 4. Envío de WhatsApp Meta
   const send = await sendClientRecuperoWhatsApp(
     c,
     {
-      phone: cli.telefono,
-      customerName: cli.nombre || 'Cliente',
-      restaurantName: rest.nombre || 'El local',
-      tiempoSinPedir: tiempoSinPedirTexto(diasDesdeUltimo),
-      productoFavorito,
-      incentivo: incentivoTexto(escalon, codigo),
-      usernameTienda: usernameSuffix,
-      imageUrl: imagenProducto || rest.imagenUrl || null,
+      phone: data.telefono!,
+      customerName: data.clienteNombre,
+      restaurantName: data.restauranteNombre,
+      tiempoSinPedir: data.tiempoSinPedir,
+      productoFavorito: data.productoFavorito,
+      incentivo: data.incentivo,
+      usernameTienda: data.usernameSuffix,
+      imageUrl: data.imagenProducto,
     },
-    credsLocal, // undefined ⇒ fallback al número del bot de Piru (mientras no haya OAuth de Meta)
+    credsLocal,
   )
 
   if (!send.success) {
@@ -502,33 +574,32 @@ export async function enviarRecuperoDormido(
       saldoMarketing: compensacion.saldoMarketingDisponible,
       plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
       errorEnvio: typeof send.error === 'string' ? send.error : JSON.stringify(send.error ?? null).slice(0, 500),
-      estado,
+      estado: data.estado,
     }
   }
 
   const confirmacion = await confirmarReservaCreditoMarketing(db, restauranteId, operacionId)
 
-  // 7. Registrar el toque.
+  // 5. Registrar toque en historial
   await db.insert(RecuperoClienteTable).values({
     restauranteId,
     clienteId,
-    telefono: cli.telefono,
-    nivel: escalon.nivel,
-    descuentoPorcentaje: escalon.descuento,
-    codigoDescuento: codigo,
+    telefono: data.telefono,
+    nivel: data.escalon.nivel,
+    descuentoPorcentaje: data.escalon.descuento,
+    codigoDescuento: data.codigoDescuento,
     segmento: null,
   })
 
-  // Estado actualizado (suma el toque recién enviado).
   const nuevoEstado = estadoRecupero(
-    [...(toquesMap[clienteId] ?? []), { nivel: escalon.nivel, createdAt: new Date() }],
-    ultimoPedidoMs,
+    [...(toquesMap[clienteId] ?? []), { nivel: data.escalon.nivel, createdAt: new Date() }],
+    null,
   )
 
   return {
     ok: true,
-    nivel: escalon.nivel,
-    codigoDescuento: codigo,
+    nivel: data.escalon.nivel,
+    codigoDescuento: data.codigoDescuento,
     saldoMarketing: confirmacion.saldoMarketingDisponible,
     plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
     estado: nuevoEstado,
@@ -544,8 +615,10 @@ export async function enviarRecuperoDormido(
 // El control se guarda para poder medir la atribución honesta después (contactados vs control).
 // ═════════════════════════════════════════════════════════════════════════════
 
+export type SegmentoRecompra = 'primer_pedido' | 'en_riesgo' | 'dormido' | 'perdido'
+
 /** Segmentos donde tiene sentido el recupero (el cliente se enfrió respecto de SU propio ritmo). */
-export const SEGMENTOS_RECUPERABLES: SegmentoCliente[] = ['en_riesgo', 'dormido', 'perdido']
+export const SEGMENTOS_RECUPERABLES: SegmentoRecompra[] = ['primer_pedido', 'en_riesgo', 'dormido', 'perdido']
 
 /** Fracción de cada segmento que se aparta al azar como grupo de control (no negociable, día 1). */
 export const PORCENTAJE_CONTROL = 0.1
@@ -554,17 +627,18 @@ export interface ClienteCohorte {
   clienteId: number
   nombre: string
   telefono: string
-  segmento: SegmentoCliente
+  segmento: SegmentoRecompra
   diasDesdeUltimo: number | null
   totalGastado: number
   ultimoPedidoMs: number | null
   cantidadPedidos: number
   proximoNivel: number
+  fechasPedidosMs: number[]
 }
 
 /**
  * Detecta la cohorte recuperable de un local: clientes en un segmento recuperable
- * (en_riesgo/dormido/perdido), con teléfono cargado y fuera del cooldown de recupero.
+ * (primer_pedido/en_riesgo/dormido/perdido), con teléfono cargado y fuera del cooldown de recupero.
  * Reusa el mismo cerebro RFM que la "Base de clientes" (misma verdad, calculada on-the-fly).
  */
 export async function cargarCohorteRecompra(
@@ -618,26 +692,40 @@ export async function cargarCohorteRecompra(
   const cohorte: ClienteCohorte[] = []
   clientes.forEach((cl, i) => {
     const perfil = perfiles[i]
-    if (!SEGMENTOS_RECUPERABLES.includes(perfil.segmento)) return
+    const g = porCliente[cl.id]
+    const ultimoPedidoMs = g.fechasMs.length > 0 ? Math.max(...g.fechasMs) : null
+
+    // Clasificación para recompra: clientes de 1 solo pedido con >= 7 días se incorporan como 'primer_pedido'
+    let segmentoRecompra: SegmentoRecompra | null = null
+    if (perfil.segmento === 'nuevo' || g.fechasMs.length === 1) {
+      if (perfil.diasDesdeUltimo != null && perfil.diasDesdeUltimo >= 7) {
+        segmentoRecompra = 'primer_pedido'
+      } else {
+        return // todavía muy reciente para volver a contactar
+      }
+    } else if (perfil.segmento === 'en_riesgo' || perfil.segmento === 'dormido' || perfil.segmento === 'perdido') {
+      segmentoRecompra = perfil.segmento
+    }
+
+    if (!segmentoRecompra || !SEGMENTOS_RECUPERABLES.includes(segmentoRecompra)) return
     if (!cl.telefono) return
     // Protección de la base (4.5): fuera de la cohorte los que pidieron la baja (opt-out) y los que
     // ya tocaron el tope de marketing del mes. Así el batch no los alcanza ni figuran en la preview.
     if (cl.marketingOptOut) return
     if (contarToquesEnVentana(toques[cl.id] ?? []) >= TOPE_MARKETING_POR_CLIENTE) return
-    const g = porCliente[cl.id]
-    const ultimoPedidoMs = g.fechasMs.length > 0 ? Math.max(...g.fechasMs) : null
     const estado = estadoRecupero(toques[cl.id] ?? [], ultimoPedidoMs)
     if (!estado.puedeEnviar) return
     cohorte.push({
       clienteId: cl.id,
       nombre: cl.nombre || 'Cliente',
       telefono: cl.telefono,
-      segmento: perfil.segmento,
+      segmento: segmentoRecompra,
       diasDesdeUltimo: perfil.diasDesdeUltimo,
       totalGastado: g.total,
       ultimoPedidoMs,
       cantidadPedidos: g.fechasMs.length,
       proximoNivel: estado.proximoNivel,
+      fechasPedidosMs: g.fechasMs,
     })
   })
   return cohorte

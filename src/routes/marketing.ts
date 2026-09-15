@@ -474,7 +474,9 @@ const marketingSmartLinksRoute = crearMarketingSmartLinksRoute({
           firstTouchRecetaCodigo: null, firstTouchAt: ahora,
           lastTouchTipo: 'campana', lastTouchCampanaId: contexto.campanaId,
           lastTouchRecetaCodigo: null, lastTouchAt: ahora, expiraAt,
-        }).ignore()
+        }).onDuplicateKeyUpdate({
+          set: { id: sql`${MarketingSesionTable.id}` },
+        })
         contarVisita = Number(insercion[0]?.affectedRows ?? 0) === 1
         ;[sesion] = await db.select().from(MarketingSesionTable).where(and(
           eq(MarketingSesionTable.restauranteId, contexto.restauranteId),

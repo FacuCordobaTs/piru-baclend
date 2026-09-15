@@ -28,6 +28,7 @@ import {
   pedidoUnificado as PedidoUnificadoTable,
   campanaRecompra as CampanaRecompraTable,
   colaRecompra as ColaRecompraTable,
+  recuperoCliente as RecuperoClienteTable,
 } from '../db/schema'
 import {
   cargarCohorteRecompra,
@@ -36,16 +37,19 @@ import {
   estadoRecupero,
   separarControl,
   enviarRecuperoDormido,
+  prepararMensajeRecupero,
   PLANTILLA_RECUPERO_WHATSAPP,
   SEGMENTOS_RECUPERABLES,
   PORCENTAJE_CONTROL,
   type ClienteCohorte,
+  type DatosMensajeRecupero,
 } from './recupero'
 import { enHorarioSilencio, horaArgentina, TOPE_MARKETING_POR_CLIENTE } from './proteccion-base'
 import { crearRecargaPendiente, resumenWallet } from './mensajes-wallet'
 import { MODULE_KEYS, tieneModuloActivo } from './modulos'
 import type { SegmentoCliente } from './clientes-rfm'
 import { calcularPrioridadStock } from './motor-recompra-prioridad'
+import { calcularPatronEnvio } from './motor-recompra-patron'
 import { sendSaldoBajoWhatsApp } from '../services/whatsapp'
 
 type Db = MySql2Database<Record<string, never>>
@@ -63,6 +67,7 @@ export const HORA_ENVIO_DEFAULT = 11
 export const RECORDATORIO_SIN_SALDO_DIAS = 7
 
 export type EstadoCampana = 'activa' | 'pausada_sin_saldo' | 'pausada_manual' | 'completada'
+export type ModoCampana = 'automatico' | 'manual'
 
 const MS_POR_DIA = 1000 * 60 * 60 * 24
 
@@ -114,6 +119,7 @@ export interface ResultadoActivar {
   yaActiva?: boolean
   vacio?: boolean
   campanaId?: number
+  modo: ModoCampana
   totalDetectados: number
   totalContactar: number
   totalControl: number
@@ -131,12 +137,16 @@ export async function activarMotor(
   db: Db,
   restauranteId: number,
   cupoDiario?: number,
+  modo: ModoCampana = 'automatico',
 ): Promise<ResultadoActivar> {
+  const modoFinal: ModoCampana = modo === 'manual' ? 'manual' : 'automatico'
+
   // El scheduler también valida el entitlement porque corre fuera del middleware HTTP.
   if (!await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MOTOR_RECOMPRA)) {
     return {
       ok: false,
       moduloNoDisponible: true,
+      modo: modoFinal,
       totalDetectados: 0,
       totalContactar: 0,
       totalControl: 0,
@@ -151,6 +161,7 @@ export async function activarMotor(
       ok: true,
       yaActiva: true,
       campanaId: actual.id,
+      modo: (actual.modo ?? 'automatico') as ModoCampana,
       totalDetectados: 0,
       totalContactar: 0,
       totalControl: 0,
@@ -162,7 +173,7 @@ export async function activarMotor(
 
   const cohorte = await cargarCohorteRecompra(db, restauranteId)
   if (cohorte.length === 0) {
-    return { ok: true, vacio: true, totalDetectados: 0, totalContactar: 0, totalControl: 0, cupoDiario: cupo }
+    return { ok: true, vacio: true, modo: modoFinal, totalDetectados: 0, totalContactar: 0, totalControl: 0, cupoDiario: cupo }
   }
 
   const { contactar, control } = separarControl(cohorte)
@@ -170,6 +181,7 @@ export async function activarMotor(
   const [ins] = await db.insert(CampanaRecompraTable).values({
     restauranteId,
     estado: 'activa',
+    modo: modoFinal,
     cupoDiario: cupo,
     diaContador: diaArgentina(),
     enviadosHoy: 0,
@@ -199,9 +211,10 @@ export async function activarMotor(
     })
   }
 
-  // Stock a contactar → cola 'pendiente', ordenado por prioridad. dueDate = ahora (drenar lo antes posible).
+  // Stock a contactar → cola 'pendiente', ordenado por prioridad. dueDate según patrón de consumo.
   for (const cl of contactar) {
     const ticket = cl.cantidadPedidos > 0 ? cl.totalGastado / cl.cantidadPedidos : cl.totalGastado
+    const patron = calcularPatronEnvio(cl.fechasPedidosMs ?? [], cl.segmento, Date.now(), cl.clienteId)
     await db.insert(ColaRecompraTable).values({
       restauranteId,
       campanaId,
@@ -211,18 +224,22 @@ export async function activarMotor(
       prioridad: calcularPrioridadStock(cl.segmento, ticket).toFixed(2),
       poblacion: 'stock',
       rol: 'contactado',
-      dueDate: new Date(),
+      dueDate: patron.dueDate,
+      horarioSugerido: patron.horarioSugerido,
       estado: 'pendiente',
       ...snapshot(cl),
     })
   }
 
-  // Primer goteo (si no es horario de silencio): que el dueño vea el motor arrancar.
-  const primerGoteo = await procesarColaDiaria(db, restauranteId)
+  // Primer goteo solo si es automático (si no es horario de silencio)
+  const primerGoteo = modoFinal === 'automatico'
+    ? await procesarColaDiaria(db, restauranteId)
+    : undefined
 
   return {
     ok: true,
     campanaId,
+    modo: modoFinal,
     totalDetectados: cohorte.length,
     totalContactar: contactar.length,
     totalControl: control.length,
@@ -246,7 +263,7 @@ function clampCupo(n: number): number {
 // ── Goteo diario (la EJECUCIÓN automática) ───────────────────────────────────
 export interface ResultadoGoteo {
   ok: boolean
-  motivo?: 'sin_campana' | 'pausada' | 'silencio' | 'cupo_agotado' | 'sin_saldo' | 'nada_que_enviar'
+  motivo?: 'sin_campana' | 'pausada' | 'silencio' | 'cupo_agotado' | 'sin_saldo' | 'nada_que_enviar' | 'modo_manual' | 'modulo_inactivo'
   flujoEnviados: number
   stockEnviados: number
   enviados: number
@@ -286,6 +303,40 @@ export async function procesarColaDiaria(
   if (!campana) return goteoVacio('sin_campana')
   if (!esProcesable(campana.estado)) return goteoVacio('pausada')
 
+  // En modo manual no se envían mensajes automáticos de WhatsApp ni se consume saldo.
+  // Solo se detecta y encola el flujo para que el admin lo vea y lo mande él mismo.
+  if (campana.modo === 'manual') {
+    if (campana.estado === 'activa' || campana.estado === 'completada') {
+      const nuevosFlujo = await detectarFlujo(db, restauranteId, campana.id)
+      for (const cl of nuevosFlujo) {
+        const ticket = cl.cantidadPedidos > 0 ? cl.totalGastado / cl.cantidadPedidos : cl.totalGastado
+        const patron = calcularPatronEnvio(cl.fechasPedidosMs ?? [], cl.segmento, ahora, cl.clienteId)
+        await db.insert(ColaRecompraTable).values({
+          restauranteId,
+          campanaId: campana.id,
+          clienteId: cl.clienteId,
+          telefono: cl.telefono,
+          segmento: cl.segmento,
+          prioridad: calcularPrioridadStock(cl.segmento, ticket).toFixed(2),
+          poblacion: 'flujo',
+          rol: 'contactado',
+          dueDate: patron.dueDate,
+          horarioSugerido: patron.horarioSugerido,
+          estado: 'pendiente',
+          ...snapshot(cl),
+        })
+      }
+    }
+    return {
+      ok: true,
+      motivo: 'modo_manual',
+      flujoEnviados: 0,
+      stockEnviados: 0,
+      enviados: 0,
+      fallidos: 0,
+    }
+  }
+
   // Protección de la base: nunca marketing de madrugada. El job reintenta en el próximo tick del día.
   if (enHorarioSilencio(ahora)) return goteoVacio('silencio')
 
@@ -319,6 +370,7 @@ export async function procesarColaDiaria(
     const nuevosFlujo = await detectarFlujo(db, restauranteId, campana.id)
     for (const cl of nuevosFlujo) {
       const ticket = cl.cantidadPedidos > 0 ? cl.totalGastado / cl.cantidadPedidos : cl.totalGastado
+      const patron = calcularPatronEnvio(cl.fechasPedidosMs ?? [], cl.segmento, ahora, cl.clienteId)
       await db.insert(ColaRecompraTable).values({
         restauranteId,
         campanaId: campana.id,
@@ -328,7 +380,8 @@ export async function procesarColaDiaria(
         prioridad: calcularPrioridadStock(cl.segmento, ticket).toFixed(2),
         poblacion: 'flujo',
         rol: 'contactado',
-        dueDate: new Date(ahora),
+        dueDate: patron.dueDate,
+        horarioSugerido: patron.horarioSugerido,
         estado: 'pendiente',
         ...snapshot(cl),
       })
@@ -488,7 +541,7 @@ async function enviarFila(
 }
 
 /**
- * Detecta la población de FLUJO: clientes recuperables (hoy en `en_riesgo`, la transición más fresca)
+ * Detecta la población de FLUJO: clientes recuperables (hoy en `en_riesgo` y `primer_pedido`, las transiciones más frescas)
  * que todavía NO están en la cola de esta campaña. Son los que "cruzan hoy" su umbral personal: su día
  * justo es hoy. Se reusa la cohorte del cerebro RFM (que ya excluye opt-out, tope y cooldown).
  */
@@ -498,16 +551,16 @@ async function detectarFlujo(
   campanaId: number,
 ): Promise<ClienteCohorte[]> {
   const cohorte = await cargarCohorteRecompra(db, restauranteId)
-  const enRiesgo = cohorte.filter((c) => c.segmento === 'en_riesgo')
-  if (enRiesgo.length === 0) return []
+  const flujo = cohorte.filter((c) => c.segmento === 'en_riesgo' || c.segmento === 'primer_pedido')
+  if (flujo.length === 0) return []
 
   // Excluir a los que ya están en la cola de esta campaña (cualquier estado / rol).
   const yaEnCola = await db
     .select({ clienteId: ColaRecompraTable.clienteId })
     .from(ColaRecompraTable)
-    .where(and(eq(ColaRecompraTable.campanaId, campanaId), inArray(ColaRecompraTable.clienteId, enRiesgo.map((c) => c.clienteId))))
+    .where(and(eq(ColaRecompraTable.campanaId, campanaId), inArray(ColaRecompraTable.clienteId, flujo.map((c) => c.clienteId))))
   const set = new Set(yaEnCola.map((r) => r.clienteId))
-  return enRiesgo.filter((c) => !set.has(c.clienteId))
+  return flujo.filter((c) => !set.has(c.clienteId))
 }
 
 /** Pausa la campaña por saldo agotado. Aviso ÚNICO (o 1/semana): nunca súplica, nunca deuda. */
@@ -709,6 +762,18 @@ export async function setCupoDiario(db: Db, restauranteId: number, cupoDiario: n
   return cupo
 }
 
+export async function setModoMotor(
+  db: Db,
+  restauranteId: number,
+  modo: ModoCampana,
+): Promise<ModoCampana | null> {
+  const campana = await getCampanaActual(db, restauranteId)
+  if (!campana) return null
+  const modoFinal: ModoCampana = modo === 'manual' ? 'manual' : 'automatico'
+  await db.update(CampanaRecompraTable).set({ modo: modoFinal }).where(eq(CampanaRecompraTable.id, campana.id))
+  return modoFinal
+}
+
 // ── Estado del motor (la RENDICIÓN de cuentas) ───────────────────────────────
 export interface PlanActivacion {
   totalDetectados: number
@@ -724,6 +789,7 @@ export interface PlanActivacion {
 
 export interface DashboardCampana {
   estado: EstadoCampana
+  modo: ModoCampana
   cupoDiario: number
   enviadosHoy: number
   totalEnviados: number
@@ -867,6 +933,7 @@ async function construirDashboard(
 
   return {
     estado: (campana.estado ?? 'activa') as EstadoCampana,
+    modo: (campana.modo ?? 'automatico') as ModoCampana,
     cupoDiario: clampCupo(campana.cupoDiario),
     enviadosHoy: campana.diaContador === diaArgentina() ? campana.enviadosHoy : 0,
     totalEnviados: campana.totalEnviados,
@@ -940,6 +1007,7 @@ export async function listarColaRecompra(
       rol: ColaRecompraTable.rol,
       prioridad: ColaRecompraTable.prioridad,
       dueDate: ColaRecompraTable.dueDate,
+      horarioSugerido: ColaRecompraTable.horarioSugerido,
       totalGastado: ColaRecompraTable.totalGastadoSnapshot,
       ultimoPedidoAt: ColaRecompraTable.ultimoPedidoAtSnapshot,
       createdAt: ColaRecompraTable.createdAt,
@@ -1226,3 +1294,99 @@ async function horaObjetivoLocal(db: Db, restauranteId: number): Promise<number>
     return HORA_ENVIO_DEFAULT
   }
 }
+
+// ── Operación manual desde la cola ───────────────────────────────────────────
+
+/** Obtiene los datos formateados del mensaje para una fila de la cola. */
+export async function obtenerMensajeFilaCola(
+  db: Db,
+  restauranteId: number,
+  filaId: number,
+): Promise<{ ok: true; data: DatosMensajeRecupero } | { ok: false; mensaje: string }> {
+  const [fila] = await db
+    .select()
+    .from(ColaRecompraTable)
+    .where(and(eq(ColaRecompraTable.id, filaId), eq(ColaRecompraTable.restauranteId, restauranteId)))
+    .limit(1)
+  if (!fila) return { ok: false, mensaje: 'Elemento de cola no encontrado' }
+  const prep = await prepararMensajeRecupero(db, restauranteId, fila.clienteId)
+  if (!prep.ok) return { ok: false, mensaje: prep.mensaje }
+  return {
+    ok: true,
+    data: {
+      ...prep.data,
+      horarioSugerido: fila.horarioSugerido ?? prep.data.horarioSugerido,
+    },
+  }
+}
+
+/** Marca una fila de la cola como enviada manualmente por el operador (sin consumir saldo marketing). */
+export async function marcarFilaColaComoEnviadaManual(
+  db: Db,
+  restauranteId: number,
+  filaId: number,
+): Promise<{ ok: boolean; mensaje?: string }> {
+  const [fila] = await db
+    .select()
+    .from(ColaRecompraTable)
+    .where(and(eq(ColaRecompraTable.id, filaId), eq(ColaRecompraTable.restauranteId, restauranteId)))
+    .limit(1)
+  if (!fila) return { ok: false, mensaje: 'Elemento de la cola no encontrado' }
+  if (fila.estado === 'enviado') return { ok: true, mensaje: 'Ya estaba marcado como enviado' }
+
+  // Preparar cupón / escalón para asegurar consistencia del beneficio
+  const prep = await prepararMensajeRecupero(db, restauranteId, fila.clienteId)
+  const nivel = prep.ok ? prep.data.nivel : (fila.nivel ?? 1)
+  const codigoDescuento = prep.ok ? prep.data.codigoDescuento : (fila.codigoDescuento ?? null)
+  const descuento = prep.ok ? prep.data.descuento : 0
+
+  await db
+    .update(ColaRecompraTable)
+    .set({
+      rol: 'contactado',
+      estado: 'enviado',
+      enviadoAt: new Date(),
+      ultimoIntentoAt: new Date(),
+      origenContacto: 'manual',
+      plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
+      errorEnvio: null,
+      nivel,
+      codigoDescuento,
+    })
+    .where(eq(ColaRecompraTable.id, filaId))
+
+  await db.insert(RecuperoClienteTable).values({
+    restauranteId,
+    clienteId: fila.clienteId,
+    telefono: fila.telefono,
+    nivel,
+    descuentoPorcentaje: descuento,
+    codigoDescuento,
+    segmento: fila.segmento,
+  })
+
+  await db
+    .update(CampanaRecompraTable)
+    .set({
+      totalEnviados: sql`${CampanaRecompraTable.totalEnviados} + 1`,
+      totalContactados: sql`${CampanaRecompraTable.totalContactados} + 1`,
+    })
+    .where(eq(CampanaRecompraTable.id, fila.campanaId))
+
+  const [{ pendientesRestantes } = { pendientesRestantes: 0 }] = await db
+    .select({ pendientesRestantes: sql<number>`count(*)` })
+    .from(ColaRecompraTable)
+    .where(
+      and(
+        eq(ColaRecompraTable.campanaId, fila.campanaId),
+        eq(ColaRecompraTable.estado, 'pendiente'),
+        eq(ColaRecompraTable.poblacion, 'stock'),
+      ),
+    )
+  if (Number(pendientesRestantes) === 0) {
+    await db.update(CampanaRecompraTable).set({ estado: 'completada' }).where(and(eq(CampanaRecompraTable.id, fila.campanaId), eq(CampanaRecompraTable.estado, 'activa')))
+  }
+
+  return { ok: true, mensaje: 'Contacto manual registrado correctamente' }
+}
+

@@ -34,9 +34,11 @@ import {
     cargarToquesPorCliente, estadoRecupero, enviarRecuperoDormido,
 } from '../lib/recupero'
 import {
-    estadoMotor, activarMotor, pausarMotorManual, reanudarMotor, setCupoDiario,
+    estadoMotor, activarMotor, pausarMotorManual, reanudarMotor, setCupoDiario, setModoMotor,
     listarClientesRecompra, listarColaRecompra, listarHistorialRecompra,
+    obtenerMensajeFilaCola, marcarFilaColaComoEnviadaManual,
     registrarContactoManual, registrarFalloContactoManual, CUPO_DIARIO_MIN, CUPO_DIARIO_MAX,
+    type ModoCampana,
 } from '../lib/motor-recompra'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { resolverOportunidadesMarketing } from '../lib/marketing-oportunidades'
@@ -644,8 +646,8 @@ clientesRoute.get('/recompra/estado', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA),
 
 /**
  * POST /clientes/recompra/activar — la DECISIÓN humana (una vez). Enciende el motor: detecta el stock,
- * aparta el 10% de control, carga la cola y dispara el primer goteo (respetando cupo/silencio).
- * Body opcional: { cupoDiario }.
+ * aparta el 10% de control, carga la cola y si el modo es automático dispara el primer goteo.
+ * Body opcional: { cupoDiario, modo?: 'automatico' | 'manual' }.
  */
 clientesRoute.post('/recompra/activar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
@@ -653,7 +655,8 @@ clientesRoute.post('/recompra/activar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA
     try {
         const body = await c.req.json().catch(() => ({}))
         const cupoDiario = body?.cupoDiario != null ? Number(body.cupoDiario) : undefined
-        const resultado = await activarMotor(db, restauranteId, cupoDiario)
+        const modo = body?.modo === 'manual' ? 'manual' : 'automatico'
+        const resultado = await activarMotor(db, restauranteId, cupoDiario, modo)
         if (resultado.moduloNoDisponible) {
             return c.json({
                 success: false,
@@ -667,7 +670,7 @@ clientesRoute.post('/recompra/activar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA
                 ? 'El motor ya estaba encendido'
                 : resultado.vacio
                     ? 'No hay clientes para recuperar en este momento'
-                    : 'Motor de recompra encendido',
+                    : `Motor de recompra encendido (${resultado.modo})`,
             data: resultado,
         }, 200)
     } catch (error) {
@@ -704,25 +707,88 @@ clientesRoute.post('/recompra/reanudar', requireModulo(MODULE_KEYS.MOTOR_RECOMPR
     }
 })
 
-/** PUT /clientes/recompra/config — ajusta el cupo diario (acotado al tope duro de sistema). */
+/** PUT /clientes/recompra/config — ajusta el cupo diario y/o modo. */
 clientesRoute.put('/recompra/config', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
         const body = await c.req.json().catch(() => ({}))
-        const cupoDiario = Number(body?.cupoDiario)
-        if (!Number.isFinite(cupoDiario)) {
-            return c.json({ success: false, message: 'cupoDiario inválido' }, 400)
+        let cupoDiarioAplicado: number | null = null
+        if (body?.cupoDiario != null) {
+            const cupoDiario = Number(body.cupoDiario)
+            if (Number.isFinite(cupoDiario)) {
+                cupoDiarioAplicado = await setCupoDiario(db, restauranteId, cupoDiario)
+            }
         }
-        const aplicado = await setCupoDiario(db, restauranteId, cupoDiario)
-        if (aplicado == null) return c.json({ success: false, message: 'No hay una campaña activa' }, 404)
+        let modoAplicado: ModoCampana | null = null
+        if (body?.modo != null) {
+            const modo = body.modo === 'manual' ? 'manual' : 'automatico'
+            modoAplicado = await setModoMotor(db, restauranteId, modo)
+        }
         return c.json({
             success: true,
-            message: 'Cupo actualizado',
-            data: { cupoDiario: aplicado, min: CUPO_DIARIO_MIN, max: CUPO_DIARIO_MAX },
+            message: 'Configuración actualizada',
+            data: {
+                cupoDiario: cupoDiarioAplicado,
+                modo: modoAplicado,
+                min: CUPO_DIARIO_MIN,
+                max: CUPO_DIARIO_MAX,
+            },
         }, 200)
     } catch (error) {
         console.error('Error configurando motor de recompra:', error)
+        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
+    }
+})
+
+/** PUT /clientes/recompra/modo — cambia directamente entre 'automatico' y 'manual'. */
+clientesRoute.put('/recompra/modo', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    try {
+        const body = await c.req.json().catch(() => ({}))
+        const modo = body?.modo === 'manual' ? 'manual' : 'automatico'
+        const aplicado = await setModoMotor(db, restauranteId, modo)
+        if (!aplicado) return c.json({ success: false, message: 'No hay una campaña activa' }, 404)
+        return c.json({ success: true, message: `Modo ${aplicado} activado`, data: { modo: aplicado } }, 200)
+    } catch (error) {
+        console.error('Error actualizando modo del motor de recompra:', error)
+        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
+    }
+})
+
+/** GET /clientes/recompra/cola/:id/mensaje — obtiene datos y texto preparado del mensaje para enviar. */
+clientesRoute.get('/recompra/cola/:id/mensaje', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const filaId = Number(c.req.param('id'))
+    if (!Number.isFinite(filaId) || filaId <= 0) {
+        return c.json({ success: false, message: 'ID de fila inválido' }, 400)
+    }
+    try {
+        const res = await obtenerMensajeFilaCola(db, restauranteId, filaId)
+        if (!res.ok) return c.json({ success: false, message: res.mensaje }, 404)
+        return c.json({ success: true, data: res.data }, 200)
+    } catch (error) {
+        console.error('Error obteniendo mensaje de cola de recompra:', error)
+        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
+    }
+})
+
+/** POST /clientes/recompra/cola/:id/marcar-enviado — marca una fila de la cola como enviada manualmente. */
+clientesRoute.post('/recompra/cola/:id/marcar-enviado', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    const filaId = Number(c.req.param('id'))
+    if (!Number.isFinite(filaId) || filaId <= 0) {
+        return c.json({ success: false, message: 'ID de fila inválido' }, 400)
+    }
+    try {
+        const res = await marcarFilaColaComoEnviadaManual(db, restauranteId, filaId)
+        if (!res.ok) return c.json({ success: false, message: res.mensaje || 'Error al marcar como enviado' }, 400)
+        return c.json({ success: true, message: res.mensaje }, 200)
+    } catch (error) {
+        console.error('Error marcando fila de recompra como enviada:', error)
         return c.json({ success: false, message: 'Error interno del servidor' }, 500)
     }
 })

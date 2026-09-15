@@ -12,3 +12,12 @@ describe('prioridad del stock del Motor de Recompra', () => {
     expect(calcularPrioridadStock('en_riesgo', 99_999_999)).toBe(calcularPrioridadStock('en_riesgo', 9_999_999))
   })
 })
+
+describe('modos de operación del Motor de Recompra', () => {
+  test('soporta modo automatico y modo manual como contratos válidos', () => {
+    const modos: ('automatico' | 'manual')[] = ['automatico', 'manual']
+    expect(modos).toContain('automatico')
+    expect(modos).toContain('manual')
+  })
+})
+

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { and, desc, eq, gt, isNull, or } from 'drizzle-orm'
+import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm'
 import type { MySql2Database } from 'drizzle-orm/mysql2'
 import { descifrarGrowthPayload } from './marketing-crypto'
 import {
@@ -190,7 +190,9 @@ export function crearRepositorioAtribucionMarketing(db: Db): RepositorioAtribuci
       return row ?? null
     },
     async insertarAtribucion(input) {
-      await db.insert(PedidoMarketingAtribucionTable).values(input).ignore()
+      await db.insert(PedidoMarketingAtribucionTable).values(input).onDuplicateKeyUpdate({
+        set: { id: sql`${PedidoMarketingAtribucionTable.id}` },
+      })
     },
   }
 }
@@ -246,7 +248,9 @@ async function asegurarSesionCampanaBestEffort(
       firstTouchRecetaCodigo: null, firstTouchAt: ahora,
       lastTouchTipo: 'campana', lastTouchCampanaId: campanaId,
       lastTouchRecetaCodigo: null, lastTouchAt: ahora, expiraAt,
-    }).ignore()
+    }).onDuplicateKeyUpdate({
+      set: { id: sql`${MarketingSesionTable.id}` },
+    })
     const [tecnica] = await db.select({ id: MarketingSesionTable.id }).from(MarketingSesionTable).where(and(
       eq(MarketingSesionTable.restauranteId, contexto.restauranteId),
       eq(MarketingSesionTable.sesionUuid, sintetico),
@@ -295,10 +299,12 @@ async function atribuirPedidoACampanaExplicita(
     recetaCodigo: null,
     revenueAtribuido: pedido.total,
     descuentoAtribuido: pedido.montoDescuento ?? '0.00',
-  }).ignore()
+  }).onDuplicateKeyUpdate({
+    set: { id: sql`${PedidoMarketingAtribucionTable.id}` },
+  })
 
-  // INSERT IGNORE puede silenciar más que una colisión idempotente. Verificar
-  // la fila evita declarar éxito cuando MySQL descartó realmente la escritura.
+  // El upsert no pisa la atribución existente. Verificar la fila evita declarar
+  // éxito si el pedido ya quedó atribuido a otra campaña.
   const [persistida] = await db.select({ campanaId: PedidoMarketingAtribucionTable.campanaId })
     .from(PedidoMarketingAtribucionTable).where(and(
       eq(PedidoMarketingAtribucionTable.restauranteId, contexto.restauranteId),
