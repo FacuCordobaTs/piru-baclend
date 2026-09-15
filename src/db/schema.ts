@@ -113,13 +113,12 @@ export const restaurante = mysqlTable("restaurante", {
   notificarClientesWhatsapp: boolean("notificar_clientes_whatsapp").default(false),
   modoConfirmacionManual: boolean("modo_confirmacion_manual").default(false),
   completedOnboarding: boolean("completed_onboarding").default(false).notNull(),
-  // Hard paywall: los locales dados de alta bajo el modelo de planes requieren una suscripción
-  // activa para usar el panel. default=false → las cuentas viejas (pre-planes) quedan
-  // grandfathered (nunca bloqueadas); el registro nuevo lo pone en true. Ver lib/planes.ts
-  // (tieneAccesoAlPanel) y el gate del admin (ProtectedLayout → /suscribir).
+  // Hard paywall: los locales nuevos pueden requerir la suscripción única para usar el panel.
+  // default=false conserva grandfathered a las cuentas anteriores. Ver lib/suscripcion.ts
+  // (tieneAccesoAlPanelSuscripcion) y el gate del admin (ProtectedLayout → /suscribir).
   requiereSuscripcion: boolean("requiere_suscripcion").default(false).notNull(),
 
-  // ── Claim flow (onboarding outbound) — ver docs/ROADMAP_CLAIM_FLOW.md ──
+  // ── Claim flow (onboarding outbound) — ver docs/AUTH_AND_ONBOARDING.md ──
   // Cómo nació la cuenta. 'self_serve' = registro/onboarding normal (default, no cambia nada del
   // flujo actual). 'outbound' = tienda demo que arma el fundador y el dueño "reclama" por link.
   origen: mysqlEnum("origen", ["self_serve", "outbound"]).default("self_serve").notNull(),
@@ -1064,6 +1063,12 @@ export const colaRecompra = mysqlTable("cola_recompra", {
   nivel: int("nivel"),
   codigoDescuento: varchar("codigo_descuento", { length: 50 }),
   enviadoAt: timestamp("enviado_at"),
+  // Metadatos auditables del último intento. `origen_contacto` distingue el
+  // scheduler de la acción explícita del operador sin crear un historial paralelo.
+  plantillaWhatsapp: varchar("plantilla_whatsapp", { length: 100 }),
+  origenContacto: varchar("origen_contacto", { length: 20 }).default("automatico").notNull(),
+  ultimoIntentoAt: timestamp("ultimo_intento_at"),
+  errorEnvio: varchar("error_envio", { length: 500 }),
   // Snapshots al encolar, para medir la atribución después (¿volvió a pedir tras el toque?).
   totalGastadoSnapshot: decimal("total_gastado_snapshot", { precision: 12, scale: 2 }).default("0.00"),
   ultimoPedidoAtSnapshot: timestamp("ultimo_pedido_at_snapshot"),
@@ -1278,42 +1283,36 @@ export const turnoCaja = mysqlTable("turno_caja", {
 // COMPATIBILIDAD LEGACY DE PLANES
 // ============================================================================
 
-// Definición de cada plan comercial. Editable sin deploy (precio, mensajes
-// incluidos, etc. viven en la tabla, no en constantes hardcodeadas en el código).
+// LEGACY/COMPATIBILIDAD: catálogo de planes conservado para admins instalados.
+// El modelo comercial vigente es suscripción única + módulos (ver docs/BILLING_AND_MODULES.md).
 export const plan = mysqlTable("plan", {
   id: int("id").primaryKey().autoincrement(),
-  // Código estable usado por el código para referirse al plan; no cambia aunque
-  // cambie el nombre comercial. Ver PLAN_CODES en lib/planes.ts.
+  // Código estable usado sólo por compatibilidad. Ver PLAN_CODES en lib/planes.ts.
   codigo: varchar("codigo", { length: 50 }).unique().notNull(), // "basico" | "intermedio" | "avanzado"
   nombre: varchar("nombre", { length: 255 }).notNull(),
   descripcion: varchar("descripcion", { length: 500 }),
   // Precio mensual en ARS. Editable sin deploy.
   precioMensual: decimal("precio_mensual", { precision: 10, scale: 2 }).notNull(),
-  // Mensajes utility (avisos de pedido) incluidos por ciclo. 0 = ninguno (plan Básico).
+  // Snapshot legacy de mensajes utility incluidos por plan.
   mensajesIncluidos: int("mensajes_incluidos").default(0).notNull(),
-  // Mensajes MARKETING (campañas del Motor de Recompra) incluidos por ciclo. 0 = ninguno
-  // (Básico/Intermedio). El Avanzado incluye 100/mes como "degustación" del Motor.
+  // Snapshot legacy de mensajes marketing por plan; los cupos vigentes salen de módulos.
   mensajesMarketingIncluidos: int("mensajes_marketing_incluidos").default(0).notNull(),
   // LEGACY (Modelo 2): antes el Avanzado daba mensajes sin tope. En el Modelo 3 NINGÚN plan
   // es ilimitado (el "ilimitado" era insostenible: cada mensaje tiene costo real en Meta).
   // La columna se conserva por retrocompat; debe quedar en false en todos los planes.
   mensajesIlimitados: boolean("mensajes_ilimitados").default(false).notNull(),
-  // Descuento porcentual al pagar el plan por año (0-20). Editable sin deploy.
-  // El negocio topea el ahorro anual a 20%; el cálculo del monto (montoPorCiclo)
-  // lo clampea de nuevo por las dudas. 0 = anual sin descuento (12 × mensual).
+  // Descuento anual legacy; la configuración vigente está en configuracion_suscripcion.
   descuentoAnual: int("descuento_anual").default(20).notNull(),
   // Orden de aparición en la UI de pricing (menor = primero).
   orden: int("orden").default(0).notNull(),
-  // Permite discontinuar un plan sin borrarlo: las suscripciones existentes lo conservan.
+  // Permite conservar filas históricas sin borrarlas.
   activo: boolean("activo").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-// Qué features habilita cada plan. Tabla en vez de ifs desparramados por el código:
-// para saber si un restaurante tiene acceso a una feature se mira su plan -> plan_feature.
-// Sólo se listan las filas de features habilitadas (habilitado=true por default).
-// Ver FEATURE_KEYS en lib/planes.ts para la lista canónica de claves.
+// LEGACY/COMPATIBILIDAD: features de planes para respuestas y admins antiguos.
+// Código nuevo usa MODULE_KEYS + restaurante_modulo; no extender esta tabla.
 export const planFeature = mysqlTable(
   "plan_feature",
   {
@@ -1332,7 +1331,7 @@ export const planFeature = mysqlTable(
   ],
 );
 
-// Suscripción de un restaurante a un plan. Una fila por restaurante (la vigente).
+// Suscripción única de un restaurante. `plan_id` queda como compatibilidad temporal.
 export const suscripcion = mysqlTable("suscripcion", {
   id: int("id").primaryKey().autoincrement(),
   restauranteId: int("restaurante_id")
@@ -1347,13 +1346,13 @@ export const suscripcion = mysqlTable("suscripcion", {
   configuracionSuscripcionId: int("configuracion_suscripcion_id")
     .references(() => configuracionSuscripcion.id),
   // Estado de la suscripción. Define qué puede hacer el local:
-  //  - trial:          período de prueba; acceso completo al plan contratado.
+  //  - trial:          período de prueba; acceso a la base, nunca a módulos pagos.
   //  - activa:         al día; acceso completo.
   //  - pago_pendiente: venció el cobro pero está en PERÍODO DE GRACIA (ver graciaHasta);
   //                    sigue operando con normalidad. NUNCA se corta en seco por un pago fallido.
-  //  - suspendida:     se agotó el período de gracia sin pagar; el panel se limita (features
+  //  - suspendida:     se agotó el período de gracia sin pagar; el panel se limita (módulos
   //                    de pago bloqueadas), pero los pedidos/avisos en curso NO se cortan.
-  //  - cancelada:      baja voluntaria; sin acceso a features de pago.
+  //  - cancelada:      baja voluntaria; sin acceso a módulos.
   estado: mysqlEnum("estado_suscripcion", [
     "trial",
     "activa",
@@ -1379,7 +1378,7 @@ export const suscripcion = mysqlTable("suscripcion", {
   // anti-reenvío del scheduler: mientras no sea null, el aviso ya salió y no se repite en cada tick.
   // Se resetea a null al arrancar un trial nuevo (iniciarTrial) para que un re-trial vuelva a avisar.
   avisoTrialVencimientoAt: timestamp("aviso_trial_vencimiento_at"),
-  // Precio congelado al momento de contratar (por si luego cambia el precio del plan).
+  // Precio congelado de compatibilidad; los ítems/snapshots nuevos separan base y módulos.
   precioMensual: decimal("precio_mensual", { precision: 10, scale: 2 }),
   // Snapshots de lectura rápida; el importe autoritativo se resuelve desde los
   // módulos activos y sus precios congelados.
@@ -1394,11 +1393,9 @@ export const suscripcion = mysqlTable("suscripcion", {
 
 // ─── Wallet de mensajes de WhatsApp al cliente (único costo variable de Piru) ───
 // Meta cobra distinto según la categoría del mensaje, por eso se llevan DOS saldos:
-//  - utility  → avisos de pedido ("en camino" / "listo"). Más barato. Lo incluye el plan.
-//  - marketing → campañas del Motor de Recompra (ROADMAP). Más caro. Sólo por recarga.
-// Regla dura: NUNCA cortar en seco. Si un saldo se agota, el mensaje igual sale y el
-// saldo queda NEGATIVO, a cubrir con la próxima recarga. Un comensal jamás se queda sin
-// su aviso por un tema de billing del local.
+//  - utility  → avisos de pedido. Los módulos pueden aportar cupo; nunca se bloquea el aviso.
+//  - marketing → campañas/retención. Growth nuevo reserva saldo; algunos callers legacy aún consumen directo.
+// Utility puede quedar negativo para no perder avisos; las reservas Growth nunca generan deuda.
 
 // Saldo actual por local (una fila por restaurante). Es un snapshot para lectura rápida;
 // la verdad auditable es el ledger transaccion_mensajes.
@@ -1409,18 +1406,18 @@ export const saldoMensajes = mysqlTable("saldo_mensajes", {
     .notNull()
     .unique(),
 
-  // Ventana del ciclo actual. Al llegar a cicloRenuevaEn se acredita el cupo del plan.
+  // Ventana del ciclo actual. Al renovar se acreditan los cupos de módulos activos.
   cicloInicio: timestamp("ciclo_inicio").defaultNow().notNull(),
   cicloRenuevaEn: timestamp("ciclo_renueva_en"),
 
-  // UTILITY — cupo del plan para ESTE ciclo. Se acredita al inicio del ciclo y el
+  // UTILITY — cupo de módulos para ESTE ciclo. Se acredita al inicio del ciclo y el
   // SOBRANTE SE PIERDE en la renovación (no se acumula: mantiene la contabilidad simple
   // y preserva el driver de recarga).
   utilityIncluidosRestantes: int("utility_incluidos_restantes").default(0).notNull(),
   // UTILITY — saldo de packs de recarga prepagos. SE ACUMULA entre ciclos. Puede ser NEGATIVO.
   utilityRecargaSaldo: int("utility_recarga_saldo").default(0).notNull(),
 
-  // MARKETING — cupo del plan para ESTE ciclo (Avanzado: 100). Se acredita al inicio del
+  // MARKETING — cupo aportado por módulos para ESTE ciclo. Se acredita al inicio del
   // ciclo y el SOBRANTE SE PIERDE en la renovación (mismo criterio que utility).
   marketingIncluidosRestantes: int("marketing_incluidos_restantes").default(0).notNull(),
   // MARKETING — saldo de packs de recarga prepagos. SE ACUMULA. Las reservas
@@ -1458,7 +1455,7 @@ export const transaccionMensajes = mysqlTable("transaccion_mensajes", {
   tipo: mysqlEnum("tipo_transaccion", [
     "consumo",         // envío de un mensaje (cantidad negativa)
     "recarga",         // compra de un pack (cantidad positiva)
-    "renovacion_plan", // acreditación del cupo del plan al inicio del ciclo (positiva)
+    "renovacion_plan", // nombre legacy: acreditación del cupo de módulos al iniciar ciclo
     "expiracion",      // sobrante del cupo que se pierde al renovar (negativa)
     "ajuste",          // corrección manual (soporte)
     "reserva",         // crédito marketing retenido antes de llamar al proveedor
@@ -1541,7 +1538,7 @@ export const recargaMensajes = mysqlTable("recarga_mensajes", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-// Pagos de la cuota mensual del plan (suscripción). NO usamos las suscripciones
+// Facturas de la suscripción única y sus módulos. NO usamos suscripciones
 // recurrentes de MercadoPago: cada cobro es un pago único vía Checkout Pro que
 // paga a la cuenta de la plataforma (Piru) y EXTIENDE la suscripción un ciclo.
 // Es el comprobante financiero; el efecto sobre el acceso queda en `suscripcion`.
@@ -1558,7 +1555,7 @@ export const pagoSuscripcion = mysqlTable("pago_suscripcion", {
     .references(() => configuracionSuscripcion.id),
   // Ciclo cubierto por este pago.
   ciclo: mysqlEnum("ciclo_pago", ["mensual", "anual"]).default("mensual").notNull(),
-  // Monto pagado en ARS (autoritativo del servidor, sale del precio del plan).
+  // Monto pagado en ARS (autoritativo del servidor, sale de base + ítems).
   monto: decimal("monto", { precision: 10, scale: 2 }).notNull(),
   montoBase: decimal("monto_base", { precision: 10, scale: 2 }),
   montoModulos: decimal("monto_modulos", { precision: 10, scale: 2 }).default("0.00").notNull(),
@@ -1576,7 +1573,7 @@ export const pagoSuscripcion = mysqlTable("pago_suscripcion", {
   // Referencias de MercadoPago (pago a la cuenta de la plataforma Piru).
   mpPreferenceId: varchar("mp_preference_id", { length: 255 }),
   mpPaymentId: varchar("mp_payment_id", { length: 255 }),
-  // Link de pago (`/pago/:token`): token de un solo uso para pagar la cuota del plan desde
+  // Link de pago (`/pago/:token`): token de un solo uso para pagar la factura desde
   // otro dispositivo (el celular) SIN login — se envía por WhatsApp al dueño. `tokenExpiraEn`
   // acota su validez. Comparte el espacio de tokens con `recargaMensajes.token`.
   token: varchar("token", { length: 64 }).unique(),

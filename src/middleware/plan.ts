@@ -4,9 +4,8 @@ import { pool } from '../db'
 import { tieneAcceso, type FeatureKey } from '../lib/planes'
 
 /**
- * Middleware de gating por plan. Se antepone a los handlers de endpoints que
- * pertenecen a una feature de pago (Intermedio+/Avanzado). El chequeo real vive
- * en el backend, siempre; ocultar el botón en la UI no alcanza.
+ * Middleware legacy de gating por plan, conservado para un endpoint y admins
+ * antiguos. Código nuevo usa requireModulo; ocultar el botón en UI no alcanza.
  *
  * Debe correr DESPUÉS de authMiddleware (necesita (c).user.id).
  * Responde 403 con { upgradeRequired: true, feature } para que la UI muestre el

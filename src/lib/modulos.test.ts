@@ -4,7 +4,6 @@ import {
   moduloEstaActivoAhora,
   MODULE_KEYS,
   resolverModulosFacturablesDeListado,
-  resolverRepresentacionCanonicaCrecimiento,
   sumarCuposMensajesDeModulos,
 } from './modulos'
 
@@ -26,16 +25,16 @@ describe('matriz de acceso de módulos', () => {
     ])).toEqual({ utility: 200, marketing: 100 })
   })
 
-  test('Crecimiento acepta su entitlement directo y el alias legacy activo', () => {
+  test('Crecimiento exige su entitlement directo', () => {
     expect(listadoHabilitaModulo([
       { codigo: MODULE_KEYS.CRECIMIENTO, activoAhora: true },
     ], MODULE_KEYS.CRECIMIENTO)).toBe(true)
     expect(listadoHabilitaModulo([
       { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: true },
-    ], MODULE_KEYS.CRECIMIENTO)).toBe(true)
+    ], MODULE_KEYS.CRECIMIENTO)).toBe(false)
   })
 
-  test('el alias es unidireccional y no activa un gate legacy', () => {
+  test('Crecimiento tampoco activa Retención', () => {
     expect(listadoHabilitaModulo([
       { codigo: MODULE_KEYS.CRECIMIENTO, activoAhora: true },
     ], MODULE_KEYS.MOTOR_RECOMPRA)).toBe(false)
@@ -59,7 +58,7 @@ describe('matriz de acceso de módulos', () => {
     ], MODULE_KEYS.PUNTOS_CLIENTES)).toBe(false)
   })
 
-  test('trial, suspensión y vencimiento bloquean también el acceso por alias', () => {
+  test('trial, suspensión y vencimiento bloquean el módulo', () => {
     for (const politica of [
       { ...BASE, estadoSuscripcion: 'trial' as const },
       { ...BASE, estadoSuscripcion: 'suspendida' as const },
@@ -74,7 +73,7 @@ describe('matriz de acceso de módulos', () => {
     }
   })
 
-  test('dos entitlements del mismo servicio no duplican cupos ni importe mensual', () => {
+  test('Crecimiento y Retención suman cupos e importes como productos independientes', () => {
     expect(listadoHabilitaModulo([
       { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: true },
       { codigo: MODULE_KEYS.CRECIMIENTO, activoAhora: true },
@@ -83,23 +82,14 @@ describe('matriz de acceso de módulos', () => {
     expect(sumarCuposMensajesDeModulos([
       { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: true, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 100 },
       { codigo: MODULE_KEYS.CRECIMIENTO, activoAhora: true, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 0 },
-    ])).toEqual({ utility: 0, marketing: 0 })
+    ])).toEqual({ utility: 0, marketing: 100 })
 
     expect(resolverModulosFacturablesDeListado([
       { codigo: MODULE_KEYS.MOTOR_RECOMPRA, tipo: 'pago', estado: 'activo', precioMensual: '70000.00', precioMensualCongelado: '70000.00' },
       { codigo: MODULE_KEYS.CRECIMIENTO, tipo: 'pago', estado: 'activo', precioMensual: '70000.00', precioMensualCongelado: '70000.00' },
-    ])).toEqual([{ codigo: MODULE_KEYS.CRECIMIENTO, montoMensual: 70000 }])
-  })
-
-  test('el catálogo muestra Crecimiento y oculta la representación legacy', () => {
-    const crecimiento = { codigo: MODULE_KEYS.CRECIMIENTO, nombre: 'Crecimiento' }
-    expect(resolverRepresentacionCanonicaCrecimiento([
-      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, nombre: 'Motor de Recompra' },
-      crecimiento,
-      { codigo: MODULE_KEYS.POS, nombre: 'Punto de venta' },
     ])).toEqual([
-      crecimiento,
-      { codigo: MODULE_KEYS.POS, nombre: 'Punto de venta' },
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, montoMensual: 70000 },
+      { codigo: MODULE_KEYS.CRECIMIENTO, montoMensual: 70000 },
     ])
   })
 

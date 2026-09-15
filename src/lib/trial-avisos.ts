@@ -1,5 +1,6 @@
 // src/lib/trial-avisos.ts
-// Aviso "tu prueba está por vencer" (día ~3 del trial de 5) del Claim Flow. Ver docs/ROADMAP_CLAIM_FLOW.md (Tarea 7).
+// Aviso "tu prueba está por vencer" (día ~3 del trial de 5) del Claim Flow.
+// Modelo vigente: docs/AUTH_AND_ONBOARDING.md.
 //
 // Un scheduler (setInterval en index.ts, patrón del Motor de Recompra) llama a `tickAvisosTrial`
 // cada ~15 min. El tick busca los trials que vencen dentro de ~2 días y todavía no recibieron el

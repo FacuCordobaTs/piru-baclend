@@ -38,14 +38,12 @@ export const MODULE_KEYS = {
 export type ModuleKey = (typeof MODULE_KEYS)[keyof typeof MODULE_KEYS]
 
 const ALIASES_ACCESO_MODULO: Partial<Record<ModuleKey, readonly ModuleKey[]>> = {
-  [MODULE_KEYS.CRECIMIENTO]: [MODULE_KEYS.MOTOR_RECOMPRA],
   [MODULE_KEYS.PUNTOS_CLIENTES]: [MODULE_KEYS.MOTOR_RECOMPRA],
 }
 
 /**
- * Durante el rollout, un entitlement legacy del Motor habilita Crecimiento.
- * El alias es intencionalmente unidireccional: los gates legacy no cambian su
- * contrato hasta que la migración de rutas se haga en una tarea posterior.
+ * Puntos es una capacidad incluida dentro de Retención. Crecimiento y Motor de
+ * Recompra no son aliases: cada gate exige su entitlement propio.
  */
 export function codigosQueHabilitanModulo(modulo: ModuleKey): readonly ModuleKey[] {
   if (modulo === MODULE_KEYS.PUNTOS_CLIENTES) {
@@ -131,17 +129,6 @@ export function listadoHabilitaModulo(
 ): boolean {
   const codigosAceptados = codigosQueHabilitanModulo(modulo)
   return modulos.some((item) => item.activoAhora && codigosAceptados.includes(item.codigo as ModuleKey))
-}
-
-/**
- * Mientras conviven ambas filas, Crecimiento es la representación canónica.
- * El caller debe filtrar antes por el estado que le interesa: así un alias
- * legacy activo no se pierde si la fila nueva todavía no está operativa.
- */
-export function resolverRepresentacionCanonicaCrecimiento<T extends { codigo: string }>(modulos: T[]): T[] {
-  const tieneCrecimiento = modulos.some((item) => item.codigo === MODULE_KEYS.CRECIMIENTO)
-  if (!tieneCrecimiento) return modulos
-  return modulos.filter((item) => item.codigo !== MODULE_KEYS.MOTOR_RECOMPRA)
 }
 
 /** Devuelve el catálogo completo enriquecido con el entitlement del restaurante. */
@@ -248,7 +235,7 @@ export interface CuposMensajesPorModulo {
 export function sumarCuposMensajesDeModulos(
   modulos: Array<Pick<ModuloResuelto, 'codigo' | 'activoAhora' | 'mensajesUtilityIncluidos' | 'mensajesMarketingIncluidos'>>,
 ): CuposMensajesPorModulo {
-  const modulosActivos = resolverRepresentacionCanonicaCrecimiento(modulos.filter((item) => item.activoAhora))
+  const modulosActivos = modulos.filter((item) => item.activoAhora)
   return modulosActivos.reduce<CuposMensajesPorModulo>((cupos, item) => {
     cupos.utility += item.mensajesUtilityIncluidos
     cupos.marketing += item.mensajesMarketingIncluidos
@@ -261,13 +248,11 @@ type ModuloFacturable = Pick<
   'codigo' | 'tipo' | 'estado' | 'precioMensual' | 'precioMensualCongelado'
 >
 
-/** Resuelve servicios facturables sin cobrar dos veces Crecimiento y su alias. */
+/** Resuelve módulos pagos activos; Crecimiento y Retención son productos independientes. */
 export function resolverModulosFacturablesDeListado(
   modulos: ModuloFacturable[],
 ): Array<{ codigo: string; montoMensual: number }> {
-  return resolverRepresentacionCanonicaCrecimiento(
-    modulos.filter((item) => item.tipo === 'pago' && item.estado === 'activo'),
-  )
+  return modulos.filter((item) => item.tipo === 'pago' && item.estado === 'activo')
     .map((item) => ({
       codigo: item.codigo,
       montoMensual: Number(item.precioMensualCongelado ?? item.precioMensual),
@@ -307,7 +292,7 @@ export async function resolverImporteMensual(
   const modulos = await resolverModulosRestaurante(db, restauranteId)
   // Un módulo activo se factura en la próxima cuota aunque el restaurante no
   // tenga todavía una suscripción activa. Así, el primer checkout incluye los
-  // módulos migrados sin duplicar Crecimiento y su alias legacy.
+  // módulos migrados ya normalizados por la migración de separación comercial.
   const modulosFacturables = resolverModulosFacturablesDeListado(modulos)
 
   const montoBaseMensual = Number(configuracion?.precioMensual ?? 0)

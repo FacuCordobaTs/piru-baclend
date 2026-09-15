@@ -21,7 +21,7 @@
 // wallet que el envío individual (4.2): `enviarRecuperoDormido` es el único camino de envío.
 
 import { type MySql2Database } from 'drizzle-orm/mysql2'
-import { and, eq, inArray, notInArray, lte, desc, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, lte, notInArray, or, sql } from 'drizzle-orm'
 import {
   cliente as ClienteTable,
   restaurante as RestauranteTable,
@@ -31,19 +31,22 @@ import {
 } from '../db/schema'
 import {
   cargarCohorteRecompra,
+  cargarToquesPorCliente,
+  COOLDOWN_HORAS,
+  estadoRecupero,
   separarControl,
   enviarRecuperoDormido,
+  PLANTILLA_RECUPERO_WHATSAPP,
   SEGMENTOS_RECUPERABLES,
   PORCENTAJE_CONTROL,
   type ClienteCohorte,
 } from './recupero'
-import { enHorarioSilencio, horaArgentina } from './proteccion-base'
-import { resumenWallet } from './mensajes-wallet'
+import { enHorarioSilencio, horaArgentina, TOPE_MARKETING_POR_CLIENTE } from './proteccion-base'
+import { crearRecargaPendiente, resumenWallet } from './mensajes-wallet'
 import { MODULE_KEYS, tieneModuloActivo } from './modulos'
-import { puedeCrearGoteoLegacy } from './compatibilidad-recompra'
 import type { SegmentoCliente } from './clientes-rfm'
-
-export { puedeCrearGoteoLegacy } from './compatibilidad-recompra'
+import { calcularPrioridadStock } from './motor-recompra-prioridad'
+import { sendSaldoBajoWhatsApp } from '../services/whatsapp'
 
 type Db = MySql2Database<Record<string, never>>
 
@@ -58,9 +61,6 @@ export const CUPO_DIARIO_MAX = 60
 export const HORA_ENVIO_DEFAULT = 11
 /** Días entre recordatorios cuando la campaña está pausada por saldo (1/semana, nunca súplica diaria). */
 export const RECORDATORIO_SIN_SALDO_DIAS = 7
-
-/** Peso del segmento para drenar el stock: en_riesgo primero (mejor tasa de retorno), perdido al final. */
-const PESO_SEGMENTO_STOCK: Record<string, number> = { en_riesgo: 3, dormido: 2, perdido: 1 }
 
 export type EstadoCampana = 'activa' | 'pausada_sin_saldo' | 'pausada_manual' | 'completada'
 
@@ -80,11 +80,6 @@ function esProcesable(estado: string | null): boolean {
  * Prioridad para drenar el stock: el segmento manda (en_riesgo > dormido > perdido) y dentro de cada
  * segmento, el ticket histórico descendente. Se codifica en un solo número: peso × 10M + ticket capado.
  */
-function calcularPrioridad(segmento: string, ticket: number): number {
-  const peso = PESO_SEGMENTO_STOCK[segmento] ?? 1
-  return peso * 10_000_000 + Math.min(Math.round(ticket), 9_999_999)
-}
-
 // Contexto mínimo para `env()` de Hono cuando el envío corre fuera de un request (job/scheduler).
 const fakeCtx = { env: process.env } as any
 
@@ -115,12 +110,7 @@ export async function getCampanaActual(db: Db, restauranteId: number): Promise<C
 // ── Encendido (la DECISIÓN humana, una sola vez) ─────────────────────────────
 export interface ResultadoActivar {
   ok: boolean
-  /**
-   * El goteo es un contrato legado: una cuenta con sólo Crecimiento usa las
-   * acciones explícitas (enlaces/canales) y no puede crear una cola automática.
-   * Se conserva aditivo para que los admins viejos entiendan la respuesta.
-   */
-  schedulerLegacyNoDisponible?: boolean
+  moduloNoDisponible?: boolean
   yaActiva?: boolean
   vacio?: boolean
   campanaId?: number
@@ -142,15 +132,11 @@ export async function activarMotor(
   restauranteId: number,
   cupoDiario?: number,
 ): Promise<ResultadoActivar> {
-  // Las campañas de Growth viven en `marketing_campana` y nunca deben crear
-  // filas en `campana_recompra`/`cola_recompra`. Sólo mantenemos el scheduler
-  // para locales que todavía poseen el entitlement físico del Motor legacy.
-  // `requireModulo(CRECIMIENTO)` en la ruta conserva acceso para admins
-  // instalados, pero no convierte ese alias en autorización para goteo nuevo.
-  if (!puedeCrearGoteoLegacy(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MOTOR_RECOMPRA))) {
+  // El scheduler también valida el entitlement porque corre fuera del middleware HTTP.
+  if (!await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MOTOR_RECOMPRA)) {
     return {
       ok: false,
-      schedulerLegacyNoDisponible: true,
+      moduloNoDisponible: true,
       totalDetectados: 0,
       totalContactar: 0,
       totalControl: 0,
@@ -222,7 +208,7 @@ export async function activarMotor(
       clienteId: cl.clienteId,
       telefono: cl.telefono,
       segmento: cl.segmento,
-      prioridad: calcularPrioridad(cl.segmento, ticket).toFixed(2),
+      prioridad: calcularPrioridadStock(cl.segmento, ticket).toFixed(2),
       poblacion: 'stock',
       rol: 'contactado',
       dueDate: new Date(),
@@ -281,8 +267,8 @@ const goteoVacio = (motivo: ResultadoGoteo['motivo']): ResultadoGoteo => ({
 
 /**
  * Drena la cola de UN local respetando el cupo diario, el horario de silencio y el saldo marketing.
- * Orden: (1) FLUJO — todos los que cruzan hoy su umbral (aunque excedan un poco el cupo); (2) STOCK —
- * con la capacidad restante, por prioridad. Cada envío descuenta 1 marketing; si el saldo llega a 0,
+ * Orden: (1) FLUJO — todos los que cruzaron su umbral; (2) STOCK — por prioridad. Ambos comparten
+ * el mismo cupo diario. Cada envío descuenta 1 marketing; si el saldo llega a 0,
  * la campaña pasa a `pausada_sin_saldo` (ninguna campaña genera deuda). Idempotente por día (contador).
  */
 export async function procesarColaDiaria(
@@ -292,7 +278,7 @@ export async function procesarColaDiaria(
 ): Promise<ResultadoGoteo> {
   // El scheduler no atraviesa middleware HTTP: debe respetar el mismo
   // entitlement que las acciones manuales antes de enviar marketing.
-  if (!puedeCrearGoteoLegacy(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MOTOR_RECOMPRA))) {
+  if (!await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MOTOR_RECOMPRA)) {
     return goteoVacio('modulo_inactivo')
   }
 
@@ -327,34 +313,30 @@ export async function procesarColaDiaria(
   let stockEnviados = 0
   let fallidos = 0
 
-  // (1) FLUJO — detectar y encolar a los que cruzan HOY su umbral, y mandarles ya (máxima prioridad).
+  // (1) FLUJO — detectar y encolar a los que cruzan HOY su umbral. El drenaje común de abajo
+  // los procesa antes que Stock, sin exceder el cupo diario.
   if (campana.estado === 'activa' || campana.estado === 'completada') {
     const nuevosFlujo = await detectarFlujo(db, restauranteId, campana.id)
     for (const cl of nuevosFlujo) {
-      if (marketing <= 0) break
       const ticket = cl.cantidadPedidos > 0 ? cl.totalGastado / cl.cantidadPedidos : cl.totalGastado
-      const [ins] = await db.insert(ColaRecompraTable).values({
+      await db.insert(ColaRecompraTable).values({
         restauranteId,
         campanaId: campana.id,
         clienteId: cl.clienteId,
         telefono: cl.telefono,
         segmento: cl.segmento,
-        prioridad: calcularPrioridad(cl.segmento, ticket).toFixed(2),
+        prioridad: calcularPrioridadStock(cl.segmento, ticket).toFixed(2),
         poblacion: 'flujo',
         rol: 'contactado',
         dueDate: new Date(ahora),
         estado: 'pendiente',
         ...snapshot(cl),
       })
-      const filaId = Number((ins as any).insertId)
-      const r = await enviarFila(db, restauranteId, filaId, cl.clienteId)
-      if (r.enviado) { flujoEnviados++; enviadosHoy++; marketing--; if (marketing <= 0) { break } }
-      else if (r.fallido) fallidos++
     }
   }
 
-  // (2) STOCK — con la capacidad restante del cupo, por prioridad descendente. Incluye también los
-  //     eventuales pendientes de flujo de días anteriores (quedaron por saldo): su prioridad los ordena.
+  // (2) Drenaje común — Flujo tiene prioridad absoluta; dentro de cada población manda el score.
+  // Incluye pendientes de flujo de días anteriores que quedaron por cupo o saldo.
   cupoRestante = cupo - enviadosHoy
   if (marketing > 0 && cupoRestante > 0) {
     const pendientes = await db
@@ -368,14 +350,25 @@ export async function procesarColaDiaria(
           lte(ColaRecompraTable.dueDate, new Date(ahora)),
         ),
       )
-      .orderBy(desc(ColaRecompraTable.prioridad))
+      .orderBy(
+        sql`CASE WHEN ${ColaRecompraTable.poblacion} = 'flujo' THEN 0 ELSE 1 END`,
+        desc(ColaRecompraTable.prioridad),
+        asc(ColaRecompraTable.dueDate),
+        asc(ColaRecompraTable.id),
+      )
       .limit(cupoRestante)
 
     for (const fila of pendientes) {
       if (marketing <= 0) break
       const r = await enviarFila(db, restauranteId, fila.id, fila.clienteId)
-      if (r.enviado) { stockEnviados++; enviadosHoy++; marketing-- }
+      if (r.enviado) {
+        if (fila.poblacion === 'flujo') flujoEnviados++
+        else stockEnviados++
+        enviadosHoy++
+        marketing--
+      }
       else if (r.fallido) fallidos++
+      else if (r.sinSaldo) { marketing = 0; break }
     }
   }
 
@@ -436,36 +429,61 @@ async function enviarFila(
   restauranteId: number,
   filaId: number,
   clienteId: number,
-): Promise<{ enviado: boolean; fallido: boolean }> {
+): Promise<{ enviado: boolean; fallido: boolean; sinSaldo?: boolean }> {
   // Regla sagrada / protección: si el cliente ya no es contactable (pidió, opt-out, tope, cooldown),
   // `enviarRecuperoDormido` lo rechaza sin mandar nada; marcamos la fila como salida/fallida.
   let res
   try {
-    res = await enviarRecuperoDormido(fakeCtx, db, restauranteId, clienteId)
+    res = await enviarRecuperoDormido(fakeCtx, db, restauranteId, clienteId, {
+      operacionId: `motor-recompra:${restauranteId}:${filaId}`,
+    })
   } catch (err) {
     console.error(`❌ [Motor goteo] Error enviando a cliente ${clienteId}:`, err)
-    await db.update(ColaRecompraTable).set({ estado: 'fallido' }).where(eq(ColaRecompraTable.id, filaId))
+    await db.update(ColaRecompraTable).set({
+      estado: 'fallido',
+      plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
+      ultimoIntentoAt: new Date(),
+      errorEnvio: err instanceof Error ? err.message.slice(0, 500) : 'Error inesperado',
+    }).where(eq(ColaRecompraTable.id, filaId))
     return { enviado: false, fallido: true }
   }
 
   if (res.ok) {
     await db
       .update(ColaRecompraTable)
-      .set({ estado: 'enviado', enviadoAt: new Date(), nivel: res.nivel ?? null, codigoDescuento: res.codigoDescuento ?? null })
+      .set({
+        estado: 'enviado',
+        enviadoAt: new Date(),
+        ultimoIntentoAt: new Date(),
+        plantillaWhatsapp: res.plantillaWhatsapp ?? PLANTILLA_RECUPERO_WHATSAPP,
+        origenContacto: 'automatico',
+        errorEnvio: null,
+        nivel: res.nivel ?? null,
+        codigoDescuento: res.codigoDescuento ?? null,
+      })
       .where(eq(ColaRecompraTable.id, filaId))
     return { enviado: true, fallido: false }
   }
 
+  if (res.motivo === 'sin_saldo') {
+    return { enviado: false, fallido: false, sinSaldo: true }
+  }
+
   // Bloqueos "no ahora" (cooldown/tope/silencio/opt-out) → dejamos la fila pendiente salvo opt-out.
   if (res.motivo === 'opt_out') {
-    await db.update(ColaRecompraTable).set({ estado: 'salido' }).where(eq(ColaRecompraTable.id, filaId))
+    await db.update(ColaRecompraTable).set({ estado: 'salido', errorEnvio: 'opt_out' }).where(eq(ColaRecompraTable.id, filaId))
     return { enviado: false, fallido: false }
   }
   if (res.motivo === 'cooldown' || res.motivo === 'tope_mensual' || res.motivo === 'horario_silencio') {
     return { enviado: false, fallido: false } // se reintenta otro día
   }
   // sin_telefono / envio_fallido / cliente_no_encontrado → fallido.
-  await db.update(ColaRecompraTable).set({ estado: 'fallido' }).where(eq(ColaRecompraTable.id, filaId))
+  await db.update(ColaRecompraTable).set({
+    estado: 'fallido',
+    plantillaWhatsapp: res.plantillaWhatsapp ?? PLANTILLA_RECUPERO_WHATSAPP,
+    ultimoIntentoAt: new Date(),
+    errorEnvio: (res.errorEnvio ?? res.motivo ?? 'envio_fallido').slice(0, 500),
+  }).where(eq(ColaRecompraTable.id, filaId))
   return { enviado: false, fallido: true }
 }
 
@@ -494,23 +512,64 @@ async function detectarFlujo(
 
 /** Pausa la campaña por saldo agotado. Aviso ÚNICO (o 1/semana): nunca súplica, nunca deuda. */
 async function pausarPorSaldo(db: Db, campana: CampanaRow, ahora: number): Promise<void> {
-  const ultimo = campana.avisoSinSaldoAt ? new Date(campana.avisoSinSaldoAt).getTime() : 0
-  const avisar = ahora - ultimo >= RECORDATORIO_SIN_SALDO_DIAS * MS_POR_DIA
   await db
     .update(CampanaRecompraTable)
     .set({
       estado: 'pausada_sin_saldo',
       pausadaAt: new Date(ahora),
-      ...(avisar ? { avisoSinSaldoAt: new Date(ahora) } : {}),
     })
     .where(eq(CampanaRecompraTable.id, campana.id))
+  await avisarPausaSinSaldoSiCorresponde(db, campana, ahora)
+}
+
+/** Aviso utility de cuenta al dueño, máximo uno cada siete días mientras siga pausado. */
+async function avisarPausaSinSaldoSiCorresponde(
+  db: Db,
+  campana: Pick<CampanaRow, 'id' | 'restauranteId' | 'avisoSinSaldoAt'>,
+  ahora: number,
+): Promise<void> {
+  const ultimo = campana.avisoSinSaldoAt ? new Date(campana.avisoSinSaldoAt).getTime() : 0
+  if (ahora - ultimo < RECORDATORIO_SIN_SALDO_DIAS * MS_POR_DIA) return
+  const [rest] = await db.select({ telefono: RestauranteTable.telefono })
+    .from(RestauranteTable)
+    .where(eq(RestauranteTable.id, campana.restauranteId))
+    .limit(1)
+  const telefono = (rest?.telefono ?? '').replace(/\D/g, '')
+  if (telefono.length < 8) {
+    await db.update(CampanaRecompraTable).set({ avisoSinSaldoAt: new Date(ahora) })
+      .where(eq(CampanaRecompraTable.id, campana.id))
+    return
+  }
+
+  try {
+    const token = crypto.randomUUID()
+    await crearRecargaPendiente(db, campana.restauranteId, {
+      categoria: 'marketing',
+      cantidad: 0,
+      monto: '0.00',
+      origen: 'auto',
+      seleccionPack: true,
+      token,
+      tokenExpiraEn: new Date(ahora + 30 * MS_POR_DIA),
+    })
+    const envio = await sendSaldoBajoWhatsApp(fakeCtx, {
+      phone: telefono,
+      estado: 'el Motor de Recompra quedó pausado porque tus mensajes de campaña llegaron a cero',
+      token,
+    })
+    if (!envio.success) return
+    await db.update(CampanaRecompraTable).set({ avisoSinSaldoAt: new Date(ahora) })
+      .where(eq(CampanaRecompraTable.id, campana.id))
+  } catch (error) {
+    console.error(`⚠️ [Motor goteo] No se pudo avisar la pausa por saldo del restaurante ${campana.restauranteId}:`, error)
+  }
 }
 
 // ── Regla sagrada: el cliente pidió → sale de la cola INMEDIATAMENTE ─────────
 /**
  * Nada peor que un "te extrañamos" a quien pidió ayer. Cuando entra un pedido de un cliente, sus filas
- * pendientes salen de la cola en tiempo real (no se espera al job diario). Best-effort: nunca frena el
- * alta del pedido. Cablear en el alta de pedidos (público).
+ * filas de la campaña salen de la cola en tiempo real (no se espera al job diario). `enviadoAt` conserva
+ * la atribución y el historial aunque el estado operativo pase a `salido`. Best-effort: nunca frena el alta.
  */
 export async function salirDeColaPorPedido(db: Db, restauranteId: number, clienteId: number): Promise<void> {
   try {
@@ -521,7 +580,7 @@ export async function salirDeColaPorPedido(db: Db, restauranteId: number, client
         and(
           eq(ColaRecompraTable.restauranteId, restauranteId),
           eq(ColaRecompraTable.clienteId, clienteId),
-          eq(ColaRecompraTable.estado, 'pendiente'),
+          inArray(ColaRecompraTable.estado, ['pendiente', 'enviado', 'control']),
         ),
       )
   } catch (err) {
@@ -542,7 +601,7 @@ export async function registrarContactoManual(
   db: Db,
   restauranteId: number,
   clienteId: number,
-  datos: { nivel?: number | null; codigoDescuento?: string | null } = {},
+  datos: { nivel?: number | null; codigoDescuento?: string | null; plantillaWhatsapp?: string | null } = {},
 ): Promise<void> {
   try {
     const campana = await getCampanaActual(db, restauranteId)
@@ -558,6 +617,7 @@ export async function registrarContactoManual(
         ),
       )
 
+    let reclasificado = false
     for (const fila of filas) {
       // Control o pendiente → pasa a contactado/enviado (fue contactado, aunque a mano).
       if (fila.rol === 'control' || fila.estado === 'pendiente' || fila.estado === 'control') {
@@ -567,15 +627,48 @@ export async function registrarContactoManual(
             rol: 'contactado',
             estado: 'enviado',
             enviadoAt: new Date(),
+            ultimoIntentoAt: new Date(),
+            origenContacto: 'manual',
+            plantillaWhatsapp: datos.plantillaWhatsapp ?? PLANTILLA_RECUPERO_WHATSAPP,
+            errorEnvio: null,
             nivel: datos.nivel ?? null,
             codigoDescuento: datos.codigoDescuento ?? null,
           })
           .where(eq(ColaRecompraTable.id, fila.id))
+        reclasificado = true
       }
+    }
+    if (reclasificado) {
+      await db.update(CampanaRecompraTable).set({
+        totalEnviados: sql`${CampanaRecompraTable.totalEnviados} + 1`,
+        totalContactados: sql`${CampanaRecompraTable.totalContactados} + 1`,
+      }).where(eq(CampanaRecompraTable.id, campana.id))
     }
   } catch (err) {
     console.error('❌ [Motor goteo] Error reclasificando contacto manual:', err)
   }
+}
+
+/** Registra un intento manual fallido sin sacar al cliente de la cola automática. */
+export async function registrarFalloContactoManual(
+  db: Db,
+  restauranteId: number,
+  clienteId: number,
+  datos: { plantillaWhatsapp?: string | null; errorEnvio?: string | null } = {},
+): Promise<void> {
+  const campana = await getCampanaActual(db, restauranteId)
+  if (!campana) return
+  await db.update(ColaRecompraTable).set({
+    origenContacto: 'manual',
+    plantillaWhatsapp: datos.plantillaWhatsapp ?? PLANTILLA_RECUPERO_WHATSAPP,
+    ultimoIntentoAt: new Date(),
+    errorEnvio: (datos.errorEnvio ?? 'envio_fallido').slice(0, 500),
+  }).where(and(
+    eq(ColaRecompraTable.restauranteId, restauranteId),
+    eq(ColaRecompraTable.campanaId, campana.id),
+    eq(ColaRecompraTable.clienteId, clienteId),
+    inArray(ColaRecompraTable.estado, ['pendiente', 'control']),
+  ))
 }
 
 // ── Controles humanos (baja frecuencia, siempre disponibles) ─────────────────
@@ -718,7 +811,9 @@ async function construirDashboard(
     .from(ColaRecompraTable)
     .where(eq(ColaRecompraTable.campanaId, campana.id))
 
-  const contactadosEnviados = filas.filter((f) => f.rol === 'contactado' && f.estado === 'enviado')
+  // El estado puede haber pasado a `salido` tras una recompra; `enviadoAt` es la evidencia
+  // inmutable de que el cliente integró el grupo tratado.
+  const contactadosEnviados = filas.filter((f) => f.rol === 'contactado' && f.enviadoAt != null)
   const control = filas.filter((f) => f.rol === 'control')
   const enCola = filas.filter((f) => f.estado === 'pendiente').length
 
@@ -789,6 +884,281 @@ async function construirDashboard(
   }
 }
 
+// ── Observabilidad operativa ─────────────────────────────────────────────────
+export interface FiltrosObservabilidadRecompra {
+  pagina?: number
+  limite?: number
+  segmento?: string
+  poblacion?: 'flujo' | 'stock'
+  rol?: 'contactado' | 'control'
+  estado?: 'pendiente' | 'enviado' | 'salido' | 'fallido' | 'control'
+}
+
+function paginacion(filtros: FiltrosObservabilidadRecompra) {
+  const pagina = Math.max(1, Math.floor(filtros.pagina ?? 1))
+  const limite = Math.max(5, Math.min(100, Math.floor(filtros.limite ?? 25)))
+  return { pagina, limite, offset: (pagina - 1) * limite }
+}
+
+function iso(value: Date | string | null | undefined): string | null {
+  return value ? new Date(value).toISOString() : null
+}
+
+function estadoPublico(estado: string): string {
+  return estado === 'salido' ? 'salido_por_pedido' : estado
+}
+
+/** Cola pendiente, en el mismo orden efectivo del scheduler: Flujo antes que Stock. */
+export async function listarColaRecompra(
+  db: Db,
+  restauranteId: number,
+  filtros: Omit<FiltrosObservabilidadRecompra, 'estado' | 'rol'> = {},
+) {
+  const campana = await getCampanaActual(db, restauranteId)
+  const { pagina, limite, offset } = paginacion(filtros)
+  if (!campana) return { items: [], pagina, limite, total: 0, paginas: 0 }
+
+  const condicionesBase = [
+    eq(ColaRecompraTable.restauranteId, restauranteId),
+    eq(ColaRecompraTable.campanaId, campana.id),
+    eq(ColaRecompraTable.estado, 'pendiente'),
+    eq(ColaRecompraTable.rol, 'contactado'),
+  ]
+  const condiciones = [...condicionesBase]
+  if (filtros.segmento) condiciones.push(eq(ColaRecompraTable.segmento, filtros.segmento))
+  if (filtros.poblacion) condiciones.push(eq(ColaRecompraTable.poblacion, filtros.poblacion))
+  const where = and(...condiciones)
+
+  const [filas, [conteo], ordenGlobal] = await Promise.all([
+    db.select({
+      id: ColaRecompraTable.id,
+      clienteId: ColaRecompraTable.clienteId,
+      clienteNombre: ClienteTable.nombre,
+      telefono: ColaRecompraTable.telefono,
+      segmento: ColaRecompraTable.segmento,
+      poblacion: ColaRecompraTable.poblacion,
+      rol: ColaRecompraTable.rol,
+      prioridad: ColaRecompraTable.prioridad,
+      dueDate: ColaRecompraTable.dueDate,
+      totalGastado: ColaRecompraTable.totalGastadoSnapshot,
+      ultimoPedidoAt: ColaRecompraTable.ultimoPedidoAtSnapshot,
+      createdAt: ColaRecompraTable.createdAt,
+    }).from(ColaRecompraTable)
+      .innerJoin(ClienteTable, and(
+        eq(ClienteTable.id, ColaRecompraTable.clienteId),
+        eq(ClienteTable.restauranteId, restauranteId),
+      ))
+      .where(where)
+      .orderBy(
+        sql`CASE WHEN ${ColaRecompraTable.poblacion} = 'flujo' THEN 0 ELSE 1 END`,
+        desc(ColaRecompraTable.prioridad),
+        asc(ColaRecompraTable.dueDate),
+        asc(ColaRecompraTable.id),
+      )
+      .limit(limite)
+      .offset(offset),
+    db.select({ total: sql<number>`count(*)` }).from(ColaRecompraTable).where(where),
+    db.select({ id: ColaRecompraTable.id }).from(ColaRecompraTable)
+      .where(and(...condicionesBase))
+      .orderBy(
+        sql`CASE WHEN ${ColaRecompraTable.poblacion} = 'flujo' THEN 0 ELSE 1 END`,
+        desc(ColaRecompraTable.prioridad),
+        asc(ColaRecompraTable.dueDate),
+        asc(ColaRecompraTable.id),
+      ),
+  ])
+
+  const total = Number(conteo?.total ?? 0)
+  const hoy = diaArgentina()
+  const enviadosHoy = campana.diaContador === hoy ? campana.enviadosHoy : 0
+  const capacidadHoy = Math.max(0, campana.cupoDiario - enviadosHoy)
+  const fechaBase = new Date()
+  const posiciones = new Map(ordenGlobal.map((fila, indice) => [fila.id, indice]))
+  const items = filas.map((fila, indicePagina) => {
+    const posicion = posiciones.get(fila.id) ?? offset + indicePagina
+    // La población ya está incorporada en `posicion`: Flujo aparece primero, pero la
+    // proyección nunca promete más despachos que el cupo diario configurado.
+    const diasEspera = posicion < capacidadHoy
+      ? 0
+      : 1 + Math.floor((posicion - capacidadHoy) / campana.cupoDiario)
+    const proyectada = new Date(fechaBase.getTime() + diasEspera * MS_POR_DIA)
+    return {
+      ...fila,
+      prioridad: Number(fila.prioridad ?? 0),
+      totalGastado: Number(fila.totalGastado ?? 0),
+      dueDate: iso(fila.dueDate),
+      ultimoPedidoAt: iso(fila.ultimoPedidoAt),
+      createdAt: iso(fila.createdAt),
+      posicionPrioridad: posicion + 1,
+      fechaProyectada: diaArgentina(proyectada.getTime()),
+    }
+  })
+  return { items, pagina, limite, total, paginas: Math.ceil(total / limite) }
+}
+
+/** Intentos ejecutados, incluidos los fallidos y los contactos manuales convergidos. */
+export async function listarHistorialRecompra(
+  db: Db,
+  restauranteId: number,
+  filtros: Pick<FiltrosObservabilidadRecompra, 'pagina' | 'limite' | 'segmento'> & { estadoDespacho?: 'entregado' | 'fallido' } = {},
+) {
+  const campana = await getCampanaActual(db, restauranteId)
+  const { pagina, limite, offset } = paginacion(filtros)
+  if (!campana) return { items: [], pagina, limite, total: 0, paginas: 0 }
+  const estadoCondicion = filtros.estadoDespacho === 'entregado'
+    ? isNotNull(ColaRecompraTable.enviadoAt)
+    : filtros.estadoDespacho === 'fallido'
+      ? or(eq(ColaRecompraTable.estado, 'fallido'), isNotNull(ColaRecompraTable.errorEnvio))!
+      : or(
+          isNotNull(ColaRecompraTable.enviadoAt),
+          eq(ColaRecompraTable.estado, 'fallido'),
+          isNotNull(ColaRecompraTable.errorEnvio),
+        )!
+  const condiciones = [
+    eq(ColaRecompraTable.restauranteId, restauranteId),
+    eq(ColaRecompraTable.campanaId, campana.id),
+    estadoCondicion,
+  ]
+  if (filtros.segmento) condiciones.push(eq(ColaRecompraTable.segmento, filtros.segmento))
+  const where = and(...condiciones)
+  const [filas, [conteo]] = await Promise.all([
+    db.select({
+      id: ColaRecompraTable.id,
+      clienteId: ColaRecompraTable.clienteId,
+      clienteNombre: ClienteTable.nombre,
+      telefono: ColaRecompraTable.telefono,
+      segmento: ColaRecompraTable.segmento,
+      poblacion: ColaRecompraTable.poblacion,
+      origenContacto: ColaRecompraTable.origenContacto,
+      estado: ColaRecompraTable.estado,
+      plantillaWhatsapp: ColaRecompraTable.plantillaWhatsapp,
+      codigoDescuento: ColaRecompraTable.codigoDescuento,
+      nivel: ColaRecompraTable.nivel,
+      enviadoAt: ColaRecompraTable.enviadoAt,
+      ultimoIntentoAt: ColaRecompraTable.ultimoIntentoAt,
+      errorEnvio: ColaRecompraTable.errorEnvio,
+    }).from(ColaRecompraTable)
+      .innerJoin(ClienteTable, and(
+        eq(ClienteTable.id, ColaRecompraTable.clienteId),
+        eq(ClienteTable.restauranteId, restauranteId),
+      ))
+      .where(where)
+      .orderBy(desc(ColaRecompraTable.ultimoIntentoAt), desc(ColaRecompraTable.enviadoAt), desc(ColaRecompraTable.id))
+      .limit(limite)
+      .offset(offset),
+    db.select({ total: sql<number>`count(*)` }).from(ColaRecompraTable).where(where),
+  ])
+  const total = Number(conteo?.total ?? 0)
+  return {
+    items: filas.map((fila) => ({
+      ...fila,
+      estadoDespacho: fila.enviadoAt && !fila.errorEnvio ? 'entregado' : 'fallido',
+      plantillaWhatsapp: fila.plantillaWhatsapp ?? PLANTILLA_RECUPERO_WHATSAPP,
+      fechaHora: iso(fila.ultimoIntentoAt ?? fila.enviadoAt),
+    })),
+    pagina, limite, total, paginas: Math.ceil(total / limite),
+  }
+}
+
+/** Directorio consolidado de la campaña viva y las protecciones vigentes por cliente. */
+export async function listarClientesRecompra(
+  db: Db,
+  restauranteId: number,
+  filtros: FiltrosObservabilidadRecompra = {},
+) {
+  const campana = await getCampanaActual(db, restauranteId)
+  const { pagina, limite, offset } = paginacion(filtros)
+  if (!campana) return { items: [], pagina, limite, total: 0, paginas: 0 }
+  const condiciones = [
+    eq(ColaRecompraTable.restauranteId, restauranteId),
+    eq(ColaRecompraTable.campanaId, campana.id),
+  ]
+  if (filtros.segmento) condiciones.push(eq(ColaRecompraTable.segmento, filtros.segmento))
+  if (filtros.poblacion) condiciones.push(eq(ColaRecompraTable.poblacion, filtros.poblacion))
+  if (filtros.rol) condiciones.push(eq(ColaRecompraTable.rol, filtros.rol))
+  if (filtros.estado) condiciones.push(eq(ColaRecompraTable.estado, filtros.estado))
+  const where = and(...condiciones)
+  const [filas, [conteo]] = await Promise.all([
+    db.select({
+      id: ColaRecompraTable.id,
+      clienteId: ColaRecompraTable.clienteId,
+      clienteNombre: ClienteTable.nombre,
+      telefono: ColaRecompraTable.telefono,
+      segmento: ColaRecompraTable.segmento,
+      poblacion: ColaRecompraTable.poblacion,
+      rol: ColaRecompraTable.rol,
+      estado: ColaRecompraTable.estado,
+      prioridad: ColaRecompraTable.prioridad,
+      totalGastadoSnapshot: ColaRecompraTable.totalGastadoSnapshot,
+      ultimoPedidoAtSnapshot: ColaRecompraTable.ultimoPedidoAtSnapshot,
+      dueDate: ColaRecompraTable.dueDate,
+      enviadoAt: ColaRecompraTable.enviadoAt,
+      marketingOptOut: ClienteTable.marketingOptOut,
+    }).from(ColaRecompraTable)
+      .innerJoin(ClienteTable, and(
+        eq(ClienteTable.id, ColaRecompraTable.clienteId),
+        eq(ClienteTable.restauranteId, restauranteId),
+      ))
+      .where(where)
+      .orderBy(
+        sql`CASE WHEN ${ColaRecompraTable.poblacion} = 'flujo' THEN 0 ELSE 1 END`,
+        desc(ColaRecompraTable.prioridad),
+        asc(ColaRecompraTable.id),
+      )
+      .limit(limite)
+      .offset(offset),
+    db.select({ total: sql<number>`count(*)` }).from(ColaRecompraTable).where(where),
+  ])
+
+  const ids = filas.map((fila) => fila.clienteId)
+  const [toques, pedidos] = await Promise.all([
+    cargarToquesPorCliente(db, restauranteId, ids),
+    ids.length === 0 ? Promise.resolve([]) : db.select({
+      clienteId: PedidoUnificadoTable.clienteId,
+      cantidadPedidos: sql<number>`count(*)`,
+      totalGastado: sql<string>`coalesce(sum(${PedidoUnificadoTable.total}), 0)`,
+      ultimoPedidoAt: sql<Date>`max(${PedidoUnificadoTable.createdAt})`,
+    }).from(PedidoUnificadoTable).where(and(
+      eq(PedidoUnificadoTable.restauranteId, restauranteId),
+      inArray(PedidoUnificadoTable.clienteId, ids),
+      notInArray(PedidoUnificadoTable.estado, ['cancelled']),
+    )).groupBy(PedidoUnificadoTable.clienteId),
+  ])
+  const pedidosPorCliente = new Map(pedidos.map((pedido) => [pedido.clienteId as number, pedido]))
+  const ahora = Date.now()
+  const inicioVentana = ahora - 30 * MS_POR_DIA
+  const items = filas.map((fila) => {
+    const resumenPedidos = pedidosPorCliente.get(fila.clienteId)
+    const cantidadPedidos = Number(resumenPedidos?.cantidadPedidos ?? 0)
+    const totalGastado = Number(resumenPedidos?.totalGastado ?? fila.totalGastadoSnapshot ?? 0)
+    const historial = toques[fila.clienteId] ?? []
+    const recupero = estadoRecupero(historial, fila.ultimoPedidoAtSnapshot ? new Date(fila.ultimoPedidoAtSnapshot).getTime() : null)
+    const toques30Dias = historial.filter((toque) => new Date(toque.createdAt).getTime() >= inicioVentana).length
+    const cooldownHasta = !recupero.puedeEnviar && recupero.ultimoEnvioAt
+      ? new Date(new Date(recupero.ultimoEnvioAt).getTime() + COOLDOWN_HORAS * 60 * 60 * 1000).toISOString()
+      : null
+    return {
+      ...fila,
+      estado: estadoPublico(fila.estado),
+      prioridad: Number(fila.prioridad ?? 0),
+      ticketPromedio: cantidadPedidos > 0 ? totalGastado / cantidadPedidos : totalGastado,
+      ultimoPedidoAt: iso(resumenPedidos?.ultimoPedidoAt ?? fila.ultimoPedidoAtSnapshot),
+      dueDate: iso(fila.dueDate),
+      enviadoAt: iso(fila.enviadoAt),
+      protecciones: {
+        horarioSilencioActivo: enHorarioSilencio(ahora),
+        cooldownHasta,
+        topeFrecuenciaAlcanzado: toques30Dias >= TOPE_MARKETING_POR_CLIENTE,
+        toques30Dias,
+        maximoToques30Dias: TOPE_MARKETING_POR_CLIENTE,
+        optOut: Boolean(fila.marketingOptOut),
+      },
+    }
+  })
+  const total = Number(conteo?.total ?? 0)
+  return { items, pagina, limite, total, paginas: Math.ceil(total / limite) }
+}
+
 // ── Scheduler: tick del motor (para todos los locales con campaña procesable) ─
 /**
  * Corre el goteo de todos los locales que tengan campaña procesable y cuya hora objetivo ya llegó,
@@ -805,12 +1175,24 @@ export async function tickMotorRecompra(db: Db, ahora: number = Date.now()): Pro
     .select({
       id: CampanaRecompraTable.id,
       restauranteId: CampanaRecompraTable.restauranteId,
+      estado: CampanaRecompraTable.estado,
       diaContador: CampanaRecompraTable.diaContador,
+      avisoSinSaldoAt: CampanaRecompraTable.avisoSinSaldoAt,
+      createdAt: CampanaRecompraTable.createdAt,
     })
     .from(CampanaRecompraTable)
-    .where(inArray(CampanaRecompraTable.estado, ['activa', 'completada']))
+    .where(inArray(CampanaRecompraTable.estado, ['activa', 'completada', 'pausada_sin_saldo']))
 
   for (const camp of campanas) {
+    if (camp.estado === 'pausada_sin_saldo') {
+      const wallet = await resumenWallet(db, camp.restauranteId)
+      if (wallet.marketing.disponible > 0) {
+        await reanudarMotor(db, camp.restauranteId)
+      } else {
+        await avisarPausaSinSaldoSiCorresponde(db, camp, ahora)
+        continue
+      }
+    }
     if (camp.diaContador === hoy) continue // ya goteó hoy
     // Hora objetivo del local (antes del pico). Si todavía no llegó, esperamos al próximo tick.
     const horaObjetivo = await horaObjetivoLocal(db, camp.restauranteId)

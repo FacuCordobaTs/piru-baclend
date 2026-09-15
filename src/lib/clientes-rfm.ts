@@ -1,6 +1,6 @@
 // src/lib/clientes-rfm.ts
 //
-// Cerebro del Motor de Recompra (Parte 4 · tarea 4.1 del ROADMAP).
+// Perfil RFM/cadencia de clientes. Modelo vigente: docs/CUSTOMERS_AND_GROWTH.md.
 //
 // Toma el historial de pedidos por cliente y devuelve un perfil RFM
 // (Recency / Frequency / Monetary) traducido a un estado de ciclo de vida

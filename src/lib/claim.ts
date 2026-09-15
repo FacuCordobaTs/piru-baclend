@@ -1,5 +1,5 @@
 // src/lib/claim.ts
-// Claim flow (onboarding outbound) — ver docs/ROADMAP_CLAIM_FLOW.md
+// Claim flow (onboarding outbound) — ver docs/AUTH_AND_ONBOARDING.md
 //
 // El fundador arma una tienda demo (prospecto) y comparte un link de reclamo
 // (admin.piru.app/mi-tienda/{claimToken}). El dueño lo "reclama" verificando su WhatsApp: la cuenta

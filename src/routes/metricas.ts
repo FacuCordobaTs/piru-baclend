@@ -11,14 +11,9 @@ import { eq, and, sql } from 'drizzle-orm'
 
 const metricasRoute = new Hono().use('*', authMiddleware)
 
-// NOTA sobre gating (FEATURE_KEYS.ESTADISTICAS_AVANZADAS): el único endpoint de
-// acá es el dashboard BÁSICO (ingresos, cantidad de pedidos, desglose por medio
-// de pago, top 5 productos). "Estadísticas y reportes" está incluido en TODOS los
-// planes (incluido Básico) por el modelo de negocio, así que este endpoint NO se
-// gatea. La feature `estadisticas_avanzadas` (Intermedio+) recién tendrá superficie
-// que gatear cuando existan endpoints de estadísticas avanzadas; ahí se antepone
-// `requireFeature(FEATURE_KEYS.ESTADISTICAS_AVANZADAS)`. No gatear este endpoint
-// básico: rompería el dashboard de los planes Básico.
+// Dashboard operativo incluido en la suscripción base: ingresos, pedidos,
+// medios de pago y productos principales. No usa el modelo legacy de
+// planes/features ni requiere un módulo adicional.
 metricasRoute.get('/', async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id

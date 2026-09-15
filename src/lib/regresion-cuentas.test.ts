@@ -113,16 +113,16 @@ describe('T41 · matriz de regresión de cuentas', () => {
     ])).toEqual({ utility: 0, marketing: 100 })
   })
 
-  test('la cuenta migrada conserva precio pero no recibe cupo marketing futuro ni doble cobro', () => {
+  test('la cuenta migrada conserva Retención y desactiva el espejo transitorio de Crecimiento', () => {
     const entitlements = [
       { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: true, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 100 },
-      { codigo: MODULE_KEYS.CRECIMIENTO, activoAhora: true, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 0 },
+      { codigo: MODULE_KEYS.CRECIMIENTO, activoAhora: false, mensajesUtilityIncluidos: 0, mensajesMarketingIncluidos: 0 },
     ]
-    expect(sumarCuposMensajesDeModulos(entitlements)).toEqual({ utility: 0, marketing: 0 })
+    expect(sumarCuposMensajesDeModulos(entitlements)).toEqual({ utility: 0, marketing: 100 })
     expect(resolverModulosFacturablesDeListado([
       { codigo: MODULE_KEYS.MOTOR_RECOMPRA, tipo: 'pago', estado: 'activo', precioMensual: '70000.00', precioMensualCongelado: '65000.00' },
-      { codigo: MODULE_KEYS.CRECIMIENTO, tipo: 'pago', estado: 'activo', precioMensual: '70000.00', precioMensualCongelado: '65000.00' },
-    ])).toEqual([{ codigo: MODULE_KEYS.CRECIMIENTO, montoMensual: 65000 }])
+      { codigo: MODULE_KEYS.CRECIMIENTO, tipo: 'pago', estado: 'inactivo', precioMensual: '70000.00', precioMensualCongelado: null },
+    ])).toEqual([{ codigo: MODULE_KEYS.MOTOR_RECOMPRA, montoMensual: 65000 }])
   })
 
   test('la gracia conserva base y módulos pagos vigentes', () => {

@@ -50,7 +50,7 @@ test('un módulo activo migrado se incluye en el primer checkout', () => {
   expect(seleccionarModulosFacturables(modulos, {})).toEqual(modulos)
 })
 
-test('Crecimiento reemplaza al Motor legacy sin duplicar la factura', () => {
+test('Crecimiento y Retención se facturan como módulos independientes', () => {
   const modulos = [
     { codigo: 'avisos_automaticos_whatsapp', estado: 'activo', origen: 'usuario' },
     { codigo: 'motor_recompra', estado: 'activo', origen: 'migracion' },
@@ -58,6 +58,7 @@ test('Crecimiento reemplaza al Motor legacy sin duplicar la factura', () => {
   ]
   expect(seleccionarModulosFacturables(modulos, {})).toEqual([
     modulos[0],
+    modulos[1],
     modulos[2],
   ])
 })

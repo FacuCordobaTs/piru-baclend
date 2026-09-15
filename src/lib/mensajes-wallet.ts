@@ -98,12 +98,12 @@ export async function getOrCreateSaldo(
   return creado
 }
 
-/** Saldo utility disponible = cupo del plan restante + saldo de recargas (puede ser negativo). */
+/** Saldo utility disponible = cupo de módulos restante + saldo de recargas (puede ser negativo). */
 export function utilityDisponible(saldo: Pick<SaldoRow, 'utilityIncluidosRestantes' | 'utilityRecargaSaldo'>): number {
   return saldo.utilityIncluidosRestantes + saldo.utilityRecargaSaldo
 }
 
-/** Saldo marketing disponible = cupo del plan restante + saldo de recargas. Las reservas Growth nunca lo vuelven negativo. */
+/** Saldo marketing disponible = cupo de módulos restante + saldo de recargas. Las reservas Growth nunca lo vuelven negativo. */
 export function marketingDisponible(saldo: Pick<SaldoRow, 'marketingIncluidosRestantes' | 'marketingRecargaSaldo'>): number {
   return saldo.marketingIncluidosRestantes + saldo.marketingRecargaSaldo
 }
@@ -255,7 +255,7 @@ export async function compensarReservaCreditoMarketing(
 }
 
 /**
- * Renueva el ciclo: el sobrante del cupo del plan SE PIERDE (se asienta como
+ * Renueva el ciclo: el sobrante del cupo de módulos SE PIERDE (se asienta como
  * 'expiracion') y se acredita el cupo nuevo ('renovacion_plan'). Resetea las alertas.
  * Idempotente por ciclo: sólo corre si ya pasó cicloRenuevaEn.
  */
@@ -308,7 +308,7 @@ export async function renovarCicloSiCorresponde(
     })
   }
 
-  // Acreditación del cupo marketing del nuevo ciclo (Avanzado).
+  // Acreditación del cupo marketing aportado por módulos activos.
   if (marketingIncluidos > 0) {
     await registrarTransaccion(db, {
       restauranteId,
@@ -355,7 +355,7 @@ export interface ResultadoConsumo {
  * el saldo queda negativo. Best-effort para el caller (envolver en try/catch: un fallo
  * de contabilidad jamás debe impedir que salga el aviso al comensal).
  *
- * Para utility consume primero el cupo del plan y luego el saldo de recarga.
+ * Para utility consume primero el cupo de módulos y luego el saldo de recarga.
  */
 export async function consumirMensaje(
   db: Db,
@@ -379,7 +379,7 @@ export async function consumirMensaje(
   let saldoResultante: number
 
   if (categoria === 'utility') {
-    // Consumir cupo del plan primero, luego recarga (que puede quedar negativa).
+    // Consumir cupo de módulos primero, luego recarga (que puede quedar negativa).
     const desdeIncluidos = Math.min(cantidad, Math.max(0, saldo.utilityIncluidosRestantes))
     const resto = cantidad - desdeIncluidos
     const nuevoIncluidos = saldo.utilityIncluidosRestantes - desdeIncluidos
@@ -388,7 +388,7 @@ export async function consumirMensaje(
     update.utilityRecargaSaldo = nuevoRecarga
     saldoResultante = nuevoIncluidos + nuevoRecarga
 
-    // Alertas sobre el consumo del cupo del plan (una vez por ciclo).
+    // Alertas sobre el consumo del cupo incluido (una vez por ciclo).
     if (cupos.utility > 0) {
       const consumidoCupo = cupos.utility - nuevoIncluidos
       const pct = consumidoCupo / cupos.utility
@@ -401,7 +401,8 @@ export async function consumirMensaje(
       }
     }
   } else {
-    // Marketing: consumir el cupo del plan primero, luego la recarga (que puede quedar negativa).
+    // Camino legacy de marketing: consume cupo incluido y luego recarga, que puede quedar negativa.
+    // Growth nuevo usa reservarCreditoMarketing y nunca entra acá sin saldo.
     const desdeIncluidos = Math.min(cantidad, Math.max(0, saldo.marketingIncluidosRestantes))
     const resto = cantidad - desdeIncluidos
     const nuevoIncluidos = saldo.marketingIncluidosRestantes - desdeIncluidos
@@ -1084,8 +1085,8 @@ export async function setAutoRecarga(
  * definido): el dueño abre `/pago/:token`, elige el pack y recién ahí se arma el pago de MP.
  *
  * Niveles progresivos (máximo 3 avisos por ciclo, uno por nivel):
- *   - NIVEL_AVISO_80     → 80% del cupo del plan consumido (solo mientras queda cupo sin usar).
- *   - NIVEL_AVISO_95     → 95% del cupo del plan consumido (ídem).
+ *   - NIVEL_AVISO_80     → 80% del cupo incluido consumido (solo mientras queda cupo sin usar).
+ *   - NIVEL_AVISO_95     → 95% del cupo incluido consumido (ídem).
  *   - NIVEL_AVISO_AGOTADO→ saldo disponible <= 0 (el modo gracia ya está corriendo en negativo).
  * El nivel alcanzado queda en `avisoSaldoBajoNivel`. Se resetea en cada renovación de ciclo Y al
  * recargar con saldo positivo (ver `aplicarCreditoRecarga`): así, si el dueño recarga y después
@@ -1101,11 +1102,11 @@ export async function avisarSaldoBajoSiCorresponde(db: Db, restauranteId: number
   const utilDisp = utilityDisponible(saldo)
   const cupo = cupos.utility
 
-  // Básico sin cupo y sin deuda de recarga: no hay avisos que se estén agotando, nada que avisar.
+  // Sin cupo incluido ni deuda de recarga: no hay avisos que se estén agotando.
   if (cupo <= 0 && saldo.utilityRecargaSaldo === 0) return
 
   const pct = cupo > 0 ? Math.min(1, (cupo - saldo.utilityIncluidosRestantes) / cupo) : 0
-  // Los niveles 80/95 describen el consumo del cupo del plan: solo aplican mientras queda
+  // Los niveles 80/95 describen el consumo del cupo incluido: sólo aplican mientras queda
   // cupo sin consumir. Con el cupo agotado y saldo de recarga positivo no se avisa nada
   // (está todo bien, tiene saldo); el único aviso posible ahí es "agotado" (disponible <= 0).
   const nivel =

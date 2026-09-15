@@ -1,5 +1,6 @@
 // src/routes/claim.ts
-// Claim flow (onboarding outbound) — endpoints PÚBLICOS (sin auth). Ver docs/ROADMAP_CLAIM_FLOW.md (Tarea 3).
+// Claim flow (onboarding outbound) — endpoints PÚBLICOS (sin auth).
+// Modelo vigente: docs/AUTH_AND_ONBOARDING.md.
 //
 // El fundador arma una tienda demo (prospecto) y comparte admin.piru.app/mi-tienda/{claimToken}.
 // El dueño la "reclama" verificando su WhatsApp: la cuenta del prospecto y la del dueño son LA MISMA

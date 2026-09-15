@@ -14,7 +14,7 @@ import {
   suscripcion as SuscripcionTable,
 } from '../db/schema'
 import { authMiddleware } from '../middleware/auth'
-import { MODULE_KEYS, resolverModulosRestaurante, resolverRepresentacionCanonicaCrecimiento } from '../lib/modulos'
+import { MODULE_KEYS, resolverModulosRestaurante } from '../lib/modulos'
 import { crearFacturaSuscripcionPendiente } from '../lib/facturacion-suscripcion'
 import { crearPreferenciaSuscripcionMP, pagosSuscripcionDisponibles } from '../lib/mp-suscripcion'
 import { sendPaymentLinkWhatsApp } from '../services/whatsapp'

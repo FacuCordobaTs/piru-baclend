@@ -21,7 +21,7 @@ import {
   type CicloPago,
 } from '../lib/suscripciones'
 import { obtenerConfiguracionSuscripcion, resolverSuscripcionUnica } from '../lib/suscripcion'
-import { resolverImporteMensual, resolverModulosRestaurante, resolverRepresentacionCanonicaCrecimiento } from '../lib/modulos'
+import { resolverImporteMensual, resolverModulosRestaurante } from '../lib/modulos'
 import {
   generarClaimLink,
   buildClaimUrl,

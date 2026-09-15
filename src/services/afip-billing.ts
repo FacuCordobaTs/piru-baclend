@@ -77,7 +77,7 @@ export async function emitirFacturaPedido(
     cert: config.cert,
     key: config.key,
     access_token: process.env.AFIPSDK_ACCESS_TOKEN!,
-    production: false, // Cambiar a false para testing
+    production: false, // Homologación hardcodeada; un pase a producción requiere revisión integral.
   })
 
   // 2. Resolver punto de venta: usar el existente o crear uno nuevo

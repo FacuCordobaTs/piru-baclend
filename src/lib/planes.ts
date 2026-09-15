@@ -1,9 +1,7 @@
 /**
- * Fuente única de verdad para los códigos de plan, las claves de feature y el
- * chequeo de acceso (tieneAcceso). El modelo de datos vive en las tablas
- * plan / plan_feature / suscripcion (ver db/schema.ts); acá están las constantes
- * estables y la ÚNICA función que decide si un local tiene acceso a una feature.
- * Todo el código pregunta por acá y en ningún otro lado.
+ * COMPATIBILIDAD LEGACY para admins instalados y el único gate rezagado.
+ * El modelo vigente es suscripción única + módulos: código nuevo debe usar
+ * lib/suscripcion.ts, lib/modulos.ts y requireModulo. Ver docs/BILLING_AND_MODULES.md.
  */
 import { type MySql2Database } from 'drizzle-orm/mysql2'
 import { and, eq } from 'drizzle-orm'
@@ -15,7 +13,7 @@ import {
 
 type Db = MySql2Database<Record<string, never>>
 
-/** Códigos estables de plan (columna plan.codigo). El nombre comercial puede cambiar; el código no. */
+/** Códigos de las filas legacy de plan; no crear planes nuevos. */
 export const PLAN_CODES = {
   BASICO: 'basico',
   INTERMEDIO: 'intermedio',
@@ -25,12 +23,8 @@ export const PLAN_CODES = {
 export type PlanCode = (typeof PLAN_CODES)[keyof typeof PLAN_CODES]
 
 /**
- * Claves canónicas de feature (columna plan_feature.feature_key).
- * Gating por plan (según el modelo de negocio):
- *   Básico+     : MULTISUCURSAL, DOMINIO_PROPIO
- *   Intermedio+ : AVISOS_WHATSAPP_CLIENTE, FACTURACION_ARCA, RAPIBOY, ESTADISTICAS_AVANZADAS
- *   Avanzado    : MOTOR_RECOMPRA
- * Todo lo demás (recepción de pedidos, impresión, cupones, etc.) NO se gatea: está en todos los planes.
+ * Claves legacy de plan_feature. Se conservan para serializar respuestas viejas;
+ * no son el catálogo canónico de capacidades.
  */
 export const FEATURE_KEYS = {
   /** Avisos automáticos al cliente por WhatsApp ("en camino" / "listo para retirar") con marca del local. */
@@ -39,19 +33,19 @@ export const FEATURE_KEYS = {
   FACTURACION_ARCA: 'facturacion_arca',
   /** Integración con Rapiboy (cadetes). */
   RAPIBOY: 'rapiboy',
-  /** Múltiples sucursales (Básico+). */
+  /** Alias legacy de múltiples sucursales. */
   MULTISUCURSAL: 'multisucursal',
   /** Estadísticas avanzadas. */
   ESTADISTICAS_AVANZADAS: 'estadisticas_avanzadas',
-  /** Dominio propio / landing propia (Básico+). */
+  /** Alias legacy de dominio propio / landing propia. */
   DOMINIO_PROPIO: 'dominio_propio',
-  /** Motor de Recompra (CRM gastronómico). ROADMAP: aún no construido. */
+  /** Alias legacy de feature. El acceso nuevo se resuelve mediante módulos. */
   MOTOR_RECOMPRA: 'motor_recompra',
 } as const
 
 export type FeatureKey = (typeof FEATURE_KEYS)[keyof typeof FEATURE_KEYS]
 
-/** Features que habilita cada plan por default (el plan superior incluye todo lo del inferior). */
+/** Matriz histórica usada sólo por compatibilidad de planes. */
 export const PLAN_FEATURES: Record<PlanCode, FeatureKey[]> = {
   [PLAN_CODES.BASICO]: [
     FEATURE_KEYS.MULTISUCURSAL,
@@ -81,22 +75,22 @@ export const PLAN_FEATURES: Record<PlanCode, FeatureKey[]> = {
  * Regla dura del negocio: NUNCA cortar en seco por un pago fallido → período de gracia primero.
  */
 export const SUSCRIPCION_ESTADOS = {
-  /** Prueba: acceso completo al plan contratado. */
+  /** Prueba: acceso a la suscripción base; módulos pagos se resuelven aparte. */
   TRIAL: 'trial',
   /** Al día: acceso completo. */
   ACTIVA: 'activa',
   /** Venció el cobro pero está en período de gracia: sigue operando con normalidad. */
   PAGO_PENDIENTE: 'pago_pendiente',
-  /** Agotada la gracia sin pagar: features de pago bloqueadas (los pedidos/avisos en curso NO se cortan). */
+  /** Agotada la gracia sin pagar: acceso comercial bloqueado; no corta operaciones ya iniciadas. */
   SUSPENDIDA: 'suspendida',
-  /** Baja voluntaria: sin acceso a features de pago. */
+  /** Baja voluntaria: sin acceso comercial. */
   CANCELADA: 'cancelada',
 } as const
 
 export type SuscripcionEstado =
   (typeof SUSCRIPCION_ESTADOS)[keyof typeof SUSCRIPCION_ESTADOS]
 
-/** Estados en los que el local conserva acceso completo a las features de su plan. */
+/** Estados que el resolver legacy considera con acceso. */
 export const ESTADOS_CON_ACCESO_COMPLETO: SuscripcionEstado[] = [
   SUSCRIPCION_ESTADOS.TRIAL,
   SUSCRIPCION_ESTADOS.ACTIVA,
@@ -104,15 +98,12 @@ export const ESTADOS_CON_ACCESO_COMPLETO: SuscripcionEstado[] = [
 ]
 
 // ============================================================================
-// Chequeo de acceso — la ÚNICA verdad. tieneAcceso(db, localId, 'feature').
+// Chequeo legacy de acceso. Código nuevo usa tieneModuloActivo/requireModulo.
 // ============================================================================
 
 /**
- * Cuentas anteriores a los planes no tienen fila en `suscripcion`. Para NO romper
- * producción, mientras no tengan suscripción se les da acceso total (fail-open):
- * el gating recién aplica cuando se les asigna un plan (backfill/onboarding).
- * Poné en false cuando todos los restaurantes tengan suscripción para gatear
- * también a los que no la tengan.
+ * Fallback histórico de features para cuentas sin fila. No equivale a acceso a
+ * módulos pagos y no debe consultarse desde código nuevo.
  */
 export const SIN_SUSCRIPCION_ACCESO_TOTAL = true
 
@@ -125,13 +116,13 @@ export interface SuscripcionResuelta {
   planId: number | null
   planCodigo: string | null
   planNombre: string | null
-  /** Estados trial/activa/pago_pendiente: conserva las features de pago del plan. */
+  /** Acceso calculado por el resolvedor legacy. */
   conAccesoAPago: boolean
-  /** Features de pago efectivamente habilitadas ahora mismo. */
+  /** Features legacy habilitadas para responses/gates antiguos. */
   features: Set<string>
-  /** Mensajes utility (avisos de pedido) incluidos por ciclo por el plan (0 si no aplica). */
+  /** Snapshot legacy de cupo utility por plan. */
   mensajesIncluidos: number
-  /** Mensajes marketing (Motor de Recompra) incluidos por ciclo por el plan (0 si no aplica). */
+  /** Snapshot legacy de cupo marketing por plan. */
   mensajesMarketingIncluidos: number
   /** LEGACY (Modelo 2): ya ningún plan es ilimitado. Se conserva por retrocompat; siempre false. */
   mensajesIlimitados: boolean
@@ -140,8 +131,8 @@ export interface SuscripcionResuelta {
 }
 
 /**
- * Resuelve la suscripción vigente de un restaurante y qué features de pago tiene
- * habilitadas AHORA (según el estado). Fuente para tieneAcceso y para la UI.
+ * Resuelve aliases de plan/features para compatibilidad. No usar como dominio
+ * canónico de suscripción o módulos.
  */
 export async function resolverSuscripcion(
   db: Db,
@@ -219,7 +210,7 @@ export async function resolverSuscripcion(
  * Hard paywall: ¿el local puede USAR el panel? Distinto del gating por feature (tieneAcceso):
  * acá decidimos acceso a TODO el admin, no a una función puntual.
  *  - Cuentas grandfathered (`requiereSuscripcion = false`, p. ej. pre-planes): siempre pueden.
- *  - Cuentas nuevas (bajo el modelo de planes): sólo con suscripción en estado con acceso
+ *  - Cuentas nuevas con hard paywall: sólo con suscripción en estado con acceso
  *    (activa / pago_pendiente en gracia). Sin fila de suscripción (nunca pagaron) → bloqueadas.
  * El `SIN_SUSCRIPCION_ACCESO_TOTAL` (fail-open de features) NO aplica acá: una cuenta paywalled
  * sin suscripción queda fuera aunque el fail-open de features siga en true.

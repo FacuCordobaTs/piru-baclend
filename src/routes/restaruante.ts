@@ -287,7 +287,7 @@ restauranteRoute.get('/profile', async (c) => {
       agregadosSecundarios: (agregadosPorProducto.get(p.id) || []).filter(a => a.grupo === 2),
     }))
 
-    // Suscripción + features de pago habilitadas: la UI candadea lo que no está incluido.
+    // Suscripción + aliases legacy de features; módulos se resuelven por separado.
     // Transición lazy de estado (venció el cobro → gracia → suspendida) antes de leer, así el
     // gate del panel usa el estado real y una cuenta recién suspendida pierde acceso.
     await resolverEstadoVigente(db, restauranteId)
@@ -771,7 +771,7 @@ restauranteRoute.put('/toggle-order-group-enabled', async (c) => {
   }
 })
 
-// Toggle habilitar/deshabilitar envio de whatsapp a clientes — feature de plan Intermedio+
+// Gate legacy pendiente de migrar a requireModulo(AVISOS_AUTOMATICOS_WHATSAPP).
 restauranteRoute.put('/toggle-notificar-clientes-whatsapp', requireFeature(FEATURE_KEYS.AVISOS_WHATSAPP_CLIENTE), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id

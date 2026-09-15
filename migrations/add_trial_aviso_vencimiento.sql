@@ -1,7 +1,8 @@
--- Migration: aviso "tu prueba está por vencer" (día ~12) del Claim Flow. Ver docs/ROADMAP_CLAIM_FLOW.md (Tarea 7)
+-- Migration: aviso "tu prueba está por vencer" (día ~3 del trial de 5) del Claim Flow.
+-- Modelo vigente: docs/AUTH_AND_ONBOARDING.md.
 --
 -- Aditiva y retrocompatible: agrega una columna nullable a `suscripcion` que sirve de flag
--- anti-reenvío del scheduler (mientras no sea null, el aviso día-12 ya salió). No cambia el
+-- anti-reenvío del scheduler (mientras no sea null, el aviso del trial ya salió). No cambia el
 -- comportamiento de las cuentas existentes. Ejecutar en MySQL (prod). Si ya existe, omitir.
 
 ALTER TABLE `suscripcion`

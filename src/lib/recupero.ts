@@ -1,11 +1,10 @@
 // src/lib/recupero.ts
 //
-// Motor de Recompra · Capa 2 (piloto automático) — playbook de recupero de dormidos (tarea 4.2).
+// Recupero de clientes — playbook de dormidos conservado por compatibilidad/transición.
 //
-// A diferencia del enunciado original del ROADMAP (piloto automático), acá el playbook es una
-// ACCIÓN VOLUNTARIA del local: aprieta un botón en la "Base de clientes" y se manda el toque de
-// recupero al cliente elegido. La inteligencia (a quién le conviene, en qué escalón está) la pone
-// el sistema; el gatillo lo pone el local.
+// El endpoint por cliente es una ACCIÓN VOLUNTARIA del local; estas primitivas también son
+// reutilizadas por el motor persistente de goteo. Modelo vigente y compatibilidad:
+// docs/CUSTOMERS_AND_GROWTH.md.
 //
 // La ESCALERA DE INCENTIVOS es la clave: no se regala descuento de entrada.
 //   nivel 1 → sin descuento (solo antojo: foto de lo que más pide + "repetí tu pedido")
@@ -14,8 +13,8 @@
 // El próximo nivel se deriva de cuántos toques se enviaron DESPUÉS del último pedido del cliente:
 // si volvió a pedir, la escalera se reinicia sola (se detiene apenas el cliente vuelve).
 //
-// Consume el bucket `marketing` del wallet de mensajes (best-effort: la contabilidad nunca impide
-// que salga el mensaje). El envío usa las credenciales de Meta del propio local (marca del local).
+// Reserva el bucket `marketing` antes de llamar a WhatsApp: retención nunca genera deuda.
+// El envío usa las credenciales de Meta del propio local (marca del local).
 
 import { type MySql2Database } from 'drizzle-orm/mysql2'
 import { and, eq, inArray, notInArray, desc } from 'drizzle-orm'
@@ -30,7 +29,11 @@ import {
   campanaRecompra as CampanaRecompraTable,
   campanaRecompraCliente as CampanaRecompraClienteTable,
 } from '../db/schema'
-import { consumirMensaje } from './mensajes-wallet'
+import {
+  compensarReservaCreditoMarketing,
+  confirmarReservaCreditoMarketing,
+  reservarCreditoMarketing,
+} from './mensajes-wallet'
 import { computarPerfilesRFM, type SegmentoCliente } from './clientes-rfm'
 import { sendClientRecuperoWhatsApp, resolverCredsRestaurante } from '../services/whatsapp'
 import {
@@ -260,13 +263,22 @@ async function upsertCuponRecupero(
 export interface ResultadoEnvioRecupero {
   ok: boolean
   /** Código de error legible para la UI cuando ok=false. */
-  motivo?: 'sin_whatsapp' | 'sin_telefono' | 'cooldown' | 'cliente_no_encontrado' | 'envio_fallido' | MotivoBloqueoMarketing
+  motivo?: 'sin_whatsapp' | 'sin_telefono' | 'sin_saldo' | 'cooldown' | 'cliente_no_encontrado' | 'envio_fallido' | MotivoBloqueoMarketing
   mensaje?: string
   nivel?: number
   codigoDescuento?: string | null
   saldoMarketing?: number
+  plantillaWhatsapp?: string
+  errorEnvio?: string | null
   estado?: EstadoRecupero
 }
+
+export interface OpcionesEnvioRecupero {
+  /** Clave estable del intento lógico. Impide dobles débitos y dobles envíos al reintentar. */
+  operacionId?: string
+}
+
+export const PLANTILLA_RECUPERO_WHATSAPP = 'recupero_dormido_v1'
 
 /**
  * Orquesta el envío de un toque de recupero al cliente: resuelve el escalón, arma el antojo
@@ -280,6 +292,7 @@ export async function enviarRecuperoDormido(
   db: Db,
   restauranteId: number,
   clienteId: number,
+  opciones: OpcionesEnvioRecupero = {},
 ): Promise<ResultadoEnvioRecupero> {
   // 1. Cliente + local
   const [cli] = await db
@@ -406,12 +419,65 @@ export async function enviarRecuperoDormido(
   }
   const escalon = ESCALERA[estado.proximoNivel - 1]
 
-  // 4. Cupón (nivel 2/3).
-  const codigo = escalon.descuento > 0
-    ? await upsertCuponRecupero(db, restauranteId, clienteId, escalon)
-    : null
+  // 4. Reservar antes de crear beneficios o llamar al proveedor. Una operación ya confirmada se responde de
+  // forma idempotente; una compensada representa un intento fallido ya cerrado.
+  const operacionId = opciones.operacionId ?? `recupero:${restauranteId}:${clienteId}:${crypto.randomUUID()}`
+  const reserva = await reservarCreditoMarketing(
+    db,
+    restauranteId,
+    operacionId,
+    `reserva_recupero_nivel_${escalon.nivel}`,
+  )
+  if (reserva.estado === 'sin_saldo') {
+    return {
+      ok: false,
+      motivo: 'sin_saldo',
+      mensaje: 'No hay saldo de mensajes de marketing disponible',
+      saldoMarketing: reserva.saldoMarketingDisponible,
+      plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
+      estado,
+    }
+  }
+  if (reserva.estado === 'confirmada') {
+    const [toqueConfirmado] = await db.select({
+      nivel: RecuperoClienteTable.nivel,
+      codigoDescuento: RecuperoClienteTable.codigoDescuento,
+    }).from(RecuperoClienteTable).where(and(
+      eq(RecuperoClienteTable.restauranteId, restauranteId),
+      eq(RecuperoClienteTable.clienteId, clienteId),
+    )).orderBy(desc(RecuperoClienteTable.createdAt)).limit(1)
+    return {
+      ok: true,
+      nivel: toqueConfirmado?.nivel ?? estado.ultimoNivel ?? escalon.nivel,
+      codigoDescuento: toqueConfirmado?.codigoDescuento ?? null,
+      saldoMarketing: reserva.saldoMarketingDisponible,
+      plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
+      estado,
+    }
+  }
+  if (reserva.estado === 'compensada') {
+    return {
+      ok: false,
+      motivo: 'envio_fallido',
+      mensaje: 'Este intento ya había fallado y su crédito fue devuelto',
+      saldoMarketing: reserva.saldoMarketingDisponible,
+      plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
+      estado,
+    }
+  }
 
-  // 5. Envío del WhatsApp de marketing con la marca del local.
+  // 5. Cupón (nivel 2/3). Si falla su persistencia se devuelve la reserva.
+  let codigo: string | null = null
+  try {
+    codigo = escalon.descuento > 0
+      ? await upsertCuponRecupero(db, restauranteId, clienteId, escalon)
+      : null
+  } catch (error) {
+    await compensarReservaCreditoMarketing(db, restauranteId, operacionId)
+    throw error
+  }
+
+  // 6. Envío del WhatsApp de marketing con la marca del local.
   const send = await sendClientRecuperoWhatsApp(
     c,
     {
@@ -428,10 +494,21 @@ export async function enviarRecuperoDormido(
   )
 
   if (!send.success) {
-    return { ok: false, motivo: 'envio_fallido', mensaje: 'No se pudo enviar el mensaje por WhatsApp', estado }
+    const compensacion = await compensarReservaCreditoMarketing(db, restauranteId, operacionId)
+    return {
+      ok: false,
+      motivo: 'envio_fallido',
+      mensaje: 'No se pudo enviar el mensaje por WhatsApp',
+      saldoMarketing: compensacion.saldoMarketingDisponible,
+      plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
+      errorEnvio: typeof send.error === 'string' ? send.error : JSON.stringify(send.error ?? null).slice(0, 500),
+      estado,
+    }
   }
 
-  // 6. Registrar el toque.
+  const confirmacion = await confirmarReservaCreditoMarketing(db, restauranteId, operacionId)
+
+  // 7. Registrar el toque.
   await db.insert(RecuperoClienteTable).values({
     restauranteId,
     clienteId,
@@ -441,19 +518,6 @@ export async function enviarRecuperoDormido(
     codigoDescuento: codigo,
     segmento: null,
   })
-
-  // 7. Descontar el bucket marketing (best-effort: nunca frena el mensaje ni el flujo).
-  let saldoMarketing: number | undefined
-  try {
-    const consumo = await consumirMensaje(db, restauranteId, {
-      categoria: 'marketing',
-      tipoMensaje: 'recupero_dormido',
-      motivo: `playbook_recupero_nivel_${escalon.nivel}`,
-    })
-    saldoMarketing = consumo.saldoMarketingDisponible
-  } catch (err) {
-    console.error('❌ [Recupero] Error descontando marketing wallet:', err)
-  }
 
   // Estado actualizado (suma el toque recién enviado).
   const nuevoEstado = estadoRecupero(
@@ -465,7 +529,8 @@ export async function enviarRecuperoDormido(
     ok: true,
     nivel: escalon.nivel,
     codigoDescuento: codigo,
-    saldoMarketing,
+    saldoMarketing: confirmacion.saldoMarketingDisponible,
+    plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
     estado: nuevoEstado,
   }
 }

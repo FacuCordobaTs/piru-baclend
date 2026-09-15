@@ -71,7 +71,7 @@ export function montoPorCiclo(
 
 /**
  * Crea un pago de suscripción en estado 'pending' (aún NO da acceso; se activa en el
- * webhook al aprobarse). El monto SIEMPRE sale del precio del plan en la DB.
+ * webhook al aprobarse). El monto SIEMPRE sale de base + módulos en la DB.
  */
 export async function crearPagoSuscripcionPendiente(
   db: Db,

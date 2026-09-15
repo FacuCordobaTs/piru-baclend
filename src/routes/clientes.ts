@@ -35,7 +35,8 @@ import {
 } from '../lib/recupero'
 import {
     estadoMotor, activarMotor, pausarMotorManual, reanudarMotor, setCupoDiario,
-    registrarContactoManual, CUPO_DIARIO_MIN, CUPO_DIARIO_MAX,
+    listarClientesRecompra, listarColaRecompra, listarHistorialRecompra,
+    registrarContactoManual, registrarFalloContactoManual, CUPO_DIARIO_MIN, CUPO_DIARIO_MAX,
 } from '../lib/motor-recompra'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { resolverOportunidadesMarketing } from '../lib/marketing-oportunidades'
@@ -558,9 +559,9 @@ clientesRoute.delete('/:id', async (c) => {
 /**
  * POST /clientes/:id/recupero — Playbook de recupero de dormidos (Motor de Recompra · 4.2).
  * Acción VOLUNTARIA del local: manda el próximo toque de la escalera de incentivos al cliente.
- * Gateado por Crecimiento (acepta el entitlement Motor legacy). Consume el bucket `marketing` del wallet.
+ * Gateado por Motor de Recompra. Reserva el bucket `marketing` antes del proveedor.
  */
-clientesRoute.post('/:id/recupero', requireModulo(MODULE_KEYS.CRECIMIENTO), async (c) => {
+clientesRoute.post('/:id/recupero', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     const clienteId = parseInt(c.req.param('id'), 10)
@@ -570,12 +571,22 @@ clientesRoute.post('/:id/recupero', requireModulo(MODULE_KEYS.CRECIMIENTO), asyn
     }
 
     try {
-        const resultado = await enviarRecuperoDormido(c, db, restauranteId, clienteId)
+        const claveSolicitada = c.req.header('Idempotency-Key')?.trim()
+        const operacionId = claveSolicitada && claveSolicitada.length <= 80
+            ? `recupero-manual:${restauranteId}:${clienteId}:${claveSolicitada}`
+            : `recupero-manual:${restauranteId}:${clienteId}:${crypto.randomUUID()}`
+        const resultado = await enviarRecuperoDormido(c, db, restauranteId, clienteId, { operacionId })
 
         if (!resultado.ok) {
+            if (resultado.motivo === 'envio_fallido') {
+                await registrarFalloContactoManual(db, restauranteId, clienteId, {
+                    plantillaWhatsapp: resultado.plantillaWhatsapp,
+                    errorEnvio: resultado.errorEnvio ?? resultado.mensaje,
+                })
+            }
             // 404 si el cliente no existe; 409 por barreras "no ahora" (cooldown + protección de la
             // base: opt-out / tope mensual / horario de silencio); 400 para el resto (config/envío).
-            const bloqueos = ['cooldown', 'opt_out', 'tope_mensual', 'horario_silencio']
+            const bloqueos = ['cooldown', 'opt_out', 'tope_mensual', 'horario_silencio', 'sin_saldo']
             const status = resultado.motivo === 'cliente_no_encontrado'
                 ? 404
                 : bloqueos.includes(resultado.motivo ?? '')
@@ -590,6 +601,7 @@ clientesRoute.post('/:id/recupero', requireModulo(MODULE_KEYS.CRECIMIENTO), asyn
         await registrarContactoManual(db, restauranteId, clienteId, {
             nivel: resultado.nivel,
             codigoDescuento: resultado.codigoDescuento,
+            plantillaWhatsapp: resultado.plantillaWhatsapp,
         })
 
         return c.json({
@@ -610,8 +622,7 @@ clientesRoute.post('/:id/recupero', requireModulo(MODULE_KEYS.CRECIMIENTO), asyn
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MOTOR DE RECOMPRA · GOTEO (piloto automático) — campaña persistente que gotea
-// al ritmo del cupo diario. Las rutas aceptan Crecimiento para admins viejos,
-// pero sólo el entitlement físico Motor puede crear goteo nuevo.
+// al ritmo del cupo diario. Todo el contrato usa el gate canónico de Retención.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
@@ -619,7 +630,7 @@ clientesRoute.post('/:id/recupero', requireModulo(MODULE_KEYS.CRECIMIENTO), asyn
  *  - apagado → un PLAN de activación (cohorte detectada + propuesta de cupo + días que cubre el saldo).
  *  - encendido → el DASHBOARD (consumo junto a retorno: contactados, volvieron, plata recuperada).
  */
-clientesRoute.get('/recompra/estado', requireModulo(MODULE_KEYS.CRECIMIENTO), async (c) => {
+clientesRoute.get('/recompra/estado', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
@@ -636,20 +647,19 @@ clientesRoute.get('/recompra/estado', requireModulo(MODULE_KEYS.CRECIMIENTO), as
  * aparta el 10% de control, carga la cola y dispara el primer goteo (respetando cupo/silencio).
  * Body opcional: { cupoDiario }.
  */
-clientesRoute.post('/recompra/activar', requireModulo(MODULE_KEYS.CRECIMIENTO), async (c) => {
+clientesRoute.post('/recompra/activar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
         const body = await c.req.json().catch(() => ({}))
         const cupoDiario = body?.cupoDiario != null ? Number(body.cupoDiario) : undefined
         const resultado = await activarMotor(db, restauranteId, cupoDiario)
-        if (resultado.schedulerLegacyNoDisponible) {
+        if (resultado.moduloNoDisponible) {
             return c.json({
                 success: false,
-                legacyScheduler: true,
-                message: 'El goteo automático es una función legacy. Usá las acciones explícitas de Crecimiento.',
+                message: 'El módulo Motor de Recompra no está disponible.',
                 data: resultado,
-            }, 409)
+            }, 403)
         }
         return c.json({
             success: true,
@@ -667,7 +677,7 @@ clientesRoute.post('/recompra/activar', requireModulo(MODULE_KEYS.CRECIMIENTO), 
 })
 
 /** POST /clientes/recompra/pausar — Pausar (siempre disponible). No se pierde nada: la cola queda. */
-clientesRoute.post('/recompra/pausar', requireModulo(MODULE_KEYS.CRECIMIENTO), async (c) => {
+clientesRoute.post('/recompra/pausar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
@@ -681,7 +691,7 @@ clientesRoute.post('/recompra/pausar', requireModulo(MODULE_KEYS.CRECIMIENTO), a
 })
 
 /** POST /clientes/recompra/reanudar — vuelve a gotear desde donde quedó. */
-clientesRoute.post('/recompra/reanudar', requireModulo(MODULE_KEYS.CRECIMIENTO), async (c) => {
+clientesRoute.post('/recompra/reanudar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
@@ -695,7 +705,7 @@ clientesRoute.post('/recompra/reanudar', requireModulo(MODULE_KEYS.CRECIMIENTO),
 })
 
 /** PUT /clientes/recompra/config — ajusta el cupo diario (acotado al tope duro de sistema). */
-clientesRoute.put('/recompra/config', requireModulo(MODULE_KEYS.CRECIMIENTO), async (c) => {
+clientesRoute.put('/recompra/config', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
     try {
@@ -713,6 +723,76 @@ clientesRoute.put('/recompra/config', requireModulo(MODULE_KEYS.CRECIMIENTO), as
         }, 200)
     } catch (error) {
         console.error('Error configurando motor de recompra:', error)
+        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
+    }
+})
+
+function numeroQuery(value: string | undefined, fallback: number) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : fallback
+}
+
+/** GET /clientes/recompra/cola — backlog paginado en orden efectivo de despacho. */
+clientesRoute.get('/recompra/cola', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    try {
+        const poblacion = c.req.query('poblacion')
+        const data = await listarColaRecompra(db, restauranteId, {
+            pagina: numeroQuery(c.req.query('pagina'), 1),
+            limite: numeroQuery(c.req.query('limite'), 25),
+            segmento: c.req.query('segmento') || undefined,
+            poblacion: poblacion === 'flujo' || poblacion === 'stock' ? poblacion : undefined,
+        })
+        return c.json({ success: true, data }, 200)
+    } catch (error) {
+        console.error('Error listando cola del motor de recompra:', error)
+        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
+    }
+})
+
+/** GET /clientes/recompra/historial — despachos entregados/fallidos auditables. */
+clientesRoute.get('/recompra/historial', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    try {
+        const estado = c.req.query('estado')
+        const data = await listarHistorialRecompra(db, restauranteId, {
+            pagina: numeroQuery(c.req.query('pagina'), 1),
+            limite: numeroQuery(c.req.query('limite'), 25),
+            segmento: c.req.query('segmento') || undefined,
+            estadoDespacho: estado === 'entregado' || estado === 'fallido' ? estado : undefined,
+        })
+        return c.json({ success: true, data }, 200)
+    } catch (error) {
+        console.error('Error listando historial del motor de recompra:', error)
+        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
+    }
+})
+
+/** GET /clientes/recompra/clientes — directorio consolidado de la campaña viva. */
+clientesRoute.get('/recompra/clientes', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = (c as any).user.id
+    try {
+        const poblacion = c.req.query('poblacion')
+        const rol = c.req.query('rol')
+        const estadoSolicitado = c.req.query('estado')
+        const estados = ['pendiente', 'enviado', 'salido', 'fallido', 'control'] as const
+        const estadoNormalizado = estadoSolicitado === 'salido_por_pedido' ? 'salido' : estadoSolicitado
+        const data = await listarClientesRecompra(db, restauranteId, {
+            pagina: numeroQuery(c.req.query('pagina'), 1),
+            limite: numeroQuery(c.req.query('limite'), 25),
+            segmento: c.req.query('segmento') || undefined,
+            poblacion: poblacion === 'flujo' || poblacion === 'stock' ? poblacion : undefined,
+            rol: rol === 'contactado' || rol === 'control' ? rol : undefined,
+            estado: estados.includes(estadoNormalizado as typeof estados[number])
+                ? estadoNormalizado as typeof estados[number]
+                : undefined,
+        })
+        return c.json({ success: true, data }, 200)
+    } catch (error) {
+        console.error('Error listando clientes del motor de recompra:', error)
         return c.json({ success: false, message: 'Error interno del servidor' }, 500)
     }
 })

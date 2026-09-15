@@ -83,7 +83,7 @@ export const authRoute = new Hono()
           email,
           nombre,
           password: passwordHash,
-          // Alta bajo el modelo de planes → hard paywall: no entra al panel sin suscripción activa.
+          // Alta con hard paywall: no entra al panel sin suscripción base con acceso.
           requiereSuscripcion: true,
           createdAt: new Date()
       });
@@ -269,7 +269,7 @@ authRoute.post('/register-telefono/verify', zValidator('json', verifyTelefonoSch
     // Idempotencia: si esta verificación ya creó (o asoció) una cuenta, devolvemos ESA cuenta en
     // vez de crear otra. Cubre reintentos y doble-submit del código: sin esto, un segundo POST con
     // el mismo verificationId caía por otro camino y podía dejar dos `restaurante` con el mismo
-    // teléfono (una con nombre, otra vacía). Ver bug 2.8 del ROADMAP.
+    // teléfono (una con nombre, otra vacía). Es una protección de identidad vigente.
     if (reg.verificado) {
       if (reg.restauranteId) {
         const [cuentaPrevia] = await db.select().from(restaurante)
@@ -366,7 +366,7 @@ authRoute.post('/register-telefono/verify', zValidator('json', verifyTelefonoSch
     await db.insert(restaurante).values({
       telefono: reg.telefono,
       telefonoVerificado: true,
-      // Alta bajo el modelo de planes → hard paywall: no entra al panel sin suscripción activa.
+      // Alta con hard paywall: no entra al panel sin suscripción base con acceso.
       requiereSuscripcion: true,
       createdAt: new Date(),
     })
@@ -666,4 +666,3 @@ authRoute.put('/change-password', authMiddleware, zValidator('json', changePassw
 //       return c.json({ error: 'Registro de usuario admin falló' }, 400);
 //   }
 // })
-

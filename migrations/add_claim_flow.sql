@@ -1,4 +1,4 @@
--- Migration: Claim flow (onboarding outbound). Ver docs/ROADMAP_CLAIM_FLOW.md
+-- Migration: Claim flow (onboarding outbound). Ver docs/AUTH_AND_ONBOARDING.md
 --
 -- Aditiva y retrocompatible: agrega columnas nuevas a `restaurante` con defaults que no cambian
 -- el comportamiento de las cuentas existentes (origen='self_serve'). Ejecutar en MySQL (prod).

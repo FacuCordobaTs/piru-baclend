@@ -774,7 +774,7 @@ export const sendClientGrowthRecipeWhatsApp = async (
 
 export interface PaymentLinkData {
     phone: string;    // teléfono del DUEÑO del local (formato internacional, solo dígitos)
-    concepto: string; // {{1}} — qué está pagando, ej: "500 avisos por WhatsApp" o "Plan Intermedio"
+    concepto: string; // {{1}} — qué está pagando, ej: "500 avisos por WhatsApp" o "Suscripción Piru"
     monto: string;    // {{2}} — total formateado, ej: "$35.000"
     token: string;    // sufijo dinámico del botón URL → /pago/:token (la página pública de pago)
 }
@@ -979,7 +979,7 @@ export interface TrialEndingData {
     nombre: string;   // {{1}} — nombre del dueño/local, ej: "Milanesas del Centro"
     fechaFin: string; // {{2}} — fecha de fin del trial, ej: "viernes 8/8"
     plata: string;    // {{3}} — plata en pedidos generada en el trial, ej: "$612.000"
-    precio: string;   // {{4}} — precio del plan sin símbolo, ej: "40.000"
+    precio: string;   // {{4}} — precio de la suscripción base sin símbolo, ej: "40.000"
     token: string;    // sufijo dinámico del botón URL → /pago/:token (la página pública de pago)
 }
 
@@ -1007,7 +1007,7 @@ export interface TrialEndingData {
  *        Tocá el botón para pagar de forma segura con Mercado Pago 👇
  *
  *     El ORDEN es el contrato (lo respeta el `body.parameters` de abajo):
- *       {{1}} nombre del dueño/local · {{2}} fecha de fin · {{3}} plata en pedidos · {{4}} precio del plan
+ *       {{1}} nombre del dueño/local · {{2}} fecha de fin · {{3}} plata en pedidos · {{4}} precio de la base
  *     Muestras: {{1}}=Milanesas del Centro · {{2}}=viernes 8/8 · {{3}}=$612.000 · {{4}}=40.000
  *   • Botón:         Uno solo, tipo "Visitar sitio web" → URL DINÁMICA.
  *                    Base EXACTA: https://admin.piru.app/pago/    Variable {{1}}: el token (uuid).
