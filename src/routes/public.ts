@@ -782,7 +782,10 @@ const createDeliverySchema = z.object({
     nombreCliente: z.string().optional(),
     telefono: z.string().optional(),
     notas: z.string().optional(),
-    metodoPago: z.string().optional(),
+    // `nullish` y no `optional`: los storefronts serializan campos opcionales sin
+    // valor como `null` (el checkout pre-cargado de una micro-campaña envía
+    // `metodoPago: null`), y `optional` rechaza `null` con un 400 sin log.
+    metodoPago: z.string().nullish(),
     codigoDescuentoId: z.number().int().positive().optional(),
     canjeEnvioGratis: z.boolean().optional().default(false),
     canjeDescuento: z.boolean().optional().default(false),
@@ -1450,7 +1453,10 @@ const createTakeawaySchema = z.object({
     nombreCliente: z.string().optional(),
     telefono: z.string().optional(),
     notas: z.string().optional(),
-    metodoPago: z.string().optional(),
+    // `nullish` y no `optional`: los storefronts serializan campos opcionales sin
+    // valor como `null` (el checkout pre-cargado de una micro-campaña envía
+    // `metodoPago: null`), y `optional` rechaza `null` con un 400 sin log.
+    metodoPago: z.string().nullish(),
     codigoDescuentoId: z.number().int().positive().optional(),
     canjeDescuento: z.boolean().optional().default(false),
     notificarWhatsapp: z.boolean().optional().default(false),
