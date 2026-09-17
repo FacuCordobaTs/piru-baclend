@@ -607,11 +607,17 @@ export const codigoDescuento = mysqlTable(
     fechaInicio: timestamp("fecha_inicio"),
     fechaFin: timestamp("fecha_fin"),
     activo: boolean("activo").default(true).notNull(),
+    // Distingue los cupones que el sistema emite solo (un Smart Link `GROWTH-*`,
+    // una micro-campaña `CRECE-*` o un toque del Motor de Recompra `VOLVE*`) de
+    // los que el dueño creó a propósito en Clientes/Cupones. Un cupón por
+    // destinatario inunda esa pantalla, así que la lista los excluye por defecto.
+    generadoAutomaticamente: boolean("generado_automaticamente").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
     uniqueIndex("uq_restaurante_codigo").on(table.restauranteId, table.codigo),
     uniqueIndex("uq_codigo_descuento_restaurante_id").on(table.restauranteId, table.id),
+    index("idx_codigo_descuento_rest_auto").on(table.restauranteId, table.generadoAutomaticamente),
   ]
 );
 

@@ -241,6 +241,7 @@ async function upsertCuponRecupero(
         fechaInicio: new Date(),
         fechaFin,
         activo: true,
+        generadoAutomaticamente: true,
       })
       .where(eq(CodigoDescuentoTable.id, existente.id))
   } else {
@@ -255,6 +256,7 @@ async function upsertCuponRecupero(
       fechaInicio: new Date(),
       fechaFin,
       activo: true,
+      generadoAutomaticamente: true,
     })
   }
 

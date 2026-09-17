@@ -938,6 +938,7 @@ export function crearMarketingGrowthPublicRoute(db = drizzle(pool)): Hono {
             fechaInicio: new Date(),
             fechaFin: expiraAt,
             activo: true,
+            generadoAutomaticamente: true,
           })
           cuponCodigo = codigo
           cuponId = Number(insertRes.insertId)
@@ -1342,6 +1343,7 @@ function crearRepositorioEnlacesDrizzle(): RepositorioEnlacesMarketing {
       const resultado = await db.insert(CodigoDescuentoTable).values({
         restauranteId, codigo: input.codigo, tipo: 'porcentaje', valor: String(input.descuentoPorcentaje),
         limiteUsos: 1, usosActuales: 0, montoMinimo: '0.00', fechaInicio: new Date(), fechaFin: input.expiraAt, activo: true,
+        generadoAutomaticamente: true,
       })
       return { id: Number(resultado[0].insertId) }
     },

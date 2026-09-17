@@ -46,16 +46,30 @@ const resultadosCodigoQuerySchema = z.object({
   message: 'from debe ser anterior a to',
 })
 
-// GET /codigo-descuento - Listar todos los códigos del restaurante
+// GET /codigo-descuento - Listar los códigos del restaurante
+//
+// Por defecto excluye los cupones que el sistema emite solo (`GROWTH-*` de un
+// Smart Link, `CRECE-*` de una micro-campaña, `VOLVE*` del Motor de Recompra):
+// se generan por destinatario y ahogan los cupones que el dueño creó a
+// propósito en esta pantalla. `?incluirAutomaticos=1` devuelve el universo
+// completo, para diagnóstico o herramientas internas.
 codigoDescuentoRoute.get('/', async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
+  const incluirAutomaticos = ['1', 'true'].includes((c.req.query('incluirAutomaticos') ?? '').toLowerCase())
 
   try {
     const codigos = await db
       .select()
       .from(CodigoDescuentoTable)
-      .where(eq(CodigoDescuentoTable.restauranteId, restauranteId))
+      .where(
+        incluirAutomaticos
+          ? eq(CodigoDescuentoTable.restauranteId, restauranteId)
+          : and(
+              eq(CodigoDescuentoTable.restauranteId, restauranteId),
+              eq(CodigoDescuentoTable.generadoAutomaticamente, false)
+            )
+      )
 
     return c.json({ success: true, data: codigos }, 200)
   } catch (error) {
@@ -189,6 +203,9 @@ codigoDescuentoRoute.post('/create', requireModulo(MODULE_KEYS.CODIGOS_DESCUENTO
       montoMinimo: body.montoMinimo ?? '0.00',
       fechaInicio: body.fechaInicio ? new Date(body.fechaInicio) : null,
       fechaFin: body.fechaFin ? new Date(body.fechaFin) : null,
+      // Este endpoint es la creación intencional del dueño: el cupón debe
+      // sobrevivir al filtro de la lista (ver GET / más abajo).
+      generadoAutomaticamente: false,
     })
 
     const insertedId = Number(result[0].insertId)
