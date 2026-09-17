@@ -1,7 +1,7 @@
 import { sucursalPublica } from '../lib/sucursales-operacion'
 // src/websocket/manager.ts
 import { drizzle } from 'drizzle-orm/mysql2';
-import { resolverClienteParaPedido } from '../lib/clientes-identidad'
+import { construirRosterParticipantes, normalizarNombreComensal, normalizarTelefonoCliente, resolverClienteParaPedido } from '../lib/clientes-identidad'
 import { eq, desc, and, or, lt, isNull, sql } from 'drizzle-orm';
 import { pool } from '../db';
 import {
@@ -653,7 +653,7 @@ class WebSocketManager {
       const nombreProducto = nombresVariantes ? `${baseNombre} - ${nombresVariantes}` : baseNombre;
 
       const clienteTelefono = item.clienteTelefono
-        || session.clientes.find(c => c.nombre === item.clienteNombre)?.telefono
+        || session.clientes.find(c => normalizarNombreComensal(c.nombre) === normalizarNombreComensal(item.clienteNombre))?.telefono
         || undefined;
 
       const newItem: ItemPedidoWS = {
@@ -1469,31 +1469,47 @@ class WebSocketManager {
         restauranteId: sala[0].restauranteId!, nombre: checkoutData.nombre, telefono: checkoutData.telefono,
       }));
       const clienteId = perfilCliente?.id ?? null;
+      // Igual que el alta individual: un pedido nuevo retira al comprador de la
+      // cola de recompra.
+      if (clienteId) salirDeColaPorPedido(this.db, sala[0].restauranteId!, clienteId).catch(() => {});
 
-      // Resolver clientes individuales para cada participante del grupo
+      // Cada comensal del grupo se persiste como cliente individual, igual que
+      // una compra de MenuDelivery. Participan del pedido quienes tienen ítems
+      // (por nombre) y el receptor; los conectados de la sala sólo prestan el
+      // celular que le falte a algún ítem, salvo que ese ítem los nombre.
+      const nombresConItems = new Set(
+        items.map(item => normalizarNombreComensal(item.clienteNombre)).filter(Boolean),
+      );
+      const { participantes, porNombre: participantePorNombre } = construirRosterParticipantes([
+        ...items.map(item => ({ nombre: item.clienteNombre, telefono: item.clienteTelefono })),
+        { nombre: checkoutData.nombre, telefono: checkoutData.telefono },
+        ...(session.clientes || []).map(conectado => ({
+          nombre: conectado.nombre,
+          telefono: conectado.telefono,
+          delPedido: nombresConItems.has(normalizarNombreComensal(conectado.nombre)),
+        })),
+      ]);
+
       const participantClientIds = new Map<string, number>();
-      if (clienteId && checkoutData.telefono?.trim()) {
-        participantClientIds.set(`${checkoutData.nombre.trim()}:${checkoutData.telefono.trim()}`, clienteId);
-        participantClientIds.set(checkoutData.telefono.trim(), clienteId);
-      }
+      const telefonoReceptor = normalizarTelefonoCliente(checkoutData.telefono);
+      if (clienteId && telefonoReceptor) participantClientIds.set(telefonoReceptor, clienteId);
 
-      for (const item of items) {
-        const itemNombre = item.clienteNombre?.trim() || checkoutData.nombre.trim();
-        const itemTel = item.clienteTelefono?.trim() || (itemNombre === checkoutData.nombre.trim() ? checkoutData.telefono.trim() : null);
-        if (itemTel && itemNombre) {
-          const key = `${itemNombre}:${itemTel}`;
-          if (!participantClientIds.has(key)) {
-            const perfil = await this.db.transaction((tx) => resolverClienteParaPedido(tx, {
-              restauranteId: sala[0].restauranteId!,
-              nombre: itemNombre,
-              telefono: itemTel,
-            }));
-            if (perfil?.id) {
-              participantClientIds.set(key, perfil.id);
-              participantClientIds.set(itemTel, perfil.id);
-              salirDeColaPorPedido(this.db, sala[0].restauranteId!, perfil.id).catch(() => {});
-            }
+      for (const [telefono, participante] of participantes) {
+        if (participantClientIds.has(telefono)) continue;
+        try {
+          const perfil = await this.db.transaction((tx) => resolverClienteParaPedido(tx, {
+            restauranteId: sala[0].restauranteId!,
+            nombre: participante.nombre,
+            telefono: participante.telefono,
+          }));
+          if (perfil?.id) {
+            participantClientIds.set(telefono, perfil.id);
+            salirDeColaPorPedido(this.db, sala[0].restauranteId!, perfil.id).catch(() => {});
           }
+        } catch (error) {
+          // Un participante que no se puede resolver no debe tumbar el pedido
+          // completo del grupo (mismo criterio que el delivery individual).
+          console.error('❌ [confirmarPedidoSala] Error resolviendo participante:', participante.nombre, error);
         }
       }
 
@@ -1572,10 +1588,19 @@ class WebSocketManager {
       });
 
       for (const item of items) {
-        const itemNombre = item.clienteNombre?.trim() || checkoutData.nombre.trim();
-        const itemTel = item.clienteTelefono?.trim() || (itemNombre === checkoutData.nombre.trim() ? checkoutData.telefono.trim() : null);
-        const itemKey = itemTel && itemNombre ? `${itemNombre}:${itemTel}` : (itemTel || null);
-        const itemClienteId = itemKey ? (participantClientIds.get(itemKey) ?? null) : (itemNombre === checkoutData.nombre.trim() ? clienteId : null);
+        // El ítem se atribuye por su celular; si no lo trajo, se busca su
+        // participante por nombre normalizado y, si tampoco, por el receptor.
+        const telefonoItem = normalizarTelefonoCliente(item.clienteTelefono)
+          || participantePorNombre.get(
+            normalizarNombreComensal(item.clienteNombre) || normalizarNombreComensal(checkoutData.nombre),
+          )
+          || null;
+        const itemClienteId = telefonoItem ? participantClientIds.get(telefonoItem) ?? null : null;
+        // Guardar el celular resuelto (aunque venga del registro de conectados)
+        // permite que el historial de Clientes atribuya el ítem del grupo.
+        const itemTelefonoVisible = (telefonoItem ? participantes.get(telefonoItem)?.telefono : null)
+          || item.clienteTelefono?.trim()
+          || null;
 
         await this.db.insert(ItemPedidoUnificadoTable).values({
           pedidoId: pedidoUnificadoId,
@@ -1591,7 +1616,7 @@ class WebSocketManager {
           nota: item.nota,
           esCanjePuntos: false,
           clienteNombre: item.clienteNombre || null,
-          clienteTelefono: itemTel || null,
+          clienteTelefono: itemTelefonoVisible,
           clienteId: itemClienteId ?? null,
         });
       }

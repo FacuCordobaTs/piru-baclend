@@ -6,6 +6,46 @@ export function normalizarTelefonoCliente(raw: string | null | undefined): strin
   return digitos.length >= 8 && digitos.length <= 20 ? digitos : null
 }
 
+export type ParticipantePedidoGrupo = { nombre: string; telefono: string }
+
+/** El nombre del comensal llega como texto libre desde la tienda y puede variar
+ * en mayúsculas, acentos o espacios entre el registro de conectados y cada ítem.
+ * Se compara normalizado para no perder la identidad de un participante. */
+export function normalizarNombreComensal(nombre?: string | null): string {
+  return (nombre ?? '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+/** Roster de participantes de un pedido grupal (sala). Cada comensal se persiste
+ * como `cliente` individual, por lo que la clave es el celular normalizado —la
+ * misma identidad que usa `resolverClienteParaPedido`— y el nombre sólo funciona
+ * como alias para vincular los ítems que no trajeron celular. La primera fuente
+ * que aporta un dato gana, así que las fuentes del pedido (ítems y receptor) van
+ * antes que las de contexto (`delPedido: false`): un conectado que no agregó
+ * nada presta su celular para vincular nombres, pero no crea un cliente nuevo
+ * porque no hay compra que lo verifique. */
+export function construirRosterParticipantes(
+  fuentes: { nombre?: string | null; telefono?: string | null; delPedido?: boolean }[],
+): { participantes: Map<string, ParticipantePedidoGrupo>; porNombre: Map<string, string> } {
+  const participantes = new Map<string, ParticipantePedidoGrupo>()
+  const porNombre = new Map<string, string>()
+  for (const fuente of fuentes) {
+    const telefonoNormalizado = normalizarTelefonoCliente(fuente.telefono)
+    const nombre = (fuente.nombre ?? '').trim()
+    if (!telefonoNormalizado || !nombre) continue
+    if (fuente.delPedido !== false && !participantes.has(telefonoNormalizado)) {
+      participantes.set(telefonoNormalizado, { nombre, telefono: (fuente.telefono ?? '').trim() })
+    }
+    const claveNombre = normalizarNombreComensal(nombre)
+    if (!porNombre.has(claveNombre)) porNombre.set(claveNombre, telefonoNormalizado)
+  }
+  return { participantes, porNombre }
+}
+
 export const columnasIndiceCliente = {
   id: cliente.id, nombre: cliente.nombre, telefono: cliente.telefono,
   telefonoNormalizado: cliente.telefonoNormalizado, updatedAt: cliente.updatedAt,
