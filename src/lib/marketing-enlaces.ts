@@ -80,6 +80,29 @@ export function generarTokenMarketing(): string {
   return randomBytes(32).toString('base64url')
 }
 
+/** Base pública de la tienda; el resto de la URL siempre es path/query dinámico. */
+export const BASE_TIENDA = 'https://my.piru.app/'
+
+/**
+ * URL pública de una micro-campaña: el storefront resuelve el slug (`/c/:slug`)
+ * y el token cifrado viaja como query para reconstruir cliente, carrito y
+ * beneficio sin exponer ids.
+ */
+export function urlMicroCampana(username: string, slug: string, token: string): string {
+  return `${BASE_TIENDA}${encodeURIComponent(username)}/c/${encodeURIComponent(slug)}?tk=${encodeURIComponent(token)}`
+}
+
+/**
+ * Un token `v1.` es una micro-campaña cifrada (AES-256-GCM) y se abre en
+ * `/c/:slug`; cualquier otro es un enlace de receta y se abre en `/r/:token`.
+ */
+export function urlEnlaceReceta(username: string, token: string, campanaSlug?: string): string {
+  if (token.startsWith('v1.')) {
+    return urlMicroCampana(username, campanaSlug || 'lo-mismo', token)
+  }
+  return `${BASE_TIENDA}${encodeURIComponent(username)}/r/${encodeURIComponent(token)}`
+}
+
 export interface ContextoClienteEnlace {
   clienteId: number
   segmento: SegmentoCliente

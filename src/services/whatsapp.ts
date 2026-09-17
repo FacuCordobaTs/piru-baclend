@@ -597,8 +597,9 @@ export interface ClientRecuperoData {
     tiempoSinPedir: string;   // {{tiempo_sin_pedir}} — ej: "3 semanas"
     productoFavorito: string; // {{producto_favorito}} — ej: "tus Alfajores de maicena"
     incentivo: string;        // {{incentivo}} — la línea del escalón (sin descuento / 10% / 20% con vencimiento)
-    usernameTienda: string;   // sufijo dinámico del botón URL (base https://my.piru.app/). Puede
-                              // incluir el carrito precargado (4.3): `username?rep=12x2-15x1`.
+    usernameTienda: string;   // path dinámico del botón URL (base https://my.piru.app/), con el
+                              // link de micro-campaña y el carrito adentro del token:
+                              // `username/c/reactivacion?tk=v1.abc.def.ghi`.
     imageUrl?: string | null; // header IMAGE (foto del producto favorito → logo del local → default)
 }
 
@@ -633,7 +634,8 @@ const RECUPERO_IMAGE_FALLBACK = 'https://my.piru.app/og-image.png';
  *     Muestras sugeridas: {{1}}=Facundo · {{2}}=Alfajor con Papas · {{3}}=1 semana ·
  *     {{4}}=Alfajor Especial · {{5}}=Y esta vez va con un 10% OFF: usá el código VOLVE10-45 al pedir.
  *   • Botón:         Uno solo, tipo "Visitar sitio web" → URL DINÁMICA.
- *                    Base: https://my.piru.app/    Variable {{1}}: alfajor (el username del local).
+ *                    Base: https://my.piru.app/    Variable {{1}}: el path de la
+ *                    micro-campaña (ej. `alfajor/c/lo-mismo?tk=v1...`).
  *   • Pie (footer):  NO agregar un pie que instruya "respondé BAJA para no recibir más". El opt-out
  *                    funciona igual sin anunciarlo: si el cliente escribe "BAJA"/"STOP" por su cuenta,
  *                    el webhook lo respeta (ver `procesarComandoOptOut` en `lib/proteccion-base.ts`).
@@ -682,7 +684,7 @@ export const sendClientRecuperoWhatsApp = async (c: any, data: ClientRecuperoDat
                     sub_type: "url",
                     index: 0,
                     parameters: [
-                        // Sufijo dinámico del botón URL: base https://my.piru.app/ + {{1}} = username del local.
+                        // Path dinámico del botón URL: base https://my.piru.app/ + {{1}} = micro-campaña del cliente.
                         { type: "text", text: data.usernameTienda }
                     ]
                 }

@@ -44,6 +44,8 @@ import {
   type MotivoBloqueoMarketing,
 } from './proteccion-base'
 import { normalizarTelefonoCliente } from './clientes-identidad'
+import { cifrarGrowthPayload } from './marketing-crypto'
+import { BASE_TIENDA, urlMicroCampana } from './marketing-enlaces'
 
 type Db = MySql2Database<Record<string, never>>
 
@@ -181,9 +183,10 @@ function tiempoSinPedirTexto(dias: number | null): string {
 }
 
 /**
- * Deep link con carrito precargado (tarea 4.3 · Capa 3, fricción cero). Codifica los items
- * (productoId + cantidad) en un sufijo compacto y URL-safe `rep` que la tienda (`web/MenuDelivery`)
- * lee para armar el carrito solo. Formato: `12x2-15x1` (idProductoXcantidad, pares con `-`).
+ * Carrito precargado (tarea 4.3 · Capa 3, fricción cero). Codifica los items
+ * (productoId + cantidad) en un sufijo compacto y URL-safe que viaja dentro del
+ * token cifrado del link de micro-campaña; la tienda lo lee al resolver el token
+ * y arma el carrito solo. Formato: `12x2-15x1` (idProductoXcantidad, pares con `-`).
  * Del antojo al pedido pagado sin volver a elegir nada.
  */
 export function encodeCarritoRep(items: { productoId: number; cantidad: number }[]): string {
@@ -295,10 +298,12 @@ export interface DatosMensajeRecupero {
   descuento: number
   codigoDescuento: string | null
   nivel: number
+  /** Link de micro-campaña (`/c/:slug?tk=v1...`) que abre la tienda del local. */
   urlTienda: string
   texto: string
   waMeUrl: string | null
   imagenProducto: string | null
+  /** El mismo link, sin la base: es el path dinámico del botón de la plantilla. */
   usernameSuffix: string
   escalon: EscalonRecupero
   estado: EstadoRecupero
@@ -399,10 +404,6 @@ export async function prepararMensajeRecupero(
   }
   if (!repParam && topProductoId) repParam = `${topProductoId}x1`
 
-  const usernameSuffix = rest.username
-    ? (repParam ? `${rest.username}?rep=${repParam}` : rest.username)
-    : ''
-
   // 3. Estado de la escalera → escalón a enviar.
   const toquesMap = await cargarToquesPorCliente(db, restauranteId, [clienteId])
   const estado = estadoRecupero(toquesMap[clienteId] ?? [], ultimoPedidoMs)
@@ -414,9 +415,32 @@ export async function prepararMensajeRecupero(
     codigo = await upsertCuponRecupero(db, restauranteId, clienteId, escalon)
   }
 
+  // 5. Link de micro-campaña con el carrito del último pedido adentro del token
+  // cifrado (antes: `username?rep=12x2-15x1` a la vista). La tienda resuelve el
+  // slug y reconstruye cliente + carrito, así que el mensaje ya no expone ids.
+  // El escalón sin descuento usa `lo-mismo` (drawer 1-toque, sin % extra) y los
+  // escalones con cupón usan `reactivacion`; el descuento sigue viajando en el
+  // cupón, por eso `dto` queda en 0 y el beneficio no se duplica.
+  const esReactivacion = escalon.descuento > 0
+  const tokenMicroCampana = cifrarGrowthPayload({
+    rId: restauranteId,
+    cId: clienteId,
+    campana: esReactivacion ? 'reactivacion' : 'lo_mismo',
+    modalidad: esReactivacion ? 'descuento_banner' : 'drawer_habitual',
+    rep: repParam || undefined,
+    dto: 0,
+    // El link vive lo mismo que el cupón del escalón (nivel 3: 48 hs).
+    exp: escalon.expiraHoras != null ? Date.now() + escalon.expiraHoras * MS_POR_HORA : null,
+  })
+  const urlTienda = rest.username
+    ? urlMicroCampana(rest.username, esReactivacion ? 'reactivacion' : 'lo-mismo', tokenMicroCampana)
+    : 'https://my.piru.app'
+  // La plantilla de WhatsApp ya trae la base `BASE_TIENDA`: sólo se envía el
+  // path dinámico del botón.
+  const usernameSuffix = rest.username ? urlTienda.slice(BASE_TIENDA.length) : ''
+
   const tiempoSinPedir = tiempoSinPedirTexto(diasDesdeUltimo)
   const incentivo = incentivoTexto(escalon, codigo)
-  const urlTienda = rest.username ? `https://my.piru.app/${usernameSuffix}` : 'https://my.piru.app'
   const nombreCliente = cli.nombre?.trim() || 'Cliente'
   const nombreLocal = rest.nombre?.trim() || 'El local'
 

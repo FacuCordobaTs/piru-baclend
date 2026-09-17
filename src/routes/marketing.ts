@@ -52,6 +52,7 @@ import {
   hashTokenMarketing,
   parseCarritoPrearmado,
   prepararEnlaceMarketing,
+  urlEnlaceReceta,
   type RepositorioEnlacesMarketing,
 } from '../lib/marketing-enlaces'
 import { computarPerfilesRFM } from '../lib/clientes-rfm'
@@ -1621,14 +1622,6 @@ function telefonoWaMe(telefono: string | null): string | null {
   // wa.me requiere formato internacional E.164 sin el signo +. Nunca se
   // devuelve el teléfono al admin: sólo se incorpora en la URL de apertura.
   return /^\d{8,15}$/.test(normalizado) ? normalizado : null
-}
-
-function urlEnlaceReceta(username: string, token: string, campanaSlug?: string): string {
-  if (token.startsWith('v1.')) {
-    const slug = campanaSlug || 'lo-mismo'
-    return `https://my.piru.app/${encodeURIComponent(username)}/c/${encodeURIComponent(slug)}?tk=${encodeURIComponent(token)}`
-  }
-  return `https://my.piru.app/${encodeURIComponent(username)}/r/${encodeURIComponent(token)}`
 }
 
 function urlWaMe(telefono: string, texto: string): string {
