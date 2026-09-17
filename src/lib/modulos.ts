@@ -47,9 +47,9 @@ const ALIASES_ACCESO_MODULO: Partial<Record<ModuleKey, readonly ModuleKey[]>> = 
  */
 export function codigosQueHabilitanModulo(modulo: ModuleKey): readonly ModuleKey[] {
   if (modulo === MODULE_KEYS.PUNTOS_CLIENTES) {
-    // Club de Puntos ahora forma parte exclusiva del módulo pago
-    // "Herramientas de retención" (motor_recompra, +$20.000/mes).
-    // Ya no se habilita como módulo incluido gratuito individual.
+    // El Club de Puntos forma parte del módulo pago "Retención"
+    // (motor_recompra). Ya no se habilita como módulo incluido gratuito
+    // individual. El precio vigente vive en `modulo.precio_mensual`.
     return [MODULE_KEYS.MOTOR_RECOMPRA]
   }
   return [modulo, ...(ALIASES_ACCESO_MODULO[modulo] ?? [])]
@@ -197,7 +197,7 @@ export async function resolverModulosRestaurante(
     }
   })
 
-  // Sincronizar puntos_clientes con el estado de motor_recompra (Herramientas de retención)
+  // Sincronizar puntos_clientes con el estado de motor_recompra (Retención)
   const retencionActiva = resueltos.some(
     (m) => m.codigo === MODULE_KEYS.MOTOR_RECOMPRA && m.activoAhora,
   )

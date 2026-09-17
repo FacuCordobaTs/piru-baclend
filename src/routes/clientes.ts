@@ -660,7 +660,7 @@ clientesRoute.post('/recompra/activar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA
         if (resultado.moduloNoDisponible) {
             return c.json({
                 success: false,
-                message: 'El módulo Motor de Recompra no está disponible.',
+                message: 'El módulo Retención no está disponible.',
                 data: resultado,
             }, 403)
         }

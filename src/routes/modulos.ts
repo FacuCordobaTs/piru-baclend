@@ -100,7 +100,7 @@ modulosRoute.put('/:codigo/activar', zValidator('param', codigoSchema), async (c
     if (codigo === MODULE_KEYS.PUNTOS_CLIENTES) {
       return c.json({
         success: false,
-        message: 'El programa de puntos forma parte del módulo Herramientas de retención (+ $20.000/mes)',
+        message: 'El Club de Puntos forma parte del módulo Retención. Activá Retención para usarlo.',
       }, 409)
     }
 

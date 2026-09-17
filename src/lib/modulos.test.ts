@@ -40,7 +40,7 @@ describe('matriz de acceso de módulos', () => {
     ], MODULE_KEYS.MOTOR_RECOMPRA)).toBe(false)
   })
 
-  test('Puntos para clientes requiere exclusivamente el módulo Herramientas de retención', () => {
+  test('Puntos para clientes requiere exclusivamente el módulo Retención', () => {
     // Si sólo tiene la fila legacy de puntos activa pero no motor_recompra, NO se habilita
     expect(listadoHabilitaModulo([
       { codigo: MODULE_KEYS.PUNTOS_CLIENTES, activoAhora: true },
