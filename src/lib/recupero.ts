@@ -13,6 +13,10 @@
 // El próximo nivel se deriva de cuántos toques se enviaron DESPUÉS del último pedido del cliente:
 // si volvió a pedir, la escalera se reinicia sola (se detiene apenas el cliente vuelve).
 //
+// El COPY del toque ya no es único: lo pone el recetario (`recetas-recompra.ts`) según el segmento
+// del cliente, y en modo manual el operador puede cambiar de receta (y con ella el beneficio y el
+// link). La escalera sigue siendo la autoridad del beneficio: la receta sólo puede bajarlo.
+//
 // Reserva el bucket `marketing` antes de llamar a WhatsApp: retención nunca genera deuda.
 // El envío usa las credenciales de Meta del propio local (marca del local).
 
@@ -46,6 +50,23 @@ import {
 import { normalizarTelefonoCliente } from './clientes-identidad'
 import { cifrarGrowthPayload } from './marketing-crypto'
 import { BASE_TIENDA, urlMicroCampana } from './marketing-enlaces'
+import {
+  esSegmentoRecompra,
+  listarRecetasRecompra,
+  resolverBeneficioRecompra,
+  resolverRecetaRecompra,
+  resolverSegmentoRecompraDesdeRFM,
+  SEGMENTOS_RECUPERABLES,
+  textoIncentivoReceta,
+  type BeneficioRecompra,
+  type RecetaRecompra,
+  type SegmentoRecompra,
+} from './recetas-recompra'
+
+// El vocabulario de segmentos vive en el recetario; se reexporta para no romper a sus consumidores
+// (motor-recompra y las rutas de clientes lo importan desde acá desde antes).
+export { SEGMENTOS_RECUPERABLES, esSegmentoRecompra }
+export type { SegmentoRecompra }
 
 type Db = MySql2Database<Record<string, never>>
 
@@ -196,30 +217,74 @@ export function encodeCarritoRep(items: { productoId: number; cantidad: number }
     .join('-')
 }
 
-/** Frase del incentivo según el escalón (la escalera hecha copy). */
-function incentivoTexto(escalon: EscalonRecupero, codigo: string | null): string {
-  if (escalon.nivel === 1) {
-    return 'Sin vueltas: te dejamos todo listo para que repitas tu pedido de siempre. 😋'
+/**
+ * Segmento de recompra de UN cliente, con el mismo cerebro RFM de la cohorte (`cargarCohorteRecompra`).
+ * Es exacto para clientes con 2+ pedidos, porque la cadencia se calcula individual; con 0 o 1 pedido
+ * cae en `primer_pedido`, igual que en la cohorte. Se usa cuando el cliente llega suelto (recupero
+ * manual por cliente): la cola del motor ya trae el segmento que clasificó la campaña.
+ */
+export function segmentoRecompraDePedidos(
+  pedidos: { total: string | null; createdAt: Date | string; estado?: string | null }[],
+): SegmentoRecompra {
+  const validos = pedidos.filter((p) => p.estado !== 'cancelled')
+  const fechasPedidosMs = validos.map((p) => new Date(p.createdAt).getTime())
+  const totalGastado = validos.reduce((acc, p) => acc + parseFloat(p.total || '0'), 0)
+  if (fechasPedidosMs.length === 1) return 'primer_pedido'
+  const [perfil] = computarPerfilesRFM([
+    { cantidadPedidos: fechasPedidosMs.length, totalGastado, fechasPedidos: fechasPedidosMs },
+  ])
+  return resolverSegmentoRecompraDesdeRFM(perfil.segmento) ?? 'primer_pedido'
+}
+
+/** Una receta ofrecida al operador, con el beneficio que tendría si la eligiera. */
+export interface OpcionRecetaRecompra {
+  codigo: SegmentoRecompra
+  nombre: string
+  descripcion: string
+  /** Hook del segmento: la primera línea del mensaje (sin la línea del cupón). */
+  textoBase: string
+  /** true si es la receta del segmento del cliente: la que el motor recomienda. */
+  esRecomendada: boolean
+  /** true si es la que efectivamente se aplicó al mensaje devuelto. */
+  esSeleccionada: boolean
+  /** Descuento efectivo de esta opción (0 = sin descuento). */
+  descuento: number
+  expiraHoras: number | null
+  nivel: number
+}
+
+function opcionReceta(
+  receta: RecetaRecompra,
+  beneficio: BeneficioRecompra,
+  flags: { esRecomendada: boolean; esSeleccionada: boolean },
+): OpcionRecetaRecompra {
+  return {
+    codigo: receta.codigo,
+    nombre: receta.nombre,
+    descripcion: receta.descripcion,
+    textoBase: receta.textoBase,
+    esRecomendada: flags.esRecomendada,
+    esSeleccionada: flags.esSeleccionada,
+    descuento: beneficio.descuento,
+    expiraHoras: beneficio.expiraHoras,
+    nivel: beneficio.nivel,
   }
-  if (escalon.nivel === 2) {
-    return `Y esta vez va con un ${escalon.descuento}% de descuento: usá el código ${codigo} al hacer tu pedido.`
-  }
-  return `Te guardamos un ${escalon.descuento}% OFF con el código ${codigo}, pero ojo: vence en 48 horas ⏰.`
 }
 
 /**
  * Crea (o reemite) el cupón de descuento asociado a un toque de recupero. Código determinístico
- * por (cliente, nivel) para no acumular basura al reintentar. Un solo uso; el nivel 3 vence en 48 hs.
+ * por (cliente, descuento) para no acumular basura al reintentar. Un solo uso; el escalón con
+ * vencimiento (nivel 3) vence en 48 hs.
  */
 async function upsertCuponRecupero(
   db: Db,
   restauranteId: number,
   clienteId: number,
-  escalon: EscalonRecupero,
+  beneficio: BeneficioRecompra,
 ): Promise<string> {
-  const codigo = `VOLVE${escalon.descuento}-${clienteId}`
-  const fechaFin = escalon.expiraHoras != null
-    ? new Date(Date.now() + escalon.expiraHoras * MS_POR_HORA)
+  const codigo = `VOLVE${beneficio.descuento}-${clienteId}`
+  const fechaFin = beneficio.expiraHoras != null
+    ? new Date(Date.now() + beneficio.expiraHoras * MS_POR_HORA)
     : null
 
   const [existente] = await db
@@ -238,7 +303,7 @@ async function upsertCuponRecupero(
       .update(CodigoDescuentoTable)
       .set({
         tipo: 'porcentaje',
-        valor: String(escalon.descuento),
+        valor: String(beneficio.descuento),
         limiteUsos: 1,
         usosActuales: 0,
         fechaInicio: new Date(),
@@ -252,7 +317,7 @@ async function upsertCuponRecupero(
       restauranteId,
       codigo,
       tipo: 'porcentaje',
-      valor: String(escalon.descuento),
+      valor: String(beneficio.descuento),
       limiteUsos: 1,
       usosActuales: 0,
       montoMinimo: '0.00',
@@ -282,6 +347,10 @@ export interface ResultadoEnvioRecupero {
 export interface OpcionesEnvioRecupero {
   /** Clave estable del intento lógico. Impide dobles débitos y dobles envíos al reintentar. */
   operacionId?: string
+  /** Segmento que clasificó la campaña. Si falta, se deriva del RFM del cliente. */
+  segmento?: SegmentoRecompra
+  /** Receta elegida a mano (modo manual). Sin ella se usa la recomendada del segmento. */
+  receta?: SegmentoRecompra
 }
 
 export const PLANTILLA_RECUPERO_WHATSAPP = 'recupero_dormido_v1'
@@ -294,10 +363,17 @@ export interface DatosMensajeRecupero {
   restauranteNombre: string
   tiempoSinPedir: string
   productoFavorito: string
+  /** Párrafo del beneficio con la voz del segmento (es el `{{5}}` de la plantilla de WhatsApp). */
   incentivo: string
   descuento: number
   codigoDescuento: string | null
   nivel: number
+  /** Segmento del cliente: define la receta recomendada. */
+  segmento: SegmentoRecompra
+  /** Receta aplicada a este mensaje (la recomendada salvo que el operador haya elegido otra). */
+  receta: OpcionRecetaRecompra
+  /** Todas las recetas disponibles con su beneficio. Es el menú de "cambiar mensaje" del modo manual. */
+  recetas: OpcionRecetaRecompra[]
   /** Link de micro-campaña (`/c/:slug?tk=v1...`) que abre la tienda del local. */
   urlTienda: string
   texto: string
@@ -313,11 +389,16 @@ export interface DatosMensajeRecupero {
 /**
  * Prepara los datos del mensaje de recupero (copy, cupón, producto favorito, deep link y wa.me).
  * No realiza envíos ni consume saldo. Se usa tanto en modo manual como antes de enviar automático.
+ *
+ * El mensaje se arma con la RECETA del segmento del cliente. En modo manual el operador puede pedir
+ * otra receta (`opciones.receta`): se aplica su copy y su techo de incentivo, así que si elige una
+ * receta sin descuento el cupón desaparece y el link pasa a ser el de `lo-mismo`.
  */
 export async function prepararMensajeRecupero(
   db: Db,
   restauranteId: number,
   clienteId: number,
+  opciones: OpcionesEnvioRecupero = {},
 ): Promise<{ ok: true; data: DatosMensajeRecupero } | { ok: false; motivo: string; mensaje: string; estado?: EstadoRecupero }> {
   // 1. Cliente + local
   const [cli] = await db
@@ -342,9 +423,14 @@ export async function prepararMensajeRecupero(
     return { ok: false, motivo: 'cliente_no_encontrado', mensaje: 'Local no encontrado' }
   }
 
-  // 2. Pedidos del cliente (no cancelados) → último pedido + producto favorito.
+  // 2. Pedidos del cliente → último pedido + producto favorito + segmento (si no vino de la cola).
   const pedidos = await db
-    .select({ id: PedidoUnificadoTable.id, createdAt: PedidoUnificadoTable.createdAt })
+    .select({
+      id: PedidoUnificadoTable.id,
+      createdAt: PedidoUnificadoTable.createdAt,
+      total: PedidoUnificadoTable.total,
+      estado: PedidoUnificadoTable.estado,
+    })
     .from(PedidoUnificadoTable)
     .where(
       and(
@@ -404,24 +490,31 @@ export async function prepararMensajeRecupero(
   }
   if (!repParam && topProductoId) repParam = `${topProductoId}x1`
 
-  // 3. Estado de la escalera → escalón a enviar.
+  // 3. Receta del segmento + estado de la escalera → beneficio a ofrecer.
+  const segmento = opciones.segmento ?? segmentoRecompraDePedidos(pedidos)
+  const recetaRecomendada = resolverRecetaRecompra(segmento)
+  const recetaSeleccionada = opciones.receta ? resolverRecetaRecompra(opciones.receta) : recetaRecomendada
+  const esRecomendada = recetaSeleccionada.codigo === recetaRecomendada.codigo
+
   const toquesMap = await cargarToquesPorCliente(db, restauranteId, [clienteId])
   const estado = estadoRecupero(toquesMap[clienteId] ?? [], ultimoPedidoMs)
   const escalon = ESCALERA[estado.proximoNivel - 1]
+  // La escalera manda; la receta elegida sólo puede bajar el beneficio (ver recetas-recompra.ts).
+  const beneficio = resolverBeneficioRecompra(escalon, recetaSeleccionada, esRecomendada)
 
   // 4. Cupón si corresponde (upsert determinístico)
   let codigo: string | null = null
-  if (escalon.descuento > 0) {
-    codigo = await upsertCuponRecupero(db, restauranteId, clienteId, escalon)
+  if (beneficio.descuento > 0) {
+    codigo = await upsertCuponRecupero(db, restauranteId, clienteId, beneficio)
   }
 
   // 5. Link de micro-campaña con el carrito del último pedido adentro del token
   // cifrado (antes: `username?rep=12x2-15x1` a la vista). La tienda resuelve el
   // slug y reconstruye cliente + carrito, así que el mensaje ya no expone ids.
-  // El escalón sin descuento usa `lo-mismo` (drawer 1-toque, sin % extra) y los
-  // escalones con cupón usan `reactivacion`; el descuento sigue viajando en el
+  // El toque sin descuento usa `lo-mismo` (drawer 1-toque, sin % extra) y los
+  // toques con cupón usan `reactivacion`; el descuento sigue viajando en el
   // cupón, por eso `dto` queda en 0 y el beneficio no se duplica.
-  const esReactivacion = escalon.descuento > 0
+  const esReactivacion = beneficio.descuento > 0
   const tokenMicroCampana = cifrarGrowthPayload({
     rId: restauranteId,
     cId: clienteId,
@@ -430,7 +523,7 @@ export async function prepararMensajeRecupero(
     rep: repParam || undefined,
     dto: 0,
     // El link vive lo mismo que el cupón del escalón (nivel 3: 48 hs).
-    exp: escalon.expiraHoras != null ? Date.now() + escalon.expiraHoras * MS_POR_HORA : null,
+    exp: beneficio.expiraHoras != null ? Date.now() + beneficio.expiraHoras * MS_POR_HORA : null,
   })
   const urlTienda = rest.username
     ? urlMicroCampana(rest.username, esReactivacion ? 'reactivacion' : 'lo-mismo', tokenMicroCampana)
@@ -440,7 +533,7 @@ export async function prepararMensajeRecupero(
   const usernameSuffix = rest.username ? urlTienda.slice(BASE_TIENDA.length) : ''
 
   const tiempoSinPedir = tiempoSinPedirTexto(diasDesdeUltimo)
-  const incentivo = incentivoTexto(escalon, codigo)
+  const incentivo = textoIncentivoReceta(recetaSeleccionada, beneficio, codigo)
   const nombreCliente = cli.nombre?.trim() || 'Cliente'
   const nombreLocal = rest.nombre?.trim() || 'El local'
 
@@ -449,6 +542,17 @@ export async function prepararMensajeRecupero(
   const norm = normalizarTelefonoCliente(cli.telefono)
   const telWa = norm ? (norm.startsWith('54') ? norm : norm.length === 10 ? `549${norm}` : norm) : null
   const waMeUrl = telWa ? `https://wa.me/${telWa}?text=${encodeURIComponent(texto)}` : null
+
+  // 6. Menú de recetas: cada una con el beneficio que tendría si se eligiera. Se calcula sin tocar
+  // la base (sólo se emite el cupón de la receta aplicada), así que abrir el selector no ensucia
+  // cupones: al elegir otra receta se vuelve a pedir el mensaje y ahí sí se emite su cupón.
+  const recetas = listarRecetasRecompra().map((r) => {
+    const esRec = r.codigo === recetaRecomendada.codigo
+    return opcionReceta(r, resolverBeneficioRecompra(escalon, r, esRec), {
+      esRecomendada: esRec,
+      esSeleccionada: r.codigo === recetaSeleccionada.codigo,
+    })
+  })
 
   return {
     ok: true,
@@ -461,9 +565,15 @@ export async function prepararMensajeRecupero(
       tiempoSinPedir,
       productoFavorito,
       incentivo,
-      descuento: escalon.descuento,
+      descuento: beneficio.descuento,
       codigoDescuento: codigo,
-      nivel: escalon.nivel,
+      nivel: beneficio.nivel,
+      segmento,
+      receta: opcionReceta(recetaSeleccionada, beneficio, {
+        esRecomendada,
+        esSeleccionada: true,
+      }),
+      recetas,
       urlTienda,
       texto,
       waMeUrl,
@@ -476,9 +586,12 @@ export async function prepararMensajeRecupero(
 }
 
 /**
- * Orquesta el envío de un toque de recupero al cliente por Meta API: resuelve el escalón,
- * arma el antojo, genera el cupón si corresponde, manda el WhatsApp de marketing con la
+ * Orquesta el envío de un toque de recupero al cliente por Meta API: resuelve la receta del
+ * segmento, arma el antojo, genera el cupón si corresponde, manda el WhatsApp de marketing con la
  * marca del local, registra el toque y descuenta el bucket marketing (best-effort).
+ *
+ * En modo automático no se pasa `receta`: cada cliente recibe el mensaje de SU segmento (`{{5}}`) y
+ * el link lo sigue resolviendo la escalera, igual que siempre.
  */
 export async function enviarRecuperoDormido(
   c: any,
@@ -487,7 +600,10 @@ export async function enviarRecuperoDormido(
   clienteId: number,
   opciones: OpcionesEnvioRecupero = {},
 ): Promise<ResultadoEnvioRecupero> {
-  const prep = await prepararMensajeRecupero(db, restauranteId, clienteId)
+  const prep = await prepararMensajeRecupero(db, restauranteId, clienteId, {
+    segmento: opciones.segmento,
+    receta: opciones.receta,
+  })
   if (!prep.ok) {
     return { ok: false, motivo: prep.motivo as any, mensaje: prep.mensaje, estado: prep.estado }
   }
@@ -606,15 +722,16 @@ export async function enviarRecuperoDormido(
 
   const confirmacion = await confirmarReservaCreditoMarketing(db, restauranteId, operacionId)
 
-  // 5. Registrar toque en historial
+  // 5. Registrar toque en historial. Se guarda el nivel de la ESCALERA (el próximo toque sigue la
+  // escalera aunque la receta haya bajado el beneficio) junto al descuento que realmente se envió.
   await db.insert(RecuperoClienteTable).values({
     restauranteId,
     clienteId,
     telefono: data.telefono,
     nivel: data.escalon.nivel,
-    descuentoPorcentaje: data.escalon.descuento,
+    descuentoPorcentaje: data.descuento,
     codigoDescuento: data.codigoDescuento,
-    segmento: null,
+    segmento: data.segmento,
   })
 
   const nuevoEstado = estadoRecupero(
@@ -639,12 +756,9 @@ export async function enviarRecuperoDormido(
 // UNA campaña. El sistema detecta la cohorte recuperable, aparta al azar un 10% de cada segmento
 // como GRUPO DE CONTROL (no se contacta) y le manda el toque de recupero al resto, todo en batch.
 // El control se guarda para poder medir la atribución honesta después (contactados vs control).
+//
+// Los segmentos (`SegmentoRecompra`) y su recetario viven en `recetas-recompra.ts`.
 // ═════════════════════════════════════════════════════════════════════════════
-
-export type SegmentoRecompra = 'primer_pedido' | 'en_riesgo' | 'dormido' | 'perdido'
-
-/** Segmentos donde tiene sentido el recupero (el cliente se enfrió respecto de SU propio ritmo). */
-export const SEGMENTOS_RECUPERABLES: SegmentoRecompra[] = ['primer_pedido', 'en_riesgo', 'dormido', 'perdido']
 
 /** Fracción de cada segmento que se aparta al azar como grupo de control (no negociable, día 1). */
 export const PORCENTAJE_CONTROL = 0.1
@@ -935,13 +1049,14 @@ export async function ejecutarCampanaRecompra(
     })
   }
 
-  // Grupo contactado: envío batch (reusa el mismo camino que el envío individual).
+  // Grupo contactado: envío batch (reusa el mismo camino que el envío individual) con el mensaje
+  // del segmento que clasificó la cohorte.
   let enviados = 0
   let fallidos = 0
   for (const cl of contactar) {
     let res: ResultadoEnvioRecupero
     try {
-      res = await enviarRecuperoDormido(c, db, restauranteId, cl.clienteId)
+      res = await enviarRecuperoDormido(c, db, restauranteId, cl.clienteId, { segmento: cl.segmento })
     } catch (err) {
       console.error(`❌ [Campaña ${campanaId}] Error enviando a cliente ${cl.clienteId}:`, err)
       res = { ok: false, motivo: 'envio_fallido' }

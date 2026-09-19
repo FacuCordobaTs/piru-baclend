@@ -31,7 +31,8 @@ import { eq, desc, inArray, notInArray, and } from 'drizzle-orm'
 import { computarPerfilesRFM } from '../lib/clientes-rfm'
 import { deduplicarPedidosHistorial } from '../lib/clientes-historial'
 import {
-    cargarToquesPorCliente, estadoRecupero, enviarRecuperoDormido,
+    cargarToquesPorCliente, esSegmentoRecompra, estadoRecupero, enviarRecuperoDormido,
+    type SegmentoRecompra,
 } from '../lib/recupero'
 import {
     estadoMotor, activarMotor, pausarMotorManual, reanudarMotor, setCupoDiario, setModoMotor,
@@ -562,6 +563,7 @@ clientesRoute.delete('/:id', async (c) => {
  * POST /clientes/:id/recupero — Playbook de recupero de dormidos (Motor de Recompra · 4.2).
  * Acción VOLUNTARIA del local: manda el próximo toque de la escalera de incentivos al cliente.
  * Gateado por Motor de Recompra. Reserva el bucket `marketing` antes del proveedor.
+ * El mensaje usa la receta del segmento del cliente (derivada del RFM: acá no hay cola que la traiga).
  */
 clientesRoute.post('/:id/recupero', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
@@ -757,7 +759,11 @@ clientesRoute.put('/recompra/modo', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), a
     }
 })
 
-/** GET /clientes/recompra/cola/:id/mensaje — obtiene datos y texto preparado del mensaje para enviar. */
+/**
+ * GET /clientes/recompra/cola/:id/mensaje — obtiene datos y texto preparado del mensaje para enviar.
+ * `?receta=` elige otra receta que la recomendada del segmento (cambia el texto, el beneficio y el
+ * link: el descuento que no se quiere dar). Sin el parámetro se devuelve la recomendada.
+ */
 clientesRoute.get('/recompra/cola/:id/mensaje', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
@@ -765,8 +771,14 @@ clientesRoute.get('/recompra/cola/:id/mensaje', requireModulo(MODULE_KEYS.MOTOR_
     if (!Number.isFinite(filaId) || filaId <= 0) {
         return c.json({ success: false, message: 'ID de fila inválido' }, 400)
     }
+    const recetaQuery = c.req.query('receta')
+    if (recetaQuery && !esSegmentoRecompra(recetaQuery)) {
+        return c.json({ success: false, message: 'Receta inválida' }, 400)
+    }
     try {
-        const res = await obtenerMensajeFilaCola(db, restauranteId, filaId)
+        const res = await obtenerMensajeFilaCola(db, restauranteId, filaId, {
+            receta: recetaQuery as SegmentoRecompra | undefined,
+        })
         if (!res.ok) return c.json({ success: false, message: res.mensaje }, 404)
         return c.json({ success: true, data: res.data }, 200)
     } catch (error) {
@@ -775,7 +787,11 @@ clientesRoute.get('/recompra/cola/:id/mensaje', requireModulo(MODULE_KEYS.MOTOR_
     }
 })
 
-/** POST /clientes/recompra/cola/:id/marcar-enviado — marca una fila de la cola como enviada manualmente. */
+/**
+ * POST /clientes/recompra/cola/:id/marcar-enviado — marca una fila de la cola como enviada manualmente.
+ * Body opcional `{ receta }`: la receta que el operador efectivamente mandó. Se registra su beneficio
+ * (que puede ser sin descuento) sin reiniciar el nivel de la escalera del cliente.
+ */
 clientesRoute.post('/recompra/cola/:id/marcar-enviado', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
@@ -784,7 +800,12 @@ clientesRoute.post('/recompra/cola/:id/marcar-enviado', requireModulo(MODULE_KEY
         return c.json({ success: false, message: 'ID de fila inválido' }, 400)
     }
     try {
-        const res = await marcarFilaColaComoEnviadaManual(db, restauranteId, filaId)
+        const body = await c.req.json().catch(() => ({}))
+        const receta = body?.receta
+        if (receta != null && !esSegmentoRecompra(receta)) {
+            return c.json({ success: false, message: 'Receta inválida' }, 400)
+        }
+        const res = await marcarFilaColaComoEnviadaManual(db, restauranteId, filaId, { receta })
         if (!res.ok) return c.json({ success: false, message: res.mensaje || 'Error al marcar como enviado' }, 400)
         return c.json({ success: true, message: res.mensaje }, 200)
     } catch (error) {

@@ -37,12 +37,15 @@ import {
   estadoRecupero,
   separarControl,
   enviarRecuperoDormido,
+  esSegmentoRecompra,
   prepararMensajeRecupero,
   PLANTILLA_RECUPERO_WHATSAPP,
   SEGMENTOS_RECUPERABLES,
   PORCENTAJE_CONTROL,
   type ClienteCohorte,
   type DatosMensajeRecupero,
+  type OpcionesEnvioRecupero,
+  type SegmentoRecompra,
 } from './recupero'
 import { enHorarioSilencio, horaArgentina, TOPE_MARKETING_POR_CLIENTE } from './proteccion-base'
 import { crearRecargaPendiente, resumenWallet } from './mensajes-wallet'
@@ -377,7 +380,7 @@ export async function procesarColaDiaria(
 
     for (const fila of pendientes) {
       if (marketing <= 0) break
-      const r = await enviarFila(db, restauranteId, fila.id, fila.clienteId)
+      const r = await enviarFila(db, restauranteId, fila.id, fila.clienteId, fila.segmento)
       if (r.enviado) {
         if (fila.poblacion === 'flujo') flujoEnviados++
         else stockEnviados++
@@ -446,6 +449,7 @@ async function enviarFila(
   restauranteId: number,
   filaId: number,
   clienteId: number,
+  segmento: string | null = null,
 ): Promise<{ enviado: boolean; fallido: boolean; sinSaldo?: boolean }> {
   // Regla sagrada / protección: si el cliente ya no es contactable (pidió, opt-out, tope, cooldown),
   // `enviarRecuperoDormido` lo rechaza sin mandar nada; marcamos la fila como salida/fallida.
@@ -453,6 +457,9 @@ async function enviarFila(
   try {
     res = await enviarRecuperoDormido(fakeCtx, db, restauranteId, clienteId, {
       operacionId: `motor-recompra:${restauranteId}:${filaId}`,
+      // El segmento que clasificó la campaña elige la receta del mensaje. El link no cambia: lo
+      // sigue resolviendo la escalera igual que antes.
+      segmento: esSegmentoRecompra(segmento) ? segmento : undefined,
     })
   } catch (err) {
     console.error(`❌ [Motor goteo] Error enviando a cliente ${clienteId}:`, err)
@@ -1315,11 +1322,17 @@ async function horaObjetivoLocal(db: Db, restauranteId: number): Promise<number>
 
 // ── Operación manual desde la cola ───────────────────────────────────────────
 
-/** Obtiene los datos formateados del mensaje para una fila de la cola. */
+/**
+ * Obtiene los datos formateados del mensaje para una fila de la cola.
+ *
+ * `opciones.receta` permite al operador pedir otra receta que la recomendada (el caso "el mensaje
+ * recomendado incluye descuento y no quiero darlo"): se devuelve el copy y el link de esa receta.
+ */
 export async function obtenerMensajeFilaCola(
   db: Db,
   restauranteId: number,
   filaId: number,
+  opciones: Pick<OpcionesEnvioRecupero, 'receta'> = {},
 ): Promise<{ ok: true; data: DatosMensajeRecupero } | { ok: false; mensaje: string }> {
   const [fila] = await db
     .select()
@@ -1327,7 +1340,10 @@ export async function obtenerMensajeFilaCola(
     .where(and(eq(ColaRecompraTable.id, filaId), eq(ColaRecompraTable.restauranteId, restauranteId)))
     .limit(1)
   if (!fila) return { ok: false, mensaje: 'Elemento de cola no encontrado' }
-  const prep = await prepararMensajeRecupero(db, restauranteId, fila.clienteId)
+  const prep = await prepararMensajeRecupero(db, restauranteId, fila.clienteId, {
+    segmento: esSegmentoRecompra(fila.segmento) ? fila.segmento : undefined,
+    receta: opciones.receta,
+  })
   if (!prep.ok) return { ok: false, mensaje: prep.mensaje }
   return {
     ok: true,
@@ -1343,6 +1359,7 @@ export async function marcarFilaColaComoEnviadaManual(
   db: Db,
   restauranteId: number,
   filaId: number,
+  opciones: Pick<OpcionesEnvioRecupero, 'receta'> = {},
 ): Promise<{ ok: boolean; mensaje?: string }> {
   const [fila] = await db
     .select()
@@ -1352,8 +1369,13 @@ export async function marcarFilaColaComoEnviadaManual(
   if (!fila) return { ok: false, mensaje: 'Elemento de la cola no encontrado' }
   if (fila.estado === 'enviado') return { ok: true, mensaje: 'Ya estaba marcado como enviado' }
 
-  // Preparar cupón / escalón para asegurar consistencia del beneficio
-  const prep = await prepararMensajeRecupero(db, restauranteId, fila.clienteId)
+  // Preparar cupón / escalón para asegurar consistencia del beneficio. Si el operador eligió otra
+  // receta, se registra el beneficio que REALMENTE mandó (puede ser 0), no el de la escalera.
+  const prep = await prepararMensajeRecupero(db, restauranteId, fila.clienteId, {
+    segmento: esSegmentoRecompra(fila.segmento) ? fila.segmento : undefined,
+    receta: opciones.receta,
+  })
+  // El nivel sigue siendo el de la escalera: cambiar de receta no reinicia el avance del cliente.
   const nivel = prep.ok ? prep.data.nivel : (fila.nivel ?? 1)
   const codigoDescuento = prep.ok ? prep.data.codigoDescuento : (fila.codigoDescuento ?? null)
   const descuento = prep.ok ? prep.data.descuento : 0
