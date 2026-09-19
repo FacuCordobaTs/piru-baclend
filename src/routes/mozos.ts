@@ -21,6 +21,7 @@ import {
 import { staffAuthMiddleware, type StaffContext } from '../middleware/staff'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
+import { cantidadImpresaTrasEdicion } from '../lib/comanda-impresion'
 import {
   ejecutarMutacionPos,
   reservarMesaLocal,
@@ -55,6 +56,19 @@ const editarPedidoSchema = z.object({
 function staff(c: any) {
   return (c as StaffContext).staff
 }
+
+/**
+ * El teléfono del mozo no tiene impresora: cada mutación viaja por WebSocket
+ * marcada como `origenMozo` para que el admin del local saque la comanda que el
+ * mozo acaba de enviar. `cantidad_impresa` es lo que separa lo nuevo del resto
+ * —los ítems que el mozo agrega nacen en 0 y una edición conserva lo ya impreso
+ * cuando la configuración no cambió—, así que el admin imprime sólo el delta.
+ * Ver `lib/comanda-impresion.ts` y el contrato de `/pedido-unificado/:id/impreso`.
+ *
+ * `shouldPrint` se decide en cada ruta: lo que agrega o cambia productos se manda
+ * a cocina; borrar un ítem o editar nombre/notas sólo refresca la lista.
+ */
+const origenMozoDeLaApp = { origenMozo: true } as const
 
 /**
  * La app de mozos opera sobre la sucursal del principal; si no tiene una
@@ -190,12 +204,12 @@ mozosRoute.post('/pedidos', zValidator('json', crearPedidoSchema), async (c) => 
       pagado: true, metodoPago: 'cash', creadoPorUsuarioId: principal.usuarioId,
     })
     const pedidoId = Number(inserted[0].insertId)
-    await tx.insert(ItemPedidoUnificadoTable).values(items.map((item) => ({ pedidoId, ...item })))
+    await tx.insert(ItemPedidoUnificadoTable).values(items.map((item) => ({ pedidoId, ...item, cantidadImpresa: 0 })))
     return { pedidoId, sucursalId: sucursalPedido }
   })
   if (!('pedidoId' in creado)) return c.json({ success: false, code: creado.error, message: creado.message }, creado.error === 'MESA_OCUPADA' ? 409 : 422)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, creado.pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId: creado.pedidoId, tipo: 'mesa', sucursalId: creado.sucursalId, event: 'upsert', reason: 'created', shouldPrint: true })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId: creado.pedidoId, tipo: 'mesa', sucursalId: creado.sucursalId, event: 'upsert', reason: 'created', shouldPrint: true, ...origenMozoDeLaApp })
   return c.json({ success: true, data }, 201)
 })
 
@@ -205,12 +219,12 @@ mozosRoute.post('/pedidos/:id{[0-9]+}/items', zValidator('json', editarItemSchem
   if (!enAlcance) return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
   const resultado = await ejecutarMutacionPos(db, principal.restauranteId, pedidoId, body.version, async (tx) => {
     const item = await resolverItemPos(tx, principal.restauranteId, body); if ('error' in item) return item
-    const inserted = await tx.insert(ItemPedidoUnificadoTable).values({ pedidoId, ...item })
+    const inserted = await tx.insert(ItemPedidoUnificadoTable).values({ pedidoId, ...item, cantidadImpresa: 0 })
     return { operacion: 'agregar_item' as const, itemPedidoId: Number(inserted[0].insertId), despues: item, reimprimeCocina: true }
   }, { id: principal.usuarioId, tipo: 'staff_mozo' })
   if (resultado.error) return respuestaErrorMutacion(c, db, principal, pedidoId, resultado)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: enAlcance.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: enAlcance.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: true, ...origenMozoDeLaApp })
   return c.json({ success: true, data })
 })
 
@@ -221,12 +235,15 @@ mozosRoute.put('/pedidos/:id{[0-9]+}/items/:itemId{[0-9]+}', zValidator('json', 
   const resultado = await ejecutarMutacionPos(db, principal.restauranteId, pedidoId, body.version, async (tx, _pedido, items) => {
     const antes = items.find((item: any) => item.id === itemId); if (!antes) return { error: 'ITEM_NO_ENCONTRADO', message: 'El ítem no pertenece al pedido' }
     const item = await resolverItemPos(tx, principal.restauranteId, body); if ('error' in item) return item
-    await tx.update(ItemPedidoUnificadoTable).set(item).where(and(eq(ItemPedidoUnificadoTable.id, itemId), eq(ItemPedidoUnificadoTable.pedidoId, pedidoId)))
+    // Cocina ya vio este ítem si la configuración no cambió: sólo el delta de
+    // cantidad es nuevo. Si cambió, la línea entera vuelve a salir.
+    const cantidadImpresa = cantidadImpresaTrasEdicion(antes, item)
+    await tx.update(ItemPedidoUnificadoTable).set({ ...item, cantidadImpresa }).where(and(eq(ItemPedidoUnificadoTable.id, itemId), eq(ItemPedidoUnificadoTable.pedidoId, pedidoId)))
     return { operacion: 'editar_item' as const, itemPedidoId: itemId, antes, despues: item, reimprimeCocina: true }
   }, { id: principal.usuarioId, tipo: 'staff_mozo' })
   if (resultado.error) return respuestaErrorMutacion(c, db, principal, pedidoId, resultado)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: enAlcance.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: enAlcance.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: true, ...origenMozoDeLaApp })
   return c.json({ success: true, data })
 })
 
@@ -240,11 +257,12 @@ mozosRoute.delete('/pedidos/:id{[0-9]+}/items/:itemId{[0-9]+}', zValidator('json
     await tx.delete(ItemPedidoUnificadoTable).where(and(eq(ItemPedidoUnificadoTable.id, itemId), eq(ItemPedidoUnificadoTable.pedidoId, pedidoId)))
     // El ítem ya no existe cuando se asienta la auditoría. La trazabilidad queda
     // completa en `antes`; conservar su FK haría fallar toda la transacción.
-    return { operacion: 'eliminar_item' as const, itemPedidoId: null, antes, reimprimeCocina: true }
+    // Quitar un producto no agrega nada nuevo a cocina: no habilita impresión.
+    return { operacion: 'eliminar_item' as const, itemPedidoId: null, antes, reimprimeCocina: false }
   }, { id: principal.usuarioId, tipo: 'staff_mozo' })
   if (resultado.error) return respuestaErrorMutacion(c, db, principal, pedidoId, resultado)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: enAlcance.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: enAlcance.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: false, ...origenMozoDeLaApp })
   return c.json({ success: true, data })
 })
 
@@ -256,11 +274,12 @@ mozosRoute.put('/pedidos/:id{[0-9]+}', zValidator('json', editarPedidoSchema), a
     const antes = { nombreCliente: pedido.nombreCliente, notas: pedido.notas }
     const despues: any = {}; if (body.nombreCliente !== undefined) despues.nombreCliente = body.nombreCliente || null; if (body.notas !== undefined) despues.notas = body.notas || null
     await tx.update(PedidoUnificadoTable).set(despues).where(eq(PedidoUnificadoTable.id, pedidoId))
-    return { operacion: 'editar_datos_pos' as const, antes, despues, reimprimeCocina: body.notas !== undefined && body.notas !== pedido.notas }
+    // Nombre y notas no son productos: la comanda no se reimprime por esto.
+    return { operacion: 'editar_datos_pos' as const, antes, despues, reimprimeCocina: false }
   }, { id: principal.usuarioId, tipo: 'staff_mozo' })
   if (resultado.error) return respuestaErrorMutacion(c, db, principal, pedidoId, resultado)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, pedidoId)
-  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: enAlcance.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: resultado.shouldPrint })
+  await emitirEventoPedido(db, { restauranteId: principal.restauranteId, pedidoId, tipo: 'mesa', sucursalId: enAlcance.sucursalId, event: 'upsert', reason: 'updated', shouldPrint: false, ...origenMozoDeLaApp })
   return c.json({ success: true, data })
 })
 

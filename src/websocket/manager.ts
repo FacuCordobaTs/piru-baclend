@@ -209,6 +209,8 @@ class WebSocketManager {
       pedidoId: number;
       sucursalId?: number | null;
       shouldPrint?: boolean;
+      /** Alta o edición hecha desde la app de mozos (sin impresora propia). */
+      origenMozo?: boolean;
       pedido?: any;
     }
   ) {

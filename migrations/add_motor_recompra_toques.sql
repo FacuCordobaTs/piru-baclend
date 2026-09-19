@@ -11,13 +11,8 @@
 
 -- ── 1. cola_recompra: qué toque es la fila y con qué link/descuento salió ────────────────────────
 ALTER TABLE `cola_recompra`
-  -- 1..3. NULL sólo en el grupo de control, que nunca recibe toques.
   ADD COLUMN `toque` TINYINT NULL AFTER `nivel`,
-  -- 'lo_mismo' | 'reactivacion'. Se registra porque `lo_mismo` NUNCA lleva descuento: sin esto el
-  -- invariante no es auditable una vez enviado.
   ADD COLUMN `link_modalidad` VARCHAR(20) NULL AFTER `toque`,
-  -- % efectivamente aplicado en ese envío (0 = sin descuento). Puede diferir del escalón si el
-  -- operador forzó otro a mano.
   ADD COLUMN `descuento_enviado` INT NULL AFTER `link_modalidad`;
 
 -- Lo ya enviado conserva su escalón como toque; lo pendiente es, por definición, el 1º.

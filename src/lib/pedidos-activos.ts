@@ -383,9 +383,15 @@ export async function emitirEventoPedido(
     event: 'upsert' | 'remove'
     reason: ReasonEventoPedido
     shouldPrint?: boolean
+    /**
+     * El cambio lo originó la app de mozos. Ese cliente no tiene impresora, así
+     * que el admin del local debe imprimir el delta por su cuenta en vez de
+     * esperar la acción manual que sí tiene sentido para el POS del dueño.
+     */
+    origenMozo?: boolean
   },
 ) {
-  const { restauranteId, pedidoId, tipo, sucursalId, event, reason, shouldPrint } = opts
+  const { restauranteId, pedidoId, tipo, sucursalId, event, reason, shouldPrint, origenMozo } = opts
   try {
     wsManager.broadcastAdminUpdate(restauranteId, tipo, { sucursalId: sucursalId ?? null }) // retrocompat
     let pedido: any = undefined
@@ -396,6 +402,7 @@ export async function emitirEventoPedido(
       event, reason, tipo, pedidoId,
       sucursalId: sucursalId ?? null,
       shouldPrint: !!shouldPrint,
+      origenMozo: !!origenMozo,
       pedido,
     })
     wsManager.broadcastMozoOrderEvent(restauranteId, sucursalId, {
