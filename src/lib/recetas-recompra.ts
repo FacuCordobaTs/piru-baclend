@@ -9,9 +9,9 @@
 // Reglas:
 //   · Una receta por segmento de recompra (`primer_pedido`, `en_riesgo`, `dormido`, `perdido`).
 //   · La receta RECOMENDADA es la del segmento del cliente (la clasificación de la campaña).
-//   · El beneficio (descuento, cupón, vencimiento y link) lo sigue mandando la ESCALERA; la
-//     receta sólo puede BAJARLO con su techo. Así el modo automático conserva exactamente los
-//     links que ya usaba, y en modo manual el operador puede cambiar a una receta sin descuento.
+//   · El modo automático nunca elige receta: manda la recomendada con el beneficio de la ESCALERA,
+//     así que sus links y su asignación quedan intactos. Una receta elegida a mano en modo manual
+//     trae el beneficio de su propio techo, que puede ser mayor o menor que el del escalón.
 //   · El copy no se inventa acá: se reusa el catálogo versionado de `recetas-crecimiento.ts`
 //     (mismo vocabulario de recetas que la tab Adquisición).
 //
@@ -50,7 +50,7 @@ export interface RecetaRecompra {
   descripcion: string
   /** Hook del segmento: la primera línea del mensaje. Nunca menciona el beneficio. */
   textoBase: string
-  /** Techo de incentivo propio de la receta (la escalera sigue siendo el piso de referencia). */
+  /** Techo de incentivo propio de la receta: es el beneficio que aplica si el operador la elige. */
   incentivoMaximo: IncentivoReceta
 }
 
@@ -104,24 +104,30 @@ export interface BeneficioRecompra {
 }
 
 /**
- * Resuelve el beneficio efectivo de un toque: `escalon` (la escalera) recortado por el techo de la
- * receta elegida.
+ * Resuelve el beneficio efectivo de un toque.
  *
- * La receta RECOMENDADA no recorta nada: el mensaje que el motor manda solo y el que el operador
- * ve por defecto son entonces el mismo, y los links del modo automático quedan intactos. Una receta
- * elegida a mano sí puede bajar el beneficio hasta su techo (por ejemplo, mandar sin descuento a un
- * cliente que la escalera ya premiaría).
+ * La receta RECOMENDADA es la escalera tal cual: es el camino del modo automático (el motor no elige
+ * receta) y el mensaje que el operador ve por defecto, así que los envíos automáticos no cambian.
+ *
+ * Una receta elegida a mano trae el beneficio de su propio techo (`incentivoSugerido` del catálogo de
+ * crecimiento), sin recortes: puede bajarlo —mandar sin descuento a quien la escalera ya premiaría—
+ * o subirlo —dar el "último intento" del 20% a un dormido—. El operador ve en pantalla qué beneficio
+ * implica antes de mandarlo. El `nivel` es siempre el de la escalera: cambiar de receta no reinicia
+ * el avance del cliente.
  */
 export function resolverBeneficioRecompra(
   escalon: EscalonIncentivo,
   receta: RecetaRecompra,
   esRecomendada: boolean,
 ): BeneficioRecompra {
-  const techo = esRecomendada ? escalon.descuento : receta.incentivoMaximo.descuentoPorcentaje
-  if (techo >= escalon.descuento) {
+  if (esRecomendada) {
     return { nivel: escalon.nivel, descuento: escalon.descuento, expiraHoras: escalon.expiraHoras }
   }
-  return { nivel: escalon.nivel, descuento: techo, expiraHoras: receta.incentivoMaximo.expiraHoras }
+  return {
+    nivel: escalon.nivel,
+    descuento: receta.incentivoMaximo.descuentoPorcentaje,
+    expiraHoras: receta.incentivoMaximo.expiraHoras,
+  }
 }
 
 /**

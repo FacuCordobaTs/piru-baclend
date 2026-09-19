@@ -391,8 +391,9 @@ export interface DatosMensajeRecupero {
  * No realiza envíos ni consume saldo. Se usa tanto en modo manual como antes de enviar automático.
  *
  * El mensaje se arma con la RECETA del segmento del cliente. En modo manual el operador puede pedir
- * otra receta (`opciones.receta`): se aplica su copy y su techo de incentivo, así que si elige una
- * receta sin descuento el cupón desaparece y el link pasa a ser el de `lo-mismo`.
+ * otra receta (`opciones.receta`): se aplica su copy y su incentivo propio, así que si elige una
+ * receta sin descuento el cupón desaparece y el link pasa a ser el de `lo-mismo`. Sin receta elegida
+ * (el caso del envío automático) el beneficio es el de la escalera, sin cambios.
  */
 export async function prepararMensajeRecupero(
   db: Db,
@@ -499,7 +500,8 @@ export async function prepararMensajeRecupero(
   const toquesMap = await cargarToquesPorCliente(db, restauranteId, [clienteId])
   const estado = estadoRecupero(toquesMap[clienteId] ?? [], ultimoPedidoMs)
   const escalon = ESCALERA[estado.proximoNivel - 1]
-  // La escalera manda; la receta elegida sólo puede bajar el beneficio (ver recetas-recompra.ts).
+  // Sin receta elegida manda la escalera; con receta elegida manda el incentivo propio de esa receta
+  // (ver recetas-recompra.ts). El nivel registrado es siempre el de la escalera.
   const beneficio = resolverBeneficioRecompra(escalon, recetaSeleccionada, esRecomendada)
 
   // 4. Cupón si corresponde (upsert determinístico)

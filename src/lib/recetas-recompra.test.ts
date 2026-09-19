@@ -51,7 +51,7 @@ describe('recetario del Motor de Recompra', () => {
   })
 })
 
-describe('beneficio de un toque: la escalera manda, la receta sólo puede bajarlo', () => {
+describe('beneficio de un toque: la recomendada es la escalera, la elegida a mano trae el suyo', () => {
   const escalon = (nivel: number) => ESCALERA[nivel - 1]
 
   test('la receta recomendada conserva el beneficio de la escalera (el mensaje del automático no cambia)', () => {
@@ -74,21 +74,31 @@ describe('beneficio de un toque: la escalera manda, la receta sólo puede bajarl
     expect(beneficio.expiraHoras).toBeNull()
   })
 
-  test('el techo de la receta recorta la escalera, nunca la sube', () => {
-    const e = escalon(3) // 20%
-    // `dormido` tiene techo 10%: elegida a mano, baja el beneficio al 10% de su propia receta.
-    const dormido = resolverBeneficioRecompra(e, resolverRecetaRecompra('dormido'), false)
-    expect(dormido.descuento).toBe(10)
-    expect(dormido.descuento).toBeLessThan(e.descuento)
-    // `perdido` tiene techo 20% con vencimiento: coincide con el escalón, no lo supera.
-    const perdido = resolverBeneficioRecompra(e, resolverRecetaRecompra('perdido'), false)
-    expect(perdido.descuento).toBe(20)
-    expect(perdido.descuento).toBeLessThanOrEqual(e.descuento)
+  test('la receta elegida a mano aplica su propio beneficio: puede bajar o subir el del escalón', () => {
+    // Baja: el escalón ya daba 20% y el operador manda la receta moderada del 10%.
+    expect(resolverBeneficioRecompra(escalon(3), resolverRecetaRecompra('dormido'), false)).toEqual({
+      nivel: 3,
+      descuento: 10,
+      expiraHoras: null,
+    })
+    // Sube: el primer toque no daba descuento y el operador manda el último intento (20% / 48 hs).
+    expect(resolverBeneficioRecompra(escalon(1), resolverRecetaRecompra('perdido'), false)).toEqual({
+      nivel: 1,
+      descuento: 20,
+      expiraHoras: 48,
+    })
   })
 
-  test('nunca hay descuento si la escalera no lo habilitó, aunque la receta tenga techo', () => {
-    for (const receta of listarRecetasRecompra()) {
-      expect(resolverBeneficioRecompra(escalon(1), receta, false).descuento).toBe(0)
+  test('en el primer toque la recomendada sigue sin descuento, pero las recetas con techo lo traen', () => {
+    const e = escalon(1)
+    expect(resolverBeneficioRecompra(e, resolverRecetaRecompra('dormido'), true).descuento).toBe(0)
+    expect(resolverBeneficioRecompra(e, resolverRecetaRecompra('dormido'), false).descuento).toBe(10)
+    expect(resolverBeneficioRecompra(e, resolverRecetaRecompra('perdido'), false).descuento).toBe(20)
+    // Las recetas sin incentivo no inventan descuento ni elegidas a mano.
+    for (const codigo of ['primer_pedido', 'en_riesgo'] as const) {
+      const beneficio = resolverBeneficioRecompra(e, resolverRecetaRecompra(codigo), false)
+      expect(beneficio.descuento).toBe(0)
+      expect(beneficio.expiraHoras).toBeNull()
     }
   })
 })
