@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { zValidator } from '@hono/zod-validator'
 import { pool } from '../db'
 import {
     cliente as ClienteTable,
@@ -31,9 +32,9 @@ import { eq, desc, inArray, notInArray, and } from 'drizzle-orm'
 import { computarPerfilesRFM } from '../lib/clientes-rfm'
 import { deduplicarPedidosHistorial } from '../lib/clientes-historial'
 import {
-    cargarToquesPorCliente, esSegmentoRecompra, estadoRecupero, enviarRecuperoDormido,
-    type SegmentoRecompra,
+    cargarToquesPorCliente, estadoRecupero, enviarRecuperoDormido,
 } from '../lib/recupero'
+import { decisionesRecetaSchema, opcionesDeDecisiones } from '../lib/recompra-decisiones'
 import {
     estadoMotor, activarMotor, pausarMotorManual, reanudarMotor, setCupoDiario, setModoMotor,
     listarClientesRecompra, listarColaRecompra, listarHistorialRecompra,
@@ -761,58 +762,73 @@ clientesRoute.put('/recompra/modo', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), a
 
 /**
  * GET /clientes/recompra/cola/:id/mensaje — obtiene datos y texto preparado del mensaje para enviar.
- * `?receta=` elige otra receta que la recomendada del segmento (cambia el texto, el beneficio y el
- * link: el descuento que no se quiere dar). Sin el parámetro se devuelve la recomendada.
+ *
+ * Las tres decisiones del operador viajan por query: `segmento` (el MENSAJE), `link` y `descuento`.
+ * `toque` elige el tramo del recetario (1º relato, 2º recordatorio, 3º cierre). Sin nada elegido se
+ * devuelve el default del motor: el segmento recalculado en vivo, el toque de la escalera del cliente
+ * y el `%` de ese escalón. `receta` se mantiene como alias legacy de `segmento`.
  */
-clientesRoute.get('/recompra/cola/:id/mensaje', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
-    const db = drizzle(pool)
-    const restauranteId = (c as any).user.id
-    const filaId = Number(c.req.param('id'))
-    if (!Number.isFinite(filaId) || filaId <= 0) {
-        return c.json({ success: false, message: 'ID de fila inválido' }, 400)
-    }
-    const recetaQuery = c.req.query('receta')
-    if (recetaQuery && !esSegmentoRecompra(recetaQuery)) {
-        return c.json({ success: false, message: 'Receta inválida' }, 400)
-    }
-    try {
-        const res = await obtenerMensajeFilaCola(db, restauranteId, filaId, {
-            receta: recetaQuery as SegmentoRecompra | undefined,
-        })
-        if (!res.ok) return c.json({ success: false, message: res.mensaje }, 404)
-        return c.json({ success: true, data: res.data }, 200)
-    } catch (error) {
-        console.error('Error obteniendo mensaje de cola de recompra:', error)
-        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
-    }
-})
+clientesRoute.get(
+    '/recompra/cola/:id/mensaje',
+    requireModulo(MODULE_KEYS.MOTOR_RECOMPRA),
+    zValidator('query', decisionesRecetaSchema),
+    async (c) => {
+        const db = drizzle(pool)
+        const restauranteId = (c as any).user.id
+        const filaId = Number(c.req.param('id'))
+        if (!Number.isFinite(filaId) || filaId <= 0) {
+            return c.json({ success: false, message: 'ID de fila inválido' }, 400)
+        }
+        try {
+            const res = await obtenerMensajeFilaCola(db, restauranteId, filaId, opcionesDeDecisiones(c.req.valid('query')))
+            if (!res.ok) return c.json({ success: false, message: res.mensaje }, 404)
+            return c.json({ success: true, data: res.data }, 200)
+        } catch (error) {
+            console.error('Error obteniendo mensaje de cola de recompra:', error)
+            return c.json({ success: false, message: 'Error interno del servidor' }, 500)
+        }
+    },
+)
 
 /**
  * POST /clientes/recompra/cola/:id/marcar-enviado — marca una fila de la cola como enviada manualmente.
- * Body opcional `{ receta }`: la receta que el operador efectivamente mandó. Se registra su beneficio
- * (que puede ser sin descuento) sin reiniciar el nivel de la escalera del cliente.
+ *
+ * Body opcional con `segmento` + `toque` + `link` + `descuento`: lo que el operador efectivamente
+ * mandó. Se registra tal cual —incluido un envío sin descuento— sin reiniciar el nivel de la escalera
+ * del cliente, y ACÁ es donde se emite el cupón (el diálogo no toca la base). La respuesta devuelve lo
+ * registrado para que la pantalla no tenga que adivinarlo.
  */
-clientesRoute.post('/recompra/cola/:id/marcar-enviado', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
-    const db = drizzle(pool)
-    const restauranteId = (c as any).user.id
-    const filaId = Number(c.req.param('id'))
-    if (!Number.isFinite(filaId) || filaId <= 0) {
-        return c.json({ success: false, message: 'ID de fila inválido' }, 400)
-    }
-    try {
-        const body = await c.req.json().catch(() => ({}))
-        const receta = body?.receta
-        if (receta != null && !esSegmentoRecompra(receta)) {
-            return c.json({ success: false, message: 'Receta inválida' }, 400)
+clientesRoute.post(
+    '/recompra/cola/:id/marcar-enviado',
+    requireModulo(MODULE_KEYS.MOTOR_RECOMPRA),
+    zValidator('json', decisionesRecetaSchema),
+    async (c) => {
+        const db = drizzle(pool)
+        const restauranteId = (c as any).user.id
+        const filaId = Number(c.req.param('id'))
+        if (!Number.isFinite(filaId) || filaId <= 0) {
+            return c.json({ success: false, message: 'ID de fila inválido' }, 400)
         }
-        const res = await marcarFilaColaComoEnviadaManual(db, restauranteId, filaId, { receta })
-        if (!res.ok) return c.json({ success: false, message: res.mensaje || 'Error al marcar como enviado' }, 400)
-        return c.json({ success: true, message: res.mensaje }, 200)
-    } catch (error) {
-        console.error('Error marcando fila de recompra como enviada:', error)
-        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
-    }
-})
+        try {
+            const res = await marcarFilaColaComoEnviadaManual(db, restauranteId, filaId, opcionesDeDecisiones(c.req.valid('json')))
+            if (!res.ok) return c.json({ success: false, message: res.mensaje || 'Error al marcar como enviado' }, 400)
+            return c.json({
+                success: true,
+                message: res.mensaje,
+                data: {
+                    toque: res.toque ?? null,
+                    nivel: res.nivel ?? null,
+                    descuento: res.descuento ?? 0,
+                    link: res.link ?? null,
+                    codigoDescuento: res.codigoDescuento ?? null,
+                },
+            }, 200)
+        } catch (error) {
+            console.error('Error marcando fila de recompra como enviada:', error)
+            return c.json({ success: false, message: 'Error interno del servidor' }, 500)
+        }
+    },
+)
 
 function numeroQuery(value: string | undefined, fallback: number) {
     const parsed = Number(value)

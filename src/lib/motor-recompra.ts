@@ -38,6 +38,7 @@ import {
   separarControl,
   enviarRecuperoDormido,
   esSegmentoRecompra,
+  normalizarToque,
   prepararMensajeRecupero,
   PLANTILLA_RECUPERO_WHATSAPP,
   SEGMENTOS_RECUPERABLES,
@@ -46,7 +47,15 @@ import {
   type DatosMensajeRecupero,
   type OpcionesEnvioRecupero,
   type SegmentoRecompra,
+  type ToqueRecompra,
 } from './recupero'
+import {
+  arranqueDeRecontacto,
+  dueDateDeRecontacto,
+  reprogramarPorCooldown,
+  reprogramarPorSilencio,
+  toqueSiguiente,
+} from './recompra-goteo'
 import { enHorarioSilencio, horaArgentina, TOPE_MARKETING_POR_CLIENTE } from './proteccion-base'
 import { crearRecargaPendiente, resumenWallet } from './mensajes-wallet'
 import { MODULE_KEYS, tieneModuloActivo } from './modulos'
@@ -380,7 +389,7 @@ export async function procesarColaDiaria(
 
     for (const fila of pendientes) {
       if (marketing <= 0) break
-      const r = await enviarFila(db, restauranteId, fila.id, fila.clienteId, fila.segmento)
+      const r = await enviarFila(db, restauranteId, fila.id, fila.clienteId, fila.segmento, fila.toque)
       if (r.enviado) {
         if (fila.poblacion === 'flujo') flujoEnviados++
         else stockEnviados++
@@ -450,9 +459,11 @@ async function enviarFila(
   filaId: number,
   clienteId: number,
   segmento: string | null = null,
+  toque: number | null = null,
 ): Promise<{ enviado: boolean; fallido: boolean; sinSaldo?: boolean }> {
   // Regla sagrada / protección: si el cliente ya no es contactable (pidió, opt-out, tope, cooldown),
   // `enviarRecuperoDormido` lo rechaza sin mandar nada; marcamos la fila como salida/fallida.
+  const toqueFila = toque != null ? normalizarToque(toque) : undefined
   let res
   try {
     res = await enviarRecuperoDormido(fakeCtx, db, restauranteId, clienteId, {
@@ -460,6 +471,9 @@ async function enviarFila(
       // El segmento que clasificó la campaña elige la receta del mensaje. El link no cambia: lo
       // sigue resolviendo la escalera igual que antes.
       segmento: esSegmentoRecompra(segmento) ? segmento : undefined,
+      // El toque de la fila decide el copy y la plantilla de Meta. El beneficio, en cambio, lo
+      // sigue fijando la escalera en el momento del envío.
+      toque: toqueFila,
     })
   } catch (err) {
     console.error(`❌ [Motor goteo] Error enviando a cliente ${clienteId}:`, err)
@@ -483,6 +497,7 @@ async function enviarFila(
         origenContacto: 'automatico',
         errorEnvio: null,
         nivel: res.nivel ?? null,
+        toque: res.toque ?? toqueFila ?? null,
         codigoDescuento: res.codigoDescuento ?? null,
       })
       .where(eq(ColaRecompraTable.id, filaId))
@@ -498,8 +513,30 @@ async function enviarFila(
     await db.update(ColaRecompraTable).set({ estado: 'salido', errorEnvio: 'opt_out' }).where(eq(ColaRecompraTable.id, filaId))
     return { enviado: false, fallido: false }
   }
-  if (res.motivo === 'cooldown' || res.motivo === 'tope_mensual' || res.motivo === 'horario_silencio') {
-    return { enviado: false, fallido: false } // se reintenta otro día
+  if (res.motivo === 'cooldown' || res.motivo === 'horario_silencio') {
+    // Reintento con dueDate NUEVA: sin esto la fila queda `pendiente` con el dueDate viejo y el
+    // drenaje la vuelve a levantar en cada tick del día, todos los días, hasta que el cooldown se
+    // cumpla por decantación. Se re-estampa un rato después del fin del cooldown (el `+5 min`
+    // garantiza progreso aunque el reloj del proceso vaya atrasado) o en 1 h si fue el silencio.
+    const reintento = res.motivo === 'cooldown'
+      ? reprogramarPorCooldown(Date.now())
+      : reprogramarPorSilencio(Date.now())
+    await db.update(ColaRecompraTable).set({
+      dueDate: reintento,
+      ultimoIntentoAt: new Date(),
+      errorEnvio: res.motivo,
+    }).where(eq(ColaRecompraTable.id, filaId))
+    return { enviado: false, fallido: false }
+  }
+  if (res.motivo === 'tope_mensual') {
+    // Terminal a propósito: el tope es de 30 días y el goteo entero dura 3 toques, así que
+    // reintentarlo sólo dejaría la fila girando para siempre sin poder salir nunca.
+    await db.update(ColaRecompraTable).set({
+      estado: 'fallido',
+      ultimoIntentoAt: new Date(),
+      errorEnvio: 'tope_mensual',
+    }).where(eq(ColaRecompraTable.id, filaId))
+    return { enviado: false, fallido: true }
   }
   // sin_telefono / envio_fallido / cliente_no_encontrado → fallido.
   await db.update(ColaRecompraTable).set({
@@ -512,43 +549,102 @@ async function enviarFila(
 }
 
 /**
+ * El toque que le sigue a un cliente YA contactado, o null si no le toca ninguno. La fórmula vive en
+ * `recompra-goteo.ts` (módulo puro) para poder fijarla con tests sin abrir el pool.
+ */
+function toqueSiguienteDeCliente(cl: ClienteCohorte, yaEncolados: Set<number>): ToqueRecompra | null {
+  return toqueSiguiente(cl.toquesDesdeUltimoPedido, yaEncolados)
+}
+
+interface DeteccionFlujo {
+  /** Clientes que entran al goteo por primera vez: su toque 1. */
+  nuevos: ClienteCohorte[]
+  /** Clientes ya contactados a los que les toca el toque siguiente. */
+  recontactos: { cliente: ClienteCohorte; toque: ToqueRecompra }[]
+}
+
+/**
  * Detecta la población de FLUJO: clientes recuperables (hoy en `en_riesgo` y `primer_pedido`, las transiciones más frescas)
- * que todavía NO están en la cola de esta campaña. Son los que "cruzan hoy" su umbral personal: su día
- * justo es hoy. Se reusa la cohorte del cerebro RFM (que ya excluye opt-out, tope y cooldown).
+ * que todavía NO están en la cola de esta campaña —su toque 1—, más los RECONTACTOS: los que ya
+ * recibieron un toque, no volvieron a pedir y les toca el siguiente.
+ *
+ * Una sola lectura de la cohorte y una sola de las filas de la campaña alimentan las dos
+ * detecciones: son la misma pregunta sobre los mismos clientes.
  */
 async function detectarFlujo(
   db: Db,
   restauranteId: number,
   campanaId: number,
-): Promise<ClienteCohorte[]> {
-  const cohorte = await cargarCohorteRecompra(db, restauranteId)
+): Promise<DeteccionFlujo> {
+  const cohorte = await cargarCohorteRecompra(db, restauranteId, { incluirEnCooldown: true })
   const flujo = cohorte.filter((c) => c.segmento === 'en_riesgo' || c.segmento === 'primer_pedido')
-  if (flujo.length === 0) return []
+  if (flujo.length === 0) return { nuevos: [], recontactos: [] }
 
-  // Excluir a los que ya están en la cola de esta campaña (cualquier estado / rol).
-  const yaEnCola = await db
-    .select({ clienteId: ColaRecompraTable.clienteId })
+  // Todas las filas de estos clientes en esta campaña: rol, y qué toques ya tienen encolados.
+  const filas = await db
+    .select({
+      clienteId: ColaRecompraTable.clienteId,
+      rol: ColaRecompraTable.rol,
+      toque: ColaRecompraTable.toque,
+    })
     .from(ColaRecompraTable)
-    .where(and(eq(ColaRecompraTable.campanaId, campanaId), inArray(ColaRecompraTable.clienteId, flujo.map((c) => c.clienteId))))
-  const set = new Set(yaEnCola.map((r) => r.clienteId))
-  return flujo.filter((c) => !set.has(c.clienteId))
+    .where(
+      and(
+        eq(ColaRecompraTable.campanaId, campanaId),
+        inArray(ColaRecompraTable.clienteId, flujo.map((c) => c.clienteId)),
+      ),
+    )
+
+  const porCliente = new Map<number, { control: boolean; toques: Set<number> }>()
+  for (const f of filas) {
+    const e = porCliente.get(f.clienteId) ?? { control: false, toques: new Set<number>() }
+    if (f.rol === 'control') e.control = true
+    if (f.rol === 'contactado' && f.toque != null) e.toques.add(f.toque)
+    porCliente.set(f.clienteId, e)
+  }
+
+  const nuevos: ClienteCohorte[] = []
+  const recontactos: DeteccionFlujo['recontactos'] = []
+  for (const c of flujo) {
+    const e = porCliente.get(c.clienteId)
+    if (!e) {
+      nuevos.push(c)
+      continue
+    }
+    // Del grupo de control no se sale nunca: es lo que sostiene la comparación contra los
+    // contactados. Si ya está en la cola con otro rol, no se lo vuelve a entrar por el toque 1.
+    if (e.control) continue
+    const toque = toqueSiguienteDeCliente(c, e.toques)
+    if (toque != null) recontactos.push({ cliente: c, toque })
+  }
+  return { nuevos, recontactos }
+}
+
+/** `ER_DUP_ENTRY` de MySQL: lo lanza el índice único `uq_cola_recompra_toque`. */
+function esDuplicado(err: unknown): boolean {
+  const e = err as { code?: string; cause?: { code?: string } }
+  return e?.code === 'ER_DUP_ENTRY' || e?.cause?.code === 'ER_DUP_ENTRY'
 }
 
 /**
  * Detecta y encola a los clientes de flujo (en_riesgo y primer_pedido) que todavía no están
- * en la cola de esta campaña. Se invoca tanto en el scheduler diario como al consultar
- * la cola u observabilidad para asegurar que clientes calificados aparezcan de inmediato.
+ * en la cola de esta campaña, y RECOLA a los ya contactados a los que les toca el toque siguiente.
+ * Se invoca tanto en el scheduler diario como al consultar la cola u observabilidad para asegurar
+ * que clientes calificados aparezcan de inmediato.
+ *
+ * Sigue siendo el ÚNICO escritor de la cola: el reencolado no envía ni toca contadores.
  */
 export async function sincronizarFlujo(
   db: Db,
   restauranteId: number,
   campanaId: number,
 ): Promise<number> {
-  const nuevosFlujo = await detectarFlujo(db, restauranteId, campanaId)
-  if (nuevosFlujo.length === 0) return 0
+  const { nuevos, recontactos } = await detectarFlujo(db, restauranteId, campanaId)
+  if (nuevos.length === 0 && recontactos.length === 0) return 0
 
   const ahora = Date.now()
-  for (const cl of nuevosFlujo) {
+  let encolados = 0
+  for (const cl of nuevos) {
     const ticket = cl.cantidadPedidos > 0 ? cl.totalGastado / cl.cantidadPedidos : cl.totalGastado
     const patron = calcularPatronEnvio(cl.fechasPedidosMs ?? [], cl.segmento, ahora, cl.clienteId)
     await db.insert(ColaRecompraTable).values({
@@ -565,8 +661,45 @@ export async function sincronizarFlujo(
       estado: 'pendiente',
       ...snapshot(cl),
     })
+    encolados++
   }
-  return nuevosFlujo.length
+
+  for (const { cliente, toque } of recontactos) {
+    // El toque siguiente no puede salir antes del cooldown de 48 hs. El fin del cooldown se le pasa
+    // al patrón de envío (para que devuelva el primer hueco habitual DESPUÉS de eso) y además se
+    // aplica como piso: el `max` lo hace estructural, no una ventana de tiempo.
+    const arranque = arranqueDeRecontacto(cliente.ultimoToqueMs ?? null, ahora)
+    const ticket = cliente.cantidadPedidos > 0
+      ? cliente.totalGastado / cliente.cantidadPedidos
+      : cliente.totalGastado
+    const patron = calcularPatronEnvio(cliente.fechasPedidosMs ?? [], cliente.segmento, arranque, cliente.clienteId)
+    const dueDate = dueDateDeRecontacto(patron.dueDate, cliente.ultimoToqueMs ?? null, ahora)
+    try {
+      await db.insert(ColaRecompraTable).values({
+        restauranteId,
+        campanaId,
+        clienteId: cliente.clienteId,
+        telefono: cliente.telefono,
+        segmento: cliente.segmento,
+        prioridad: calcularPrioridadStock(cliente.segmento, ticket).toFixed(2),
+        // `flujo` (y no `stock`) porque madura en su `dueDate`: como `stock` iría al fondo por
+        // prioridad y un 3º toque con vencimiento de 48 hs saldría tarde.
+        poblacion: 'flujo',
+        rol: 'contactado',
+        toque,
+        dueDate,
+        horarioSugerido: patron.horarioSugerido,
+        estado: 'pendiente',
+        ...snapshot(cliente),
+      })
+      encolados++
+    } catch (err) {
+      // Idempotencia: el índice único (campaña, cliente, toque) es la garantía anti-bucle. Si dos
+      // GET de la UI sincronizan a la vez, el segundo cae acá y no pasa nada.
+      if (!esDuplicado(err)) throw err
+    }
+  }
+  return encolados
 }
 
 /** Pausa la campaña por saldo agotado. Aviso ÚNICO (o 1/semana): nunca súplica, nunca deuda. */
@@ -800,7 +933,10 @@ export interface DashboardCampana {
   enviadosHoy: number
   totalEnviados: number
   enCola: number
+  /** Clientes ÚNICOS con al menos un toque enviado (el goteo manda hasta 3 por cliente). */
   contactados: number
+  /** Total de toques enviados: `contactados` ≤ `toquesEnviados` ≤ 3 × `contactados`. */
+  toquesEnviados: number
   volvieron: number
   plataRecuperada: number
   control: number
@@ -899,6 +1035,19 @@ async function construirDashboard(
   const referencia = campana.activadaAt ? new Date(campana.activadaAt) : new Date(campana.createdAt)
   const clientesRelevantes = [...contactadosEnviados.map((f) => f.clienteId), ...control.map((f) => f.clienteId)]
 
+  // Con el goteo hay hasta 3 filas `enviado` por cliente, así que el mapa se queda con el PRIMER
+  // toque (`t < prev`): "volvió después de que lo contactamos" se mide contra el primer contacto, que
+  // es la referencia comparable con el control (que tiene un único instante, `activadaAt`). Si se
+  // quedara con el último, la tasa se derrumbaría a un tercio sin que nada haya empeorado.
+  const enviadoPorCliente = new Map<number, number>()
+  for (const f of contactadosEnviados) {
+    if (!f.enviadoAt) continue
+    const t = new Date(f.enviadoAt).getTime()
+    const prev = enviadoPorCliente.get(f.clienteId)
+    if (prev == null || t < prev) enviadoPorCliente.set(f.clienteId, t)
+  }
+  const contactados = enviadoPorCliente.size
+
   let volvieron = 0
   let plataRecuperada = 0
   let controlVolvieron = 0
@@ -919,9 +1068,6 @@ async function construirDashboard(
         ),
       )
 
-    // Índice: primer pedido de cada cliente después de su fecha de referencia.
-    const enviadoPorCliente = new Map<number, number>()
-    for (const f of contactadosEnviados) if (f.enviadoAt) enviadoPorCliente.set(f.clienteId, new Date(f.enviadoAt).getTime())
     const controlSet = new Set(control.map((f) => f.clienteId))
     const volvieronSet = new Set<number>()
     const controlVolvieronSet = new Set<number>()
@@ -940,7 +1086,7 @@ async function construirDashboard(
     controlVolvieron = controlVolvieronSet.size
   }
 
-  const tasaContactados = contactadosEnviados.length > 0 ? volvieron / contactadosEnviados.length : 0
+  const tasaContactados = contactados > 0 ? volvieron / contactados : 0
   const tasaControl = control.length > 0 ? controlVolvieron / control.length : 0
 
   return {
@@ -950,7 +1096,8 @@ async function construirDashboard(
     enviadosHoy: campana.diaContador === diaArgentina() ? campana.enviadosHoy : 0,
     totalEnviados: campana.totalEnviados,
     enCola,
-    contactados: contactadosEnviados.length,
+    contactados,
+    toquesEnviados: campana.totalEnviados,
     volvieron,
     plataRecuperada,
     control: control.length,
@@ -1120,6 +1267,11 @@ export async function listarHistorialRecompra(
       plantillaWhatsapp: ColaRecompraTable.plantillaWhatsapp,
       codigoDescuento: ColaRecompraTable.codigoDescuento,
       nivel: ColaRecompraTable.nivel,
+      // Qué toque salió y con qué link/descuento: es la auditoría del invariante "lo_mismo nunca
+      // lleva descuento" y de la diferencia entre el copy elegido (`toque`) y el escalón (`nivel`).
+      toque: ColaRecompraTable.toque,
+      linkModalidad: ColaRecompraTable.linkModalidad,
+      descuentoEnviado: ColaRecompraTable.descuentoEnviado,
       enviadoAt: ColaRecompraTable.enviadoAt,
       ultimoIntentoAt: ColaRecompraTable.ultimoIntentoAt,
       errorEnvio: ColaRecompraTable.errorEnvio,
@@ -1182,6 +1334,9 @@ export async function listarClientesRecompra(
       rol: ColaRecompraTable.rol,
       estado: ColaRecompraTable.estado,
       prioridad: ColaRecompraTable.prioridad,
+      // El recorrido del goteo de este cliente: qué toque es esta fila y cuántos lleva ya enviados.
+      toque: ColaRecompraTable.toque,
+      nivel: ColaRecompraTable.nivel,
       totalGastadoSnapshot: ColaRecompraTable.totalGastadoSnapshot,
       ultimoPedidoAtSnapshot: ColaRecompraTable.ultimoPedidoAtSnapshot,
       dueDate: ColaRecompraTable.dueDate,
@@ -1234,6 +1389,9 @@ export async function listarClientesRecompra(
       ...fila,
       estado: estadoPublico(fila.estado),
       prioridad: Number(fila.prioridad ?? 0),
+      // El recorrido del goteo: cuántos toques lleva desde su último pedido (0 = todavía ninguno,
+      // 3 = ya se le mandaron los tres). El `toque` de la fila es el tramo de ESTA fila.
+      toquesDesdeUltimoPedido: recupero.toquesDesdeUltimoPedido,
       ticketPromedio: cantidadPedidos > 0 ? totalGastado / cantidadPedidos : totalGastado,
       ultimoPedidoAt: iso(resumenPedidos?.ultimoPedidoAt ?? fila.ultimoPedidoAtSnapshot),
       dueDate: iso(fila.dueDate),
@@ -1322,17 +1480,22 @@ async function horaObjetivoLocal(db: Db, restauranteId: number): Promise<number>
 
 // ── Operación manual desde la cola ───────────────────────────────────────────
 
+/** Las tres decisiones del operador sobre un envío puntual: mensaje, link y descuento. */
+type OpcionesMensajeManual = Pick<OpcionesEnvioRecupero, 'receta' | 'segmento' | 'toque' | 'link' | 'descuento'>
+
 /**
  * Obtiene los datos formateados del mensaje para una fila de la cola.
  *
- * `opciones.receta` permite al operador pedir otra receta que la recomendada (el caso "el mensaje
- * recomendado incluye descuento y no quiero darlo"): se devuelve el copy y el link de esa receta.
+ * El operador decide tres cosas: el MENSAJE (receta = segmento, más el toque), el LINK y el
+ * DESCUENTO. Sin nada elegido se devuelve el default del motor: el segmento en vivo del cliente, el
+ * toque que marca su escalera y el `%` de ese escalón. El toque de la fila se usa como default
+ * cuando la fila ya lo trae (las que encola el goteo lo traen).
  */
 export async function obtenerMensajeFilaCola(
   db: Db,
   restauranteId: number,
   filaId: number,
-  opciones: Pick<OpcionesEnvioRecupero, 'receta'> = {},
+  opciones: OpcionesMensajeManual = {},
 ): Promise<{ ok: true; data: DatosMensajeRecupero } | { ok: false; mensaje: string }> {
   const [fila] = await db
     .select()
@@ -1341,8 +1504,11 @@ export async function obtenerMensajeFilaCola(
     .limit(1)
   if (!fila) return { ok: false, mensaje: 'Elemento de cola no encontrado' }
   const prep = await prepararMensajeRecupero(db, restauranteId, fila.clienteId, {
-    segmento: esSegmentoRecompra(fila.segmento) ? fila.segmento : undefined,
+    segmento: opciones.segmento ?? (esSegmentoRecompra(fila.segmento) ? fila.segmento : undefined),
     receta: opciones.receta,
+    toque: opciones.toque ?? fila.toque ?? undefined,
+    link: opciones.link,
+    descuento: opciones.descuento,
   })
   if (!prep.ok) return { ok: false, mensaje: prep.mensaje }
   return {
@@ -1359,8 +1525,8 @@ export async function marcarFilaColaComoEnviadaManual(
   db: Db,
   restauranteId: number,
   filaId: number,
-  opciones: Pick<OpcionesEnvioRecupero, 'receta'> = {},
-): Promise<{ ok: boolean; mensaje?: string }> {
+  opciones: OpcionesMensajeManual = {},
+): Promise<{ ok: boolean; mensaje?: string; toque?: number; nivel?: number; descuento?: number; link?: string; codigoDescuento?: string | null }> {
   const [fila] = await db
     .select()
     .from(ColaRecompraTable)
@@ -1369,16 +1535,23 @@ export async function marcarFilaColaComoEnviadaManual(
   if (!fila) return { ok: false, mensaje: 'Elemento de la cola no encontrado' }
   if (fila.estado === 'enviado') return { ok: true, mensaje: 'Ya estaba marcado como enviado' }
 
-  // Preparar cupón / escalón para asegurar consistencia del beneficio. Si el operador eligió otra
-  // receta, se registra el beneficio que REALMENTE mandó (puede ser 0), no el de la escalera.
+  // Preparar cupón / escalón para asegurar consistencia del beneficio: acá es donde el cupón se
+  // emite de verdad (el diálogo no toca la base). Se registra el beneficio que REALMENTE se mandó.
   const prep = await prepararMensajeRecupero(db, restauranteId, fila.clienteId, {
-    segmento: esSegmentoRecompra(fila.segmento) ? fila.segmento : undefined,
+    segmento: opciones.segmento ?? (esSegmentoRecompra(fila.segmento) ? fila.segmento : undefined),
     receta: opciones.receta,
+    toque: opciones.toque ?? fila.toque ?? undefined,
+    link: opciones.link,
+    descuento: opciones.descuento,
   })
-  // El nivel sigue siendo el de la escalera: cambiar de receta no reinicia el avance del cliente.
+  // El nivel sigue siendo el de la escalera: cambiar de receta, de link o de descuento no reinicia
+  // el avance del cliente. El `toque` sí puede diferir del nivel: es el copy que el operador eligió.
   const nivel = prep.ok ? prep.data.nivel : (fila.nivel ?? 1)
+  const toque = prep.ok ? prep.data.toque : (normalizarToque(fila.toque ?? 1))
+  const link = prep.ok ? prep.data.link : 'lo-mismo'
   const codigoDescuento = prep.ok ? prep.data.codigoDescuento : (fila.codigoDescuento ?? null)
   const descuento = prep.ok ? prep.data.descuento : 0
+  const plantillaWhatsapp = prep.ok ? prep.data.plantillaWhatsapp : PLANTILLA_RECUPERO_WHATSAPP
 
   await db
     .update(ColaRecompraTable)
@@ -1388,9 +1561,12 @@ export async function marcarFilaColaComoEnviadaManual(
       enviadoAt: new Date(),
       ultimoIntentoAt: new Date(),
       origenContacto: 'manual',
-      plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
+      plantillaWhatsapp,
       errorEnvio: null,
       nivel,
+      toque,
+      linkModalidad: link,
+      descuentoEnviado: descuento,
       codigoDescuento,
     })
     .where(eq(ColaRecompraTable.id, filaId))
@@ -1400,6 +1576,8 @@ export async function marcarFilaColaComoEnviadaManual(
     clienteId: fila.clienteId,
     telefono: fila.telefono,
     nivel,
+    toque,
+    modalidad: link,
     descuentoPorcentaje: descuento,
     codigoDescuento,
     segmento: fila.segmento,
@@ -1413,6 +1591,9 @@ export async function marcarFilaColaComoEnviadaManual(
     })
     .where(eq(CampanaRecompraTable.id, fila.campanaId))
 
+  // No se encola acá el toque siguiente: de eso se encarga `detectarRecontacto` en la próxima
+  // lectura de la cola. Una sola puerta para el reencolado es lo que hace que el índice único
+  // alcance como garantía anti-bucle.
   const [{ pendientesRestantes } = { pendientesRestantes: 0 }] = await db
     .select({ pendientesRestantes: sql<number>`count(*)` })
     .from(ColaRecompraTable)
@@ -1427,6 +1608,14 @@ export async function marcarFilaColaComoEnviadaManual(
     await db.update(CampanaRecompraTable).set({ estado: 'completada' }).where(and(eq(CampanaRecompraTable.id, fila.campanaId), eq(CampanaRecompraTable.estado, 'activa')))
   }
 
-  return { ok: true, mensaje: 'Contacto manual registrado correctamente' }
+  return {
+    ok: true,
+    mensaje: 'Contacto manual registrado correctamente',
+    toque,
+    nivel,
+    descuento,
+    link,
+    codigoDescuento,
+  }
 }
 

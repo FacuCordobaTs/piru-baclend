@@ -57,7 +57,7 @@ import {
 } from '../lib/marketing-enlaces'
 import { computarPerfilesRFM } from '../lib/clientes-rfm'
 import { chequearProteccionMarketing, VENTANA_TOPE_DIAS } from '../lib/proteccion-base'
-import { COOLDOWN_HORAS } from '../lib/recupero'
+import { COOLDOWN_HORAS, resolverCuponLinkRecupero } from '../lib/recupero'
 import { registrarContactoManual } from '../lib/motor-recompra'
 import {
   compensarReservaCreditoMarketing,
@@ -904,6 +904,8 @@ export function crearMarketingGrowthPublicRoute(db = drizzle(pool)): Hono {
 
     let cuponCodigo: string | null = null
     let cuponId: number | null = null
+    /** Vencimiento REAL del cupón (no el del token): es el que la tienda puede prometer. */
+    let cuponExpiraAt: Date | null = null
     if (payload.dto && payload.dto > 0) {
       try {
         const [enlaceConCupon] = await db.select({
@@ -925,29 +927,44 @@ export function crearMarketingGrowthPublicRoute(db = drizzle(pool)): Hono {
         if (enlaceConCupon && (!enlaceConCupon.fechaFin || new Date(enlaceConCupon.fechaFin) > new Date())) {
           cuponCodigo = enlaceConCupon.codigo
           cuponId = enlaceConCupon.cuponId
+          cuponExpiraAt = enlaceConCupon.fechaFin ?? null
         } else {
-          const codigo = `GROWTH-${payload.cId}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`
-          const expiraAt = payload.exp ? new Date(payload.exp) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-          const [insertRes] = await db.insert(CodigoDescuentoTable).values({
-            restauranteId: payload.rId,
-            codigo,
-            tipo: 'porcentaje',
-            valor: String(payload.dto),
-            limiteUsos: 1,
-            usosActuales: 0,
-            montoMinimo: '0.00',
-            fechaInicio: new Date(),
-            fechaFin: expiraAt,
-            activo: true,
-            generadoAutomaticamente: true,
-          })
-          cuponCodigo = codigo
-          cuponId = Number(insertRes.insertId)
+          // El Motor de Recompra no deja fila en `marketing_enlace`: su cupón es el determinístico
+          // `VOLVE{d}-{clienteId}`, que emitió el ENVÍO. Acá sólo se LEE —reabrirlo no puede extender
+          // las 48 hs del último toque ni revivir un cupón ya usado—.
+          const cuponRecupero = await resolverCuponLinkRecupero(db, payload.rId, payload.cId, payload.dto)
+          if (cuponRecupero) {
+            cuponCodigo = cuponRecupero.codigo
+            cuponId = cuponRecupero.id
+            cuponExpiraAt = cuponRecupero.fechaFin
+          } else if (payload.origen !== 'recompra') {
+            const codigo = `GROWTH-${payload.cId}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`
+            const expiraAt = payload.exp ? new Date(payload.exp) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+            const [insertRes] = await db.insert(CodigoDescuentoTable).values({
+              restauranteId: payload.rId,
+              codigo,
+              tipo: 'porcentaje',
+              valor: String(payload.dto),
+              limiteUsos: 1,
+              usosActuales: 0,
+              montoMinimo: '0.00',
+              fechaInicio: new Date(),
+              fechaFin: expiraAt,
+              activo: true,
+              generadoAutomaticamente: true,
+            })
+            cuponCodigo = codigo
+            cuponId = Number(insertRes.insertId)
+            cuponExpiraAt = expiraAt
+          }
         }
       } catch (err) {
         console.error('Error resolviendo cupón para growth payload:', err)
       }
     }
+    // El token lleva el `%` a propósito, pero quien lo hace cumplir es el cupón: sin cupón vigente la
+    // tienda no puede mostrar un banner que el checkout después rechaza (vencido, inactivo o ya usado).
+    const hayDescuento = cuponId != null && (payload.dto ?? 0) > 0
 
     const campanaSlug = payload.campana === 'lo_mismo' ? 'lo-mismo' : 'reactivacion'
     const campanaRecord = await asegurarCampanaMaestra(db, payload.rId, payload.campana)
@@ -976,9 +993,9 @@ export function crearMarketingGrowthPublicRoute(db = drizzle(pool)): Hono {
         carrito: carritoReconstruido,
         itemsTotal: itemsTotal.toFixed(2),
         descuento: {
-          activo: (payload.dto ?? 0) > 0,
-          porcentaje: payload.dto ?? 0,
-          expiraAt: payload.exp ?? null,
+          activo: hayDescuento,
+          porcentaje: hayDescuento ? (payload.dto ?? 0) : 0,
+          expiraAt: cuponExpiraAt ?? (hayDescuento ? payload.exp ?? null : null),
           codigoCupon: cuponCodigo,
           codigoDescuentoId: cuponId,
         },

@@ -821,6 +821,124 @@ describe('POST /public/growth/resolver-enlace', () => {
     expect(json.data.carrito[0].productoId).toBe(12)
     expect(json.data.carrito[0].cantidad).toBe(2)
   })
+
+  /**
+   * Un toque del Motor de Recompra emite su cupón `VOLVE{d}-{clienteId}` al ENVIAR, no al abrir el
+   * link. El resolver sólo puede leerlo: si minteara uno nuevo cuando el original ya no sirve
+   * —vencido, inactivo o gastado—, reabrir el link reviviría un cupón ya usado (o mostraría un
+   * banner con descuento para un cupón que el checkout después rechaza).
+   */
+  function crearMockCuponRecompra(opts: { cuponRecompra: { usosActuales: number } | null; inserciones: unknown[] }) {
+    return {
+      select: (fields?: any) => ({
+        from: () => {
+          const chain: any = {
+            where: () => chain,
+            innerJoin: () => chain,
+            orderBy: () => chain,
+            limit: () => {
+              if (fields && 'deliveryEnabled' in fields) {
+                return Promise.resolve([{ id: 1, nombre: 'Pizzería Piru', username: 'pizzeria', deliveryEnabled: true, takeawayEnabled: true, deliveryFee: '150.00', direccionSoloTexto: false }])
+              }
+              if (fields && 'telefono' in fields) {
+                return Promise.resolve([{ id: 10, nombre: 'Carlos Gomez', telefono: '5491155551234', direccion: 'Calle 123' }])
+              }
+              if (fields && 'metodoPago' in fields) {
+                // Sin último pedido: el carrito queda vacío y no hay productos que resolver.
+                return Promise.resolve([])
+              }
+              if (fields && 'cuponId' in fields) {
+                // La consulta a `marketing_enlace` (join con el cupón): ningún enlace de campaña.
+                return Promise.resolve([])
+              }
+              if (fields && 'limiteUsos' in fields) {
+                // El cupón determinístico `VOLVE{d}-{clienteId}`: sólo existe si el toque se envió.
+                return Promise.resolve(opts.cuponRecompra
+                  ? [{ id: 77, activo: true, limiteUsos: 1, usosActuales: opts.cuponRecompra.usosActuales, fechaFin: null }]
+                  : [])
+              }
+              // Cámara maestra.
+              return Promise.resolve([{ id: 50, slug: 'lo-mismo', tipo: 'lo_mismo' }])
+            },
+          }
+          return chain
+        },
+      }),
+      insert: () => ({
+        values: (fila: unknown) => {
+          opts.inserciones.push(fila)
+          return Promise.resolve([{ insertId: 999 }])
+        },
+      }),
+    }
+  }
+
+  async function resolverConMock(token: string, mockDb: any) {
+    const app = new Hono().route('/public', crearMarketingGrowthPublicRoute(mockDb))
+    const response = await app.request('/public/growth/resolver-enlace', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, restauranteSlug: 'pizzeria' }),
+    })
+    return { status: response.status, json: await response.json() as any }
+  }
+
+  it('un toque de Recompra con el cupón ya usado no mintea otro: el link no promete beneficio', async () => {
+    const inserciones: unknown[] = []
+    const token = cifrarGrowthPayload({
+      rId: 1,
+      cId: 10,
+      campana: 'reactivacion',
+      modalidad: 'descuento_banner',
+      dto: 10,
+      exp: null,
+      origen: 'recompra',
+    })
+
+    const { status, json } = await resolverConMock(token, crearMockCuponRecompra({ cuponRecompra: { usosActuales: 1 }, inserciones }))
+
+    expect(status).toBe(200)
+    expect(inserciones).toHaveLength(0)
+    expect(json.data.descuento).toMatchObject({ activo: false, porcentaje: 0, codigoCupon: null, codigoDescuentoId: null })
+  })
+
+  it('un toque de Recompra con el cupón vigente lo siembra sin mintear nada', async () => {
+    const inserciones: unknown[] = []
+    const token = cifrarGrowthPayload({
+      rId: 1,
+      cId: 10,
+      campana: 'reactivacion',
+      modalidad: 'descuento_banner',
+      dto: 10,
+      exp: null,
+      origen: 'recompra',
+    })
+
+    const { json } = await resolverConMock(token, crearMockCuponRecompra({ cuponRecompra: { usosActuales: 0 }, inserciones }))
+
+    expect(inserciones).toHaveLength(0)
+    expect(json.data.descuento).toMatchObject({ activo: true, porcentaje: 10, codigoCupon: 'VOLVE10-10', codigoDescuentoId: 77 })
+  })
+
+  it('un link de campaña sin cupón propio sí lo mintea: el guard es sólo para Recompra', async () => {
+    const inserciones: unknown[] = []
+    const token = cifrarGrowthPayload({
+      rId: 1,
+      cId: 10,
+      campana: 'reactivacion',
+      modalidad: 'descuento_banner',
+      dto: 10,
+      exp: null,
+      // Sin `origen`: es una micro-campaña, que sí crea su cupón al abrir el link.
+    })
+
+    const { status, json } = await resolverConMock(token, crearMockCuponRecompra({ cuponRecompra: null, inserciones }))
+
+    expect(status).toBe(200)
+    expect(inserciones).toHaveLength(1)
+    expect(json.data.descuento).toMatchObject({ activo: true, porcentaje: 10 })
+    expect(json.data.descuento.codigoCupon).toStartWith('GROWTH-')
+  })
 })
 
 describe('POST /marketing/enlaces (micro-campañas lo_mismo y reactivacion)', () => {

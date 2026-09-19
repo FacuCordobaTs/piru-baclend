@@ -592,11 +592,21 @@ export const notificarClientePagoConfirmado = async (
 
 export interface ClientRecuperoData {
     phone: string;            // teléfono del cliente
-    customerName: string;     // {{nombre_cliente}}
-    restaurantName: string;   // {{nombre_del_local}}
-    tiempoSinPedir: string;   // {{tiempo_sin_pedir}} — ej: "3 semanas"
-    productoFavorito: string; // {{producto_favorito}} — ej: "tus Alfajores de maicena"
-    incentivo: string;        // {{incentivo}} — la línea del escalón (sin descuento / 10% / 20% con vencimiento)
+    /** Nombre EXACTO de la plantilla aprobada en Meta para (segmento × toque). */
+    plantilla: string;
+    /**
+     * ¿La plantilla lleva encabezado con la foto del producto? Sólo el 1º toque. Cuando es `false`
+     * el componente `header` NO se envía: los toques 2 y 3 van sin encabezado (mandar una imagen
+     * que la plantilla no declara hace que Meta rechace el mensaje).
+     */
+    conImagen: boolean;
+    /**
+     * Los `{{n}}` del cuerpo, EN ORDEN. Cada plantilla declara cuáles usa, así que este array es el
+     * contrato: `parametros[0]` es `{{1}}`, `parametros[1]` es `{{2}}`, etcétera. Lo produce
+     * `componerCuerpoToque` (`lib/recetas-recompra.ts`) para el mismo tramo, así que el envío por
+     * Meta y el texto que el operador copia a mano no pueden divergir.
+     */
+    parametros: { nombre: string; valor: string }[];
     usernameTienda: string;   // path dinámico del botón URL (base https://my.piru.app/), con el
                               // link de micro-campaña y el carrito adentro del token:
                               // `username/c/reactivacion?tk=v1.abc.def.ghi`.
@@ -607,18 +617,34 @@ export interface ClientRecuperoData {
 const RECUPERO_IMAGE_FALLBACK = 'https://my.piru.app/og-image.png';
 
 /**
- * Playbook de recupero de dormidos (Motor de Recompra · tarea 4.2). Envía un mensaje de
- * MARKETING al cliente con la marca del local (requiere sus credenciales de Meta vía OAuth),
- * usando la plantilla `recupero_dormido_v1`.
+ * Motor de Recompra · un mensaje por SEGMENTO × TOQUE. Envía un mensaje de MARKETING al cliente con
+ * la marca del local (requiere sus credenciales de Meta vía OAuth), usando la plantilla que
+ * corresponde al tramo que se está mandando.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * PLANTILLA A CREAR EN META (WhatsApp Manager → Plantillas de mensajes):
- *   • Nombre:        recupero_dormido_v1
- *   • Categoría:     MARKETING
+ * PLANTILLAS A CREAR EN META (WhatsApp Manager → Plantillas de mensajes):
+ *
+ *   Son 11 (`recupero_dormido_v1` ya existe y no se toca), una por combinación de segmento × toque:
+ *
+ *     recupero_toque1_primer_pedido_v1 · recupero_toque1_en_riesgo_v1 · recupero_toque1_perdido_v1
+ *     recupero_toque2_<segmento>_v1   (los 4 segmentos)
+ *     recupero_toque3_<segmento>_v1   (los 4 segmentos)
+ *
+ *   El 1º toque de `dormido` usa la histórica `recupero_dormido_v1`; el nombre de cada tramo y el
+ *   cuerpo exacto de cada una viven en el recetario (`lib/recetas-recompra.ts`,
+ *   `resolverPlantillaRecompra` / `listarPlantillasNuevas`) y están documentados, listos para
+ *   copiar y pegar, en `docs/PLANTILLAS_RECOMPRA_TOQUES.md`.
+ *
+ *   Común a todas:
+ *   • Categoría:     MARKETING (es un mensaje proactivo de reactivación, no utility). Por eso
+ *                    consume el bucket `marketing` del wallet, no el `utility`.
  *   • Idioma:        Español (Argentina) — es_AR
- *   • Encabezado:    IMAGEN (media dinámico; se envía por `link` en cada mensaje).
- *                    Subí una imagen de muestra al crearla (una foto de producto sirve).
- *   • Cuerpo (con variables POSICIONALES {{1}}..{{5}} — así está creada en prod):
+ *   • Encabezado:    IMAGEN (media dinámico, se envía por `link` en cada mensaje) **sólo en el 1º
+ *                    toque**; subí una imagen de muestra al crearla (una foto de producto sirve).
+ *                    Los toques 2 y 3 van SIN componente de encabezado.
+ *   • Cuerpo:        variables POSICIONALES `{{1}}..{{n}}`, en el orden que declara el recetario.
+ *                    El orden ES el contrato: reordenar el recetario rompe las plantillas ya
+ *                    aprobadas. Muestras del 1º toque de `dormido` (la histórica):
  *
  *        ¡Hola {{1}}! 👋
  *
@@ -628,11 +654,16 @@ const RECUPERO_IMAGE_FALLBACK = 'https://my.piru.app/og-image.png';
  *
  *        Tocá el botón y pedí en segundos 👇
  *
- *     El ORDEN es el contrato (lo respeta el `body.parameters` de abajo):
- *       {{1}} nombre_cliente · {{2}} nombre_del_local · {{3}} tiempo_sin_pedir ·
- *       {{4}} producto_favorito · {{5}} incentivo
- *     Muestras sugeridas: {{1}}=Facundo · {{2}}=Alfajor con Papas · {{3}}=1 semana ·
- *     {{4}}=Alfajor Especial · {{5}}=Y esta vez va con un 10% OFF: usá el código VOLVE10-45 al pedir.
+ *     {{1}} cliente · {{2}} local · {{3}} tiempo sin pedir · {{4}} producto favorito · última
+ *     variable: la línea de beneficio. Esa línea NUNCA menciona un código de descuento: el `%`
+ *     viaja en el link y la tienda lo aplica sola.
+ *
+ *     Tres reglas de Meta rechazan una plantilla EN AUTOMÁTICO, sin revisión humana, y el recetario
+ *     las cumple (los tests de `recetas-recompra.test.ts` las fijan para las 12): el cuerpo no puede
+ *     empezar ni terminar con una variable (`Invalid format`); hacen falta al menos
+ *     `3 × variables + 1` palabras entre texto fijo y variables (error 2388293); y nunca van dos
+ *     variables pegadas. Por eso todos los cuerpos cierran con el CTA del botón: la línea de
+ *     beneficio es la última variable y necesita texto fijo detrás.
  *   • Botón:         Uno solo, tipo "Visitar sitio web" → URL DINÁMICA.
  *                    Base: https://my.piru.app/    Variable {{1}}: el path de la
  *                    micro-campaña (ej. `alfajor/c/lo-mismo?tk=v1...`).
@@ -641,8 +672,8 @@ const RECUPERO_IMAGE_FALLBACK = 'https://my.piru.app/og-image.png';
  *                    el webhook lo respeta (ver `procesarComandoOptOut` en `lib/proteccion-base.ts`).
  *                    Dejar el mensaje limpio, sin texto de baja visible para el comensal.
  *
- * NOTA sobre categoría: es MARKETING (no utility) porque es un mensaje proactivo de
- * reactivación. Por eso consume el bucket `marketing` del wallet, no el `utility`.
+ *   La aprobación es POR LOCAL: cada local tiene su propia WABA (OAuth), así que las 11 plantillas
+ *   hay que crearlas una vez por local. Ver `docs/PLANTILLAS_RECOMPRA_TOQUES.md`.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 export const sendClientRecuperoWhatsApp = async (c: any, data: ClientRecuperoData, creds?: WaCredentials) => {
@@ -652,43 +683,42 @@ export const sendClientRecuperoWhatsApp = async (c: any, data: ClientRecuperoDat
 
     const url = `https://graph.facebook.com/v22.0/${phoneId}/messages`;
 
+    // El encabezado es CONDICIONAL: los toques 2 y 3 no lo llevan, y mandarlo igual hace que Meta
+    // rechace el mensaje. El orden header → body → button es el que exige la API.
+    const components: any[] = [];
+    if (data.conImagen) {
+        components.push({
+            type: "header",
+            parameters: [
+                { type: "image", image: { link: data.imageUrl || RECUPERO_IMAGE_FALLBACK } }
+            ]
+        });
+    }
+    components.push({
+        type: "body",
+        // Variables POSICIONALES: el orden del array ES el contrato con la plantilla. No hay
+        // nombres hardcodeados acá a propósito — los pone el recetario del tramo.
+        parameters: data.parametros.map((p) => ({ type: "text", text: p.valor }))
+    });
+    components.push({
+        type: "button",
+        sub_type: "url",
+        index: 0,
+        parameters: [
+            // Path dinámico del botón URL: base https://my.piru.app/ + {{1}} = micro-campaña del cliente.
+            { type: "text", text: data.usernameTienda }
+        ]
+    });
+
     const body = {
         messaging_product: "whatsapp",
         recipient_type: "individual",
         to: data.phone,
         type: "template",
         template: {
-            name: "recupero_dormido_v1",
+            name: data.plantilla,
             language: { code: "es_AR" },
-            components: [
-                {
-                    type: "header",
-                    parameters: [
-                        { type: "image", image: { link: data.imageUrl || RECUPERO_IMAGE_FALLBACK } }
-                    ]
-                },
-                {
-                    type: "body",
-                    // La plantilla usa variables POSICIONALES {{1}}..{{5}} (así se creó en Meta).
-                    // El orden ES el contrato: {{1}} nombre · {{2}} local · {{3}} tiempo · {{4}} producto · {{5}} incentivo.
-                    parameters: [
-                        { type: "text", text: data.customerName },   // {{1}}
-                        { type: "text", text: data.restaurantName },  // {{2}}
-                        { type: "text", text: data.tiempoSinPedir },  // {{3}}
-                        { type: "text", text: data.productoFavorito },// {{4}}
-                        { type: "text", text: data.incentivo }        // {{5}}
-                    ]
-                },
-                {
-                    type: "button",
-                    sub_type: "url",
-                    index: 0,
-                    parameters: [
-                        // Path dinámico del botón URL: base https://my.piru.app/ + {{1}} = micro-campaña del cliente.
-                        { type: "text", text: data.usernameTienda }
-                    ]
-                }
-            ]
+            components
         }
     };
 

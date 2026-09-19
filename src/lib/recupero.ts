@@ -51,120 +51,63 @@ import { normalizarTelefonoCliente } from './clientes-identidad'
 import { cifrarGrowthPayload } from './marketing-crypto'
 import { BASE_TIENDA, urlMicroCampana } from './marketing-enlaces'
 import {
+  componerCuerpoToque,
+  DESCUENTO_MAX,
+  DESCUENTO_MIN,
+  ESCALERA,
+  esModalidadLink,
   esSegmentoRecompra,
+  lineaBeneficioRecompra,
   listarRecetasRecompra,
+  MODALIDADES_LINK,
+  NIVEL_MAX,
+  normalizarToque,
   resolverBeneficioRecompra,
+  resolverPlantillaRecompra,
   resolverRecetaRecompra,
+  resolverRecetaToque,
   resolverSegmentoRecompraDesdeRFM,
   SEGMENTOS_RECUPERABLES,
-  textoIncentivoReceta,
+  TOQUE_MAX,
+  TOQUES_RECOMPRA,
   type BeneficioRecompra,
+  type EscalonRecupero,
+  type ModalidadLink,
   type RecetaRecompra,
   type SegmentoRecompra,
+  type ToqueRecompra,
+  type VariableToque,
 } from './recetas-recompra'
+import {
+  COOLDOWN_HORAS,
+  estadoRecupero,
+  MS_POR_HORA,
+  type EstadoRecupero,
+  type Toque,
+} from './recompra-goteo'
+import { resolverEnvioRecompra, type OrigenDescuento } from './recompra-envio'
 
-// El vocabulario de segmentos vive en el recetario; se reexporta para no romper a sus consumidores
-// (motor-recompra y las rutas de clientes lo importan desde acá desde antes).
-export { SEGMENTOS_RECUPERABLES, esSegmentoRecompra }
-export type { SegmentoRecompra }
+// El vocabulario del goteo vive en el recetario; se reexporta para no romper a sus consumidores
+// (motor-recompra, las rutas de clientes y los tipos del admin lo importan desde acá desde antes).
+export { SEGMENTOS_RECUPERABLES, esSegmentoRecompra, normalizarToque, TOQUE_MAX }
+export { DESCUENTO_MIN, DESCUENTO_MAX, MODALIDADES_LINK, esModalidadLink }
+export type { SegmentoRecompra, ToqueRecompra, ModalidadLink }
 
 type Db = MySql2Database<Record<string, never>>
 
 // ── Definición de la escalera ────────────────────────────────────────────────
-export interface EscalonRecupero {
-  nivel: number
-  /** % de descuento del cupón (0 = sin descuento). */
-  descuento: number
-  /** Vencimiento del cupón en horas (null = sin vencimiento). */
-  expiraHoras: number | null
-  /** Rótulo corto para la UI. */
-  titulo: string
-  /** Descripción para la UI (qué se le va a mandar). */
-  detalle: string
-}
-
-export const ESCALERA: EscalonRecupero[] = [
-  {
-    nivel: 1,
-    descuento: 0,
-    expiraHoras: null,
-    titulo: 'Primer toque · sin descuento',
-    detalle: 'Solo un antojo: la foto de lo que más pide + invitación a repetir su pedido. No se regala margen a quien vuelve gratis.',
-  },
-  {
-    nivel: 2,
-    descuento: 10,
-    expiraHoras: null,
-    titulo: 'Segundo toque · 10% de descuento',
-    detalle: 'Si no volvió con el primer toque, un empujón chico: 10% con un código propio.',
-  },
-  {
-    nivel: 3,
-    descuento: 20,
-    expiraHoras: 48,
-    titulo: 'Último toque · 20% OFF con vencimiento',
-    detalle: 'Oferta fuerte y con urgencia: 20% que vence en 48 hs. Es el último intento.',
-  },
-]
-
-export const NIVEL_MAX = ESCALERA.length
-
-/** No se permite reenviar otro toque dentro de esta ventana (protección mínima anti-spam). */
-export const COOLDOWN_HORAS = 48
+// La tabla vive en el recetario (módulo puro) para que el motor y los tests puedan leerla sin abrir
+// el pool; se reexporta acá porque este módulo es donde la importan sus consumidores desde antes.
+export { ESCALERA, NIVEL_MAX, type EscalonRecupero }
 
 const MS_POR_DIA = 1000 * 60 * 60 * 24
-const MS_POR_HORA = 1000 * 60 * 60
+// El ritmo del goteo vive en un módulo puro para poder fijarlo con tests (ver `recompra-goteo.ts`);
+// se reexporta acá porque este módulo es donde lo importan sus consumidores desde antes.
+export { COOLDOWN_HORAS, MS_POR_HORA }
 
-export interface EstadoRecupero {
-  /** Toques enviados en total al cliente (histórico). */
-  totalEnvios: number
-  /** Timestamp ISO del último toque enviado, o null. */
-  ultimoEnvioAt: string | null
-  /** Nivel del último toque enviado, o null. */
-  ultimoNivel: number | null
-  /** Próximo escalón a enviar (1..NIVEL_MAX). */
-  proximoNivel: number
-  /** false si estamos dentro del cooldown (hay que esperar antes de insistir). */
-  puedeEnviar: boolean
-}
-
-interface Toque {
-  nivel: number
-  createdAt: Date
-}
-
-/**
- * Deriva el estado de la escalera para un cliente a partir de sus toques previos y la fecha de su
- * último pedido. El próximo nivel cuenta sólo los toques posteriores al último pedido (si volvió a
- * pedir, la escalera se reinicia). Capado en NIVEL_MAX.
- */
-export function estadoRecupero(
-  toques: Toque[],
-  ultimoPedidoMs: number | null,
-  ahora: number = Date.now(),
-): EstadoRecupero {
-  const ordenados = [...toques].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-  const ultimo = ordenados[ordenados.length - 1] ?? null
-
-  // Toques enviados DESPUÉS del último pedido (los previos ya "cumplieron": el cliente pidió).
-  const desdeUltimoPedido = ultimoPedidoMs != null
-    ? ordenados.filter((t) => t.createdAt.getTime() > ultimoPedidoMs)
-    : ordenados
-
-  const proximoNivel = Math.min(desdeUltimoPedido.length + 1, NIVEL_MAX)
-
-  const puedeEnviar = ultimo == null
-    ? true
-    : (ahora - ultimo.createdAt.getTime()) >= COOLDOWN_HORAS * MS_POR_HORA
-
-  return {
-    totalEnvios: ordenados.length,
-    ultimoEnvioAt: ultimo ? ultimo.createdAt.toISOString() : null,
-    ultimoNivel: ultimo ? ultimo.nivel : null,
-    proximoNivel,
-    puedeEnviar,
-  }
-}
+// El estado de la escalera para un cliente es puro y vive con el ritmo del goteo (ver
+// `recompra-goteo.ts`); se reexporta acá porque este módulo es donde lo importan sus consumidores.
+export { estadoRecupero, type EstadoRecupero, type Toque }
 
 /** Carga los toques de recupero de varios clientes de un local, agrupados por clienteId. */
 export async function cargarToquesPorCliente(
@@ -331,12 +274,62 @@ async function upsertCuponRecupero(
   return codigo
 }
 
+/**
+ * Resuelve el cupón de un toque a partir del LINK, para que la tienda lo siembre en el checkout por
+ * id (`codigoDescuentoId`) sin que el cliente tipee nada.
+ *
+ * Hermano de `upsertCuponRecupero`, no un alias: aquél **re-arma** el cupón (`usosActuales: 0` y
+ * `fechaFin` nueva), que es lo correcto al emitir un toque nuevo y exactamente lo que NO hay que
+ * hacer al abrir un link. Acá sólo se LEE, y se devuelve `null` si el cupón no existe, está inactivo,
+ * vencido o ya usado: así el vencimiento de 48 hs de `codigo_descuento.fechaFin` es el que manda, y
+ * reabrir el link no lo extiende ni revive un cupón ya gastado.
+ *
+ * No recibe el `%` esperado para poder crearlo si falta: el cupón lo emite el ENVÍO, no la apertura
+ * del link. Si falta, este link no tiene beneficio que prometer.
+ */
+export async function resolverCuponLinkRecupero(
+  db: Db,
+  restauranteId: number,
+  clienteId: number,
+  descuento: number,
+): Promise<{ id: number; codigo: string; fechaFin: Date | null } | null> {
+  if (!Number.isFinite(descuento) || descuento <= 0) return null
+  const codigo = `VOLVE${Math.trunc(descuento)}-${clienteId}`
+
+  const [cupon] = await db
+    .select({
+      id: CodigoDescuentoTable.id,
+      activo: CodigoDescuentoTable.activo,
+      limiteUsos: CodigoDescuentoTable.limiteUsos,
+      usosActuales: CodigoDescuentoTable.usosActuales,
+      fechaFin: CodigoDescuentoTable.fechaFin,
+    })
+    .from(CodigoDescuentoTable)
+    .where(
+      and(
+        eq(CodigoDescuentoTable.restauranteId, restauranteId),
+        eq(CodigoDescuentoTable.codigo, codigo),
+      ),
+    )
+    .limit(1)
+
+  if (!cupon || !cupon.activo) return null
+  const ahora = Date.now()
+  if (cupon.fechaFin && new Date(cupon.fechaFin).getTime() <= ahora) return null
+  if (cupon.limiteUsos != null && (cupon.usosActuales ?? 0) >= cupon.limiteUsos) return null
+  // `fechaFin` viaja para que el resolver del link pueda mostrar el vencimiento REAL del cupón y no
+  // el del token, que es sólo de exhibición.
+  return { id: cupon.id, codigo, fechaFin: cupon.fechaFin ?? null }
+}
+
 export interface ResultadoEnvioRecupero {
   ok: boolean
   /** Código de error legible para la UI cuando ok=false. */
   motivo?: 'sin_whatsapp' | 'sin_telefono' | 'sin_saldo' | 'cooldown' | 'cliente_no_encontrado' | 'envio_fallido' | MotivoBloqueoMarketing
   mensaje?: string
   nivel?: number
+  /** Toque que salió (1..3). El `nivel` es el de la escalera: pueden diferir en el envío manual. */
+  toque?: number
   codigoDescuento?: string | null
   saldoMarketing?: number
   plantillaWhatsapp?: string
@@ -351,9 +344,66 @@ export interface OpcionesEnvioRecupero {
   segmento?: SegmentoRecompra
   /** Receta elegida a mano (modo manual). Sin ella se usa la recomendada del segmento. */
   receta?: SegmentoRecompra
+  /**
+   * Toque que le toca a este envío (1..3). El motor lo pasa desde la fila de la cola, porque entre
+   * el encolado y el drenaje el ledger puede haber cambiado (el operador forzó un toque a mano) y
+   * la fila quedaría mintiendo sobre lo que mandó. Se aplica como TECHO: nunca adelanta la escalera.
+   */
+  toque?: number
+  /** Modalidad del link elegida a mano. Sin ella se deriva del descuento. */
+  link?: ModalidadLink
+  /** % forzado a mano (sólo modo manual). Sin él manda el escalón o el techo de la receta. */
+  descuento?: number
 }
 
-export const PLANTILLA_RECUPERO_WHATSAPP = 'recupero_dormido_v1'
+/**
+ * `recupero_dormido_v1` es la plantilla HISTÓRICA: sigue siendo la del 1º toque de `dormido`
+ * (ya está aprobada en las WABAs de los locales, no se crea una nueva). El resto de las
+ * combinaciones segmento × toque tienen la suya.
+ */
+export const PLANTILLA_RECUPERO_WHATSAPP = resolverPlantillaRecompra('dormido', 1)
+
+/** De dónde salió el descuento de este envío. La UI lo muestra para que el operador sepa qué mandó. */
+export type { OrigenDescuento }
+
+export interface OpcionToqueRecompra {
+  toque: ToqueRecompra
+  /** "1º toque", "2º toque", "3º toque". */
+  titulo: string
+  /** Qué trabajo hace ese toque ("recordatorio corto", "cierre"). */
+  descripcion: string
+  /** % del escalón de ese toque (el que aplicaría el motor). */
+  descuento: number
+  expiraHoras: number | null
+  /** true si es el toque que se aplicó a este mensaje. */
+  esActual: boolean
+  /**
+   * true si es el toque que la escalera marca hoy para este cliente: el DEFAULT del diálogo. No es
+   * una habilitación —el operador puede elegir cualquier toque, porque el copy es su decisión
+   * editorial—, pero la UI lo resalta para que el default se entienda de un vistazo.
+   */
+  esDeLaEscalera: boolean
+}
+
+export interface OpcionLinkRecompra {
+  modalidad: ModalidadLink
+  titulo: string
+  descripcion: string
+  esActual: boolean
+}
+
+export interface OpcionesMensajeRecompra {
+  segmentos: {
+    codigo: SegmentoRecompra
+    nombre: string
+    /** true si es el segmento RECALCULADO en vivo del cliente (el que se usa por defecto). */
+    esDelCliente: boolean
+    esActual: boolean
+  }[]
+  toques: OpcionToqueRecompra[]
+  links: OpcionLinkRecompra[]
+  descuentos: { min: number; max: number; sugeridos: number[]; recomendado: number }
+}
 
 export interface DatosMensajeRecupero {
   clienteId: number
@@ -363,20 +413,47 @@ export interface DatosMensajeRecupero {
   restauranteNombre: string
   tiempoSinPedir: string
   productoFavorito: string
-  /** Párrafo del beneficio con la voz del segmento (es el `{{5}}` de la plantilla de WhatsApp). */
+  /**
+   * Línea del beneficio (la variable final del tramo). NO menciona ningún código: el descuento
+   * viaja en el link, así que la tienda lo aplica sola.
+   */
   incentivo: string
   descuento: number
+  /** Se sigue emitiendo como mecanismo de cobro, pero ya no se muestra en el mensaje. */
   codigoDescuento: string | null
   nivel: number
+  /** Toque efectivamente aplicado a este mensaje (1..3). */
+  toque: ToqueRecompra
+  /** Toque que traía la fila de la cola, si vino de una. La UI avisa si difiere del efectivo. */
+  toquePlanificado: number | null
+  /** Plantilla de Meta que corresponde a (segmento × toque). */
+  plantillaWhatsapp: string
+  /** ¿La plantilla lleva encabezado con la foto del producto? Sólo el 1º toque. */
+  conImagen: boolean
+  /** Con qué modalidad abre el link. */
+  link: ModalidadLink
+  /** De dónde salió el descuento aplicado. */
+  descuentoOrigen: OrigenDescuento
+  expiraHoras: number | null
   /** Segmento del cliente: define la receta recomendada. */
   segmento: SegmentoRecompra
+  /** Segmento que clasificó la campaña (el de la fila). Difiere del vivo si el cliente cambió. */
+  segmentoFila: SegmentoRecompra | null
   /** Receta aplicada a este mensaje (la recomendada salvo que el operador haya elegido otra). */
   receta: OpcionRecetaRecompra
   /** Todas las recetas disponibles con su beneficio. Es el menú de "cambiar mensaje" del modo manual. */
   recetas: OpcionRecetaRecompra[]
+  /** Catálogo de los tres controles del diálogo, con sus defaults ya resueltos. */
+  opciones: OpcionesMensajeRecompra
   /** Link de micro-campaña (`/c/:slug?tk=v1...`) que abre la tienda del local. */
   urlTienda: string
+  /** El cuerpo del tramo ya renderizado: es el texto que se copia en modo manual. */
   texto: string
+  /**
+   * Los `{{n}}` del tramo, EN ORDEN: es el contrato de variables posicionales con Meta. Se manda
+   * tal cual, sin nombres hardcodeados, para que la plantilla y el recetario no puedan divergir.
+   */
+  parametros: { nombre: VariableToque; valor: string }[]
   waMeUrl: string | null
   imagenProducto: string | null
   /** El mismo link, sin la base: es el path dinámico del botón de la plantilla. */
@@ -491,8 +568,13 @@ export async function prepararMensajeRecupero(
   }
   if (!repParam && topProductoId) repParam = `${topProductoId}x1`
 
-  // 3. Receta del segmento + estado de la escalera → beneficio a ofrecer.
-  const segmento = opciones.segmento ?? segmentoRecompraDePedidos(pedidos)
+  // 3. Segmento + estado de la escalera → TOQUE (el copy) y BENEFICIO (el %).
+  //    Dos ejes independientes: el SEGMENTO elige la voz y el TOQUE elige el trabajo —de ahí sale la
+  //    plantilla de Meta—. El BENEFICIO, en cambio, es siempre el de la escalera: cambiar de copy, de
+  //    link o de % no reinicia ni adelanta el avance del cliente.
+  const segmentoVivo = segmentoRecompraDePedidos(pedidos)
+  const segmentoFila = opciones.segmento ?? null
+  const segmento = segmentoFila ?? segmentoVivo
   const recetaRecomendada = resolverRecetaRecompra(segmento)
   const recetaSeleccionada = opciones.receta ? resolverRecetaRecompra(opciones.receta) : recetaRecomendada
   const esRecomendada = recetaSeleccionada.codigo === recetaRecomendada.codigo
@@ -500,32 +582,49 @@ export async function prepararMensajeRecupero(
   const toquesMap = await cargarToquesPorCliente(db, restauranteId, [clienteId])
   const estado = estadoRecupero(toquesMap[clienteId] ?? [], ultimoPedidoMs)
   const escalon = ESCALERA[estado.proximoNivel - 1]
-  // Sin receta elegida manda la escalera; con receta elegida manda el incentivo propio de esa receta
-  // (ver recetas-recompra.ts). El nivel registrado es siempre el de la escalera.
-  const beneficio = resolverBeneficioRecompra(escalon, recetaSeleccionada, esRecomendada)
 
-  // 4. Cupón si corresponde (upsert determinístico)
+  // El toque elegido a mano se respeta tal cual (es decisión editorial); el `nivel` que se registra
+  // es igual el del escalón. Ver `recompra-envio.ts`, que es donde vive esta regla.
+  const toquePlanificado = opciones.toque != null ? normalizarToque(opciones.toque) : null
+  const envio = resolverEnvioRecompra({
+    escalon,
+    proximoNivel: estado.proximoNivel,
+    receta: recetaSeleccionada,
+    esRecetaRecomendada: esRecomendada,
+    toque: toquePlanificado,
+    link: opciones.link,
+    descuento: opciones.descuento,
+  })
+  const { toque, link, descuento, descuentoOrigen, beneficio, beneficioBase } = envio
+  const recetaToque = resolverRecetaToque(segmento, toque)
+
+  // 4. Cupón: es el MECANISMO DE COBRO, no el vehículo del mensaje. El checkout recibe un
+  // `codigoDescuentoId`, nunca el % del link, así que el cupón determinístico del cliente es lo que
+  // hace que el descuento se aplique solo. El mensaje no lo menciona: el cliente no tipea nada.
   let codigo: string | null = null
-  if (beneficio.descuento > 0) {
+  if (envio.emiteCupon) {
     codigo = await upsertCuponRecupero(db, restauranteId, clienteId, beneficio)
   }
 
-  // 5. Link de micro-campaña con el carrito del último pedido adentro del token
-  // cifrado (antes: `username?rep=12x2-15x1` a la vista). La tienda resuelve el
-  // slug y reconstruye cliente + carrito, así que el mensaje ya no expone ids.
-  // El toque sin descuento usa `lo-mismo` (drawer 1-toque, sin % extra) y los
-  // toques con cupón usan `reactivacion`; el descuento sigue viajando en el
-  // cupón, por eso `dto` queda en 0 y el beneficio no se duplica.
-  const esReactivacion = beneficio.descuento > 0
+  // 5. Link de micro-campaña con el carrito del último pedido adentro del token cifrado (antes:
+  // `username?rep=12x2-15x1` a la vista). La tienda resuelve el slug y reconstruye cliente +
+  // carrito, así que el mensaje ya no expone ids.
+  const esReactivacion = link === 'reactivacion'
   const tokenMicroCampana = cifrarGrowthPayload({
     rId: restauranteId,
     cId: clienteId,
     campana: esReactivacion ? 'reactivacion' : 'lo_mismo',
     modalidad: esReactivacion ? 'descuento_banner' : 'drawer_habitual',
     rep: repParam || undefined,
-    dto: 0,
-    // El link vive lo mismo que el cupón del escalón (nivel 3: 48 hs).
+    // El % viaja por el link: la tienda muestra el banner y la carta con descuento y de ahí siembra
+    // el cupón en el checkout, sin que el cliente tipee nada.
+    dto: descuento,
+    // El link vive lo mismo que el cupón (nivel 3: 48 hs). Es de EXHIBICIÓN: el vencimiento que se
+    // hace cumplir de verdad es `codigo_descuento.fechaFin`, que fija `upsertCuponRecupero`.
     exp: beneficio.expiraHoras != null ? Date.now() + beneficio.expiraHoras * MS_POR_HORA : null,
+    // El cupón de este link ya lo emitió el envío: el resolver de la tienda lo LEE y no lo mintea
+    // (ver `resolverCuponLinkRecupero` y `marketing.ts`).
+    origen: 'recompra',
   })
   const urlTienda = rest.username
     ? urlMicroCampana(rest.username, esReactivacion ? 'reactivacion' : 'lo-mismo', tokenMicroCampana)
@@ -535,11 +634,21 @@ export async function prepararMensajeRecupero(
   const usernameSuffix = rest.username ? urlTienda.slice(BASE_TIENDA.length) : ''
 
   const tiempoSinPedir = tiempoSinPedirTexto(diasDesdeUltimo)
-  const incentivo = textoIncentivoReceta(recetaSeleccionada, beneficio, codigo)
+  const incentivo = lineaBeneficioRecompra(beneficio, toque)
   const nombreCliente = cli.nombre?.trim() || 'Cliente'
   const nombreLocal = rest.nombre?.trim() || 'El local'
 
-  const texto = `¡Hola ${nombreCliente}! 👋\n\nEn ${nombreLocal} hace ${tiempoSinPedir} que no te vemos y se nos antojó tentarte con ${productoFavorito}. 😋\n\n${incentivo}\n\nPedí en segundos desde acá 👇\n${urlTienda}`
+  // El cuerpo sale del recetario del tramo: es el MISMO texto que el cuerpo de la plantilla de Meta,
+  // así que lo que el admin previsualiza y lo que el operador copia no pueden divergir.
+  const { texto: cuerpo, parametros } = componerCuerpoToque(recetaToque, {
+    cliente: nombreCliente,
+    local: nombreLocal,
+    tiempoSinPedir,
+    productoFavorito,
+    beneficio: incentivo,
+  } satisfies Record<VariableToque, string>)
+  // En modo manual no hay botón de plantilla: el link va pegado abajo del texto.
+  const texto = `${cuerpo}\n\n${urlTienda}`
 
   const norm = normalizarTelefonoCliente(cli.telefono)
   const telWa = norm ? (norm.startsWith('54') ? norm : norm.length === 10 ? `549${norm}` : norm) : null
@@ -556,6 +665,49 @@ export async function prepararMensajeRecupero(
     })
   })
 
+  // 7. Los otros dos controles del diálogo. El catálogo de toques sale de la ESCALERA (el toque y el
+  // escalón son el mismo número: `nivel === toque`), así que la UI no tiene que inventar defaults.
+  const opcionesUi: OpcionesMensajeRecompra = {
+    segmentos: recetas.map((r) => ({
+      codigo: r.codigo,
+      nombre: r.nombre,
+      esDelCliente: r.codigo === segmentoVivo,
+      esActual: r.codigo === segmento,
+    })),
+    toques: TOQUES_RECOMPRA.map((t) => {
+      const e = ESCALERA[t - 1]
+      return {
+        toque: t,
+        titulo: e.titulo,
+        descripcion: e.detalle,
+        descuento: e.descuento,
+        expiraHoras: e.expiraHoras,
+        esActual: t === toque,
+        esDeLaEscalera: t === estado.proximoNivel,
+      }
+    }),
+    links: [
+      {
+        modalidad: 'lo-mismo' as ModalidadLink,
+        titulo: 'Volver a pedir lo mismo',
+        descripcion: 'Abre su último pedido ya cargado. Sin descuento: es para quien sólo necesita el empujón.',
+        esActual: link === 'lo-mismo',
+      },
+      {
+        modalidad: 'reactivacion' as ModalidadLink,
+        titulo: 'Volver con descuento',
+        descripcion: 'Abre la tienda con el % ya aplicado. El cliente no tipea ningún código.',
+        esActual: link === 'reactivacion',
+      },
+    ],
+    descuentos: {
+      min: DESCUENTO_MIN,
+      max: DESCUENTO_MAX,
+      sugeridos: [10, 20],
+      recomendado: beneficioBase.descuento,
+    },
+  }
+
   return {
     ok: true,
     data: {
@@ -567,17 +719,27 @@ export async function prepararMensajeRecupero(
       tiempoSinPedir,
       productoFavorito,
       incentivo,
-      descuento: beneficio.descuento,
+      descuento,
       codigoDescuento: codigo,
       nivel: beneficio.nivel,
+      toque,
+      toquePlanificado,
+      plantillaWhatsapp: recetaToque.plantilla,
+      conImagen: recetaToque.conImagen,
+      link,
+      descuentoOrigen,
+      expiraHoras: beneficio.expiraHoras,
       segmento,
+      segmentoFila,
       receta: opcionReceta(recetaSeleccionada, beneficio, {
         esRecomendada,
         esSeleccionada: true,
       }),
       recetas,
+      opciones: opcionesUi,
       urlTienda,
       texto,
+      parametros,
       waMeUrl,
       imagenProducto: imagenProducto || rest.imagenUrl || null,
       usernameSuffix,
@@ -588,12 +750,13 @@ export async function prepararMensajeRecupero(
 }
 
 /**
- * Orquesta el envío de un toque de recupero al cliente por Meta API: resuelve la receta del
- * segmento, arma el antojo, genera el cupón si corresponde, manda el WhatsApp de marketing con la
+ * Orquesta el envío de un toque de recupero al cliente por Meta API: resuelve el tramo (segmento ×
+ * toque), arma el antojo, genera el cupón si corresponde, manda el WhatsApp de marketing con la
  * marca del local, registra el toque y descuenta el bucket marketing (best-effort).
  *
- * En modo automático no se pasa `receta`: cada cliente recibe el mensaje de SU segmento (`{{5}}`) y
- * el link lo sigue resolviendo la escalera, igual que siempre.
+ * En modo automático no se pasa nada: cada cliente recibe el toque que le marca su escalera, con el
+ * copy de SU segmento y la plantilla de esa combinación. En modo manual llegan `toque`, `link` y
+ * `descuento`: son decisiones editoriales del operador para ESE envío.
  */
 export async function enviarRecuperoDormido(
   c: any,
@@ -605,6 +768,9 @@ export async function enviarRecuperoDormido(
   const prep = await prepararMensajeRecupero(db, restauranteId, clienteId, {
     segmento: opciones.segmento,
     receta: opciones.receta,
+    toque: opciones.toque,
+    link: opciones.link,
+    descuento: opciones.descuento,
   })
   if (!prep.ok) {
     return { ok: false, motivo: prep.motivo as any, mensaje: prep.mensaje, estado: prep.estado }
@@ -661,13 +827,14 @@ export async function enviarRecuperoDormido(
       motivo: 'sin_saldo',
       mensaje: 'No hay saldo de mensajes de marketing disponible',
       saldoMarketing: reserva.saldoMarketingDisponible,
-      plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
+      plantillaWhatsapp: data.plantillaWhatsapp,
       estado: data.estado,
     }
   }
   if (reserva.estado === 'confirmada') {
     const [toqueConfirmado] = await db.select({
       nivel: RecuperoClienteTable.nivel,
+      toque: RecuperoClienteTable.toque,
       codigoDescuento: RecuperoClienteTable.codigoDescuento,
     }).from(RecuperoClienteTable).where(and(
       eq(RecuperoClienteTable.restauranteId, restauranteId),
@@ -676,9 +843,10 @@ export async function enviarRecuperoDormido(
     return {
       ok: true,
       nivel: toqueConfirmado?.nivel ?? data.estado.ultimoNivel ?? data.escalon.nivel,
+      toque: toqueConfirmado?.toque ?? undefined,
       codigoDescuento: toqueConfirmado?.codigoDescuento ?? null,
       saldoMarketing: reserva.saldoMarketingDisponible,
-      plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
+      plantillaWhatsapp: data.plantillaWhatsapp,
       estado: data.estado,
     }
   }
@@ -688,21 +856,20 @@ export async function enviarRecuperoDormido(
       motivo: 'envio_fallido',
       mensaje: 'Este intento ya había fallado y su crédito fue devuelto',
       saldoMarketing: reserva.saldoMarketingDisponible,
-      plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
+      plantillaWhatsapp: data.plantillaWhatsapp,
       estado: data.estado,
     }
   }
 
-  // 4. Envío de WhatsApp Meta
+  // 4. Envío de WhatsApp Meta. La plantilla, el encabezado y los parámetros salen del tramo: el
+  //    1º toque lleva la foto del producto, el 2º y el 3º no llevan encabezado.
   const send = await sendClientRecuperoWhatsApp(
     c,
     {
       phone: data.telefono!,
-      customerName: data.clienteNombre,
-      restaurantName: data.restauranteNombre,
-      tiempoSinPedir: data.tiempoSinPedir,
-      productoFavorito: data.productoFavorito,
-      incentivo: data.incentivo,
+      plantilla: data.plantillaWhatsapp,
+      conImagen: data.conImagen,
+      parametros: data.parametros,
       usernameTienda: data.usernameSuffix,
       imageUrl: data.imagenProducto,
     },
@@ -716,7 +883,7 @@ export async function enviarRecuperoDormido(
       motivo: 'envio_fallido',
       mensaje: 'No se pudo enviar el mensaje por WhatsApp',
       saldoMarketing: compensacion.saldoMarketingDisponible,
-      plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
+      plantillaWhatsapp: data.plantillaWhatsapp,
       errorEnvio: typeof send.error === 'string' ? send.error : JSON.stringify(send.error ?? null).slice(0, 500),
       estado: data.estado,
     }
@@ -724,13 +891,17 @@ export async function enviarRecuperoDormido(
 
   const confirmacion = await confirmarReservaCreditoMarketing(db, restauranteId, operacionId)
 
-  // 5. Registrar toque en historial. Se guarda el nivel de la ESCALERA (el próximo toque sigue la
-  // escalera aunque la receta haya bajado el beneficio) junto al descuento que realmente se envió.
+  // 5. Registrar toque en historial. Se guardan las DOS cosas: el `nivel` de la ESCALERA (el próximo
+  // toque sigue la escalera aunque el operador haya elegido otro copy o forzado otro %) y el `toque`
+  // que realmente salió. Difieren sólo en el envío manual forzado, y esa divergencia es la que hay
+  // que poder auditar después.
   await db.insert(RecuperoClienteTable).values({
     restauranteId,
     clienteId,
     telefono: data.telefono,
     nivel: data.escalon.nivel,
+    toque: data.toque,
+    modalidad: data.link,
     descuentoPorcentaje: data.descuento,
     codigoDescuento: data.codigoDescuento,
     segmento: data.segmento,
@@ -744,9 +915,10 @@ export async function enviarRecuperoDormido(
   return {
     ok: true,
     nivel: data.escalon.nivel,
+    toque: data.toque,
     codigoDescuento: data.codigoDescuento,
     saldoMarketing: confirmacion.saldoMarketingDisponible,
-    plantillaWhatsapp: PLANTILLA_RECUPERO_WHATSAPP,
+    plantillaWhatsapp: data.plantillaWhatsapp,
     estado: nuevoEstado,
   }
 }
@@ -775,6 +947,10 @@ export interface ClienteCohorte {
   ultimoPedidoMs: number | null
   cantidadPedidos: number
   proximoNivel: number
+  /** Toques enviados DESPUÉS del último pedido, sin capar. Es lo que mide el avance del goteo. */
+  toquesDesdeUltimoPedido: number
+  /** Timestamp del último toque enviado (de cualquier toque, no sólo los posteriores al pedido). */
+  ultimoToqueMs: number | null
   fechasPedidosMs: number[]
 }
 
@@ -782,10 +958,16 @@ export interface ClienteCohorte {
  * Detecta la cohorte recuperable de un local: clientes en un segmento recuperable
  * (primer_pedido/en_riesgo/dormido/perdido), con teléfono cargado y fuera del cooldown de recupero.
  * Reusa el mismo cerebro RFM que la "Base de clientes" (misma verdad, calculada on-the-fly).
+ *
+ * `incluirEnCooldown` levanta SÓLO el filtro de cooldown, y lo usa el reencolado del goteo: al
+ * cliente que ya recibió un toque hay que volver a verlo, justamente, cuando está dentro del
+ * cooldown (es la ventana que hay que esperar antes del toque siguiente). Todo lo demás —opt-out,
+ * tope mensual, segmento, teléfono— se sigue filtrando igual en los dos modos.
  */
 export async function cargarCohorteRecompra(
   db: Db,
   restauranteId: number,
+  opciones: { incluirEnCooldown?: boolean } = {},
 ): Promise<ClienteCohorte[]> {
   const clientes = await db
     .select({
@@ -856,7 +1038,11 @@ export async function cargarCohorteRecompra(
     if (cl.marketingOptOut) return
     if (contarToquesEnVentana(toques[cl.id] ?? []) >= TOPE_MARKETING_POR_CLIENTE) return
     const estado = estadoRecupero(toques[cl.id] ?? [], ultimoPedidoMs)
-    if (!estado.puedeEnviar) return
+    if (!estado.puedeEnviar && !opciones.incluirEnCooldown) return
+    const ultimoToqueMs = (toques[cl.id] ?? []).reduce<number | null>(
+      (max, t) => (max == null || t.createdAt.getTime() > max ? t.createdAt.getTime() : max),
+      null,
+    )
     cohorte.push({
       clienteId: cl.id,
       nombre: cl.nombre || 'Cliente',
@@ -867,6 +1053,8 @@ export async function cargarCohorteRecompra(
       ultimoPedidoMs,
       cantidadPedidos: g.fechasMs.length,
       proximoNivel: estado.proximoNivel,
+      toquesDesdeUltimoPedido: estado.toquesDesdeUltimoPedido,
+      ultimoToqueMs,
       fechasPedidosMs: g.fechasMs,
     })
   })

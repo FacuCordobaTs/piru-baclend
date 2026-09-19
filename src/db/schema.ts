@@ -4,6 +4,7 @@ import {
   char,
   varchar,
   int,
+  tinyint,
   timestamp,
   boolean,
   decimal,
@@ -982,11 +983,17 @@ export const recuperoCliente = mysqlTable("recupero_cliente", {
   telefono: varchar("telefono", { length: 50 }).notNull(),
   // Escalón de la escalera de incentivos (1, 2 o 3).
   nivel: int("nivel").notNull(),
+  // Tramo del goteo que se mandó (1º, 2º o 3º). `nivel` es la escalera y manda el avance; `toque`
+  // es el copy que el operador eligió. Difieren sólo en el envío manual forzado (elegir el 3º
+  // cuando la escalera va por el 2º), y esa divergencia es lo que hay que poder auditar.
+  toque: tinyint("toque"),
   descuentoPorcentaje: int("descuento_porcentaje").default(0).notNull(),
   // Código de descuento generado para este toque (null en el nivel 1, que no lleva descuento).
   codigoDescuento: varchar("codigo_descuento", { length: 50 }),
   // Segmento del cliente al momento del envío (para atribución posterior).
   segmento: varchar("segmento", { length: 20 }),
+  // 'lo_mismo' | 'reactivacion' — con qué modalidad de link salió (lo_mismo nunca lleva descuento).
+  modalidad: varchar("modalidad", { length: 20 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -1071,6 +1078,15 @@ export const colaRecompra = mysqlTable("cola_recompra", {
   estado: varchar("estado", { length: 20 }).default("pendiente").notNull(),
   // Escalón de la escalera que se le mandó (se resuelve al enviar).
   nivel: int("nivel"),
+  // Tramo del goteo: 1º, 2º o 3º. Mientras la fila está `pendiente` es el ÚNICO lugar donde vive
+  // el toque (no hay `nivel` ni fila en `recupero_cliente`), así que no se puede reconstruir.
+  // NULL sólo en el grupo de control, que nunca recibe toques.
+  toque: tinyint("toque"),
+  // 'lo_mismo' | 'reactivacion' — con qué modalidad de link salió. `lo_mismo` nunca lleva descuento.
+  linkModalidad: varchar("link_modalidad", { length: 20 }),
+  // % efectivamente aplicado en ese envío (0 = sin descuento). Puede diferir del escalón si el
+  // operador forzó otro a mano.
+  descuentoEnviado: int("descuento_enviado"),
   codigoDescuento: varchar("codigo_descuento", { length: 50 }),
   enviadoAt: timestamp("enviado_at"),
   // Metadatos auditables del último intento. `origen_contacto` distingue el
@@ -1083,7 +1099,13 @@ export const colaRecompra = mysqlTable("cola_recompra", {
   totalGastadoSnapshot: decimal("total_gastado_snapshot", { precision: 12, scale: 2 }).default("0.00"),
   ultimoPedidoAtSnapshot: timestamp("ultimo_pedido_at_snapshot"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+  // Un cliente no puede tener dos filas del MISMO toque en la misma campaña. Es lo que hace
+  // imposible el bucle del reencolado y lo que protege de dos sincronizaciones concurrentes desde
+  // los GET de la UI (la segunda recibe ER_DUP_ENTRY y lo ignora). El control queda con `toque`
+  // NULL y MySQL admite múltiples NULL en un índice único, así que no colisiona.
+  uniqueIndex("uq_cola_recompra_toque").on(table.campanaId, table.clienteId, table.toque),
+]);
 
 
 

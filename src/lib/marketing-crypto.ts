@@ -9,6 +9,13 @@ export interface GrowthTokenPayload {
   dto?: number
   exp?: number | null
   nonce?: string
+  /**
+   * Quién emitió el link. `'recompra'` marca los toques del Motor de Recompra: su cupón lo emite el
+   * ENVÍO (`VOLVE{d}-{clienteId}`), así que el resolver del link no puede mintear uno —sólo leer el
+   * que ya existe— y, si no está vigente, el link no promete beneficio. Ausente = link de campaña,
+   * que sí lo mintea.
+   */
+  origen?: 'recompra'
 }
 
 function resolverClaveSecreta(secretPersonalizado?: string): Buffer {

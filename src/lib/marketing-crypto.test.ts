@@ -51,8 +51,13 @@ describe('marketing-crypto (AES-256-GCM)', () => {
     const token = cifrarGrowthPayload(payloadBase)
     const partes = token.split('.')
 
-    // Modificamos un carácter del ciphertext
-    const cipherModificado = partes[2].slice(0, -1) + (partes[2].endsWith('a') ? 'b' : 'a')
+    // Se cambia el PRIMER carácter del ciphertext, no el último: en base64 el último carácter de un
+    // grupo final puede codificar sólo bits de relleno, así que mutarlo a veces decodifica a los
+    // mismos bytes y el token adulterado resulta válido (el test fallaba ~1 de cada 8 veces, según
+    // el nonce aleatorio). El primer carácter siempre lleva bits significativos del primer byte.
+    const cipher = partes[2]
+    const cipherModificado = (cipher[0] === 'A' ? 'B' : 'A') + cipher.slice(1)
+    expect(cipherModificado).not.toBe(cipher)
     const tokenAdulterado = `${partes[0]}.${partes[1]}.${cipherModificado}.${partes[3]}`
 
     const resultado = descifrarGrowthPayload(tokenAdulterado)
