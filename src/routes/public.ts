@@ -248,6 +248,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             // Configuración pública (no secreta) necesaria para que el storefront
             // cargue dinámicamente el contenedor propio del restaurante.
             gtmContainerId: RestauranteTable.gtmContainerId,
+            metaPixelId: RestauranteTable.metaPixelId,
             direccion: RestauranteTable.direccion,
             direccionTexto: RestauranteTable.direccionTexto,
             direccionLat: RestauranteTable.direccionLat,

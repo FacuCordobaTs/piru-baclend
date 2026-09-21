@@ -24,13 +24,9 @@ CREATE TABLE IF NOT EXISTS `ropa_producto` (
   `precio` DECIMAL(10,2) NOT NULL,
   `precio_anterior` DECIMAL(10,2) NULL DEFAULT NULL,
   `categoria` VARCHAR(50) NULL DEFAULT NULL,
-  -- Array JSON de URLs de R2. La primera es la imagen de la tarjeta del catálogo.
   `imagenes` JSON NULL,
-  -- Array JSON de strings, ej. ["S","M","L","XL"].
   `talles` JSON NULL,
-  -- Array JSON de { nombre: string, hex: string }.
   `colores` JSON NULL,
-  -- NULL = sin control de stock; con valor, se descuenta al confirmar cada pedido.
   `stock` INT NULL DEFAULT NULL,
   `activo` BOOLEAN NOT NULL DEFAULT true,
   `orden` INT NOT NULL DEFAULT 0,
@@ -56,14 +52,10 @@ CREATE TABLE IF NOT EXISTS `ropa_pedido` (
   `subtotal` DECIMAL(10,2) NOT NULL,
   `costo_envio` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   `total` DECIMAL(10,2) NOT NULL,
-  -- Canonical: mercadopago_checkout, transferencia_automatica_cucuru, manual_transfer, cash.
-  -- Ver backend/src/lib/metodos-pago.ts
   `metodo_pago` VARCHAR(64) NULL DEFAULT NULL,
   `pagado` BOOLEAN NOT NULL DEFAULT false,
   `estado_pago` ENUM('pendiente', 'pagado', 'fallido') NOT NULL DEFAULT 'pendiente',
   `estado` ENUM('pendiente', 'preparando', 'enviado', 'entregado', 'cancelado') NOT NULL DEFAULT 'pendiente',
-  -- Alias/CVU dinámico de Cucuru minteado por pedido (ver services/cucuru.ts). Se duplica acá
-  -- además de en ropa_pago porque es lo que le muestra la pantalla de seguimiento al comprador.
   `alias_transferencia` VARCHAR(255) NULL DEFAULT NULL,
   `cvu_transferencia` VARCHAR(255) NULL DEFAULT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -77,10 +69,7 @@ CREATE TABLE IF NOT EXISTS `ropa_pedido` (
 CREATE TABLE IF NOT EXISTS `ropa_pedido_item` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `pedido_id` INT NOT NULL,
-  -- Sin FK estricta a ropa_producto, igual que item_pedido_unificado.producto_id: borrar un
-  -- producto no debe romper el historial de pedidos ya hechos.
   `producto_id` INT NOT NULL,
-  -- Snapshot comercial al momento de la compra.
   `nombre_producto` VARCHAR(255) NOT NULL,
   `imagen_url` VARCHAR(512) NULL DEFAULT NULL,
   `talle` VARCHAR(50) NULL DEFAULT NULL,
@@ -100,8 +89,6 @@ CREATE TABLE IF NOT EXISTS `ropa_pago` (
   `metodo` VARCHAR(64) NOT NULL,
   `estado` ENUM('pending', 'paid', 'failed') NOT NULL DEFAULT 'pending',
   `monto` DECIMAL(10,2) NOT NULL,
-  -- Ids de Mercado Pago. La external_reference que los asocia es `piru-ropa-{pedidoId}`,
-  -- deliberadamente distinta del `piru-{id}` de comida para que el webhook no se confunda.
   `mp_payment_id` VARCHAR(255) NULL DEFAULT NULL,
   `mp_preference_id` VARCHAR(255) NULL DEFAULT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -20,6 +20,7 @@ import { resolverEstadoVigente } from '../lib/suscripciones'
 import { computarInventarioClaim } from '../lib/claim'
 import { baseTiendaDe } from '../lib/marketing-enlaces'
 import { esGtmContainerIdValido, normalizarGtmContainerId } from '../lib/gtm'
+import { esMetaPixelIdValido, normalizarMetaPixelId } from '../lib/meta-pixel'
 
 // Configuración de R2
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID
@@ -130,6 +131,9 @@ const updateProfileSchema = z.object({
   disenoAlternativo: z.boolean().optional(),
   gtmContainerId: z.string().max(64).nullable().optional().refine(esGtmContainerIdValido, {
     message: 'Ingresá un ID de contenedor válido, por ejemplo GTM-ABC123.',
+  }),
+  metaPixelId: z.string().max(32).nullable().optional().refine(esMetaPixelIdValido, {
+    message: 'Ingresá el ID numérico de tu pixel, por ejemplo 2426435001137598.',
   }),
 })
 
@@ -371,7 +375,7 @@ restauranteRoute.post('/complete-profile', zValidator('json', completeProfileSch
 restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre, direccion, direccionTexto, direccionLat, direccionLng, direccionSoloTexto, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, comprobantesWhatsapp, transferenciaAlias, colorPrimario, colorSecundario, usarColorUnico, disenoAlternativo, gtmContainerId } = c.req.valid('json')
+  const { nombre, direccion, direccionTexto, direccionLat, direccionLng, direccionSoloTexto, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, comprobantesWhatsapp, transferenciaAlias, colorPrimario, colorSecundario, usarColorUnico, disenoAlternativo, gtmContainerId, metaPixelId } = c.req.valid('json')
 
   try {
     // Obtener datos actuales del restaurante
@@ -417,6 +421,7 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
     if (usarColorUnico !== undefined) updateData.usarColorUnico = usarColorUnico
     if (disenoAlternativo !== undefined) updateData.disenoAlternativo = disenoAlternativo
     if (gtmContainerId !== undefined) updateData.gtmContainerId = normalizarGtmContainerId(gtmContainerId)
+    if (metaPixelId !== undefined) updateData.metaPixelId = normalizarMetaPixelId(metaPixelId)
     if (username !== undefined) {
       if (!username || username.trim() === '') {
         updateData.username = null
