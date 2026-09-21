@@ -49,7 +49,7 @@ import {
 } from './proteccion-base'
 import { normalizarTelefonoCliente } from './clientes-identidad'
 import { cifrarGrowthPayload } from './marketing-crypto'
-import { BASE_TIENDA, urlMicroCampana } from './marketing-enlaces'
+import { anclajePublico, pathBotonPlantilla, urlMicroCampana } from './marketing-enlaces'
 import {
   componerCuerpoToque,
   DESCUENTO_MAX,
@@ -456,8 +456,12 @@ export interface DatosMensajeRecupero {
   parametros: { nombre: VariableToque; valor: string }[]
   waMeUrl: string | null
   imagenProducto: string | null
-  /** El mismo link, sin la base: es el path dinámico del botón de la plantilla. */
-  usernameSuffix: string
+  /**
+   * Path dinámico del botón de la plantilla: el link anclado a las plantillas del
+   * local sin su base (la plantilla la trae embebida). Puede no coincidir con el
+   * path de `urlTienda` si el local tiene dominio propio pero plantillas compartidas.
+   */
+  pathBoton: string
   escalon: EscalonRecupero
   estado: EstadoRecupero
   horarioSugerido?: string | null
@@ -492,6 +496,8 @@ export async function prepararMensajeRecupero(
       nombre: RestauranteTable.nombre,
       username: RestauranteTable.username,
       imagenUrl: RestauranteTable.imagenUrl,
+      dominioTienda: RestauranteTable.dominioTienda,
+      dominioPlantillas: RestauranteTable.dominioPlantillas,
     })
     .from(RestauranteTable)
     .where(eq(RestauranteTable.id, restauranteId))
@@ -626,12 +632,14 @@ export async function prepararMensajeRecupero(
     // (ver `resolverCuponLinkRecupero` y `marketing.ts`).
     origen: 'recompra',
   })
-  const urlTienda = rest.username
-    ? urlMicroCampana(rest.username, esReactivacion ? 'reactivacion' : 'lo-mismo', tokenMicroCampana)
+  const slugToque = esReactivacion ? 'reactivacion' : 'lo-mismo'
+  const anclaje = anclajePublico(rest)
+  const urlTienda = anclaje
+    ? urlMicroCampana(anclaje, slugToque, tokenMicroCampana)
     : 'https://my.piru.app'
-  // La plantilla de WhatsApp ya trae la base `BASE_TIENDA`: sólo se envía el
-  // path dinámico del botón.
-  const usernameSuffix = rest.username ? urlTienda.slice(BASE_TIENDA.length) : ''
+  // La plantilla de WhatsApp ya trae SU base embebida: sólo se envía el path
+  // dinámico del botón, que puede colgar de otra base que la del link público.
+  const pathBoton = pathBotonPlantilla(rest, tokenMicroCampana, slugToque)
 
   const tiempoSinPedir = tiempoSinPedirTexto(diasDesdeUltimo)
   const incentivo = lineaBeneficioRecompra(beneficio, toque)
@@ -742,7 +750,7 @@ export async function prepararMensajeRecupero(
       parametros,
       waMeUrl,
       imagenProducto: imagenProducto || rest.imagenUrl || null,
-      usernameSuffix,
+      pathBoton,
       escalon,
       estado,
     },
@@ -870,7 +878,7 @@ export async function enviarRecuperoDormido(
       plantilla: data.plantillaWhatsapp,
       conImagen: data.conImagen,
       parametros: data.parametros,
-      usernameTienda: data.usernameSuffix,
+      pathBoton: data.pathBoton,
       imageUrl: data.imagenProducto,
     },
     credsLocal,

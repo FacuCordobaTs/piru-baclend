@@ -607,9 +607,13 @@ export interface ClientRecuperoData {
      * Meta y el texto que el operador copia a mano no pueden divergir.
      */
     parametros: { nombre: string; valor: string }[];
-    usernameTienda: string;   // path dinámico del botón URL (base https://my.piru.app/), con el
-                              // link de micro-campaña y el carrito adentro del token:
-                              // `username/c/reactivacion?tk=v1.abc.def.ghi`.
+    /**
+     * Path dinámico del botón URL: la plantilla trae SU base embebida y acá viaja sólo lo que
+     * sigue. Con las plantillas genéricas eso incluye el username como primer segmento
+     * (`username/c/reactivacion?tk=v1.abc.def.ghi`); con plantillas propias del local, no
+     * (`c/reactivacion?tk=v1.abc.def.ghi`). Lo resuelve `pathBotonPlantilla`.
+     */
+    pathBoton: string;
     imageUrl?: string | null; // header IMAGE (foto del producto favorito → logo del local → default)
 }
 
@@ -705,8 +709,8 @@ export const sendClientRecuperoWhatsApp = async (c: any, data: ClientRecuperoDat
         sub_type: "url",
         index: 0,
         parameters: [
-            // Path dinámico del botón URL: base https://my.piru.app/ + {{1}} = micro-campaña del cliente.
-            { type: "text", text: data.usernameTienda }
+            // Path dinámico del botón URL: la base la trae la plantilla, `{{1}}` es la micro-campaña.
+            { type: "text", text: data.pathBoton }
         ]
     });
 
@@ -753,7 +757,12 @@ export interface ClientGrowthRecipeData {
     customerName: string;
     restaurantName: string;
     texto: string;
-    recipeUrl: string;
+    /**
+     * Path dinámico del botón URL: la plantilla trae la base embebida, así que acá
+     * viaja sólo lo que sigue (`username/r/token` o `r/token` si el local tiene
+     * plantillas propias). Lo resuelve `pathBotonPlantilla`.
+     */
+    pathBoton: string;
 }
 
 /**
@@ -765,7 +774,7 @@ export interface ClientGrowthRecipeData {
  * Cuerpo posicional: "Hola {{1}} 👋\n\n{{2}}\n\n{{3}}".
  * Botón URL dinámico: base `https://my.piru.app/`, sufijo `{{1}}`.
  * Parámetros: nombre del cliente, texto sugerido y nombre del local. El botón
- * recibe el path completo `username/r/token`, sin exponer datos personales.
+ * recibe el path completo, sin exponer datos personales.
  */
 export const sendClientGrowthRecipeWhatsApp = async (
     c: any,
@@ -777,7 +786,6 @@ export const sendClientGrowthRecipeWhatsApp = async (
     const token = creds?.token ?? WHATSAPP_API_TOKEN;
     if (!phoneId || !token) return { success: false, error: 'credenciales_whatsapp_incompletas' };
 
-    const path = data.recipeUrl.replace(/^https:\/\/my\.piru\.app\//, '');
     const response = await fetch(`https://graph.facebook.com/v22.0/${phoneId}/messages`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -791,7 +799,7 @@ export const sendClientGrowthRecipeWhatsApp = async (
                         { type: 'text', text: data.texto },
                         { type: 'text', text: data.restaurantName },
                     ] },
-                    { type: 'button', sub_type: 'url', index: 0, parameters: [{ type: 'text', text: path }] },
+                    { type: 'button', sub_type: 'url', index: 0, parameters: [{ type: 'text', text: data.pathBoton }] },
                 ],
             },
         }),

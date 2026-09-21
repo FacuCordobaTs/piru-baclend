@@ -575,7 +575,8 @@ function repositorioContactos(optOut = false): RepositorioContactosMarketing & {
     buscarEnlace: async (restauranteId, enlaceId) => restauranteId === 7 && enlaceId === 31 ? {
       id: 31, restauranteId: 7, clienteId: 11, tokenHash: hashTokenMarketing(token),
       textoSugerido: 'Volvé por tus favoritos & disfrutá', telefono: '+54 9 11 5555-1234',
-      marketingOptOut: optOut, username: 'pizzeria-demo', activo: true, expiraAt: new Date('2026-09-30T00:00:00.000Z'),
+      marketingOptOut: optOut, username: 'pizzeria-demo', dominioTienda: null, dominioPlantillas: null,
+      activo: true, expiraAt: new Date('2026-09-30T00:00:00.000Z'),
     } : null,
     buscarContactoPorIdempotencia: async (_restauranteId, clave) => contactos.find((contacto) => contacto.idempotenciaClave === clave) ?? null,
     cargarToques: async (_restauranteId, _clienteId, desde) => contactos.filter((contacto) => contacto.createdAt >= desde).map((contacto) => ({ createdAt: contacto.createdAt })),
@@ -656,7 +657,8 @@ function dependenciasEnvio(overrides: Partial<DependenciasEnvioWhatsappMarketing
   const repo: any = {
     buscarEnlace: async (restauranteId: number, enlaceId: number) => restauranteId === 7 && enlaceId === 41 ? {
       id: 41, restauranteId: 7, clienteId: 11, tokenHash: hashTokenMarketing(token), textoSugerido: 'Volvé por tus favoritos',
-      telefono: '5491155551234', marketingOptOut: false, username: 'pizzeria-demo', activo: true,
+      telefono: '5491155551234', marketingOptOut: false, username: 'pizzeria-demo', dominioTienda: null, dominioPlantillas: null,
+      activo: true,
       expiraAt: new Date('2026-09-30T00:00:00.000Z'), clienteNombre: 'Ana', restauranteNombre: 'Pizzería Demo',
       creds: { phoneId: 'phone-1', token: 'secret' }, usaCredencialesPlataforma: false,
     } : null,

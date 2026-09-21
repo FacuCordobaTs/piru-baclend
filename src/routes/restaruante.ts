@@ -18,6 +18,7 @@ import { MODULE_KEYS, tieneModuloActivo, type ModuleKey } from '../lib/modulos'
 import { resolverSuscripcionUnica, tieneAccesoAlPanelSuscripcion } from '../lib/suscripcion'
 import { resolverEstadoVigente } from '../lib/suscripciones'
 import { computarInventarioClaim } from '../lib/claim'
+import { baseTiendaDe } from '../lib/marketing-enlaces'
 import { esGtmContainerIdValido, normalizarGtmContainerId } from '../lib/gtm'
 
 // Configuración de R2
@@ -320,6 +321,10 @@ restauranteRoute.get('/profile', async (c) => {
     const restauranteEnriquecido = {
       ...restaurante[0],
       sistemaPuntos: sistemaPuntosActivo,
+      // Base ya armada de la tienda (dominio propio o my.piru.app/<username>) para que el admin
+      // copie links sin reimplementar la regla. Quien la use tiene que tolerar `null`: el perfil
+      // puede llegar antes que el local tenga username.
+      baseTienda: baseTiendaDe(restaurante[0]),
     }
 
     return c.json({ message: 'Profile retrieved successfully', success: true, data: { restaurante: restauranteEnriquecido, mesas, productos, suscripcion } }, 200)

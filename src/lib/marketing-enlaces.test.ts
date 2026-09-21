@@ -1,9 +1,17 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  anclajeCompartido,
+  anclajePlantillas,
+  anclajePropio,
+  anclajePublico,
+  baseTiendaDe,
   esCarritoPrearmadoValido,
   hashTokenMarketing,
   parseCarritoPrearmado,
+  pathBotonPlantilla,
   prepararEnlaceMarketing,
+  urlEnlaceReceta,
+  urlMicroCampana,
   type RepositorioEnlacesMarketing,
 } from './marketing-enlaces'
 
@@ -91,5 +99,51 @@ describe('prepararEnlaceMarketing', () => {
     repo.crearEnlace = async (datos) => { controlAntesDeCrear = repo.controles.includes(datos.clienteId); return crearOriginal(datos) }
     await prepararEnlaceMarketing(repo, 7, input(), () => 'token-a')
     expect(controlAntesDeCrear).toBe(true)
+  })
+})
+
+describe('anclaje de los links de campaña', () => {
+  test('sin dominio propio, el link público y el del botón son el mismo (compartido)', () => {
+    const local = { username: 'pizzeria-demo' }
+    expect(urlMicroCampana(anclajePublico(local)!, 'lo-mismo', 'v1.a.b.c'))
+      .toBe('https://my.piru.app/pizzeria-demo/c/lo-mismo?tk=v1.a.b.c')
+    expect(pathBotonPlantilla(local, 'v1.a.b.c', 'lo-mismo')).toBe('pizzeria-demo/c/lo-mismo?tk=v1.a.b.c')
+    expect(baseTiendaDe(local)).toBe('https://my.piru.app/pizzeria-demo/')
+  })
+
+  test('con dominio propio y plantillas compartidas: link público propio, path del botón con username', () => {
+    // Es el estado de alfajor hasta que existan sus 12 plantillas: el link que se copia
+    // va al dominio propio, pero el botón de Meta sigue necesitando el username porque
+    // la plantilla compartida tiene https://my.piru.app/ embebida.
+    const local = { username: 'alfajor', dominioTienda: 'alfajorconpapas.com', dominioPlantillas: null }
+    expect(urlMicroCampana(anclajePublico(local)!, 'reactivacion', 'v1.x.y.z'))
+      .toBe('https://alfajorconpapas.com/c/reactivacion?tk=v1.x.y.z')
+    expect(pathBotonPlantilla(local, 'v1.x.y.z', 'reactivacion')).toBe('alfajor/c/reactivacion?tk=v1.x.y.z')
+    expect(baseTiendaDe(local)).toBe('https://alfajorconpapas.com/')
+  })
+
+  test('con plantillas propias, el path del botón pierde el username', () => {
+    const local = { username: 'alfajor', dominioTienda: 'alfajorconpapas.com', dominioPlantillas: 'alfajorconpapas.com' }
+    expect(pathBotonPlantilla(local, 'v1.x.y.z', 'reactivacion')).toBe('c/reactivacion?tk=v1.x.y.z')
+    expect(anclajePlantillas(local)).toEqual(anclajePropio('alfajorconpapas.com'))
+  })
+
+  test('los links de receta (token no cifrado) también se anclan y el path conserva su forma', () => {
+    const local = { username: 'che-milanesa', dominioTienda: 'che-milanesa.com', dominioPlantillas: null }
+    expect(urlEnlaceReceta(anclajePublico(local)!, 'token-opaco', 'lo-mismo'))
+      .toBe('https://che-milanesa.com/r/token-opaco')
+    expect(pathBotonPlantilla(local, 'token-opaco', 'lo-mismo')).toBe('che-milanesa/r/token-opaco')
+  })
+
+  test('sin username ni dominio no hay link público ni path de botón', () => {
+    const local = { username: null }
+    expect(anclajePublico(local)).toBeNull()
+    expect(baseTiendaDe(local)).toBeNull()
+    expect(pathBotonPlantilla(local, 'v1.a.b.c')).toBe('')
+  })
+
+  test('normaliza el dominio guardado (protocolo, espacios y barras sobrantes)', () => {
+    expect(anclajePropio('https://alfajorconpapas.com/')).toEqual({ base: 'https://alfajorconpapas.com/', prefijo: '' })
+    expect(anclajePropio(' http://alfajorconpapas.com// ')).toEqual({ base: 'https://alfajorconpapas.com/', prefijo: '' })
   })
 })

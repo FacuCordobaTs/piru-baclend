@@ -34,6 +34,13 @@ export const restaurante = mysqlTable("restaurante", {
   imagenUrl: varchar("imagen_url", { length: 255 }),
   imagenLightUrl: varchar("imagen_light_url", { length: 255 }),
   username: varchar("username", { length: 255 }).unique(),
+  // Dominio propio de la tienda, sin protocolo (ej. 'alfajorconpapas.com'). NULL = el local
+  // vive en my.piru.app/<username>. Cambia el link que se copia y se comparte, no el routing.
+  dominioTienda: varchar("dominio_tienda", { length: 255 }),
+  // Base ya aprobada en las plantillas de Meta DE ESTE local. NULL = plantillas genéricas
+  // (base https://my.piru.app/ y el username como primer segmento del path).
+  // Ver docs/PLANTILLAS_RECOMPRA_ALFAJOR.md.
+  dominioPlantillas: varchar("dominio_plantillas", { length: 255 }),
   // ID público del contenedor Google Tag Manager del local. No es una credencial:
   // el storefront lo necesita para poder cargar el contenedor configurado por el dueño.
   gtmContainerId: varchar("gtm_container_id", { length: 64 }),

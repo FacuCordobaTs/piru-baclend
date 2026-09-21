@@ -52,6 +52,8 @@ import {
   hashTokenMarketing,
   parseCarritoPrearmado,
   prepararEnlaceMarketing,
+  anclajePublicoDe,
+  pathBotonPlantilla,
   urlEnlaceReceta,
   type RepositorioEnlacesMarketing,
 } from '../lib/marketing-enlaces'
@@ -1602,6 +1604,10 @@ export interface EnlaceParaContactoMarketing {
   telefono: string | null
   marketingOptOut: boolean
   username: string
+  /** Dominio propio del local; `null` = el link vive en my.piru.app/<username>. */
+  dominioTienda: string | null
+  /** Base ya aprobada en las plantillas de Meta del local; `null` = plantillas genéricas. */
+  dominioPlantillas: string | null
   activo: boolean
   expiraAt: Date | null
 }
@@ -1682,7 +1688,7 @@ export function crearMarketingContactosRoute(
       if (existente.enlaceId !== enlace.id || existente.canal !== canal) {
         return c.json({ success: false, message: 'La clave de idempotencia ya pertenece a otra acción' }, 409)
       }
-      const url = urlEnlaceReceta(enlace.username, input.token, campanaSlug)
+      const url = urlEnlaceReceta(anclajePublicoDe(enlace), input.token, campanaSlug)
       const telefono = canal === 'wa_me' ? telefonoWaMe(enlace.telefono) : null
       if (canal === 'wa_me' && !telefono) return c.json({ success: false, code: 'telefono_invalido', message: 'El cliente no tiene un teléfono válido para WhatsApp' }, 422)
       return c.json({ success: true, data: {
@@ -1727,11 +1733,11 @@ export function crearMarketingContactosRoute(
       if (error?.code !== 'ER_DUP_ENTRY') throw error
       const creadoEnParalelo = await repositorio.buscarContactoPorIdempotencia(restauranteId, input.idempotenciaClave)
       if (!creadoEnParalelo || creadoEnParalelo.enlaceId !== enlace.id || creadoEnParalelo.canal !== canal) throw error
-      const url = urlEnlaceReceta(enlace.username, input.token, campanaSlug)
+      const url = urlEnlaceReceta(anclajePublicoDe(enlace), input.token, campanaSlug)
       const texto = `${enlace.textoSugerido ?? ''}\n\n${url}`.trim()
       return c.json({ success: true, data: { contacto: creadoEnParalelo, url, waMeUrl: telefono ? urlWaMe(telefono, texto) : undefined, entregado: false, idempotente: true } })
     }
-    const url = urlEnlaceReceta(enlace.username, input.token, campanaSlug)
+    const url = urlEnlaceReceta(anclajePublicoDe(enlace), input.token, campanaSlug)
     const texto = `${enlace.textoSugerido ?? ''}\n\n${url}`.trim()
     return c.json({ success: true, data: {
       contacto,
@@ -1758,6 +1764,7 @@ function crearRepositorioContactosDrizzle(): RepositorioContactosMarketing {
         textoSugerido: MarketingEnlaceTable.textoSugerido, activo: MarketingEnlaceTable.activo,
         expiraAt: MarketingEnlaceTable.expiraAt, telefono: ClienteTable.telefono,
         marketingOptOut: ClienteTable.marketingOptOut, username: RestauranteTable.username,
+        dominioTienda: RestauranteTable.dominioTienda, dominioPlantillas: RestauranteTable.dominioPlantillas,
       }).from(MarketingEnlaceTable)
         .innerJoin(RestauranteTable, eq(RestauranteTable.id, MarketingEnlaceTable.restauranteId))
         .leftJoin(ClienteTable, and(eq(ClienteTable.id, MarketingEnlaceTable.clienteId), eq(ClienteTable.restauranteId, MarketingEnlaceTable.restauranteId)))
@@ -1819,7 +1826,7 @@ export interface DependenciasEnvioWhatsappMarketing {
   reservar: typeof reservarCreditoMarketing
   confirmar: typeof confirmarReservaCreditoMarketing
   compensar: typeof compensarReservaCreditoMarketing
-  enviar: (input: { phone: string; customerName: string; restaurantName: string; texto: string; recipeUrl: string; creds: WaCredentials | undefined }) => Promise<{ success: boolean; id?: string; error?: unknown }>
+  enviar: (input: { phone: string; customerName: string; restaurantName: string; texto: string; pathBoton: string; creds: WaCredentials | undefined }) => Promise<{ success: boolean; id?: string; error?: unknown }>
   ahora: () => Date
 }
 
@@ -1905,8 +1912,9 @@ export function crearMarketingEnvioWhatsappRoute(
     }
 
     const campanaSlug = (enlace.recetaCodigo === 'segunda_compra' || enlace.recetaCodigo === 'volver_a_tiempo') ? 'lo-mismo' : 'reactivacion'
-    const recipeUrl = urlEnlaceReceta(enlace.username, input.token, campanaSlug)
-    const envio = await dependencias.enviar({ phone: telefono, customerName: enlace.clienteNombre, restaurantName: enlace.restauranteNombre, texto: enlace.textoSugerido ?? '', recipeUrl, creds: enlace.creds })
+    // El botón de `crecimiento_receta_v1` trae la base embebida: va el path, no la URL pública.
+    const pathBoton = pathBotonPlantilla(enlace, input.token, campanaSlug)
+    const envio = await dependencias.enviar({ phone: telefono, customerName: enlace.clienteNombre, restaurantName: enlace.restauranteNombre, texto: enlace.textoSugerido ?? '', pathBoton, creds: enlace.creds })
     if (!envio.success || !envio.id) {
       await dependencias.compensar(dependencias.walletDb as any, restauranteId, operacionId)
       await dependencias.repositorio.actualizarContacto(restauranteId, contacto.id, { estado: 'revertido' })
@@ -1932,6 +1940,7 @@ function crearRepositorioEnvioWhatsappDrizzle(): RepositorioEnvioWhatsappMarketi
         tokenHash: MarketingEnlaceTable.tokenHash, textoSugerido: MarketingEnlaceTable.textoSugerido, activo: MarketingEnlaceTable.activo,
         expiraAt: MarketingEnlaceTable.expiraAt, telefono: ClienteTable.telefono, marketingOptOut: ClienteTable.marketingOptOut,
         clienteNombre: ClienteTable.nombre, username: RestauranteTable.username, restauranteNombre: RestauranteTable.nombre,
+        dominioTienda: RestauranteTable.dominioTienda, dominioPlantillas: RestauranteTable.dominioPlantillas,
         whatsappPhoneId: RestauranteTable.whatsappPhoneId, whatsappAccessToken: RestauranteTable.whatsappAccessToken,
       }).from(MarketingEnlaceTable).innerJoin(RestauranteTable, eq(RestauranteTable.id, MarketingEnlaceTable.restauranteId))
         .leftJoin(ClienteTable, and(eq(ClienteTable.id, MarketingEnlaceTable.clienteId), eq(ClienteTable.restauranteId, MarketingEnlaceTable.restauranteId)))

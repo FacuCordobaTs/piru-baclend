@@ -84,23 +84,114 @@ export function generarTokenMarketing(): string {
 export const BASE_TIENDA = 'https://my.piru.app/'
 
 /**
+ * Punto de anclaje de los links de un local: la base pública más el prefijo que
+ * antecede a `/c/:slug` o `/r/:token`. Un local en el dominio compartido lleva el
+ * username como primer segmento; uno con dominio propio vive en la raíz.
+ */
+export interface AnclajeTienda {
+  base: string
+  prefijo: string
+}
+
+/** Local en el dominio compartido: el username es el primer segmento del path. */
+export const anclajeCompartido = (username: string): AnclajeTienda => ({
+  base: BASE_TIENDA,
+  prefijo: `${encodeURIComponent(username)}/`,
+})
+
+/** Local en su propio dominio: la tienda vive en la raíz. */
+export const anclajePropio = (dominio: string): AnclajeTienda => ({
+  base: `https://${normalizarDominio(dominio)}/`,
+  prefijo: '',
+})
+
+/** Quita protocolo y barras sobrantes: el dominio se guarda pelado en la base. */
+function normalizarDominio(dominio: string): string {
+  return dominio.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '')
+}
+
+/** Los datos de un local que alcanzan para decidir cómo se arman sus links. */
+export interface LocalEnlaces {
+  username: string | null
+  dominioTienda?: string | null
+  dominioPlantillas?: string | null
+}
+
+/**
+ * Anclaje del link que se muestra y se copia (texto del modo manual, admin, el
+ * que el operador le pasa al cliente): el dominio propio manda sobre el compartido.
+ * `null` sólo si el local no tiene ni dominio ni username.
+ */
+export function anclajePublico(local: LocalEnlaces): AnclajeTienda | null {
+  const dominio = local.dominioTienda?.trim()
+  if (dominio) return anclajePropio(dominio)
+  return local.username ? anclajeCompartido(local.username) : null
+}
+
+/**
+ * `anclajePublico` para un local que ya sabemos que tiene username: el `??` es
+ * inalcanzable y sólo le da al compilador el no-null que el llamador conoce.
+ */
+export function anclajePublicoDe(local: LocalEnlaces & { username: string }): AnclajeTienda {
+  return anclajePublico(local) ?? anclajeCompartido(local.username)
+}
+
+/**
+ * Anclaje del link que abre el botón de la plantilla de Meta. La base está
+ * embebida en la plantilla aprobada, así que NO puede ser la pública mientras las
+ * plantillas de ese local no se hayan creado para su dominio: hasta entonces cae
+ * al anclaje compartido y el path conserva el username.
+ */
+export function anclajePlantillas(local: LocalEnlaces): AnclajeTienda | null {
+  const dominio = local.dominioPlantillas?.trim()
+  if (dominio) return anclajePropio(dominio)
+  return local.username ? anclajeCompartido(local.username) : null
+}
+
+/**
  * URL pública de una micro-campaña: el storefront resuelve el slug (`/c/:slug`)
  * y el token cifrado viaja como query para reconstruir cliente, carrito y
  * beneficio sin exponer ids.
  */
-export function urlMicroCampana(username: string, slug: string, token: string): string {
-  return `${BASE_TIENDA}${encodeURIComponent(username)}/c/${encodeURIComponent(slug)}?tk=${encodeURIComponent(token)}`
+export function urlMicroCampana(anclaje: AnclajeTienda, slug: string, token: string): string {
+  return `${anclaje.base}${anclaje.prefijo}c/${encodeURIComponent(slug)}?tk=${encodeURIComponent(token)}`
 }
 
 /**
  * Un token `v1.` es una micro-campaña cifrada (AES-256-GCM) y se abre en
  * `/c/:slug`; cualquier otro es un enlace de receta y se abre en `/r/:token`.
  */
-export function urlEnlaceReceta(username: string, token: string, campanaSlug?: string): string {
+export function urlEnlaceReceta(anclaje: AnclajeTienda, token: string, campanaSlug?: string): string {
   if (token.startsWith('v1.')) {
-    return urlMicroCampana(username, campanaSlug || 'lo-mismo', token)
+    return urlMicroCampana(anclaje, campanaSlug || 'lo-mismo', token)
   }
-  return `${BASE_TIENDA}${encodeURIComponent(username)}/r/${encodeURIComponent(token)}`
+  return `${anclaje.base}${anclaje.prefijo}r/${encodeURIComponent(token)}`
+}
+
+/**
+ * Path dinámico del botón de la plantilla de Meta: el mismo link, anclado a las
+ * plantillas del local y sin su base — es lo que viaja como `{{1}}`, porque la
+ * plantilla ya trae la base embebida. Con `dominio_plantillas` en NULL el anclaje
+ * es el compartido y el path arranca con el username.
+ *
+ * No se deriva recortando la URL pública: eso sólo funciona mientras la base
+ * compartida sea prefijo literal de la pública, y deja de serlo justo cuando el
+ * local tiene dominio propio.
+ */
+export function pathBotonPlantilla(local: LocalEnlaces, token: string, campanaSlug?: string): string {
+  const anclaje = anclajePlantillas(local)
+  if (!anclaje) return ''
+  return urlEnlaceReceta(anclaje, token, campanaSlug).slice(anclaje.base.length)
+}
+
+/**
+ * Base ya armada con la que el admin compone links (`<base>c/<slug>`) sin
+ * reimplementar la regla: `https://my.piru.app/<username>/` o el dominio propio.
+ * `null` si el local todavía no tiene ni username ni dominio.
+ */
+export function baseTiendaDe(local: LocalEnlaces): string | null {
+  const anclaje = anclajePublico(local)
+  return anclaje ? `${anclaje.base}${anclaje.prefijo}` : null
 }
 
 export interface ContextoClienteEnlace {
