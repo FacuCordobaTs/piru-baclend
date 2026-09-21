@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { restaurante as RestauranteTable, pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, pago as PagoTable, mesa as MesaTable, pagoSubtotal as PagoSubtotalTable, pedidoUnificado as PedidoUnificadoTable, itemPedidoUnificado as ItemPedidoUnificadoTable } from '../db/schema'
+import { restaurante as RestauranteTable, pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, pago as PagoTable, mesa as MesaTable, pagoSubtotal as PagoSubtotalTable, pedidoUnificado as PedidoUnificadoTable, itemPedidoUnificado as ItemPedidoUnificadoTable, ropaPedido as RopaPedidoTable, ropaPago as RopaPagoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { eq, and, inArray } from 'drizzle-orm'
 import { authMiddleware } from '../middleware/auth'
@@ -62,6 +62,18 @@ function parseMercadoPagoPiruPedidoUnificadoId(externalReference: string): numbe
 /** `piru-recarga-{id}` = compra de un pack de recarga de mensajes (pago a Piru). */
 function parseRecargaMensajesId(externalReference: string): number | null {
   const m = externalReference.match(/^piru-recarga-(\d+)$/)
+  return m ? parseInt(m[1], 10) : null
+}
+
+/**
+ * `piru-ropa-{id}` = pedido de la tienda de indumentaria (tabla `ropa_pedido`).
+ *
+ * Prefijo deliberadamente distinto del `piru-{id}` de comida: los ids de ropa viven en su
+ * propia tabla y su numeración se solapa con la de `pedido_unificado`, así que sin el
+ * prefijo este webhook acreditaría el pedido de comida equivocado.
+ */
+function parseRopaPedidoId(externalReference: string): number | null {
+  const m = externalReference.match(/^piru-ropa-(\d+)$/)
   return m ? parseInt(m[1], 10) : null
 }
 
@@ -678,6 +690,54 @@ mercadopagoRoute.post('/webhook', async (c) => {
       }
       console.log(`✅ [Webhook] Factura de suscripción acreditada: rest=${res.restauranteId} base=${res.acreditoBase} modulos=${res.modulosActivados.length} recarga=${res.recargaAcreditada} hasta=${res.periodoHasta?.toISOString()}`)
       return c.json({ status: 'suscripcion_activada' })
+    }
+
+    // ── Pedido de la tienda de indumentaria (ropa_pedido) ──
+    // Va antes del parser de pedido unificado y no comparte ninguna rama con él: la tabla
+    // es otra, así que el flujo de comida no cambia de comportamiento.
+    const ropaPedidoId = parseRopaPedidoId(externalReference)
+    if (ropaPedidoId != null) {
+      const ropaRows = await db.select()
+        .from(RopaPedidoTable)
+        .where(eq(RopaPedidoTable.id, ropaPedidoId))
+        .limit(1)
+
+      if (ropaRows.length === 0) {
+        console.error(`❌ [Webhook] Pedido de ropa ${ropaPedidoId} no encontrado`)
+        return c.json({ status: 'error', message: 'Ropa order not found' })
+      }
+
+      if (status === 'approved') {
+        if (ropaRows[0].pagado) {
+          console.log(`⏭️ [Webhook] Pedido de ropa ${ropaPedidoId} ya figuraba como pagado.`)
+          return c.json({ status: 'already_processed' })
+        }
+
+        await db.update(RopaPedidoTable)
+          .set({ pagado: true, estadoPago: 'pagado' })
+          .where(eq(RopaPedidoTable.id, ropaPedidoId))
+
+        await db.update(RopaPagoTable)
+          .set({ estado: 'paid', mpPaymentId: String(paymentId) })
+          .where(eq(RopaPagoTable.pedidoId, ropaPedidoId))
+
+        console.log(`✅ [Webhook] Pedido de ropa ${ropaPedidoId} acreditado (pago ${paymentId})`)
+        return c.json({ status: 'ropa_pagada' })
+      }
+
+      // Rechazado/cancelado: se deja el registro de pago en failed para que quede el rastro,
+      // pero el pedido sigue pendiente y el dueño lo ve como impago en el admin.
+      if (status === 'rejected' || status === 'cancelled') {
+        await db.update(RopaPagoTable)
+          .set({ estado: 'failed', mpPaymentId: String(paymentId) })
+          .where(eq(RopaPagoTable.pedidoId, ropaPedidoId))
+
+        console.log(`⏭️ [Webhook] Pedido de ropa ${ropaPedidoId}: pago ${status} (${statusDetail})`)
+        return c.json({ status: 'ropa_pago_fallido' })
+      }
+
+      console.log(`⏭️ [Webhook] Pedido de ropa ${ropaPedidoId}: status=${status}, sin acción`)
+      return c.json({ status: 'ignored' })
     }
 
     const pedidoId = parseMercadoPagoPiruPedidoUnificadoId(externalReference)

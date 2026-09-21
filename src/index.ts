@@ -26,6 +26,7 @@ import type { ServerWebSocket } from "bun";
 import { verifyToken } from './libs/jwt';
 import { webhookRoute } from './routes/webhook';
 import { cucuruRoute } from './routes/cucuru';
+import { ropaRoute } from './routes/ropa';
 import { zonaDeliveryRoute } from './routes/zona-delivery';
 import { codigoDescuentoRoute } from './routes/codigo-descuento';
 import { migrationRoute } from './routes/migration';
@@ -205,6 +206,7 @@ app.basePath('/api')
   .route('/notificacion', notificacionRoute)
   .route('/public', publicRoute)
   .route('/public', marketingPublicRoute)
+  .route('/ropa', ropaRoute)
   .route('/marketing', marketingCampanasRoute)
   .route('/public/claim', claimRoute)
   .route('/clientes', clientesRoute)

@@ -27,12 +27,10 @@ WHERE `codigo` = 'crecimiento';
 UPDATE `restaurante_modulo` rm
 JOIN `modulo` m ON m.`id` = rm.`modulo_id`
 SET
-  rm.`estado` = 'activo',
   rm.`precio_mensual_congelado` = NULL,
   rm.`vigente_hasta` = NULL,
   rm.`cancelar_al_fin_periodo` = false
-WHERE m.`codigo` = 'crecimiento'
-  AND rm.`estado` IN ('pendiente_pago', 'cancelacion_programada');
+WHERE m.`codigo` = 'crecimiento';
 
 -- El resto conserva su estado (`activo` sigue activo, `inactivo` sigue esperando
 -- que el dueño lo prenda) pero pierde el precio congelado: ya no hay monto que

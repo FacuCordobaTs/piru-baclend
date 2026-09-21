@@ -146,7 +146,14 @@ export const restaurante = mysqlTable("restaurante", {
   afipPuntoDeVenta: int("afip_punto_de_venta"),
   afipCondicionIva: mysqlEnum("afip_condicion_iva", ["RI", "MO"]).default("RI"),
 
- 
+  // ── Tienda de indumentaria (alfajor) — ver docs/ORDERS.md ──
+  // Deliberadamente separado de deliveryEnabled/deliveryFee: esos gobiernan el envío de comida
+  // (con zonas y Google Maps) y no deben cambiar de comportamiento. Acá es retiro o envío a
+  // domicilio con costo fijo.
+  ropaEnvioEnabled: boolean("ropa_envio_enabled").default(true).notNull(),
+  ropaCostoEnvio: decimal("ropa_costo_envio", { precision: 10, scale: 2 })
+    .default("0.00")
+    .notNull(),
 });
 
 export const sucursal = mysqlTable("sucursal", {
@@ -1864,3 +1871,116 @@ export const itemPedidoTakeaway = mysqlTable("item_pedido_takeaway", {
   agregados: json("agregados"),
   esCanjePuntos: boolean("es_canje_puntos").default(false),
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tienda de indumentaria (ropa) — ver docs/ORDERS.md
+//
+// Vive completamente aparte de pedido_unificado a propósito: la ropa no tiene mesa, mozos,
+// cocina, puntos ni reparto, y meterla en el agregado de comida obligaría a tocar el flujo
+// de pedidos de comida, que no debe cambiar de comportamiento.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const ropaProducto = mysqlTable("ropa_producto", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  subtitulo: varchar("subtitulo", { length: 255 }),
+  descripcion: varchar("descripcion", { length: 500 }),
+  composicion: varchar("composicion", { length: 255 }),
+  fit: varchar("fit", { length: 100 }),
+  precio: decimal("precio", { precision: 10, scale: 2 }).notNull(),
+  // Precio "tachado" para mostrar el descuento. null = sin descuento.
+  precioAnterior: decimal("precio_anterior", { precision: 10, scale: 2 }),
+  categoria: varchar("categoria", { length: 50 }),
+  /** Array de URLs de R2: la primera es la que usa la tarjeta del catálogo. */
+  imagenes: json("imagenes"),
+  /** Array de strings, ej. ["S","M","L","XL"]. */
+  talles: json("talles"),
+  /** Array de { nombre: string, hex: string } — sin stock por variante (decisión de producto). */
+  colores: json("colores"),
+  // null = sin control de stock. Si tiene valor, se descuenta al confirmar cada pedido.
+  stock: int("stock"),
+  activo: boolean("activo").default(true).notNull(),
+  orden: int("orden").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+}, (table) => [
+  index("idx_ropa_producto_restaurante_activo_orden").on(
+    table.restauranteId,
+    table.activo,
+    table.orden,
+  ),
+]);
+
+export const ropaPedido = mysqlTable("ropa_pedido", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  nombreCliente: varchar("nombre_cliente", { length: 255 }).notNull(),
+  telefono: varchar("telefono", { length: 50 }).notNull(),
+  email: varchar("email", { length: 255 }),
+  tipoEntrega: mysqlEnum("tipo_entrega", ["retiro", "envio"]).notNull(),
+  direccion: varchar("direccion", { length: 512 }),
+  ciudad: varchar("ciudad", { length: 255 }),
+  codigoPostal: varchar("codigo_postal", { length: 20 }),
+  notas: varchar("notas", { length: 500 }),
+  subtotal: decimal("subtotal", { precision: 10, scale: 2 }).notNull(),
+  costoEnvio: decimal("costo_envio", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  total: decimal("total", { precision: 10, scale: 2 }).notNull(),
+  /** Canonical: mercadopago_checkout, transferencia_automatica_cucuru, manual_transfer, cash; ver lib/metodos-pago.ts */
+  metodoPago: varchar("metodo_pago", { length: 64 }),
+  pagado: boolean("pagado").default(false).notNull(),
+  estadoPago: mysqlEnum("estado_pago", ["pendiente", "pagado", "fallido"]).default("pendiente").notNull(),
+  estado: mysqlEnum("estado", [
+    "pendiente",
+    "preparando",
+    "enviado",
+    "entregado",
+    "cancelado",
+  ]).default("pendiente").notNull(),
+  // Alias/CVU dinámico de Cucuru minteado por pedido. Se guarda acá además de en ropa_pago
+  // porque es lo que la pantalla de seguimiento le muestra al comprador.
+  aliasTransferencia: varchar("alias_transferencia", { length: 255 }),
+  cvuTransferencia: varchar("cvu_transferencia", { length: 255 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+}, (table) => [
+  index("idx_ropa_pedido_restaurante_estado_fecha").on(
+    table.restauranteId,
+    table.estado,
+    table.createdAt,
+  ),
+]);
+
+export const ropaPedidoItem = mysqlTable("ropa_pedido_item", {
+  id: int("id").primaryKey().autoincrement(),
+  pedidoId: int("pedido_id").references(() => ropaPedido.id, { onDelete: "cascade" }).notNull(),
+  // Sin FK estricta a ropa_producto, igual que item_pedido_unificado.productoId: borrar un
+  // producto no debe romper el historial de pedidos ya hechos.
+  productoId: int("producto_id").notNull(),
+  // Snapshot comercial al momento de la compra: si el producto cambia de precio o de nombre
+  // después, el pedido sigue mostrando lo que el cliente compró.
+  nombreProducto: varchar("nombre_producto", { length: 255 }).notNull(),
+  imagenUrl: varchar("imagen_url", { length: 512 }),
+  talle: varchar("talle", { length: 50 }),
+  colorNombre: varchar("color_nombre", { length: 100 }),
+  colorHex: varchar("color_hex", { length: 20 }),
+  cantidad: int("cantidad").default(1).notNull(),
+  precioUnitario: decimal("precio_unitario", { precision: 10, scale: 2 }).notNull(),
+}, (table) => [
+  index("idx_ropa_pedido_item_pedido").on(table.pedidoId),
+]);
+
+export const ropaPago = mysqlTable("ropa_pago", {
+  id: int("id").primaryKey().autoincrement(),
+  pedidoId: int("pedido_id").references(() => ropaPedido.id, { onDelete: "cascade" }).notNull(),
+  metodo: varchar("metodo", { length: 64 }).notNull(),
+  estado: mysqlEnum("estado", ["pending", "paid", "failed"]).default("pending").notNull(),
+  monto: decimal("monto", { precision: 10, scale: 2 }).notNull(),
+  // external_reference de Mercado Pago: `piru-ropa-{pedidoId}`. Distinto del `piru-{id}` de
+  // comida, que es lo que permite al webhook despachar sin ambigüedad.
+  mpPaymentId: varchar("mp_payment_id", { length: 255 }),
+  mpPreferenceId: varchar("mp_preference_id", { length: 255 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_ropa_pago_pedido").on(table.pedidoId),
+]);
