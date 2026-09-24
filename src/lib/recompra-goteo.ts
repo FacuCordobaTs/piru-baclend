@@ -17,6 +17,15 @@ export const COOLDOWN_HORAS = 48
 
 export const MS_POR_HORA = 1000 * 60 * 60
 
+export const MS_POR_DIA = 24 * MS_POR_HORA
+
+/**
+ * Piso en DÍAS del espaciado entre toques, derivado del cooldown: es el mismo invariante anti-spam,
+ * expresado en la unidad en la que el dueño configura ("cada cuántos días sale el 2º y el 3º").
+ * Lo configurable sólo puede ESTIRAR el espaciado, nunca acortarlo por debajo de esto.
+ */
+export const DIAS_ENTRE_TOQUES_MIN = Math.ceil(COOLDOWN_HORAS / 24)
+
 /** Minutos de gracia que se le suman al reintento por cooldown para garantizar que avance. */
 const GRACIA_COOLDOWN_MS = 5 * 60 * 1000
 
@@ -40,17 +49,56 @@ export function arranqueDeRecontacto(ultimoToqueMs: number | null, ahora: number
 }
 
 /**
- * Cuándo se encola el toque siguiente: el primer hueco habitual del cliente que caiga después del
- * cooldown, o el fin del cooldown si ese hueco no existe. El piso es estructural —no una ventana de
- * tiempo— para que el drenaje no pueda levantarlo antes de tiempo.
+ * Días efectivos de espera entre toques. Un valor ausente o inválido cae en el default histórico
+ * (los 48 hs del cooldown); cualquier valor por debajo del piso se levanta al piso. Es la única
+ * puerta por la que entra la configuración del dueño, así que el invariante anti-spam no depende
+ * de que la UI mande un número sensato.
  */
+export function diasEntreToques(dias: number | null | undefined): number {
+  if (dias == null || !Number.isFinite(dias)) return COOLDOWN_HORAS / 24
+  return Math.max(DIAS_ENTRE_TOQUES_MIN, Math.round(dias))
+}
+
+/** Instante (ms) en el que termina la espera entre el toque anterior y el siguiente. */
+export function finDeEsperaEntreToques(
+  ultimoToqueMs: number | null,
+  dias: number | null | undefined,
+  ahora: number,
+): number {
+  return (ultimoToqueMs ?? ahora) + diasEntreToques(dias) * MS_POR_DIA
+}
+
+/** `arranqueDeRecontacto` con el espaciado configurable de la tanda. */
+export function arranqueDeRecontactoConIntervalo(
+  ultimoToqueMs: number | null,
+  dias: number | null | undefined,
+  ahora: number,
+): number {
+  return Math.max(ahora, finDeEsperaEntreToques(ultimoToqueMs, dias, ahora))
+}
+
+/**
+ * Cuándo se encola el toque siguiente: el primer hueco habitual del cliente que caiga después de la
+ * espera configurada, o el fin de esa espera si ese hueco no existe. El piso es estructural —no una
+ * ventana de tiempo— para que el drenaje no pueda levantarlo antes de tiempo.
+ */
+export function dueDateDeRecontactoConIntervalo(
+  dueDatePatron: Date | null,
+  ultimoToqueMs: number | null,
+  dias: number | null | undefined,
+  ahora: number,
+): Date {
+  const fin = finDeEsperaEntreToques(ultimoToqueMs, dias, ahora)
+  return dueDatePatron && dueDatePatron.getTime() > fin ? dueDatePatron : new Date(fin)
+}
+
+/** `dueDateDeRecontactoConIntervalo` con el espaciado default (48 hs). */
 export function dueDateDeRecontacto(
   dueDatePatron: Date | null,
   ultimoToqueMs: number | null,
   ahora: number,
 ): Date {
-  const fin = finDeCooldown(ultimoToqueMs, ahora)
-  return dueDatePatron && dueDatePatron.getTime() > fin ? dueDatePatron : new Date(fin)
+  return dueDateDeRecontactoConIntervalo(dueDatePatron, ultimoToqueMs, null, ahora)
 }
 
 /**

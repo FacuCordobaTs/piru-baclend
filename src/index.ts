@@ -785,11 +785,11 @@ app.get(
   })
 )
 
-// ── Motor de Recompra · scheduler del goteo diario ──────────────────────────
-// El motor NO le pide acciones diarias al dueño: un job gotea la cola de cada local a su ritmo.
-// Tick cada 15 min; `tickMotorRecompra` decide qué locales drenar hoy (una vez/día, a la hora
-// objetivo del local, respetando el horario de silencio y el cupo). Best-effort: si falla, se
-// reintenta en el próximo tick sin tirar el server.
+// ── Motor de Recompra · scheduler del goteo programado ──────────────────────
+// El dueño no despacha mensajes: programa una tanda y este job la gotea. Tick cada 15 min;
+// `tickMotorRecompra` recorre los locales con tandas vivas y drena lo que YA venció, cada fila a su
+// día y hora (respetando el horario de silencio y el cupo diario del local). Best-effort: si falla,
+// se reintenta en el próximo tick sin tirar el server.
 const MOTOR_TICK_MS = 15 * 60 * 1000
 setInterval(() => {
   tickMotorRecompra(drizzle(pool)).catch((err) => {

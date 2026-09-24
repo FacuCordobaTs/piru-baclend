@@ -1015,6 +1015,36 @@ export const recuperoCliente = mysqlTable("recupero_cliente", {
 });
 
 
+// Motor de Recompra · configuración DEL LOCAL (una fila por restaurante).
+// El cupo diario y el modo dejan de vivir en la campaña: con varias tandas corriendo a la vez, el
+// cupo protege el número de WhatsApp del local, no una tanda puntual. Sin fila, el código devuelve
+// los defaults (misma convención que `configuracion_puntos`), así que ningún local necesita backfill.
+export const configMotorRecompra = mysqlTable("config_motor_recompra", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id")
+    .references(() => restaurante.id, { onDelete: "cascade" })
+    .unique()
+    .notNull(),
+  // 'activa' | 'pausada_manual' | 'pausada_sin_saldo' — la pausa es del LOCAL: pausa todo su goteo.
+  estado: varchar("estado", { length: 20 }).default("activa").notNull(),
+  // 'automatico' (drena con Meta Cloud API, consume 1 crédito marketing) | 'manual' (el operador copia).
+  modo: varchar("modo", { length: 20 }).default("automatico").notNull(),
+  // Techo de envíos por día del local. No es una promesa: cada cliente cae en su día y horario.
+  cupoDiario: int("cupo_diario").default(30).notNull(),
+  // Días entre el 1º y el 2º toque, y entre el 2º y el 3º. El piso de 48 hs es un invariante anti-spam:
+  // la configuración sólo puede estirarlo, nunca acortarlo (lo aplica `recompra-goteo.ts`).
+  diasToque2: int("dias_toque_2").default(2).notNull(),
+  diasToque3: int("dias_toque_3").default(2).notNull(),
+  // % del lote que se aparta como grupo de control (atribución honesta). No recibe toques ni gasta cupo.
+  porcentajeControl: int("porcentaje_control").default(10).notNull(),
+  // Día de Argentina "YYYY-MM-DD" del último drenaje: idempotencia diaria del tick.
+  ultimoDrenajeDia: varchar("ultimo_drenaje_dia", { length: 10 }),
+  // Aviso al dueño cuando el motor se pausa por saldo (uno solo, después 1 recordatorio por semana).
+  avisoSinSaldoAt: timestamp("aviso_sin_saldo_at"),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Motor de Recompra · 4.4 — Campaña de recompra (envío batch) + grupo de control.
 // Cada "encendido del motor" es una campaña: se detecta la cohorte recuperable, se aparta al azar
 // un 10% de cada segmento como GRUPO DE CONTROL (no se contacta) y al resto se le envía el toque.
@@ -1029,14 +1059,33 @@ export const campanaRecompra = mysqlTable("campana_recompra", {
   totalFallidos: int("total_fallidos").default(0).notNull(),
   // ── Motor de Recompra · goteo (piloto automático) — campos aditivos ──────────
   // El modelo dejó de ser "batch masivo por click" para ser una CAMPAÑA PERSISTENTE
-  // que gotea a ritmo diario. Una fila con `estado` no-null es la campaña viva del
-  // local (una a la vez). Las filas viejas (estado null) son los encendidos batch legacy.
+  // que gotea a ritmo diario. Con las programaciones explícitas pueden convivir VARIAS por local
+  // (una por tanda programada); `origen` distingue las tanda nuevas del goteo persistente legacy.
   // 'activa' | 'pausada_sin_saldo' | 'pausada_manual' | 'completada'
   estado: varchar("estado", { length: 20 }),
   // 'automatico' | 'manual' — en manual el admin copia y envía él mismo; en automático drena con Meta API.
+  // LEGACY: el modo vigente es el de `config_motor_recompra` (es del local, no de la tanda).
   modo: varchar("modo", { length: 20 }).default("automatico").notNull(),
   // Cupo diario de envíos (warm-up del número + cocina sin picos). Configurable por local, con tope duro de sistema.
+  // LEGACY: el cupo vigente es el de `config_motor_recompra` (protege el número del local, no una tanda).
   cupoDiario: int("cupo_diario").default(30).notNull(),
+  // ── Programaciones (el modelo explícito) — campos aditivos ──────────────────
+  // Cada "programación" es una fila de esta tabla con su especificación. 'goteo' son las campañas
+  // persistentes legacy (sus filas ya agendadas se drenan, pero no generan toques nuevos);
+  // 'programada' es una tanda que el dueño programó desde la pantalla del motor.
+  origen: varchar("origen", { length: 20 }).default("goteo").notNull(),
+  // Segmento elegido en la tanda. NULL = "en general" (todos los segmentos recuperables).
+  segmento: varchar("segmento", { length: 20 }),
+  // N que pidió el dueño: mensajes ENVIADOS. El control se aparta de los siguientes de la lista.
+  cantidadObjetivo: int("cantidad_objetivo"),
+  // Hasta qué toque llega la tanda (1 = sólo primeros toques, 2 = 1º y 2º, 3 = los tres).
+  toqueHasta: tinyint("toque_hasta").default(1).notNull(),
+  // Overrides de espaciado de ESTA tanda. NULL = usa los días de `config_motor_recompra`.
+  diasToque2: int("dias_toque_2"),
+  diasToque3: int("dias_toque_3"),
+  // Override del % de control de ESTA tanda. NULL = usa el del local.
+  porcentajeControl: int("porcentaje_control"),
+  programadaAt: timestamp("programada_at"),
   // Contador del día en curso (día de Argentina "YYYY-MM-DD") y cuántos se enviaron ese día.
   diaContador: varchar("dia_contador", { length: 10 }),
   enviadosHoy: int("enviados_hoy").default(0).notNull(),

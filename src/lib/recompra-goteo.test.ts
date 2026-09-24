@@ -2,10 +2,16 @@ import { describe, expect, test } from 'bun:test'
 import { ESCALERA, NIVEL_MAX } from './recetas-recompra'
 import {
   arranqueDeRecontacto,
+  arranqueDeRecontactoConIntervalo,
   COOLDOWN_HORAS,
+  diasEntreToques,
+  DIAS_ENTRE_TOQUES_MIN,
   dueDateDeRecontacto,
+  dueDateDeRecontactoConIntervalo,
   estadoRecupero,
   finDeCooldown,
+  finDeEsperaEntreToques,
+  MS_POR_DIA,
   MS_POR_HORA,
   reprogramarPorCooldown,
   reprogramarPorSilencio,
@@ -83,6 +89,93 @@ describe('cuándo se encola el toque siguiente', () => {
     const vencido = dueDateDeRecontacto(null, AHORA - 50 * HORA, AHORA)
     expect(vencido.getTime()).toBe(AHORA - 2 * HORA)
     expect(vencido.getTime()).toBeLessThan(AHORA)
+  })
+})
+
+describe('el espaciado configurable entre toques', () => {
+  // El dueño configura "cada cuántos días sale el 2º y el 3º". Lo configurable sólo puede ESTIRAR
+  // el espaciado: 48 hs entre toques es un INVARIANTE anti-spam, no un default.
+  test('el piso en días sale del cooldown: 48 hs son 2 días', () => {
+    expect(DIAS_ENTRE_TOQUES_MIN).toBe(2)
+    expect(COOLDOWN_HORAS).toBe(48)
+  })
+
+  test('lo pedido por debajo del piso se levanta al piso', () => {
+    expect(diasEntreToques(1)).toBe(DIAS_ENTRE_TOQUES_MIN)
+    expect(diasEntreToques(0)).toBe(DIAS_ENTRE_TOQUES_MIN)
+    expect(diasEntreToques(-7)).toBe(DIAS_ENTRE_TOQUES_MIN)
+  })
+
+  test('lo pedido por encima del piso se respeta tal cual', () => {
+    expect(diasEntreToques(2)).toBe(2)
+    expect(diasEntreToques(5)).toBe(5)
+    expect(diasEntreToques(10)).toBe(10)
+  })
+
+  test('sin configurar queda el espaciado histórico de 48 hs', () => {
+    // 48 / 24 = 2 días: el default es exactamente el cooldown, no un número nuevo.
+    expect(diasEntreToques(null)).toBe(2)
+    expect(diasEntreToques(undefined)).toBe(2)
+    expect(diasEntreToques(Number.NaN)).toBe(2)
+    expect(diasEntreToques(Number.POSITIVE_INFINITY)).toBe(2)
+  })
+
+  test('un valor con decimales se redondea al día más cercano', () => {
+    expect(diasEntreToques(2.4)).toBe(2)
+    expect(diasEntreToques(2.6)).toBe(3)
+  })
+
+  test('la espera arranca del último toque, no de ahora', () => {
+    const ultimo = AHORA - 1 * MS_POR_DIA
+    // Ya esperó 1 día de los 3 configurados: le quedan 2.
+    expect(finDeEsperaEntreToques(ultimo, 3, AHORA)).toBe(ultimo + 3 * MS_POR_DIA)
+    expect(finDeEsperaEntreToques(ultimo, 3, AHORA)).toBe(AHORA + 2 * MS_POR_DIA)
+  })
+
+  test('sin toque previo fechado la espera completa corre desde ahora', () => {
+    // Acá `null` es "esta tanda todavía no le mandó nada", no "no pudimos fechar el último toque":
+    // el toque 1 sale ya, y el 2 espera el intervalo configurado desde ese primer envío.
+    expect(finDeEsperaEntreToques(null, 3, AHORA)).toBe(AHORA + 3 * MS_POR_DIA)
+  })
+
+  test('el arranque del recontacto es el fin de la espera, nunca antes de ahora', () => {
+    // Un cliente cuyo último toque fue hace mucho ya cumplió la espera: sale ahora.
+    expect(arranqueDeRecontactoConIntervalo(AHORA - 40 * MS_POR_DIA, 3, AHORA)).toBe(AHORA)
+    expect(arranqueDeRecontactoConIntervalo(AHORA - 1 * MS_POR_DIA, 3, AHORA)).toBe(AHORA + 2 * MS_POR_DIA)
+  })
+
+  test('el fin de la espera configurada le gana al hueco habitual si el hueco es antes', () => {
+    const intervaloLargo = dueDateDeRecontactoConIntervalo(new Date(AHORA + 1 * HORA), null, 5, AHORA)
+    expect(intervaloLargo.getTime()).toBe(AHORA + 5 * MS_POR_DIA)
+  })
+
+  test('el primer hueco habitual posterior a la espera manda sobre el piso', () => {
+    const tarde = new Date(AHORA + 9 * MS_POR_DIA)
+    expect(dueDateDeRecontactoConIntervalo(tarde, null, 5, AHORA).getTime()).toBe(tarde.getTime())
+  })
+
+  test('con el intervalo default se comporta igual que la versión sin configurar', () => {
+    // `dueDateDeRecontacto` es el wrapper con `dias = null`: las dos tienen que dar lo mismo, o el
+    // camino viejo y el nuevo divergirían en el día del envío.
+    for (const patron of [null, new Date(AHORA + 2 * HORA), new Date(AHORA + 30 * HORA)]) {
+      for (const ultimo of [null, AHORA - 40 * HORA, AHORA - 50 * HORA]) {
+        expect(dueDateDeRecontactoConIntervalo(patron, ultimo, null, AHORA).getTime())
+          .toBe(dueDateDeRecontacto(patron, ultimo, AHORA).getTime())
+      }
+    }
+  })
+
+  test('un intervalo configurado nunca adelanta el envío respecto del default', () => {
+    // Es la propiedad que hace de la configuración una promesa segura: cualquier valor que el dueño
+    // elija deja el toque igual o más lejos que los 48 hs de siempre. Si esto fallara, subir el
+    // número en la pantalla podría estar acercando los mensajes.
+    const patron = new Date(AHORA + 1 * HORA)
+    const ultimo = AHORA - 10 * HORA
+    const base = dueDateDeRecontacto(patron, ultimo, AHORA).getTime()
+    for (const dias of [1, 2, 3, 7, 30]) {
+      expect(dueDateDeRecontactoConIntervalo(patron, ultimo, dias, AHORA).getTime())
+        .toBeGreaterThanOrEqual(base)
+    }
   })
 })
 
