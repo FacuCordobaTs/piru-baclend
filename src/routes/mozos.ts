@@ -46,6 +46,12 @@ const crearPedidoSchema = z.object({
   items: z.array(itemSchema).min(1).max(100),
 })
 const editarItemSchema = itemSchema.extend({ version: z.number().int().positive() })
+// Lo que el mozo confirma junto viaja en `items` y sale en una sola comanda. El
+// cuerpo de un solo ítem sigue valiendo para las PWA que todavía no se actualizaron.
+const agregarItemsSchema = z.union([
+  z.object({ version: z.number().int().positive(), items: z.array(itemSchema).min(1).max(100) }),
+  editarItemSchema.transform(({ version, ...item }) => ({ version, items: [item] })),
+])
 const eliminarItemSchema = z.object({ version: z.number().int().positive() })
 const editarPedidoSchema = z.object({
   version: z.number().int().positive(),
@@ -213,14 +219,23 @@ mozosRoute.post('/pedidos', zValidator('json', crearPedidoSchema), async (c) => 
   return c.json({ success: true, data }, 201)
 })
 
-mozosRoute.post('/pedidos/:id{[0-9]+}/items', zValidator('json', editarItemSchema), async (c) => {
-  const db = drizzle(pool); const principal = staff(c); const pedidoId = Number(c.req.param('id')); const body = c.req.valid('json')
+mozosRoute.post('/pedidos/:id{[0-9]+}/items', zValidator('json', agregarItemsSchema), async (c) => {
+  const db = drizzle(pool); const principal = staff(c); const pedidoId = Number(c.req.param('id')); const { version, items } = c.req.valid('json')
   const enAlcance = await pedidoEnAlcance(db, principal, pedidoId)
   if (!enAlcance) return c.json({ success: false, message: 'Pedido no encontrado' }, 404)
-  const resultado = await ejecutarMutacionPos(db, principal.restauranteId, pedidoId, body.version, async (tx) => {
-    const item = await resolverItemPos(tx, principal.restauranteId, body); if ('error' in item) return item
-    const inserted = await tx.insert(ItemPedidoUnificadoTable).values({ pedidoId, ...item, cantidadImpresa: 0 })
-    return { operacion: 'agregar_item' as const, itemPedidoId: Number(inserted[0].insertId), despues: item, reimprimeCocina: true }
+  // Todo el lote entra en una transacción y sale en un único evento: el admin
+  // reclama el delta completo de una vez, en lugar de una comanda por producto.
+  const resultado = await ejecutarMutacionPos(db, principal.restauranteId, pedidoId, version, async (tx) => {
+    const resueltos = []
+    for (const entrada of items) {
+      const item = await resolverItemPos(tx, principal.restauranteId, entrada); if ('error' in item) return item
+      resueltos.push(item)
+    }
+    const inserted = await tx.insert(ItemPedidoUnificadoTable).values(resueltos.map((item) => ({ pedidoId, ...item, cantidadImpresa: 0 })))
+    // Un solo ítem conserva la auditoría de siempre; un lote la asienta en una fila.
+    return resueltos.length === 1
+      ? { operacion: 'agregar_item' as const, itemPedidoId: Number(inserted[0].insertId), despues: resueltos[0], reimprimeCocina: true }
+      : { operacion: 'agregar_item' as const, itemPedidoId: null, despues: { items: resueltos }, reimprimeCocina: true }
   }, { id: principal.usuarioId, tipo: 'staff_mozo' })
   if (resultado.error) return respuestaErrorMutacion(c, db, principal, pedidoId, resultado)
   const data = await respuestaPedidoEditable(db, principal.restauranteId, pedidoId)
