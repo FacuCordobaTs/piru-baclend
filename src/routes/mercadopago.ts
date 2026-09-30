@@ -13,6 +13,8 @@ import { confirmarRecarga } from '../lib/mensajes-wallet'
 import { confirmarPagoSuscripcion } from '../lib/suscripciones'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { acreditarPuntosPedidoAprobado, revertirPuntosPedidoCancelado } from '../lib/puntos'
+import { esNotificacionDeOrden, validarFirmaWebhookMp } from '../lib/mp-qr'
+import { servicioCobrosQr } from '../lib/pos-cobros-qr-prod'
 
 const MP_CLIENT_ID = process.env.MP_CLIENT_ID
 const MP_CLIENT_SECRET = process.env.MP_CLIENT_SECRET
@@ -604,6 +606,27 @@ mercadopagoRoute.post('/webhook', async (c) => {
     const topic = query['topic'] || body?.topic
 
     console.log(`📨 [Webhook] Recibido - type: ${type}, topic: ${topic}, paymentId: ${paymentId}`)
+
+    // ── Orders API: cobros con QR estático del POS ──
+    // Se resuelve antes que los pagos clásicos y no comparte ninguna rama con ellos. El payload no
+    // se usa para decidir nada: sólo identifica la orden, que se vuelve a leer en Mercado Pago con
+    // el token del local dueño del cobro.
+    if (esNotificacionDeOrden(type, topic, body?.action)) {
+      const secretoWebhook = process.env.MP_WEBHOOK_SECRET
+      if (secretoWebhook && !validarFirmaWebhookMp({
+        secreto: secretoWebhook,
+        firma: c.req.header('x-signature'),
+        requestId: c.req.header('x-request-id'),
+        dataId: paymentId ? String(paymentId) : undefined,
+      })) {
+        console.warn('⚠️ [Webhook] Notificación de orden con firma inválida')
+        return c.json({ status: 'invalid_signature' }, 401)
+      }
+      if (!paymentId) return c.json({ status: 'ignored' })
+      const resultado = await servicioCobrosQr.procesarNotificacionOrden(String(paymentId))
+      console.log(`🧾 [Webhook] Orden ${paymentId}: ${resultado}`)
+      return c.json({ status: 'ok', resultado })
+    }
 
     // Solo procesar notificaciones de pagos
     if ((type !== 'payment' && topic !== 'payment') || !paymentId) {

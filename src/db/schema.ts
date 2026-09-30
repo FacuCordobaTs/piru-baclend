@@ -6,6 +6,7 @@ import {
   int,
   tinyint,
   timestamp,
+  datetime,
   boolean,
   decimal,
   mysqlEnum,
@@ -2035,4 +2036,65 @@ export const ropaPago = mysqlTable("ropa_pago", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("idx_ropa_pago_pedido").on(table.pedidoId),
+]);
+
+// ── Cobros con QR estático de Mercado Pago (POS) — ver docs/WHATSAPP_AND_PAYMENTS.md ──
+// Una caja es un POS de Mercado Pago del propio vendedor (su token OAuth) con un QR fijo impreso.
+// Se vincula una ya existente o se crea sobre una tienda real del vendedor; nunca se inventa una tienda.
+export const mpCajaQr = mysqlTable("mp_caja_qr", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  nombre: varchar("nombre", { length: 120 }).notNull(),
+  // Ids del POS en Mercado Pago. `external_pos_id` es lo que viaja en cada orden (`config.qr.external_pos_id`).
+  mpPosId: varchar("mp_pos_id", { length: 40 }).notNull(),
+  mpStoreId: varchar("mp_store_id", { length: 40 }),
+  externalPosId: varchar("external_pos_id", { length: 64 }).notNull(),
+  // Imagen del QR estático que devuelve Mercado Pago al leer/crear la caja (se imprime y se pega).
+  qrImagenUrl: varchar("qr_imagen_url", { length: 512 }),
+  qrPlantillaUrl: varchar("qr_plantilla_url", { length: 512 }),
+  activo: boolean("activo").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_mp_caja_qr_restaurante_pos").on(table.restauranteId, table.mpPosId),
+  index("idx_mp_caja_qr_restaurante_activo").on(table.restauranteId, table.activo),
+]);
+
+// Intento de cobro de un pedido del POS contra el QR estático de una caja. La confirmación la
+// decide el servidor consultando la orden en Mercado Pago (webhook `orders` o consulta directa):
+// nunca el navegador. Los instantes (`created_at`, `updated_at`, `expira_at`, `pagado_at`) los escribe
+// la app y son DATETIME —no TIMESTAMP ni `CURRENT_TIMESTAMP`—: un TIMESTAMP se convierte según la zona
+// de cada sesión MySQL y Drizzle asume UTC, así que el mismo instante no siempre volvería igual.
+export const posCobroQr = mysqlTable("pos_cobro_qr", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  pedidoId: int("pedido_id").references(() => pedidoUnificado.id, { onDelete: "cascade" }).notNull(),
+  cajaId: int("caja_id").references(() => mpCajaQr.id).notNull(),
+  // Siempre el `total` del pedido persistido; el cliente no manda montos.
+  monto: decimal("monto", { precision: 10, scale: 2 }).notNull(),
+  // `external_reference` de la orden y clave de idempotencia de su alta en Mercado Pago.
+  externalReference: varchar("external_reference", { length: 64 }).notNull(),
+  mpOrderId: varchar("mp_order_id", { length: 64 }),
+  estado: mysqlEnum("estado", [
+    "creando",
+    "creado",
+    "pagado",
+    "cancelado",
+    "vencido",
+    "reembolsado",
+    "error",
+  ]).default("creando").notNull(),
+  mpStatus: varchar("mp_status", { length: 40 }),
+  mpStatusDetail: varchar("mp_status_detail", { length: 80 }),
+  mpPaymentId: varchar("mp_payment_id", { length: 64 }),
+  montoPagado: decimal("monto_pagado", { precision: 10, scale: 2 }),
+  mensaje: varchar("mensaje", { length: 255 }),
+  expiraAt: datetime("expira_at"),
+  pagadoAt: datetime("pagado_at"),
+  createdAt: datetime("created_at").notNull(),
+  updatedAt: datetime("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("uq_pos_cobro_qr_referencia").on(table.externalReference),
+  uniqueIndex("uq_pos_cobro_qr_mp_order").on(table.mpOrderId),
+  index("idx_pos_cobro_qr_pedido").on(table.pedidoId, table.createdAt),
+  index("idx_pos_cobro_qr_caja_estado").on(table.cajaId, table.estado),
 ]);
