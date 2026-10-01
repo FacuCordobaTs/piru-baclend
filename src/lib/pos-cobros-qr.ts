@@ -156,7 +156,9 @@ export interface EfectosCobrosQr {
 export type CodigoErrorPosQr =
   | 'MODULO_MP_INACTIVO'
   | 'MP_NO_CONECTADO'
+  | 'APP_QR_NO_CONFIGURADA'
   | 'CAJA_NO_ENCONTRADA'
+  | 'CAJA_INACTIVA'
   | 'CAJA_SIN_ID_EXTERNO'
   | 'TIENDA_INVALIDA'
   | 'PEDIDO_NO_ENCONTRADO'
@@ -200,6 +202,8 @@ export interface CajaMpDto {
   storeId: string | null
   qrUrl: string | null
   vinculada: boolean
+  /** `false`: Mercado Pago la tiene inactiva y no puede recibir pagos. */
+  activa: boolean
 }
 
 export interface TiendaMpDto {
@@ -210,7 +214,10 @@ export interface TiendaMpDto {
 
 export interface EstadoPosQrDto {
   moduloMercadoPago: boolean
+  /** El local autorizó la aplicación de Mercado Pago para QR (no la de pagos online). */
   mpConectado: boolean
+  /** El servidor tiene configurada la aplicación de Mercado Pago para QR; sin ella no se puede conectar. */
+  appConfigurada: boolean
   cajas: CajaQrDto[]
 }
 
@@ -219,6 +226,9 @@ export interface ResultadoCancelacionDto {
   /** El pedido quedó cancelado por esta llamada. */
   pedidoCancelado: boolean
 }
+
+/** La conexión de QR es propia (aplicación de pagos presenciales) y se hace desde la configuración del POS. */
+const MENSAJE_CONECTAR_QR = 'Conectá Mercado Pago para cobrar con QR en «Configurar punto de venta»'
 
 const fallo = (
   codigo: CodigoErrorPosQr,
@@ -236,6 +246,8 @@ export interface DependenciasCobrosQr {
   mp: ClienteMpQr
   efectos: EfectosCobrosQr
   ahora?: () => Date
+  /** ¿Está configurada la aplicación de Mercado Pago para QR en este servidor? Por defecto, sí. */
+  appConfigurada?: () => boolean
   /** Mínimo entre dos consultas a Mercado Pago por el mismo cobro (el POS consulta cada pocos segundos). */
   consultaMinimaMs?: number
   /** Un `creando` sin orden más viejo que esto se da por fallido. */
@@ -370,7 +382,7 @@ export function crearServicioCobrosQr(deps: DependenciasCobrosQr) {
 
   const errorDeMp = (error: MpError): Resultado<never> => {
     if (error.status === 401 || error.status === 403 || error.code === 'mp_no_conectado') {
-      return fallo('MP_NO_CONECTADO', 'Mercado Pago rechazó la conexión. Volvé a conectar tu cuenta en Ajustes → Métodos de pago.', 409)
+      return fallo('MP_NO_CONECTADO', 'Mercado Pago rechazó la conexión para cobros con QR. Volvé a conectarla en «Configurar punto de venta».', 409)
     }
     return fallo('MP_ERROR', error.red || error.status >= 500
       ? 'No pudimos comunicarnos con Mercado Pago. Reintentá en unos segundos.'
@@ -386,7 +398,12 @@ export function crearServicioCobrosQr(deps: DependenciasCobrosQr) {
     async estado(restauranteId: number): Promise<EstadoPosQrDto> {
       const conexion = await repo.conexion(restauranteId)
       const cajas = conexion.moduloActivo ? await repo.listarCajas(restauranteId) : []
-      return { moduloMercadoPago: conexion.moduloActivo, mpConectado: conexion.conectado, cajas: cajas.map(aCajaDto) }
+      return {
+        moduloMercadoPago: conexion.moduloActivo,
+        mpConectado: conexion.conectado,
+        appConfigurada: deps.appConfigurada ? deps.appConfigurada() : true,
+        cajas: cajas.map(aCajaDto),
+      }
     },
 
     // ── Administración de cajas ──
@@ -394,7 +411,7 @@ export function crearServicioCobrosQr(deps: DependenciasCobrosQr) {
     async listarCajasMp(restauranteId: number): Promise<Resultado<CajaMpDto[]>> {
       const conexion = await repo.conexion(restauranteId)
       if (!conexion.moduloActivo) return fallo('MODULO_MP_INACTIVO', 'Activá el módulo Mercado Pago para cobrar con QR', 403)
-      if (!conexion.conectado) return fallo('MP_NO_CONECTADO', 'Conectá tu cuenta de Mercado Pago en Ajustes → Métodos de pago', 409)
+      if (!conexion.conectado) return fallo('MP_NO_CONECTADO', MENSAJE_CONECTAR_QR, 409)
       try {
         const [remotas, vinculadas] = await Promise.all([mp.listarCajas(restauranteId), repo.listarCajas(restauranteId)])
         const yaVinculadas = new Set(vinculadas.map((c) => c.mpPosId))
@@ -402,7 +419,7 @@ export function crearServicioCobrosQr(deps: DependenciasCobrosQr) {
           ok: true,
           data: remotas.map((c) => ({
             mpPosId: c.id, nombre: c.nombre, externalId: c.externalId, storeId: c.storeId, qrUrl: c.qrImagen,
-            vinculada: yaVinculadas.has(c.id),
+            vinculada: yaVinculadas.has(c.id), activa: c.activa,
           })),
         }
       } catch (error) {
@@ -414,7 +431,7 @@ export function crearServicioCobrosQr(deps: DependenciasCobrosQr) {
     async listarTiendasMp(restauranteId: number): Promise<Resultado<TiendaMpDto[]>> {
       const conexion = await repo.conexion(restauranteId)
       if (!conexion.moduloActivo) return fallo('MODULO_MP_INACTIVO', 'Activá el módulo Mercado Pago para cobrar con QR', 403)
-      if (!conexion.conectado || !conexion.mpUserId) return fallo('MP_NO_CONECTADO', 'Conectá tu cuenta de Mercado Pago en Ajustes → Métodos de pago', 409)
+      if (!conexion.conectado || !conexion.mpUserId) return fallo('MP_NO_CONECTADO', MENSAJE_CONECTAR_QR, 409)
       try {
         const tiendas = await mp.listarTiendas(restauranteId, conexion.mpUserId)
         return { ok: true, data: tiendas.map((t) => ({ id: t.id, nombre: t.nombre, direccion: t.direccion })) }
@@ -428,10 +445,11 @@ export function crearServicioCobrosQr(deps: DependenciasCobrosQr) {
     async vincularCaja(restauranteId: number, mpPosId: string): Promise<Resultado<CajaQrDto>> {
       const conexion = await repo.conexion(restauranteId)
       if (!conexion.moduloActivo) return fallo('MODULO_MP_INACTIVO', 'Activá el módulo Mercado Pago para cobrar con QR', 403)
-      if (!conexion.conectado) return fallo('MP_NO_CONECTADO', 'Conectá tu cuenta de Mercado Pago en Ajustes → Métodos de pago', 409)
+      if (!conexion.conectado) return fallo('MP_NO_CONECTADO', MENSAJE_CONECTAR_QR, 409)
       try {
         const remota = await mp.obtenerCaja(restauranteId, mpPosId)
         if (!remota) return fallo('CAJA_NO_ENCONTRADA', 'Esa caja no existe en tu cuenta de Mercado Pago', 404)
+        if (!remota.activa) return fallo('CAJA_INACTIVA', 'Esa caja está inactiva en Mercado Pago y no puede recibir pagos. Activala allá o elegí otra.', 422)
         if (!remota.externalId) {
           return fallo('CAJA_SIN_ID_EXTERNO', 'Esa caja no tiene un ID externo, que Mercado Pago exige para cobrar por API. Creá una caja nueva desde acá.', 422)
         }
@@ -450,14 +468,13 @@ export function crearServicioCobrosQr(deps: DependenciasCobrosQr) {
     async crearCajaNueva(restauranteId: number, entrada: { nombre: string; tiendaId: string }): Promise<Resultado<CajaQrDto>> {
       const conexion = await repo.conexion(restauranteId)
       if (!conexion.moduloActivo) return fallo('MODULO_MP_INACTIVO', 'Activá el módulo Mercado Pago para cobrar con QR', 403)
-      if (!conexion.conectado || !conexion.mpUserId) return fallo('MP_NO_CONECTADO', 'Conectá tu cuenta de Mercado Pago en Ajustes → Métodos de pago', 409)
+      if (!conexion.conectado || !conexion.mpUserId) return fallo('MP_NO_CONECTADO', MENSAJE_CONECTAR_QR, 409)
       try {
         const tiendas = await mp.listarTiendas(restauranteId, conexion.mpUserId)
         const tienda = tiendas.find((t) => t.id === entrada.tiendaId)
         if (!tienda) return fallo('TIENDA_INVALIDA', 'Esa tienda no existe en tu cuenta de Mercado Pago', 422)
         let creada = await mp.crearCaja(restauranteId, {
-          nombre: entrada.nombre, tiendaId: tienda.id, tiendaExternalId: tienda.externalId,
-          externalPosId: nuevoExternalPosId(restauranteId),
+          nombre: entrada.nombre, tiendaId: tienda.id, externalPosId: nuevoExternalPosId(restauranteId),
         })
         if (!creada.qrImagen) creada = (await mp.obtenerCaja(restauranteId, creada.id)) ?? creada
         if (!creada.externalId) return fallo('MP_ERROR', 'Mercado Pago creó la caja sin ID externo', 502)
@@ -485,7 +502,7 @@ export function crearServicioCobrosQr(deps: DependenciasCobrosQr) {
       const { restauranteId, pedidoId, cajaId } = entrada
       const conexion = await repo.conexion(restauranteId)
       if (!conexion.moduloActivo) return fallo('MODULO_MP_INACTIVO', 'Activá el módulo Mercado Pago para cobrar con QR', 403)
-      if (!conexion.conectado) return fallo('MP_NO_CONECTADO', 'Conectá tu cuenta de Mercado Pago en Ajustes → Métodos de pago', 409)
+      if (!conexion.conectado) return fallo('MP_NO_CONECTADO', MENSAJE_CONECTAR_QR, 409)
 
       const caja = await repo.buscarCaja(restauranteId, cajaId)
       if (!caja || !caja.activo) {

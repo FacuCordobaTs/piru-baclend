@@ -612,12 +612,15 @@ mercadopagoRoute.post('/webhook', async (c) => {
     // se usa para decidir nada: sólo identifica la orden, que se vuelve a leer en Mercado Pago con
     // el token del local dueño del cobro.
     if (esNotificacionDeOrden(type, topic, body?.action)) {
-      const secretoWebhook = process.env.MP_WEBHOOK_SECRET
+      // Cada aplicación de Mercado Pago tiene su propio secreto de firma (Webhooks → Configurar
+      // notificaciones): éste es el de la aplicación de QR, que es la que recibe el evento "Order".
+      // El manifiesto usa el `data.id` de la URL, no el del cuerpo.
+      const secretoWebhook = process.env.MP_QR_WEBHOOK_SECRET
       if (secretoWebhook && !validarFirmaWebhookMp({
         secreto: secretoWebhook,
         firma: c.req.header('x-signature'),
         requestId: c.req.header('x-request-id'),
-        dataId: paymentId ? String(paymentId) : undefined,
+        dataId: query['data.id'],
       })) {
         console.warn('⚠️ [Webhook] Notificación de orden con firma inválida')
         return c.json({ status: 'invalid_signature' }, 401)

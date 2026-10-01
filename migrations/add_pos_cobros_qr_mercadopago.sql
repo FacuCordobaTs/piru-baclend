@@ -59,8 +59,6 @@ CREATE TABLE IF NOT EXISTS `pos_cobro_qr` (
   KEY `idx_pos_cobro_qr_caja_estado` (`caja_id`, `estado`),
   CONSTRAINT `fk_pos_cobro_qr_restaurante`
     FOREIGN KEY (`restaurante_id`) REFERENCES `restaurante` (`id`),
-  -- CASCADE: borrar un pedido (DELETE /pedido-unificado/:id, baja de un cliente) no debe
-  -- quedar bloqueado por su historial de cobros.
   CONSTRAINT `fk_pos_cobro_qr_pedido`
     FOREIGN KEY (`pedido_id`) REFERENCES `pedido_unificado` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_pos_cobro_qr_caja`

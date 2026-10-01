@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import type { MiddlewareHandler } from 'hono'
+import { LOCAL, json, montar as montarConexion, tokensMp } from '../lib/mp-conexion-qr.fakes'
 import { RESTAURANTE, montar } from '../lib/pos-cobros-qr.fakes'
-import { crearPosQrRoute } from './pos-qr'
+import { crearMpQrCallbackRoute, crearPosQrRoute } from './pos-qr'
 
 // Auth de prueba: fija el restaurante como lo hace `authMiddleware` (`c.user`).
 const comoDueno = (id = RESTAURANTE): MiddlewareHandler => async (c, next) => {
@@ -11,16 +12,26 @@ const comoDueno = (id = RESTAURANTE): MiddlewareHandler => async (c, next) => {
 const sinPermiso: MiddlewareHandler = async (c) => c.json({ error: 'Authorization header required' }, 401)
 const pasaPos: MiddlewareHandler = async (_c, next) => { await next() }
 
-function app(opciones: Parameters<typeof montar>[0] = {}, middlewares: { auth?: MiddlewareHandler; pos?: MiddlewareHandler } = {}) {
+function app(
+  opciones: Parameters<typeof montar>[0] = {},
+  middlewares: { auth?: MiddlewareHandler; pos?: MiddlewareHandler } = {},
+  conexionOpciones: Parameters<typeof montarConexion>[0] = {},
+) {
   const s = montar(opciones)
-  const route = crearPosQrRoute({ servicio: s.servicio, autenticacion: middlewares.auth ?? comoDueno(), posDelPedido: middlewares.pos ?? pasaPos })
+  const conexion = montarConexion(conexionOpciones)
+  const route = crearPosQrRoute({
+    servicio: s.servicio,
+    conexion: conexion.servicio,
+    autenticacion: middlewares.auth ?? comoDueno(),
+    posDelPedido: middlewares.pos ?? pasaPos,
+  })
   const pedir = (ruta: string, init?: { metodo?: string; cuerpo?: unknown }) =>
     route.request(ruta, {
       method: init?.metodo ?? (init?.cuerpo === undefined ? 'GET' : 'POST'),
       headers: { 'Content-Type': 'application/json' },
       body: init?.cuerpo === undefined ? undefined : JSON.stringify(init.cuerpo),
     })
-  return { ...s, pedir }
+  return { ...s, conexion, pedir }
 }
 
 describe('POST /pedidos/:id/cobro', () => {
@@ -115,7 +126,7 @@ describe('GET /pedidos/:id/cobro', () => {
   test('no revela cobros de otros locales', async () => {
     const a = app()
     await a.pedir('/pedidos/100/cobro', { cuerpo: { cajaId: 1 } })
-    const otro = crearPosQrRoute({ servicio: a.servicio, autenticacion: comoDueno(999), posDelPedido: pasaPos })
+    const otro = crearPosQrRoute({ servicio: a.servicio, conexion: a.conexion.servicio, autenticacion: comoDueno(999), posDelPedido: pasaPos })
     const res = await otro.request('/pedidos/100/cobro')
     expect(await res.json()).toEqual({ success: true, data: null })
   })
@@ -196,5 +207,108 @@ describe('autenticación', () => {
     ]
     for (const [ruta, init] of pedidos) expect((await a.pedir(ruta, init)).status).toBe(401)
     expect(a.mp.creadas).toHaveLength(0)
+  })
+})
+
+describe('conexión con la aplicación de Mercado Pago para QR', () => {
+  test('POST /conexion/iniciar devuelve la URL de autorización de la aplicación de QR con un state propio', async () => {
+    const a = app()
+    const res = await a.pedir('/conexion/iniciar', { metodo: 'POST' })
+    expect(res.status).toBe(200)
+    const { success, data } = await res.json() as { success: boolean; data: { url: string } }
+    expect(success).toBe(true)
+    const url = new URL(data.url)
+    expect(url.hostname).toBe('auth.mercadopago.com.ar')
+    expect(url.searchParams.get('client_id')).toBe('7364289770550796')
+    expect(url.searchParams.get('state')).toMatch(new RegExp(`^${RESTAURANTE}\\.\\d+\\.[0-9a-f]+\\.[0-9a-f]{64}$`))
+    expect(data.url).not.toContain('secreto-de-la-app')
+  })
+
+  test('sin la aplicación de QR configurada en el servidor responde 503 con un código estable', async () => {
+    const a = app({}, {}, { config: null })
+    const res = await a.pedir('/conexion/iniciar', { metodo: 'POST' })
+    expect(res.status).toBe(503)
+    expect(await res.json()).toMatchObject({ success: false, code: 'APP_QR_NO_CONFIGURADA' })
+  })
+
+  test('sin el módulo Mercado Pago responde el mismo contrato que requireModulo', async () => {
+    const a = app({}, {}, { repo: { modulo: false } })
+    const res = await a.pedir('/conexion/iniciar', { metodo: 'POST' })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({ success: false, moduleRequired: true, module: 'mercadopago', upgradeRequired: true, code: 'MODULO_MP_INACTIVO' })
+  })
+
+  test('DELETE /conexion desconecta sólo el local autenticado', async () => {
+    const a = app()
+    const res = await a.pedir('/conexion', { metodo: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true })
+    expect(a.conexion.registro.desconexiones).toEqual([RESTAURANTE])
+  })
+
+  test('las rutas de conexión exigen autenticación', async () => {
+    const a = app({}, { auth: sinPermiso })
+    expect((await a.pedir('/conexion/iniciar', { metodo: 'POST' })).status).toBe(401)
+    expect((await a.pedir('/conexion', { metodo: 'DELETE' })).status).toBe(401)
+    expect(a.conexion.registro.desconexiones).toHaveLength(0)
+  })
+})
+
+describe('callback público del OAuth (GET /mp-qr/callback)', () => {
+  const ADMIN = 'https://admin.example'
+  async function montarCallback(opciones: Parameters<typeof montarConexion>[0] = {}) {
+    const c = montarConexion({ repo: { conexion: null }, ...opciones })
+    const route = crearMpQrCallbackRoute({ conexion: c.servicio, adminUrl: ADMIN })
+    const iniciada = await c.servicio.iniciar(LOCAL)
+    const state = iniciada.ok ? new URL(iniciada.data.url).searchParams.get('state')! : ''
+    const volver = (consulta: string) => route.request(`/callback?${consulta}`, { redirect: 'manual' })
+    return { ...c, state, volver }
+  }
+
+  test('con un state propio guarda la conexión y vuelve al admin con éxito', async () => {
+    const c = await montarCallback({ respuestas: [json(tokensMp())] })
+    const res = await c.volver(`code=TG-CODIGO&state=${encodeURIComponent(c.state)}`)
+    expect(res.status).toBe(302)
+    expect(res.headers.get('location')).toBe(`${ADMIN}/dashboard?mp_qr_status=success`)
+    expect(c.registro.guardados).toHaveLength(1)
+    expect(c.filas.get(LOCAL)).toMatchObject({ conectado: true, mpUserId: '555' })
+  })
+
+  test('un state que no emitió este servidor vuelve con error y no llega a Mercado Pago', async () => {
+    const c = await montarCallback({ respuestas: [json(tokensMp())] })
+    for (const state of ['42', `7${c.state.slice(2)}`, 'cualquier-cosa']) {
+      const res = await c.volver(`code=TG-CODIGO&state=${encodeURIComponent(state)}`)
+      expect(res.headers.get('location')).toBe(`${ADMIN}/dashboard?mp_qr_status=error&mp_qr_error=estado_invalido`)
+    }
+    expect(c.llamadas).toHaveLength(0)
+    expect(c.registro.guardados).toHaveLength(0)
+  })
+
+  test('si el vendedor no autoriza o faltan parámetros, vuelve con el motivo', async () => {
+    const c = await montarCallback()
+    expect((await c.volver('error=access_denied')).headers.get('location')).toContain('mp_qr_error=denegado')
+    expect((await c.volver('')).headers.get('location')).toContain('mp_qr_error=faltan_parametros')
+  })
+
+  test('si Mercado Pago rechaza el código vuelve con error y no guarda nada', async () => {
+    const c = await montarCallback({ respuestas: [json({ error: 'invalid_grant', message: 'Invalid code' }, 400)] })
+    const res = await c.volver(`code=MAL&state=${encodeURIComponent(c.state)}`)
+    expect(res.headers.get('location')).toBe(`${ADMIN}/dashboard?mp_qr_status=error&mp_qr_error=oauth_fallido`)
+    expect(c.registro.guardados).toHaveLength(0)
+  })
+
+  test('un fallo inesperado no deja la pantalla en blanco ni filtra datos: vuelve con error servidor', async () => {
+    const c = await montarCallback({ respuestas: [json(tokensMp())] })
+    c.repo.guardar = async () => { throw new Error('ER_LOCK_DEADLOCK con TOKEN-SECRETO') }
+    const original = console.error
+    const registrado: unknown[][] = []
+    console.error = (...args: unknown[]) => { registrado.push(args) }
+    try {
+      const res = await c.volver(`code=TG&state=${encodeURIComponent(c.state)}`)
+      expect(res.headers.get('location')).toBe(`${ADMIN}/dashboard?mp_qr_status=error&mp_qr_error=servidor`)
+    } finally {
+      console.error = original
+    }
+    expect(registrado).toHaveLength(1)
   })
 })

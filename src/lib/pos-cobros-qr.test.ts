@@ -357,9 +357,22 @@ describe('cancelar el cobro', () => {
 describe('cajas', () => {
   test('el estado expone las cajas activas sólo si el módulo está activo', async () => {
     const s = montar()
-    expect(await s.servicio.estado(RESTAURANTE)).toMatchObject({ moduloMercadoPago: true, mpConectado: true, cajas: [{ id: 1, nombre: 'Caja 1', qrUrl: 'https://mp/qr1.png' }] })
+    expect(await s.servicio.estado(RESTAURANTE)).toMatchObject({ moduloMercadoPago: true, mpConectado: true, appConfigurada: true, cajas: [{ id: 1, nombre: 'Caja 1', qrUrl: 'https://mp/qr1.png' }] })
     const sin = montar({ conexion: { moduloActivo: false } })
-    expect(await sin.servicio.estado(RESTAURANTE)).toEqual({ moduloMercadoPago: false, mpConectado: true, cajas: [] })
+    expect(await sin.servicio.estado(RESTAURANTE)).toEqual({ moduloMercadoPago: false, mpConectado: true, appConfigurada: true, cajas: [] })
+  })
+
+  test('el estado avisa si el servidor no tiene configurada la aplicación de Mercado Pago para QR', async () => {
+    const s = montar({ conexion: { conectado: false } }, { appConfigurada: false })
+    expect(await s.servicio.estado(RESTAURANTE)).toMatchObject({ mpConectado: false, appConfigurada: false })
+  })
+
+  test('una caja inactiva en Mercado Pago se lista como inactiva y no se puede vincular', async () => {
+    const s = montar({ cajas: [] })
+    s.mp.cfg.cajasRemotas = [{ id: 'MP9', nombre: 'Apagada', externalId: 'APAG9', storeId: '10', externalStoreId: null, qrImagen: 'https://mp/9.png', qrPlantilla: null, activa: false }]
+    expect(await s.servicio.listarCajasMp(RESTAURANTE)).toMatchObject({ ok: true, data: [{ mpPosId: 'MP9', activa: false }] })
+    expect(await s.servicio.vincularCaja(RESTAURANTE, 'MP9')).toMatchObject({ ok: false, codigo: 'CAJA_INACTIVA', status: 422 })
+    expect(s.cajas).toHaveLength(0)
   })
 
   test('lista las cajas de Mercado Pago marcando las ya vinculadas', async () => {
@@ -395,7 +408,8 @@ describe('cajas', () => {
     const r = await s.servicio.crearCajaNueva(RESTAURANTE, { nombre: 'Caja Feria', tiendaId: '10' })
     expect(r).toMatchObject({ ok: true, data: { nombre: 'Caja Feria', externalPosId: expect.stringMatching(/^PIRU7/), qrUrl: 'https://mp/900.png' } })
     expect(s.mp.cfg.cajasCreadas).toHaveLength(1)
-    expect(s.mp.cfg.cajasCreadas[0]).toMatchObject({ tiendaId: '10', tiendaExternalId: 'S10' })
+    // La tienda se identifica sólo por su id: Mercado Pago valida que sea del vendedor.
+    expect(s.mp.cfg.cajasCreadas[0]).toEqual({ nombre: 'Caja Feria', tiendaId: '10', externalPosId: expect.any(String) })
     expect(s.mp.cfg.cajasCreadas[0].externalPosId).toMatch(/^PIRU7[0-9A-F]{10}$/)
   })
 

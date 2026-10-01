@@ -15,6 +15,7 @@ import {
   normalizarOrdenMp,
   normalizarTiendaMp,
   nuevaReferenciaCobro,
+  nombreCajaMp,
   nuevoExternalPosId,
   validarFirmaWebhookMp,
   type OrdenMp,
@@ -76,6 +77,26 @@ describe('identificadores', () => {
   })
 })
 
+describe('nombre de la caja (POST /v2/pos)', () => {
+  test('deja letras, números, guiones, guiones bajos y espacios internos', () => {
+    expect(nombreCajaMp('Barra 1')).toBe('Barra 1')
+    expect(nombreCajaMp('caja_2-salida')).toBe('caja_2-salida')
+  })
+
+  test('quita acentos y signos, junta espacios y recorta bordes', () => {
+    expect(nombreCajaMp('  Barra del Evento Ñandú!  ')).toBe('Barra del Evento Nandu')
+    expect(nombreCajaMp('Caja   #3 (norte)')).toBe('Caja 3 norte')
+  })
+
+  test('respeta el máximo de 45 caracteres sin dejar un espacio al final y nunca queda vacío', () => {
+    const largo = nombreCajaMp(`${'a'.repeat(44)} bbbb`)
+    expect(largo.length).toBeLessThanOrEqual(45)
+    expect(largo.endsWith(' ')).toBe(false)
+    expect(nombreCajaMp('!!!')).toBe('Caja Piru')
+    expect(nombreCajaMp('')).toBe('Caja Piru')
+  })
+})
+
 describe('orden QR (contrato del plugin de Mercado Pago)', () => {
   const cuerpo = armarOrdenQr({ monto: '1500.00', referencia: 'piru-qr-1-2-abcd1234', externalPosId: 'PIRU1ABC', descripcion: 'Pedido #2' })
 
@@ -121,9 +142,23 @@ describe('normalizar respuestas', () => {
     })
   })
 
-  test('caja y tienda: ids numéricos pasan a string y el QR sale de qr.image', () => {
-    expect(normalizarCajaMp({ id: 1234, name: 'Caja 1', external_id: 'PIRU1ABC', store_id: 55, qr: { image: 'https://mp/qr.png', template_document: 'https://mp/qr.pdf' } }))
-      .toEqual({ id: '1234', nombre: 'Caja 1', externalId: 'PIRU1ABC', storeId: '55', externalStoreId: null, qrImagen: 'https://mp/qr.png', qrPlantilla: 'https://mp/qr.pdf' })
+  test('caja v2: ids numéricos pasan a string y el QR sale de qr_response.image', () => {
+    expect(normalizarCajaMp({
+      id: 1234, name: 'Caja 1', status: 'active', external_id: 'PIRU1ABC', store_id: '55', external_store_id: 'S55',
+      config: { qr: { operating_mode: 'pdv' } },
+      qr_response: { uuid: 'abc', image: 'https://mp/qr.png', template_document: 'https://mp/qr.pdf', template_image: 'https://mp/qr-plantilla.png' },
+    })).toEqual({
+      id: '1234', nombre: 'Caja 1', externalId: 'PIRU1ABC', storeId: '55', externalStoreId: 'S55',
+      qrImagen: 'https://mp/qr.png', qrPlantilla: 'https://mp/qr.pdf', activa: true,
+    })
+  })
+
+  test('caja con la forma anterior (qr) sigue leyéndose, y una inactiva se marca', () => {
+    expect(normalizarCajaMp({ id: 7, name: 'Vieja', external_id: 'E7', store_id: 5, status: 'inactive', qr: { image: 'https://mp/viejo.png', template_image: 'https://mp/viejo-plantilla.png' } }))
+      .toEqual({ id: '7', nombre: 'Vieja', externalId: 'E7', storeId: '5', externalStoreId: null, qrImagen: 'https://mp/viejo.png', qrPlantilla: 'https://mp/viejo-plantilla.png', activa: false })
+  })
+
+  test('caja sin id es inválida; tienda con calle y número arma su dirección', () => {
     expect(normalizarCajaMp({ name: 'sin id' })).toBeNull()
     expect(normalizarTiendaMp({ id: 9, name: 'Stand', location: { street_name: 'Belgrano', street_number: '10' } }))
       .toEqual({ id: '9', nombre: 'Stand', externalId: null, direccion: 'Belgrano 10' })
@@ -201,10 +236,10 @@ const json = (cuerpo: unknown, status = 200) => new Response(JSON.stringify(cuer
 
 function cliente(respuestas: Parameters<typeof fetchFalso>[0], token: string | null = 'TOKEN-A', renovado: string | null = null) {
   const { fn, llamadas } = fetchFalso(respuestas)
-  const refrescos: number[] = []
+  const refrescos: Array<[number, string]> = []
   const mp = crearClienteMpQr({
     obtenerToken: async () => token,
-    refrescarToken: async (id) => { refrescos.push(id); return renovado },
+    refrescarToken: async (id, fallido) => { refrescos.push([id, fallido]); return renovado },
     fetch: fn,
   })
   return { mp, llamadas, refrescos }
@@ -235,7 +270,8 @@ describe('cliente de Mercado Pago', () => {
     const { mp, llamadas, refrescos } = cliente([json({ message: 'unauthorized' }, 401), json({ id: 'ORD1', status: 'created' })], 'VIEJO', 'NUEVO')
     const o = await mp.obtenerOrden(5, 'ORD1')
     expect(o.id).toBe('ORD1')
-    expect(refrescos).toEqual([5])
+    // La renovación recibe el token que falló: así no se gasta el refresh_token si otro ya lo renovó.
+    expect(refrescos).toEqual([[5, 'VIEJO']])
     expect((llamadas[0].init.headers as Record<string, string>).Authorization).toBe('Bearer VIEJO')
     expect((llamadas[1].init.headers as Record<string, string>).Authorization).toBe('Bearer NUEVO')
   })
@@ -262,13 +298,18 @@ describe('cliente de Mercado Pago', () => {
     expect(error.status).toBe(409)
   })
 
-  test('cancela por id con su propia clave de idempotencia y sin headers de Point', async () => {
-    const { mp, llamadas } = cliente([json({ id: 'ORD1', status: 'canceled' })])
+  test('cancela por id con una clave de idempotencia nueva en cada intento y sin headers de Point', async () => {
+    const { mp, llamadas } = cliente([json({ id: 'ORD1', status: 'canceled' }), json({ id: 'ORD1', status: 'canceled' })])
     const o = await mp.cancelarOrden(5, 'ORD1')
+    await mp.cancelarOrden(5, 'ORD1')
     expect(o.status).toBe('canceled')
     expect(llamadas[0].url).toBe('https://api.mercadopago.com/v1/orders/ORD1/cancel')
     expect(llamadas[0].init.method).toBe('POST')
-    expect((llamadas[0].init.headers as Record<string, string>)['X-Idempotency-Key']).toBe('cancel-ORD1')
+    const claves = llamadas.map((l) => (l.init.headers as Record<string, string>)['X-Idempotency-Key'])
+    expect(claves[0]).toMatch(/^[0-9a-f-]{36}$/)
+    // Con una clave fija, el reintento tras un cancelar fallido devolvería idempotency_key_already_used.
+    expect(claves[1]).not.toBe(claves[0])
+    expect((llamadas[0].init.headers as Record<string, string>)['X-Allow-Cancelable-Status']).toBeUndefined()
   })
 
   test('el id de la orden se escapa en la URL', async () => {
@@ -277,35 +318,51 @@ describe('cliente de Mercado Pago', () => {
     expect(llamadas[0].url).toBe('https://api.mercadopago.com/v1/orders/ORD%2F1%3Fx%3D1')
   })
 
-  test('lista las cajas paginando hasta agotar los resultados', async () => {
-    const pagina = (desde: number, cuantos: number) => json({ results: Array.from({ length: cuantos }, (_, i) => ({ id: desde + i, name: `Caja ${desde + i}`, external_id: `E${desde + i}` })) })
-    const { mp, llamadas } = cliente([pagina(1, 50), pagina(51, 3)])
+  test('lista las cajas de /v2/pos de a 30, leyendo data, hasta agotar los resultados', async () => {
+    const pagina = (desde: number, cuantos: number) => json({
+      paging: { total: 33, offset: desde - 1, limit: 30 },
+      data: Array.from({ length: cuantos }, (_, i) => ({ id: desde + i, name: `Caja ${desde + i}`, external_id: `E${desde + i}`, qr_response: { image: `https://mp/${desde + i}.png` } })),
+    })
+    const { mp, llamadas } = cliente([pagina(1, 30), pagina(31, 3)])
     const cajas = await mp.listarCajas(5)
-    expect(cajas).toHaveLength(53)
+    expect(cajas).toHaveLength(33)
+    expect(cajas[32]).toMatchObject({ id: '33', qrImagen: 'https://mp/33.png', activa: true })
     expect(llamadas.map((l) => l.url)).toEqual([
-      'https://api.mercadopago.com/pos?limit=50&offset=0',
-      'https://api.mercadopago.com/pos?limit=50&offset=50',
+      'https://api.mercadopago.com/v2/pos?limit=30&offset=0',
+      'https://api.mercadopago.com/v2/pos?limit=30&offset=30',
     ])
   })
 
-  test('obtener una caja inexistente devuelve null, otros errores se propagan', async () => {
-    expect(await cliente([json({ message: 'not found' }, 404)]).mp.obtenerCaja(5, '1')).toBeNull()
+  test('obtener una caja que no existe o no es del vendedor devuelve null; otros errores se propagan', async () => {
+    const consulta = cliente([json({ errors: [{ code: 'pos_not_found' }] }, 404)])
+    expect(await consulta.mp.obtenerCaja(5, '1')).toBeNull()
+    expect(consulta.llamadas[0].url).toBe('https://api.mercadopago.com/v2/pos/1')
+    expect(await cliente([json({ errors: [{ code: 'bad_request' }] }, 400)]).mp.obtenerCaja(5, '1')).toBeNull()
     await expect(cliente([json({ message: 'boom' }, 500)]).mp.obtenerCaja(5, '1')).rejects.toMatchObject({ status: 500 })
   })
 
-  test('lista las tiendas del vendedor', async () => {
-    const { mp, llamadas } = cliente([json({ results: [{ id: 10, name: 'Stand Feria', external_id: 'S1' }, { name: 'sin id' }] })])
-    expect(await mp.listarTiendas(5, '777')).toEqual([{ id: '10', nombre: 'Stand Feria', externalId: 'S1', direccion: null }])
-    expect(llamadas[0].url).toBe('https://api.mercadopago.com/users/777/stores/search?limit=50&offset=0')
+  test('lista las tiendas del vendedor (también si la página viene envuelta en un arreglo)', async () => {
+    const pagina = { paging: { total: 2 }, results: [{ id: 10, name: 'Stand Feria', external_id: 'S1' }, { name: 'sin id' }] }
+    const { mp, llamadas } = cliente([json(pagina), json([pagina])])
+    const esperadas = [{ id: '10', nombre: 'Stand Feria', externalId: 'S1', direccion: null }]
+    expect(await mp.listarTiendas(5, '777')).toEqual(esperadas)
+    expect(await mp.listarTiendas(5, '777')).toEqual(esperadas)
+    expect(llamadas[0].url).toBe('https://api.mercadopago.com/users/777/stores/search?limit=30&offset=0')
   })
 
-  test('crea la caja con importe fijo sobre una tienda existente', async () => {
-    const { mp, llamadas } = cliente([json({ id: 88, name: 'Caja Feria', external_id: 'PIRU5AAA', store_id: 10, qr: { image: 'https://mp/qr.png' } }, 201)])
-    const caja = await mp.crearCaja(5, { nombre: 'Caja Feria', tiendaId: '10', tiendaExternalId: 'S1', externalPosId: 'PIRU5AAA' })
-    expect(caja).toMatchObject({ id: '88', externalId: 'PIRU5AAA', qrImagen: 'https://mp/qr.png' })
-    expect(llamadas[0].url).toBe('https://api.mercadopago.com/pos')
+  test('crea la caja con POST /v2/pos, modo atendido, nombre válido y clave de idempotencia', async () => {
+    const { mp, llamadas } = cliente([json({
+      id: 88, name: 'Caja Feria', status: 'active', external_id: 'PIRU5AAA', store_id: '10',
+      qr_response: { image: 'https://mp/qr.png', template_document: 'https://mp/qr.pdf' },
+    }, 201)])
+    const caja = await mp.crearCaja(5, { nombre: 'Caja Feria ñandú', tiendaId: '10', externalPosId: 'PIRU5AAA' })
+    expect(caja).toMatchObject({ id: '88', externalId: 'PIRU5AAA', qrImagen: 'https://mp/qr.png', qrPlantilla: 'https://mp/qr.pdf' })
+    expect(llamadas[0].url).toBe('https://api.mercadopago.com/v2/pos')
+    expect(llamadas[0].init.method).toBe('POST')
+    expect((llamadas[0].init.headers as Record<string, string>)['X-Idempotency-Key']).toBe('PIRU5AAA')
+    // Sin fixed_amount (API anterior), sin external_store_id: la tienda se identifica sólo por store_id.
     expect(JSON.parse(String(llamadas[0].init.body))).toEqual({
-      name: 'Caja Feria', fixed_amount: true, store_id: 10, external_store_id: 'S1', external_id: 'PIRU5AAA',
+      name: 'Caja Feria nandu', store_id: '10', external_id: 'PIRU5AAA', config: { qr: { operating_mode: 'pdv' } },
     })
   })
 
@@ -340,15 +397,27 @@ describe('firma del webhook', () => {
     expect(validarFirmaWebhookMp({ secreto, firma, requestId: 'req-1', dataId: 'ord01abc' })).toBe(true)
   })
 
-  test('rechaza firmas alteradas, secretos distintos y datos faltantes', () => {
+  test('rechaza firmas alteradas, secretos distintos y firmas ausentes o ilegibles', () => {
     const firma = firmar('ord01abc', 'req-1', '1742505638683')
     expect(validarFirmaWebhookMp({ secreto, firma, requestId: 'req-2', dataId: 'ord01abc' })).toBe(false)
     expect(validarFirmaWebhookMp({ secreto, firma, requestId: 'req-1', dataId: 'otro' })).toBe(false)
     expect(validarFirmaWebhookMp({ secreto: 'otro', firma, requestId: 'req-1', dataId: 'ord01abc' })).toBe(false)
     expect(validarFirmaWebhookMp({ secreto, firma: firma.replace('v1=', 'v1=00'), requestId: 'req-1', dataId: 'ord01abc' })).toBe(false)
     expect(validarFirmaWebhookMp({ secreto, firma: undefined, requestId: 'req-1', dataId: 'ord01abc' })).toBe(false)
-    expect(validarFirmaWebhookMp({ secreto, firma, requestId: undefined, dataId: 'ord01abc' })).toBe(false)
     expect(validarFirmaWebhookMp({ secreto: '', firma, requestId: 'req-1', dataId: 'ord01abc' })).toBe(false)
     expect(validarFirmaWebhookMp({ secreto, firma: 'basura', requestId: 'req-1', dataId: 'ord01abc' })).toBe(false)
+    expect(validarFirmaWebhookMp({ secreto, firma: 'ts=1742505638683', requestId: 'req-1', dataId: 'ord01abc' })).toBe(false)
+  })
+
+  test('si data.id o x-request-id no llegaron, se omiten del manifiesto (regla oficial)', () => {
+    const ts = '1742505638683'
+    const sinRequestId = `ts=${ts},v1=${createHmac('sha256', secreto).update(`id:ord01abc;ts:${ts};`).digest('hex')}`
+    expect(validarFirmaWebhookMp({ secreto, firma: sinRequestId, requestId: undefined, dataId: 'ORD01ABC' })).toBe(true)
+    // Con el request-id presente la firma anterior ya no sirve: el manifiesto cambia.
+    expect(validarFirmaWebhookMp({ secreto, firma: sinRequestId, requestId: 'req-1', dataId: 'ORD01ABC' })).toBe(false)
+
+    const sinDataId = `ts=${ts},v1=${createHmac('sha256', secreto).update(`request-id:req-1;ts:${ts};`).digest('hex')}`
+    expect(validarFirmaWebhookMp({ secreto, firma: sinDataId, requestId: 'req-1', dataId: undefined })).toBe(true)
+    expect(validarFirmaWebhookMp({ secreto, firma: sinDataId, requestId: 'req-1', dataId: '' })).toBe(true)
   })
 })

@@ -129,6 +129,10 @@ export function crearRepoFalso(inicial: { conexion?: Partial<ConexionMp>; pedido
 
 // ───────────────────────────── Mercado Pago simulado ─────────────────────────────
 
+/** Caja de Mercado Pago de un test: `activa` se omite y vale `true`. */
+export type CajaRemotaFalsa = Omit<CajaMp, 'activa'> & { activa?: boolean }
+const comoCajaMp = (caja: CajaRemotaFalsa): CajaMp => ({ activa: true, ...caja })
+
 export function crearMpFalso() {
   const ordenes = new Map<string, OrdenMp>()
   const creadas: Array<{ restauranteId: number; entrada: EntradaOrdenQr }> = []
@@ -138,9 +142,9 @@ export function crearMpFalso() {
     falloCrear: Error | null
     falloObtener: Error | null
     falloCancelar: Error | null
-    cajasRemotas: CajaMp[]
+    cajasRemotas: CajaRemotaFalsa[]
     tiendas: TiendaMp[]
-    cajasCreadas: Array<{ nombre: string; tiendaId: string; tiendaExternalId?: string | null; externalPosId: string }>
+    cajasCreadas: Array<{ nombre: string; tiendaId: string; externalPosId: string }>
   } = { falloCrear: null, falloObtener: null, falloCancelar: null, cajasRemotas: [], tiendas: [], cajasCreadas: [] }
   let n = 1
 
@@ -171,12 +175,15 @@ export function crearMpFalso() {
       o.status = 'canceled'
       return { ...o }
     },
-    async listarCajas() { return cfg.cajasRemotas },
-    async obtenerCaja(_r, id) { return cfg.cajasRemotas.find((c) => c.id === id) ?? null },
+    async listarCajas() { return cfg.cajasRemotas.map(comoCajaMp) },
+    async obtenerCaja(_r, id) {
+      const caja = cfg.cajasRemotas.find((c) => c.id === id)
+      return caja ? comoCajaMp(caja) : null
+    },
     async listarTiendas() { return cfg.tiendas },
     async crearCaja(_r, entrada) {
       cfg.cajasCreadas.push(entrada)
-      return { id: '900', nombre: entrada.nombre, externalId: entrada.externalPosId, storeId: entrada.tiendaId, externalStoreId: entrada.tiendaExternalId ?? null, qrImagen: null, qrPlantilla: null }
+      return { id: '900', nombre: entrada.nombre, externalId: entrada.externalPosId, storeId: entrada.tiendaId, externalStoreId: null, qrImagen: null, qrPlantilla: null, activa: true }
     },
   }
   /** Simula lo que hace el comprador/Mercado Pago sobre la orden. */
@@ -188,7 +195,7 @@ export function crearMpFalso() {
   return { cliente, ordenes, creadas, consultas, cancelaciones, cfg, mutar, pagar }
 }
 
-export function montar(inicial: Parameters<typeof crearRepoFalso>[0] = {}, opciones: { consultaMinimaMs?: number } = {}) {
+export function montar(inicial: Parameters<typeof crearRepoFalso>[0] = {}, opciones: { consultaMinimaMs?: number; appConfigurada?: boolean } = {}) {
   const r = crearRepoFalso(inicial)
   const mp = crearMpFalso()
   let reloj = T0.getTime()
@@ -204,6 +211,7 @@ export function montar(inicial: Parameters<typeof crearRepoFalso>[0] = {}, opcio
     },
     ahora: () => new Date(reloj),
     consultaMinimaMs: opciones.consultaMinimaMs ?? 0,
+    appConfigurada: opciones.appConfigurada === undefined ? undefined : () => opciones.appConfigurada!,
     log: (m) => { logs.push(m) },
   })
   return { ...r, mp, servicio, efectosPagados, efectosCancelados, logs, avanzar: (ms: number) => { reloj += ms } }

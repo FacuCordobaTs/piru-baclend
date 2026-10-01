@@ -31,7 +31,7 @@ import { zonaDeliveryRoute } from './routes/zona-delivery';
 import { codigoDescuentoRoute } from './routes/codigo-descuento';
 import { migrationRoute } from './routes/migration';
 import { pedidoUnificadoRoute } from './routes/pedido-unificado';
-import { posQrRoute } from './routes/pos-qr';
+import { mpQrCallbackRoute, posQrRoute } from './routes/pos-qr';
 import { metricasRoute } from './routes/metricas';
 import { onboardingRoute } from './routes/onboarding';
 import { sucursalesRoute } from './routes/sucursales'
@@ -218,6 +218,7 @@ app.basePath('/api')
   .route('/migrate-pedidos', migrationRoute)
   .route('/pedido-unificado', pedidoUnificadoRoute)
   .route('/pos-qr', posQrRoute)
+  .route('/mp-qr', mpQrCallbackRoute)
   .route('/metricas', metricasRoute)
   .route('/onboarding', onboardingRoute)
   .route('/sucursales', sucursalesRoute)

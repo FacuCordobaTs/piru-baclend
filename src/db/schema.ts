@@ -2098,3 +2098,23 @@ export const posCobroQr = mysqlTable("pos_cobro_qr", {
   index("idx_pos_cobro_qr_pedido").on(table.pedidoId, table.createdAt),
   index("idx_pos_cobro_qr_caja_estado").on(table.cajaId, table.estado),
 ]);
+
+// Conexión OAuth de cada local con la aplicación de Mercado Pago creada para "Código QR" (pagos
+// presenciales). Es distinta de la de pagos online (columnas `mp_*` de `restaurante`): Mercado Pago crea
+// cada aplicación para una sola solución, y un QR para terceros usa los tokens de la aplicación de QR.
+// Ver lib/mp-qr-oauth.ts. Una fila por local; `conectado=false` = hay que volver a autorizar.
+export const mpConexionQr = mysqlTable("mp_conexion_qr", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  mpUserId: varchar("mp_user_id", { length: 50 }).notNull(),
+  accessToken: varchar("access_token", { length: 512 }).notNull(),
+  refreshToken: varchar("refresh_token", { length: 512 }),
+  scope: varchar("scope", { length: 255 }),
+  // El access token dura 180 días; se renueva con el refresh token antes de vencer.
+  expiraAt: datetime("expira_at"),
+  conectado: boolean("conectado").default(true).notNull(),
+  createdAt: datetime("created_at").notNull(),
+  updatedAt: datetime("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("uq_mp_conexion_qr_restaurante").on(table.restauranteId),
+]);

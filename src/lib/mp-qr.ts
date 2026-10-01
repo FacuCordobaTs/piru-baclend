@@ -1,17 +1,21 @@
 /**
  * Cobros con QR estático de Mercado Pago (Orders API, `type: "qr"`, `mode: "static"`).
  *
- * Contrato (guía oficial del plugin de Mercado Pago, `guides/qr.md`):
+ * Contrato (documentación oficial de Mercado Pago, "Código QR" en mercadopago.com.ar/developers):
  * - `POST /v1/orders` con `type: "qr"`, `total_amount` y `transactions.payments[0].amount` como
  *   strings iguales con dos decimales, `external_reference` único y `X-Idempotency-Key`.
  * - La caja (POS) y su tienda ya existen: la orden usa el `external_id` del POS en
  *   `config.qr.external_pos_id`. En modo `static` el comprador escanea el QR fijo que devolvió
- *   la caja; la orden no trae `type_response.qr_data`.
+ *   la caja (`qr_response.image`); la orden no trae `type_response.qr_data`.
+ * - Cajas: `POST /v2/pos` (exige `X-Idempotency-Key`), `GET /v2/pos` (límite 1–30) y
+ *   `GET /v2/pos/{id}`. Tiendas: `GET /users/{user_id}/stores/search`. Este módulo nunca crea tiendas.
  * - Estados de la orden: `created`, `processed`, `canceled`, `expired`, `refunded`.
+ * - El token es el OAuth del vendedor obtenido con la aplicación de Mercado Pago creada para
+ *   "Código QR" (pagos presenciales), distinta de la de pagos online: ver `mp-qr-oauth.ts`.
  *
  * Este módulo no toca la base ni lee el entorno: recibe el token y `fetch` por parámetro.
  */
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 
 export const MP_API_URL = 'https://api.mercadopago.com'
 export const MODO_QR = 'static' as const
@@ -19,6 +23,8 @@ export const MODO_QR = 'static' as const
 export const EXPIRACION_COBRO_MINUTOS = 10
 export const EXPIRACION_ORDEN_MP = `PT${EXPIRACION_COBRO_MINUTOS}M`
 const TIMEOUT_MP_MS = 12_000
+/** `GET /v2/pos` admite de 1 a 30 resultados por página. */
+const LIMITE_PAGINA_MP = 30
 
 export type EstadoCobroQr = 'creando' | 'creado' | 'pagado' | 'cancelado' | 'vencido' | 'reembolsado' | 'error'
 export const ESTADOS_COBRO_ACTIVOS: readonly EstadoCobroQr[] = ['creando', 'creado']
@@ -242,6 +248,24 @@ export interface CajaMp {
   externalStoreId: string | null
   qrImagen: string | null
   qrPlantilla: string | null
+  /** `false` si Mercado Pago la tiene `inactive`: no puede recibir pagos. */
+  activa: boolean
+}
+
+/**
+ * Nombre que acepta `POST /v2/pos`: sólo letras, números, guiones, guiones bajos y espacios internos,
+ * hasta 45 caracteres. Se quitan acentos y signos en lugar de rechazar lo que escribió el dueño.
+ */
+export function nombreCajaMp(nombre: string): string {
+  const limpio = nombre
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9 _-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 45)
+    .trim()
+  return limpio || 'Caja Piru'
 }
 
 export interface TiendaMp {
@@ -256,15 +280,26 @@ export function normalizarCajaMp(crudo: unknown): CajaMp | null {
   const p = crudo as Record<string, any>
   const id = texto(p.id)
   if (!id) return null
+  // `/v2/pos` devuelve el QR en `qr_response`; la API anterior lo devolvía en `qr`.
+  const qr = p.qr_response && typeof p.qr_response === 'object' ? p.qr_response : p.qr
   return {
     id,
     nombre: texto(p.name) ?? `Caja ${id}`,
     externalId: texto(p.external_id),
     storeId: texto(p.store_id),
     externalStoreId: texto(p.external_store_id),
-    qrImagen: texto(p.qr?.image),
-    qrPlantilla: texto(p.qr?.template_document) ?? texto(p.qr?.template_image),
+    qrImagen: texto(qr?.image),
+    qrPlantilla: texto(qr?.template_document) ?? texto(qr?.template_image),
+    activa: texto(p.status)?.toLowerCase() !== 'inactive',
   }
+}
+
+/** Filas de una respuesta paginada: `data` (cajas) o `results` (tiendas), a veces envueltas en un arreglo. */
+function filasDeLista(datos: any): unknown[] {
+  const pagina = Array.isArray(datos) && datos.length > 0 && !Array.isArray(datos[0]) && datos[0] && ('results' in datos[0] || 'data' in datos[0]) ? datos[0] : datos
+  if (Array.isArray(pagina?.data)) return pagina.data
+  if (Array.isArray(pagina?.results)) return pagina.results
+  return Array.isArray(pagina) ? pagina : []
 }
 
 export function normalizarTiendaMp(crudo: unknown): TiendaMp | null {
@@ -287,8 +322,11 @@ export function normalizarTiendaMp(crudo: unknown): TiendaMp | null {
 export interface DependenciasClienteMp {
   /** Token OAuth vigente del vendedor, o `null` si no tiene Mercado Pago conectado. */
   obtenerToken: (restauranteId: number) => Promise<string | null>
-  /** Valida/renueva el token tras un 401 y devuelve el que corresponde usar. */
-  refrescarToken: (restauranteId: number) => Promise<string | null>
+  /**
+   * Renueva el token tras un 401 y devuelve el que corresponde usar. Recibe el token que falló: si otro
+   * proceso ya lo renovó, devuelve el nuevo sin gastar el `refresh_token` (cada renovación lo rota).
+   */
+  refrescarToken: (restauranteId: number, tokenFallido: string) => Promise<string | null>
   fetch?: typeof fetch
   timeoutMs?: number
 }
@@ -300,7 +338,7 @@ export interface ClienteMpQr {
   listarCajas(restauranteId: number): Promise<CajaMp[]>
   obtenerCaja(restauranteId: number, mpPosId: string): Promise<CajaMp | null>
   listarTiendas(restauranteId: number, mpUserId: string): Promise<TiendaMp[]>
-  crearCaja(restauranteId: number, entrada: { nombre: string; tiendaId: string; tiendaExternalId?: string | null; externalPosId: string }): Promise<CajaMp>
+  crearCaja(restauranteId: number, entrada: { nombre: string; tiendaId: string; externalPosId: string }): Promise<CajaMp>
 }
 
 export function crearClienteMpQr(dependencias: DependenciasClienteMp): ClienteMpQr {
@@ -314,7 +352,7 @@ export function crearClienteMpQr(dependencias: DependenciasClienteMp): ClienteMp
     opciones: { cuerpo?: unknown; idempotencia?: string } = {},
   ): Promise<any> {
     const token = await dependencias.obtenerToken(restauranteId)
-    if (!token) throw new MpError('Mercado Pago no está conectado', { status: 401, code: 'mp_no_conectado' })
+    if (!token) throw new MpError('Mercado Pago no está conectado para cobros con QR', { status: 401, code: 'mp_no_conectado' })
 
     const enviar = async (bearer: string): Promise<Response> => {
       try {
@@ -335,7 +373,7 @@ export function crearClienteMpQr(dependencias: DependenciasClienteMp): ClienteMp
 
     let respuesta = await enviar(token)
     if (respuesta.status === 401) {
-      const renovado = await dependencias.refrescarToken(restauranteId)
+      const renovado = await dependencias.refrescarToken(restauranteId, token)
       if (renovado && renovado !== token) respuesta = await enviar(renovado)
     }
 
@@ -373,52 +411,55 @@ export function crearClienteMpQr(dependencias: DependenciasClienteMp): ClienteMp
 
     async cancelarOrden(restauranteId, mpOrderId) {
       return ordenODeError(await pedir(restauranteId, 'POST', `/v1/orders/${encodeURIComponent(mpOrderId)}/cancel`, {
-        idempotencia: `cancel-${mpOrderId}`,
+        // Una clave nueva por intento: con una fija, reintentar tras un fallo (p. ej. un pago en curso)
+        // devolvería `idempotency_key_already_used` en lugar de evaluar de nuevo la cancelación.
+        idempotencia: randomUUID(),
       }))
     },
 
     async listarCajas(restauranteId) {
       const cajas: CajaMp[] = []
-      // Tope de 3 páginas: un vendedor normal tiene un puñado de cajas.
-      for (let pagina = 0; pagina < 3; pagina++) {
-        const datos = await pedir(restauranteId, 'GET', `/pos?limit=50&offset=${pagina * 50}`)
-        const resultados: unknown[] = Array.isArray(datos?.results) ? datos.results : Array.isArray(datos) ? datos : []
+      // Tope de 4 páginas de 30: un vendedor normal tiene un puñado de cajas.
+      for (let pagina = 0; pagina < 4; pagina++) {
+        const datos = await pedir(restauranteId, 'GET', `/v2/pos?limit=${LIMITE_PAGINA_MP}&offset=${pagina * LIMITE_PAGINA_MP}`)
+        const resultados = filasDeLista(datos)
         for (const item of resultados) {
           const caja = normalizarCajaMp(item)
           if (caja) cajas.push(caja)
         }
-        if (resultados.length < 50) break
+        if (resultados.length < LIMITE_PAGINA_MP) break
       }
       return cajas
     },
 
     async obtenerCaja(restauranteId, mpPosId) {
       try {
-        return normalizarCajaMp(await pedir(restauranteId, 'GET', `/pos/${encodeURIComponent(mpPosId)}`))
+        return normalizarCajaMp(await pedir(restauranteId, 'GET', `/v2/pos/${encodeURIComponent(mpPosId)}`))
       } catch (error) {
-        if (error instanceof MpError && error.status === 404) return null
+        // `pos_not_found` (404) o una caja que no es de este vendedor (400 `bad_request`).
+        if (error instanceof MpError && (error.status === 404 || error.status === 400)) return null
         throw error
       }
     },
 
     async listarTiendas(restauranteId, mpUserId) {
-      const datos = await pedir(restauranteId, 'GET', `/users/${encodeURIComponent(mpUserId)}/stores/search?limit=50&offset=0`)
-      const resultados: unknown[] = Array.isArray(datos?.results) ? datos.results : Array.isArray(datos) ? datos : []
-      return resultados.map(normalizarTiendaMp).filter((t): t is TiendaMp => t !== null)
+      const datos = await pedir(restauranteId, 'GET', `/users/${encodeURIComponent(mpUserId)}/stores/search?limit=${LIMITE_PAGINA_MP}&offset=0`)
+      return filasDeLista(datos).map(normalizarTiendaMp).filter((t): t is TiendaMp => t !== null)
     },
 
     async crearCaja(restauranteId, entrada) {
-      const tiendaId = Number(entrada.tiendaId)
-      if (!Number.isInteger(tiendaId) || tiendaId <= 0) throw new MpError('La tienda de Mercado Pago no es válida', { code: 'tienda_invalida' })
-      const crudo = await pedir(restauranteId, 'POST', '/pos', {
+      const tiendaId = String(entrada.tiendaId ?? '').trim()
+      if (!/^\d{1,20}$/.test(tiendaId)) throw new MpError('La tienda de Mercado Pago no es válida', { code: 'tienda_invalida' })
+      const crudo = await pedir(restauranteId, 'POST', '/v2/pos', {
         cuerpo: {
-          name: entrada.nombre,
-          // El importe lo fija el vendedor desde la orden: el comprador no puede cambiarlo.
-          fixed_amount: true,
+          name: nombreCajaMp(entrada.nombre),
           store_id: tiendaId,
-          ...(entrada.tiendaExternalId ? { external_store_id: entrada.tiendaExternalId } : {}),
           external_id: entrada.externalPosId,
+          // `pdv`: modo atendido (hay un cajero). Es el que acompaña a las órdenes QR estáticas por API.
+          config: { qr: { operating_mode: 'pdv' } },
         },
+        // `external_id` es único por intento (azar en `nuevoExternalPosId`): sirve de clave y evita duplicar la caja.
+        idempotencia: entrada.externalPosId,
       })
       const caja = normalizarCajaMp(crudo)
       if (!caja) throw new MpError('Mercado Pago devolvió una caja sin identificador', { detalle: crudo })
@@ -440,7 +481,9 @@ export function esNotificacionDeOrden(type: unknown, topic: unknown, action: unk
 
 /**
  * Valida `x-signature` (`ts=…,v1=…`): HMAC-SHA256 hex de `id:{data.id};request-id:{x-request-id};ts:{ts};`.
- * Un `data.id` alfanumérico va en minúsculas en el manifiesto. Comparación en tiempo constante.
+ * `data.id` es el parámetro `data.id` de la URL (no el del cuerpo), en minúsculas. Si `data.id` o
+ * `x-request-id` no llegaron, se omiten del manifiesto antes de calcular el HMAC. Comparación en
+ * tiempo constante.
  */
 export function validarFirmaWebhookMp(entrada: {
   secreto: string
@@ -449,7 +492,7 @@ export function validarFirmaWebhookMp(entrada: {
   dataId: string | null | undefined
 }): boolean {
   const { secreto, firma, requestId, dataId } = entrada
-  if (!secreto || !firma || !requestId || !dataId) return false
+  if (!secreto || !firma) return false
   const partes = Object.fromEntries(
     firma.split(',').map((parte) => {
       const i = parte.indexOf('=')
@@ -458,7 +501,11 @@ export function validarFirmaWebhookMp(entrada: {
   ) as Record<string, string>
   const { ts, v1 } = partes
   if (!ts || !v1) return false
-  const manifiesto = `id:${dataId.toLowerCase()};request-id:${requestId};ts:${ts};`
+  const manifiesto = `${[
+    ...(dataId ? [`id:${dataId.toLowerCase()}`] : []),
+    ...(requestId ? [`request-id:${requestId}`] : []),
+    `ts:${ts}`,
+  ].join(';')};`
   const esperado = createHmac('sha256', secreto).update(manifiesto).digest('hex')
   const recibido = Buffer.from(v1, 'utf8')
   const calculado = Buffer.from(esperado, 'utf8')

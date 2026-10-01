@@ -12,10 +12,10 @@
 import { and, desc, eq, inArray, or, sql } from 'drizzle-orm'
 import {
   mpCajaQr as CajaTable,
+  mpConexionQr as ConexionTable,
   pago as PagoTable,
   pedidoUnificado as PedidoTable,
   posCobroQr as CobroTable,
-  restaurante as RestauranteTable,
 } from '../db/schema'
 import { MODULE_KEYS, tieneModuloActivo } from './modulos'
 import { ESTADOS_COBRO_ACTIVOS, type EstadoCobroQr } from './mp-qr'
@@ -101,10 +101,11 @@ export function crearRepositorioCobrosQr(db: any): RepositorioCobrosQr {
 
   return {
     async conexion(restauranteId) {
+      // Conexión con la aplicación de Mercado Pago para QR (`mp_conexion_qr`), no la de pagos online.
       const [fila] = await db
-        .select({ conectado: RestauranteTable.mpConnected, token: RestauranteTable.mpAccessToken, mpUserId: RestauranteTable.mpUserId })
-        .from(RestauranteTable)
-        .where(eq(RestauranteTable.id, restauranteId))
+        .select({ conectado: ConexionTable.conectado, token: ConexionTable.accessToken, mpUserId: ConexionTable.mpUserId })
+        .from(ConexionTable)
+        .where(eq(ConexionTable.restauranteId, restauranteId))
         .limit(1)
       return {
         moduloActivo: await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MERCADOPAGO),

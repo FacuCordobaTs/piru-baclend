@@ -1,7 +1,11 @@
 // pos-qr.ts — cobros del POS con el QR estático de una caja de Mercado Pago.
 //
+// Conexión con la aplicación de Mercado Pago para QR (pagos presenciales), distinta de la de pagos online:
+//   POST   /conexion/iniciar               URL de autorización (state firmado) para llevar al vendedor
+//   DELETE /conexion                       desconecta y desactiva las cajas
+//   GET    /mp-qr/callback                 (otro router, público) vuelve Mercado Pago con el `code`
 // Cajas (administración, sólo dueño autenticado):
-//   GET    /estado                         módulo, conexión y cajas vinculadas
+//   GET    /estado                         módulo, conexión de QR y cajas vinculadas
 //   GET    /mp/cajas                       cajas del vendedor en Mercado Pago
 //   GET    /mp/tiendas                     tiendas del vendedor (para crear una caja)
 //   POST   /cajas                          vincula una caja existente
@@ -19,11 +23,13 @@ import { zValidator } from '@hono/zod-validator'
 import { authMiddleware } from '../middleware/auth'
 import { requirePosDelPedido } from '../middleware/pos-evento'
 import { MODULE_KEYS } from '../lib/modulos'
-import { servicioCobrosQr } from '../lib/pos-cobros-qr-prod'
+import type { ServicioConexionQr } from '../lib/mp-conexion-qr'
+import { servicioCobrosQr, servicioConexionQr } from '../lib/pos-cobros-qr-prod'
 import type { Resultado, ServicioCobrosQr } from '../lib/pos-cobros-qr'
 
 export interface DependenciasPosQrRoute {
   servicio: ServicioCobrosQr
+  conexion: ServicioConexionQr
   autenticacion: MiddlewareHandler
   /** Gate del POS sobre el pedido de la URL (`:id`). */
   posDelPedido: MiddlewareHandler
@@ -37,7 +43,7 @@ const nuevaCajaSchema = z.object({
 const cobroSchema = z.object({ cajaId: z.number().int().positive() })
 const cancelarSchema = z.object({ cancelarPedido: z.boolean().default(false) })
 
-export function crearPosQrRoute({ servicio, autenticacion, posDelPedido }: DependenciasPosQrRoute) {
+export function crearPosQrRoute({ servicio, conexion, autenticacion, posDelPedido }: DependenciasPosQrRoute) {
   const route = new Hono()
   route.use('*', autenticacion)
 
@@ -56,6 +62,14 @@ export function crearPosQrRoute({ servicio, autenticacion, posDelPedido }: Depen
       ...(resultado.codigo === 'MODULO_MP_INACTIVO' ? { moduleRequired: true, module: MODULE_KEYS.MERCADOPAGO, upgradeRequired: true } : {}),
     }, resultado.status as 400)
   }
+
+  // ── Conexión con la aplicación de Mercado Pago para QR ──
+  route.post('/conexion/iniciar', async (c) => responder(c, await conexion.iniciar(restauranteIdDe(c))))
+
+  route.delete('/conexion', async (c) => {
+    await conexion.desconectar(restauranteIdDe(c))
+    return c.json({ success: true })
+  })
 
   // ── Cajas ──
   route.get('/estado', async (c) => c.json({ success: true, data: await servicio.estado(restauranteIdDe(c)) }))
@@ -94,6 +108,44 @@ export function crearPosQrRoute({ servicio, autenticacion, posDelPedido }: Depen
 
 export const posQrRoute = crearPosQrRoute({
   servicio: servicioCobrosQr,
+  conexion: servicioConexionQr,
   autenticacion: authMiddleware,
   posDelPedido: requirePosDelPedido,
+})
+
+// ── Callback público del OAuth ──
+// Mercado Pago redirige acá al vendedor con `code` y `state`. Va en su propio router (sin
+// `autenticacion`): no hay sesión del admin en esa redirección, y la identidad la da el `state`
+// firmado por este servidor. Vuelve al admin con el resultado en la URL.
+
+export interface DependenciasCallbackQr {
+  conexion: ServicioConexionQr
+  /** Origen del admin, sin barra final. */
+  adminUrl: string
+}
+
+export function crearMpQrCallbackRoute({ conexion, adminUrl }: DependenciasCallbackQr) {
+  const route = new Hono()
+  route.get('/callback', async (c) => {
+    const volver = (estado: 'success' | 'error', motivo?: string) =>
+      c.redirect(`${adminUrl}/dashboard?mp_qr_status=${estado}${motivo ? `&mp_qr_error=${motivo}` : ''}`)
+    try {
+      const resultado = await conexion.completar({
+        code: c.req.query('code'),
+        state: c.req.query('state'),
+        error: c.req.query('error'),
+      })
+      return resultado.ok ? volver('success') : volver('error', resultado.motivo)
+    } catch (error) {
+      // Sin `code`, `state` ni tokens en el log.
+      console.error('❌ [mp-qr] Error en el callback de OAuth:', error instanceof Error ? error.message : 'desconocido')
+      return volver('error', 'servidor')
+    }
+  })
+  return route
+}
+
+export const mpQrCallbackRoute = crearMpQrCallbackRoute({
+  conexion: servicioConexionQr,
+  adminUrl: (process.env.ADMIN_URL || 'https://admin.piru.app').replace(/\/$/, ''),
 })
