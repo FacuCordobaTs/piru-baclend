@@ -227,6 +227,26 @@ export class MpError extends Error {
   }
 }
 
+/** Diagnóstico para logs de OAuth: Drizzle incluye SQL y tokens incluso en Error.message. */
+export function diagnosticoSeguroQr(error: unknown): Record<string, string | number | boolean> {
+  if (error instanceof MpError) return { tipo: 'mercadopago', status: error.status, red: error.red }
+  // Drizzle envuelve el error del driver en `cause`. Nunca registrar mensajes, SQL, params ni stacks.
+  let causa = error
+  for (let nivel = 0; nivel < 5 && causa && typeof causa === 'object'; nivel++) {
+    const datos = causa as Record<string, unknown>
+    if (typeof datos.code === 'string' && /^ER_[A-Z0-9_]{1,64}$/.test(datos.code)) {
+      return {
+        tipo: 'mysql',
+        codigo: datos.code,
+        ...(typeof datos.errno === 'number' && Number.isSafeInteger(datos.errno) ? { numero: datos.errno } : {}),
+        ...(typeof datos.sqlState === 'string' && /^[A-Z0-9]{5}$/.test(datos.sqlState) ? { estadoSql: datos.sqlState } : {}),
+      }
+    }
+    causa = datos.cause
+  }
+  return { tipo: 'desconocido' }
+}
+
 /** Mercado Pago usa `errors[]` (Orders) o `message`/`cause[]` (API clásica). */
 export function detalleErrorMp(payload: unknown): { code: string | null; message: string | null } {
   if (!payload || typeof payload !== 'object') return { code: null, message: null }

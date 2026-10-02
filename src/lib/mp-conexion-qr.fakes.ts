@@ -11,6 +11,15 @@ export const config: ConfigOAuthQr = { clientId: '7364289770550796', clientSecre
 export const T0 = new Date('2026-10-01T15:00:00.000Z')
 export const DIA = 24 * 60 * 60_000
 export const LOCAL = 42
+/** Permisos de OAuth actuales: las URNs de QR y pagos exceden el antiguo VARCHAR(255). */
+export const SCOPE_QR_EXTENSO = [
+  'offline_access', 'payments', 'read',
+  ...['instore-order', 'integration:integrator', 'pos', 'store', 'terminal:actions', 'terminal:list', 'terminal:setup']
+    .map((recurso) => `urn:mp:instore:${recurso}/read-write`),
+  ...['customer:cards', 'customer:customer', 'merchant-order', 'order:payment', 'payments', 'payments:cancel', 'payments:refunds', 'preference', 'subs-recurring:subscription']
+    .map((recurso) => `urn:mp:online:${recurso}/read-write`),
+  'write',
+].join(' ')
 
 /** Repositorio en memoria con la misma semántica que el de MySQL (sin concurrencia). */
 export function repoFalso(inicial: { modulo?: boolean; conexion?: Partial<ConexionQr> | null } = {}) {
@@ -45,7 +54,7 @@ export function repoFalso(inicial: { modulo?: boolean; conexion?: Partial<Conexi
         if (error instanceof MpError && !error.red && [400, 401, 403].includes(error.status)) filas.set(id, { ...actual, conectado: false })
         return null
       }
-      filas.set(id, { ...actual, accessToken: nuevos.accessToken, refreshToken: nuevos.refreshToken ?? actual.refreshToken, expiraAt: nuevos.expiraAt })
+      filas.set(id, { ...actual, accessToken: nuevos.accessToken, refreshToken: nuevos.refreshToken ?? actual.refreshToken, scope: nuevos.scope ?? actual.scope, expiraAt: nuevos.expiraAt })
       return nuevos.accessToken
     },
     async desconectar(id) { filas.delete(id); registro.desconexiones.push(id) },
@@ -81,4 +90,3 @@ export function montar(opciones: { repo?: Parameters<typeof repoFalso>[0]; respu
   })
   return { ...r, ...http, servicio, logs }
 }
-

@@ -5,7 +5,7 @@
  *
  * No importa la base ni el entorno: la persistencia llega por `repo` y la configuración por `config`.
  */
-import { MpError } from './mp-qr'
+import { diagnosticoSeguroQr } from './mp-qr'
 import {
   canjearCodigoOAuth,
   firmarEstadoOAuth,
@@ -97,7 +97,7 @@ export function crearServicioConexionQr(deps: DependenciasConexionQr) {
       )
     } catch (error) {
       // Un fallo de base o de red no debe tumbar el cobro: se sigue con el token que había.
-      log(`No se pudo renovar el token del local ${restauranteId}`, error instanceof MpError ? error.message : error)
+      log(`No se pudo renovar el token del local ${restauranteId}`, diagnosticoSeguroQr(error))
       return null
     }
   }
@@ -138,7 +138,7 @@ export function crearServicioConexionQr(deps: DependenciasConexionQr) {
       try {
         tokens = await canjearCodigoOAuth(config, entrada.code, dependenciasHttp())
       } catch (error) {
-        log(`Mercado Pago rechazó el código de autorización del local ${restauranteId}`, error instanceof MpError ? error.message : error)
+        log(`Mercado Pago rechazó el código de autorización del local ${restauranteId}`, diagnosticoSeguroQr(error))
         return { ok: false, motivo: 'oauth_fallido' }
       }
       if (!tokens.mpUserId) return { ok: false, motivo: 'cuenta_invalida' }

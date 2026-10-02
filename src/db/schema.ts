@@ -1,6 +1,7 @@
 // schema.ts
 import {
   mysqlTable,
+  text,
   char,
   varchar,
   int,
@@ -2109,7 +2110,8 @@ export const mpConexionQr = mysqlTable("mp_conexion_qr", {
   mpUserId: varchar("mp_user_id", { length: 50 }).notNull(),
   accessToken: varchar("access_token", { length: 512 }).notNull(),
   refreshToken: varchar("refresh_token", { length: 512 }),
-  scope: varchar("scope", { length: 255 }),
+  // OAuth devuelve URNs de permisos que pueden superar ampliamente los 255 caracteres.
+  scope: text("scope"),
   // El access token dura 180 días; se renueva con el refresh token antes de vencer.
   expiraAt: datetime("expira_at"),
   conectado: boolean("conectado").default(true).notNull(),

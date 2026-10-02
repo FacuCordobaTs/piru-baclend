@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { DIA, LOCAL, T0, config, fetchFalso, json, montar, repoFalso, tokensMp } from './mp-conexion-qr.fakes'
+import { DIA, LOCAL, SCOPE_QR_EXTENSO, T0, config, fetchFalso, json, montar, repoFalso, tokensMp } from './mp-conexion-qr.fakes'
 import { crearServicioConexionQr } from './mp-conexion-qr'
 import { leerEstadoOAuth } from './mp-qr-oauth'
 
@@ -105,6 +105,22 @@ describe('completar la conexión en el callback', () => {
     expect(s.registro.cajasDesactivadas).toEqual([])
     expect(s.filas.get(LOCAL)?.conectado).toBe(true)
   })
+
+  test('conecta, reconecta y renueva sin truncar los permisos extensos de Mercado Pago', async () => {
+    const s = montar({ repo: { conexion: null }, respuestas: [
+      json(tokensMp({ scope: SCOPE_QR_EXTENSO })),
+      json(tokensMp({ scope: `${SCOPE_QR_EXTENSO} urn:global:admin:oauth:/read-write` })),
+      json(tokensMp({ access_token: 'RENOVADO', refresh_token: 'TG-RENOVADO', scope: SCOPE_QR_EXTENSO })),
+    ] })
+    expect(SCOPE_QR_EXTENSO.length).toBeGreaterThan(255)
+    for (let intento = 0; intento < 2; intento++) {
+      expect(await s.servicio.completar({ code: `TG-${intento}`, state: await estadoValido(s) })).toEqual({ ok: true, restauranteId: LOCAL })
+      expect(s.filas.get(LOCAL)?.scope).toBe(s.registro.guardados[intento].scope)
+    }
+    expect(await s.servicio.refrescar(LOCAL, 'TOKEN-B')).toBe('RENOVADO')
+    expect(s.filas.get(LOCAL)).toMatchObject({ scope: SCOPE_QR_EXTENSO, refreshToken: 'TG-RENOVADO', conectado: true })
+    expect(s.registro.cajasDesactivadas).toEqual([])
+  })
 })
 
 describe('token vigente', () => {
@@ -166,11 +182,15 @@ describe('renovar tras un 401 y desconectar', () => {
 
   test('un fallo inesperado del repositorio no tumba el cobro: se informa y devuelve null', async () => {
     const r = repoFalso()
-    r.repo.renovar = async () => { throw new Error('deadlock') }
-    const logs: string[] = []
-    const servicio = crearServicioConexionQr({ repo: r.repo, config: () => config, ahora: () => T0, log: (m) => { logs.push(m) } })
+    r.repo.renovar = async () => { throw new Error('Failed query: update mp_conexion_qr params: TOKEN-SECRETO TG-SECRETO', {
+      cause: { code: 'ER_DATA_TOO_LONG', errno: 1406, sqlState: '22001', sqlMessage: 'scope TOKEN-SECRETO', sql: 'TG-SECRETO' },
+    }) }
+    const logs: unknown[][] = []
+    const servicio = crearServicioConexionQr({ repo: r.repo, config: () => config, ahora: () => T0, log: (...args) => { logs.push(args) } })
     expect(await servicio.refrescar(LOCAL, 'TOKEN-A')).toBeNull()
     expect(logs).toHaveLength(1)
+    expect(logs[0][1]).toEqual({ tipo: 'mysql', codigo: 'ER_DATA_TOO_LONG', numero: 1406, estadoSql: '22001' })
+    expect(JSON.stringify(logs)).not.toContain('SECRETO')
   })
 
   test('el estado refleja si hay conexión y de qué cuenta', async () => {

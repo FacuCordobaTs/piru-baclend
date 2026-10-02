@@ -299,7 +299,9 @@ describe('callback público del OAuth (GET /mp-qr/callback)', () => {
 
   test('un fallo inesperado no deja la pantalla en blanco ni filtra datos: vuelve con error servidor', async () => {
     const c = await montarCallback({ respuestas: [json(tokensMp())] })
-    c.repo.guardar = async () => { throw new Error('ER_LOCK_DEADLOCK con TOKEN-SECRETO') }
+    c.repo.guardar = async () => { throw new Error('Failed query: insert into mp_conexion_qr params: TOKEN-SECRETO TG-SECRETO', {
+      cause: { code: 'ER_DATA_TOO_LONG', errno: 1406, sqlState: '22001', sqlMessage: 'scope TOKEN-SECRETO', sql: 'TG-SECRETO' },
+    }) }
     const original = console.error
     const registrado: unknown[][] = []
     console.error = (...args: unknown[]) => { registrado.push(args) }
@@ -310,5 +312,7 @@ describe('callback público del OAuth (GET /mp-qr/callback)', () => {
       console.error = original
     }
     expect(registrado).toHaveLength(1)
+    expect(registrado[0][1]).toEqual({ tipo: 'mysql', codigo: 'ER_DATA_TOO_LONG', numero: 1406, estadoSql: '22001' })
+    expect(JSON.stringify(registrado)).not.toContain('SECRETO')
   })
 })

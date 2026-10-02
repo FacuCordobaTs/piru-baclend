@@ -23,6 +23,7 @@ import { zValidator } from '@hono/zod-validator'
 import { authMiddleware } from '../middleware/auth'
 import { requirePosDelPedido } from '../middleware/pos-evento'
 import { MODULE_KEYS } from '../lib/modulos'
+import { diagnosticoSeguroQr } from '../lib/mp-qr'
 import type { ServicioConexionQr } from '../lib/mp-conexion-qr'
 import { servicioCobrosQr, servicioConexionQr } from '../lib/pos-cobros-qr-prod'
 import type { Resultado, ServicioCobrosQr } from '../lib/pos-cobros-qr'
@@ -138,7 +139,7 @@ export function crearMpQrCallbackRoute({ conexion, adminUrl }: DependenciasCallb
       return resultado.ok ? volver('success') : volver('error', resultado.motivo)
     } catch (error) {
       // Sin `code`, `state` ni tokens en el log.
-      console.error('❌ [mp-qr] Error en el callback de OAuth:', error instanceof Error ? error.message : 'desconocido')
+      console.error('❌ [mp-qr] Error en el callback de OAuth:', diagnosticoSeguroQr(error))
       return volver('error', 'servidor')
     }
   })

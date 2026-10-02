@@ -7,6 +7,7 @@ import {
   centavosAMonto,
   crearClienteMpQr,
   detalleErrorMp,
+  diagnosticoSeguroQr,
   esNotificacionDeOrden,
   interpretarOrdenMp,
   montoParaMp,
@@ -32,6 +33,25 @@ const orden = (parcial: Partial<OrdenMp> = {}): OrdenMp => ({
   ...parcial,
 })
 const esperado = { montoCentavos: 150000, referencia: 'piru-qr-1-2-abcd1234' }
+
+describe('diagnóstico seguro de OAuth', () => {
+  test('no registra mensajes ni respuestas de Mercado Pago que puedan contener credenciales', () => {
+    expect(diagnosticoSeguroQr(new MpError('TOKEN-SECRETO', { status: 401, code: 'TG-SECRETO', detalle: { access_token: 'SECRETO' } })))
+      .toEqual({ tipo: 'mercadopago', status: 401, red: false })
+    expect(diagnosticoSeguroQr(new Error('TOKEN-SECRETO'))).toEqual({ tipo: 'desconocido' })
+    expect(diagnosticoSeguroQr('TOKEN-SECRETO')).toEqual({ tipo: 'desconocido' })
+  })
+
+  test('sigue causas anidadas y descarta campos SQL que no sean códigos del driver', () => {
+    expect(diagnosticoSeguroQr(new Error('wrapper', { cause: new Error('params TOKEN-SECRETO', {
+      cause: { code: 'ER_LOCK_DEADLOCK', errno: 1213, sqlState: '40001', sql: 'TOKEN-SECRETO' },
+    }) }))).toEqual({ tipo: 'mysql', codigo: 'ER_LOCK_DEADLOCK', numero: 1213, estadoSql: '40001' })
+    expect(diagnosticoSeguroQr({ code: 'APP_USR-SECRETO', sqlState: 'SECRETO' })).toEqual({ tipo: 'desconocido' })
+    const ciclo: { cause?: unknown } = {}
+    ciclo.cause = ciclo
+    expect(diagnosticoSeguroQr(ciclo)).toEqual({ tipo: 'desconocido' })
+  })
+})
 
 describe('montos', () => {
   test('convierte a centavos sin depender del formato y rechaza lo no numérico', () => {
