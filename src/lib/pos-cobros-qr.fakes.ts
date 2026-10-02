@@ -202,6 +202,7 @@ export function montar(inicial: Parameters<typeof crearRepoFalso>[0] = {}, opcio
   const efectosPagados: number[] = []
   const efectosCancelados: number[] = []
   const logs: string[] = []
+  const diagnosticos: unknown[] = []
   const servicio = crearServicioCobrosQr({
     repo: r.repo,
     mp: mp.cliente,
@@ -212,8 +213,7 @@ export function montar(inicial: Parameters<typeof crearRepoFalso>[0] = {}, opcio
     ahora: () => new Date(reloj),
     consultaMinimaMs: opciones.consultaMinimaMs ?? 0,
     appConfigurada: opciones.appConfigurada === undefined ? undefined : () => opciones.appConfigurada!,
-    log: (m) => { logs.push(m) },
+    log: (m, detalle) => { logs.push(m); diagnosticos.push(detalle) },
   })
-  return { ...r, mp, servicio, efectosPagados, efectosCancelados, logs, avanzar: (ms: number) => { reloj += ms } }
+  return { ...r, mp, servicio, efectosPagados, efectosCancelados, logs, diagnosticos, avanzar: (ms: number) => { reloj += ms } }
 }
-

@@ -8,6 +8,8 @@ import {
   crearClienteMpQr,
   detalleErrorMp,
   diagnosticoSeguroQr,
+  diagnosticoErrorOrdenQr,
+  mensajeErrorOrdenQr,
   esNotificacionDeOrden,
   interpretarOrdenMp,
   montoParaMp,
@@ -50,6 +52,25 @@ describe('diagnóstico seguro de OAuth', () => {
     const ciclo: { cause?: unknown } = {}
     ciclo.cause = ciclo
     expect(diagnosticoSeguroQr(ciclo)).toEqual({ tipo: 'desconocido' })
+  })
+})
+
+describe('diagnóstico de rechazo de Orders', () => {
+  test('un rechazo de Orders conserva la propiedad y el motivo, ocultando credenciales', () => {
+    const error = new MpError('Invalid value for property', { status: 400, code: 'property_value', detalle: {
+      access_token: 'APP_USR-SECRETO', errors: [{ code: 'property_value', details: [
+        { field: 'total_amount', message: 'Value is below the allowed minimum', value: 'APP_USR-SECRETO' },
+        'Authorization Bearer APP_USR-SECRETO',
+      ] }],
+    } })
+    const diagnostico = diagnosticoErrorOrdenQr(error)
+    expect(diagnostico).toEqual({ status: 400, code: 'property_value', detalles: [
+      'total_amount: Value is below the allowed minimum', 'Authorization Bearer [oculto]',
+    ] })
+    expect(mensajeErrorOrdenQr(error)).toContain('total_amount: Value is below the allowed minimum')
+    expect(JSON.stringify(diagnostico)).not.toContain('SECRETO')
+    expect(mensajeErrorOrdenQr(new MpError('Invalid value for property', { code: 'property_value' })))
+      .toContain('property_value')
   })
 })
 

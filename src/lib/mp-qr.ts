@@ -258,6 +258,45 @@ export function detalleErrorMp(payload: unknown): { code: string | null; message
   return { code, message }
 }
 
+/** Sólo motivos de la respuesta de Orders; nunca registrar el payload, headers ni el token. */
+export function diagnosticoErrorOrdenQr(error: MpError): { status: number; code: string | null; detalles: string[] } {
+  const limpiar = (valor: unknown): string | null => {
+    if (typeof valor !== 'string') return null
+    return valor.replace(/Bearer\s+\S+/gi, 'Bearer [oculto]')
+      .replace(/\b(?:APP_USR|TEST|TG)-[^\s"',;]+/g, '[oculto]')
+      .replace(/[A-Za-z0-9_-]{32,}/g, '[oculto]').slice(0, 300)
+  }
+  const payload = error.detalle as { errors?: unknown[] } | null
+  const detalles: string[] = []
+  for (const entrada of Array.isArray(payload?.errors) ? payload.errors.slice(0, 5) : []) {
+    if (!entrada || typeof entrada !== 'object') continue
+    const e = entrada as { details?: unknown; message?: unknown }
+    const lista = Array.isArray(e.details) ? e.details : e.details == null ? [] : [e.details]
+    for (const detalle of lista.slice(0, 5)) {
+      if (typeof detalle === 'string') {
+        const limpio = limpiar(detalle)
+        if (limpio) detalles.push(limpio)
+      } else if (detalle && typeof detalle === 'object') {
+        const d = detalle as Record<string, unknown>
+        const campo = limpiar(d.field ?? d.property ?? d.path)
+        const motivo = limpiar(d.message ?? d.description)
+        if (campo || motivo) detalles.push([campo, motivo].filter(Boolean).join(': '))
+      }
+    }
+  }
+  return { status: error.status, code: limpiar(error.code), detalles }
+}
+
+export function mensajeErrorOrdenQr(error: MpError): string {
+  const { code, detalles } = diagnosticoErrorOrdenQr(error)
+  if (code === 'property_value' || code === 'property_type' || code === 'unsupported_properties' || code === 'bad_request') {
+    return detalles.length
+      ? `Mercado Pago rechazó los datos del cobro: ${detalles.join('; ')}`
+      : `Mercado Pago rechazó los datos del cobro (${code}). Revisá el diagnóstico del servidor.`
+  }
+  return error.message
+}
+
 // ─────────────────────────── Cajas y tiendas ───────────────────────────
 
 export interface CajaMp {

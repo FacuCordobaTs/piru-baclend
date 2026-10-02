@@ -108,6 +108,23 @@ describe('caja con un solo cobro pendiente', () => {
 })
 
 describe('errores de Mercado Pago al crear la orden', () => {
+  test('property_value identifica la propiedad en la respuesta, el log y el cobro retomado', async () => {
+    const s = montar({ pedidos: [{ id: 100, total: '10.00' }] })
+    s.mp.cfg.falloCrear = new MpError('Invalid value for property', { status: 400, code: 'property_value', detalle: {
+      errors: [{ details: [{ field: 'config.qr.external_pos_id', message: 'Invalid POS value' }] }],
+      access_token: 'APP_USR-SECRETO',
+    } })
+    expect(await iniciar(s)).toMatchObject({ ok: false, codigo: 'MP_ERROR', reintentable: false,
+      mensaje: 'Mercado Pago rechazó los datos del cobro: config.qr.external_pos_id: Invalid POS value',
+      datos: { mercadopago: { status: 400, code: 'property_value' } },
+    })
+    expect(await s.servicio.consultarCobro(RESTAURANTE, 100)).toMatchObject({ estado: 'error', reintentable: false })
+    expect(s.diagnosticos[0]).toMatchObject({ restauranteId: RESTAURANTE, pedidoId: 100, cajaId: 1,
+      status: 400, code: 'property_value', detalles: ['config.qr.external_pos_id: Invalid POS value'],
+    })
+    expect(JSON.stringify(s.diagnosticos)).not.toContain('SECRETO')
+    expect(s.pedidos.get(100)!.pagado).toBe(false)
+  })
   test('un rechazo definitivo deja el cobro en error y se informa', async () => {
     const s = montar()
     s.mp.cfg.falloCrear = new MpError('external_pos_id inválido', { status: 400, code: 'invalid_external_pos_id' })

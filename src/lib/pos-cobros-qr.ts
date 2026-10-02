@@ -15,7 +15,9 @@ import {
   EXPIRACION_COBRO_MINUTOS,
   MpError,
   aCentavos,
+  diagnosticoErrorOrdenQr,
   interpretarOrdenMp,
+  mensajeErrorOrdenQr,
   montoParaMp,
   nuevoExternalPosId,
   nuevaReferenciaCobro,
@@ -193,6 +195,7 @@ export interface CobroQrDto {
   mensaje: string | null
   expiraAt: string | null
   pagadoAt: string | null
+  reintentable: boolean
 }
 
 export interface CajaMpDto {
@@ -277,6 +280,7 @@ export function crearServicioCobrosQr(deps: DependenciasCobrosQr) {
       mensaje: cobro.mensaje,
       expiraAt: cobro.expiraAt ? cobro.expiraAt.toISOString() : null,
       pagadoAt: cobro.pagadoAt ? cobro.pagadoAt.toISOString() : null,
+      reintentable: cobro.mpStatus !== 'rejected',
     }
   }
 
@@ -386,7 +390,10 @@ export function crearServicioCobrosQr(deps: DependenciasCobrosQr) {
     }
     return fallo('MP_ERROR', error.red || error.status >= 500
       ? 'No pudimos comunicarnos con Mercado Pago. Reintentá en unos segundos.'
-      : recortar(error.message), 502, { reintentable: error.red || error.status >= 500 })
+      : recortar(mensajeErrorOrdenQr(error)), 502, {
+        reintentable: error.red || error.status >= 500 || error.status === 429,
+        datos: { mercadopago: diagnosticoErrorOrdenQr(error) },
+      })
   }
 
   const ocupada = (cobro: CobroQr, pedidoId: number): Resultado<never> =>
@@ -551,13 +558,19 @@ export function crearServicioCobrosQr(deps: DependenciasCobrosQr) {
         return { ok: true, data: await aDto(cobro, caja) }
       } catch (error) {
         if (!(error instanceof MpError)) throw error
+        log('No se pudo crear el cobro en Mercado Pago', {
+          restauranteId, pedidoId, cajaId, cobroId: cobro.id,
+          ...diagnosticoErrorOrdenQr(error),
+        })
         // Un corte de red o un 5xx no dicen si Mercado Pago creó la orden: el cobro queda en
         // `creando` para retomarlo con la misma clave. Un 4xx sí es un rechazo definitivo.
         const ambiguo = error.red || error.status >= 500
         if (!ambiguo) {
           await repo.transicionar(cobro.id, ['creando'], {
             estado: 'error',
-            mensaje: error.cajaOcupada ? 'La caja tiene una orden pendiente en Mercado Pago' : recortar(error.message),
+            mensaje: error.cajaOcupada ? 'La caja tiene una orden pendiente en Mercado Pago' : recortar(mensajeErrorOrdenQr(error)),
+            mpStatus: error.cajaOcupada || error.status === 429 ? null : 'rejected',
+            mpStatusDetail: diagnosticoErrorOrdenQr(error).code?.slice(0, 80) ?? null,
             ahora: ahora(),
           })
         }
