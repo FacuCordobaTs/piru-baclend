@@ -20,6 +20,7 @@ import {
 import { SUSCRIPCION_ESTADOS } from './planes'
 import { acreditarCupoPlan, acreditarCuposPorModulos, confirmarRecarga, type CategoriaMensaje } from './mensajes-wallet'
 import { SUSCRIPCION_UNICA_CODIGO } from './suscripcion'
+import { acreditarComisionMarketer } from './comisiones-marketer-db'
 export { resolverEstadoPorTiempo, type EstadoSuscripcionTemporal } from './suscripcion-estado'
 import { resolverEstadoPorTiempo, type EstadoSuscripcionTemporal } from './suscripcion-estado'
 
@@ -207,6 +208,8 @@ export async function confirmarPagoSuscripcion(
     })
     .where(eq(PagoSuscripcionTable.id, pagoId))
 
+  await acreditarComisionMarketer(db, pagoId)
+
   // 2. Upsert de la suscripción → activa, extendida.
   const precioMensual = planRow ? String(planRow.precioMensual) : pago.monto
   if (subActual) {
@@ -310,6 +313,8 @@ async function confirmarFacturaCompuesta(
       recargaAcreditada: false,
     }
   }
+
+  await acreditarComisionMarketer(db, pago.id)
 
   if (itemBase) {
     const [subActual] = await db

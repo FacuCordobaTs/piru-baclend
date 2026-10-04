@@ -173,6 +173,18 @@ describe('prioridad y orden', () => {
 
 // ── seleccionarCandidatos ────────────────────────────────────────────────────
 describe('seleccionarCandidatos', () => {
+  test('soloIncluidos conserva exactamente los elegidos y aparta control del resto', () => {
+    const resultado = seleccionarCandidatos(cohorteMixta(), spec({ cantidad: 500, incluirIds: [2, 6, 4], soloIncluidos: true, porcentajeControl: 30 }))
+    expect(ids(resultado.contactar)).toEqual([2, 6, 4])
+    expect(resultado.control).toHaveLength(1)
+    expect(resultado.control.every(c => ![2, 6, 4].includes(c.clienteId))).toBe(true)
+  })
+  test('soloIncluidos ignora clientes protegidos ausentes de cohorte y no agrega nadie si no hay elegidos', () => {
+    const resultado = seleccionarCandidatos(cohorteMixta(), spec({ cantidad: 500, incluirIds: [2, 999], soloIncluidos: true }))
+    expect(ids(resultado.contactar)).toEqual([2])
+    expect(resultado.incluidosIgnorados).toEqual([999])
+    expect(seleccionarCandidatos(cohorteMixta(), spec({ cantidad: 500, soloIncluidos: true })).contactar).toEqual([])
+  })
   test('toma los N mejores en orden de prioridad', () => {
     const { contactar, control } = seleccionarCandidatos(cohorteMixta(), spec({ cantidad: 3, porcentajeControl: 0 }))
     expect(ids(contactar)).toEqual([2, 3, 6])

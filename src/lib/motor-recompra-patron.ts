@@ -67,6 +67,7 @@ export function calcularPatronEnvio(
   segmento: string,
   ahoraMs: number = Date.now(),
   clienteId: number = 0,
+  diasValle: number[] = DIAS_VALLE,
 ): PatronEnvioCliente {
   const ahoraArg = obtenerComponentesArgentina(ahoraMs)
 
@@ -120,8 +121,9 @@ export function calcularPatronEnvio(
 
   if (esPerdido) {
     // Para perdidos: programar en días valle (Lunes, Martes, Miércoles) para repartir carga
-    const valleIndex = Math.abs(clienteId) % DIAS_VALLE.length
-    targetDiaSemana = DIAS_VALLE[valleIndex]
+    const dias = diasValle.length ? diasValle : DIAS_VALLE
+    const valleIndex = Math.abs(clienteId) % dias.length
+    targetDiaSemana = dias[valleIndex]
     // Usar la hora preferida del cliente si es cena/almuerzo, o 20:00 hs por defecto
     targetHora = horaValida >= 18 ? horaValida : (horaValida <= 14 ? horaValida : 20)
     sufijoEtiqueta = 'día valle'

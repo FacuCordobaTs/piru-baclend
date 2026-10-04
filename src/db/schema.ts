@@ -6,6 +6,8 @@ import {
   varchar,
   int,
   tinyint,
+  bigint,
+  smallint,
   timestamp,
   datetime,
   boolean,
@@ -1030,7 +1032,7 @@ export const configMotorRecompra = mysqlTable("config_motor_recompra", {
   // 'activa' | 'pausada_manual' | 'pausada_sin_saldo' — la pausa es del LOCAL: pausa todo su goteo.
   estado: varchar("estado", { length: 20 }).default("activa").notNull(),
   // 'automatico' (drena con Meta Cloud API, consume 1 crédito marketing) | 'manual' (el operador copia).
-  modo: varchar("modo", { length: 20 }).default("automatico").notNull(),
+  modo: varchar("modo", { length: 20 }).default("manual").notNull(),
   // Techo de envíos por día del local. No es una promesa: cada cliente cae en su día y horario.
   cupoDiario: int("cupo_diario").default(30).notNull(),
   // Días entre el 1º y el 2º toque, y entre el 2º y el 3º. El piso de 48 hs es un invariante anti-spam:
@@ -1087,6 +1089,11 @@ export const campanaRecompra = mysqlTable("campana_recompra", {
   diasToque3: int("dias_toque_3"),
   // Override del % de control de ESTA tanda. NULL = usa el del local.
   porcentajeControl: int("porcentaje_control"),
+  fechaObjetivo: varchar("fecha_objetivo", { length: 10 }),
+  horaObjetivo: tinyint("hora_objetivo"),
+  mensajePersonalizado: text("mensaje_personalizado"),
+  descuentoPorcentaje: tinyint("descuento_porcentaje"),
+  marketerId: int("marketer_id"),
   programadaAt: timestamp("programada_at"),
   // Contador del día en curso (día de Argentina "YYYY-MM-DD") y cuántos se enviaron ese día.
   diaContador: varchar("dia_contador", { length: 10 }),
@@ -2120,3 +2127,65 @@ export const mpConexionQr = mysqlTable("mp_conexion_qr", {
 }, (table) => [
   uniqueIndex("uq_mp_conexion_qr_restaurante").on(table.restauranteId),
 ]);
+
+
+// Identidad y permisos del canal marketers. Nunca serializar estas filas como perfil público.
+export const marketer = mysqlTable("marketer", {
+  id: int("id").primaryKey().autoincrement(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  email: varchar("email", { length: 255 }).notNull(),
+  telefono: varchar("telefono", { length: 50 }),
+  passwordHash: varchar("password_hash", { length: 255 }),
+  activacionTokenHash: char("activacion_token_hash", { length: 64 }),
+  activacionExpiraAt: datetime("activacion_expira_at"),
+  codigo: varchar("codigo", { length: 32 }).notNull(),
+  comisionPorcentaje: decimal("comision_porcentaje", { precision: 5, scale: 2 }).default("20.00").notNull(),
+  datosCobro: varchar("datos_cobro", { length: 255 }),
+  activo: boolean("activo").default(true).notNull(),
+  ultimoAccesoAt: datetime("ultimo_acceso_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+}, (t) => [uniqueIndex("uq_marketer_email").on(t.email), uniqueIndex("uq_marketer_codigo").on(t.codigo),
+  check("chk_marketer_comision", sql`${t.comisionPorcentaje} BETWEEN 0 AND 100`)]);
+
+export const restauranteMarketer = mysqlTable("restaurante_marketer", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id, { onDelete: "cascade" }).notNull(),
+  marketerId: int("marketer_id").references(() => marketer.id).notNull(),
+  estado: mysqlEnum("estado", ["activo", "revocado"]).default("activo").notNull(),
+  origen: mysqlEnum("origen", ["interno", "duenio", "referido"]).notNull(),
+  comisionPorcentaje: decimal("comision_porcentaje", { precision: 5, scale: 2 }),
+  activadoAt: datetime("activado_at").notNull(),
+  revocadoAt: datetime("revocado_at"),
+  revocadoPor: mysqlEnum("revocado_por", ["duenio", "interno", "marketer"]),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+}, (t) => [uniqueIndex("uq_restaurante_marketer_restaurante").on(t.restauranteId),
+  index("idx_restaurante_marketer_marketer").on(t.marketerId, t.estado)]);
+
+export const comisionMarketer = mysqlTable("comision_marketer", {
+  id: int("id").primaryKey().autoincrement(),
+  marketerId: int("marketer_id").references(() => marketer.id).notNull(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  pagoSuscripcionId: int("pago_suscripcion_id").references(() => pagoSuscripcion.id).notNull(),
+  baseComisionable: decimal("base_comisionable", { precision: 10, scale: 2 }).notNull(),
+  porcentaje: decimal("porcentaje", { precision: 5, scale: 2 }).notNull(),
+  monto: decimal("monto", { precision: 10, scale: 2 }).notNull(),
+  estado: mysqlEnum("estado", ["pendiente", "pagada", "anulada"]).default("pendiente").notNull(),
+  pagadaAt: datetime("pagada_at"),
+  referenciaPago: varchar("referencia_pago", { length: 255 }),
+  nota: varchar("nota", { length: 255 }),
+  createdAt: datetime("created_at").notNull(),
+}, (t) => [uniqueIndex("uq_comision_marketer_pago").on(t.pagoSuscripcionId),
+  index("idx_comision_marketer_marketer").on(t.marketerId, t.estado, t.createdAt)]);
+
+export const marketerAccion = mysqlTable("marketer_accion", {
+  id: bigint("id", { mode: "number" }).primaryKey().autoincrement(),
+  marketerId: int("marketer_id").notNull(),
+  restauranteId: int("restaurante_id").notNull(),
+  metodo: varchar("metodo", { length: 8 }).notNull(),
+  ruta: varchar("ruta", { length: 255 }).notNull(),
+  status: smallint("status"),
+  createdAt: datetime("created_at").notNull(),
+}, (t) => [index("idx_marketer_accion_restaurante").on(t.restauranteId, t.createdAt),
+  index("idx_marketer_accion_marketer").on(t.marketerId, t.createdAt)]);

@@ -6,6 +6,8 @@ import { pool } from '../db'
 import { authMiddleware } from '../middleware/auth'
 import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS } from '../lib/modulos'
+import { and, eq } from 'drizzle-orm'
+import { producto, productoPuntos } from '../db/schema'
 import {
   ajusteManualPuntos,
   guardarConfiguracionPuntos,
@@ -20,6 +22,26 @@ import {
 export const puntosRoute = new Hono()
 
 puntosRoute.use('*', authMiddleware)
+
+puntosRoute.put('/productos/:id', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA),
+  zValidator('param', z.object({ id: z.coerce.number().int().positive() })),
+  zValidator('json', z.object({ puntosGanados: z.number().int().min(0).max(2147483647),
+    puntosNecesarios: z.number().int().min(0).max(2147483647) }).strict()), async c => {
+    const db = drizzle(pool)
+    const restauranteId = Number((c as any).user.id)
+    const productoId = c.req.valid('param').id
+    const datos = c.req.valid('json')
+    const [item] = await db.select({ id: producto.id }).from(producto)
+      .where(and(eq(producto.id, productoId), eq(producto.restauranteId, restauranteId))).limit(1)
+    if (!item) return c.json({ success: false, message: 'Producto no encontrado' }, 404)
+    await db.transaction(async tx => {
+      const [existente] = await tx.select({ id: productoPuntos.id }).from(productoPuntos)
+        .where(and(eq(productoPuntos.productoId, productoId), eq(productoPuntos.restauranteId, restauranteId))).limit(1)
+      if (existente) await tx.update(productoPuntos).set(datos).where(and(eq(productoPuntos.id, existente.id), eq(productoPuntos.restauranteId, restauranteId)))
+      else await tx.insert(productoPuntos).values({ restauranteId, productoId, ...datos })
+    })
+    return c.json({ success: true, data: { productoId, ...datos } })
+  })
 
 const decimalString = z.union([z.string(), z.number()]).transform((val) => {
   if (typeof val === 'number') {

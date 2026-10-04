@@ -45,6 +45,9 @@ import { modulosRoute } from './routes/modulos';
 import { puntosRoute } from './routes/puntos';
 import { pagoRoute } from './routes/pago';
 import { internoRoute } from './routes/interno';
+import { marketerRoute } from './routes/marketer';
+import { miMarketerRoute } from './routes/mi-marketer';
+import { marketerPuedeSocketAdmin } from './lib/marketer-permisos';
 import { claimRoute } from './routes/claim';
 import { staffLoginRoute, staffRoute } from './routes/staff';
 import { mozosRoute } from './routes/mozos';
@@ -96,6 +99,8 @@ app.use('*', cors({
     'http://localhost:5173',
     'http://localhost:5174', // panel interno (Vite dev, puerto siguiente al del admin)
     'http://localhost:5175', // PWA de mozos (Vite dev)
+    'http://localhost:5176',
+    'https://marketing.piru.app',
     'https://piru.app',
     'https://admin.piru.app',
     'https://interno.piru.app',      // panel interno del fundador (Cloudflare Pages)
@@ -236,6 +241,8 @@ app.basePath('/api')
   .route('/mensajes', mensajesRoute)
   .route('/pago', pagoRoute)
   .route('/interno', internoRoute)
+  .route('/marketer', marketerRoute)
+  .route('/mi-marketer', miMarketerRoute)
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
 // because :qrToken would match "admin" as a token
 app.get(
@@ -248,7 +255,7 @@ app.get(
     if (token) {
       try {
         const decoded = await verifyToken(token);
-        restauranteId = decoded.id;
+        if (marketerPuedeSocketAdmin(decoded)) restauranteId = decoded.id;
         console.log(`🔑 Admin token válido - Restaurante ID: ${restauranteId}`);
       } catch (error) {
         console.error('❌ Invalid admin token:', error);

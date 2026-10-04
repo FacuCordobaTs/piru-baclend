@@ -619,7 +619,7 @@ describe('Canales copiar y wa.me de enlaces de marketing', () => {
     expect(response.status).toBe(201)
     const body = await response.json()
     expect(body).toMatchObject({ success: true, data: { contacto: { canal: 'wa_me', estado: 'abierto' }, entregado: false } })
-    expect(body.data.waMeUrl).toBe('https://wa.me/5491155551234?text=Volv%C3%A9%20por%20tus%20favoritos%20%26%20disfrut%C3%A1%0A%0Ahttps%3A%2F%2Fmy.piru.app%2Fpizzeria-demo%2Fr%2Ftoken-contacto-seguro-12345678901234567890')
+    expect(body.data.waMeUrl).toBe('https://api.whatsapp.com/send?phone=5491155551234&text=Volv%C3%A9%20por%20tus%20favoritos%20%26%20disfrut%C3%A1%0A%0Ahttps%3A%2F%2Fmy.piru.app%2Fpizzeria-demo%2Fr%2Ftoken-contacto-seguro-12345678901234567890')
     expect(repo.walletMovimientos).toBe(0)
   })
 

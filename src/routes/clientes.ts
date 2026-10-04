@@ -48,6 +48,8 @@ import {
 } from '../lib/recompra-programacion'
 import { DIAS_ENTRE_TOQUES_MIN } from '../lib/recompra-goteo'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
+import { obtenerDiasFlojos } from '../lib/dias-flojos-db'
+import { ErrorProgramacion } from '../lib/dias-flojos'
 import { resolverOportunidadesMarketing } from '../lib/marketing-oportunidades'
 import { resolverDatosGrowthClientes } from '../lib/clientes-growth'
 
@@ -77,6 +79,16 @@ async function borrarPedidosUnificados(tx: any, restauranteId: number, pedidoIds
 }
 
 clientesRoute.use('*', authMiddleware)
+
+clientesRoute.get('/dias-flojos', zValidator('query', z.object({
+    semanas: z.coerce.number().int().min(1).max(26).optional(),
+    dia: z.coerce.number().int().min(0).max(6).optional(),
+    franja: z.string().max(80).optional(),
+})), async (c) => {
+    const q = c.req.valid('query')
+    const data = await obtenerDiasFlojos(drizzle(pool), (c as any).user.id, q.semanas ?? 8, q.dia, q.franja)
+    return c.json({ success: true, data })
+})
 
 clientesRoute.get('/indice-pos', requirePosConsulta, async (c) => {
     const inicio = performance.now()
@@ -644,6 +656,11 @@ clientesRoute.post('/:id/recupero', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), a
  * servidor, así que rechazar por un valor que el motor sabe acotar sería un bug silencioso.
  */
 const especificacionProgramacionSchema = z.object({
+    soloIncluidos: z.boolean().optional(),
+    fechaObjetivo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+    horaObjetivo: z.number().int().min(11).max(21).nullish(),
+    mensaje: z.string().trim().min(1).max(700).nullish(),
+    descuentoPorcentaje: z.number().int().refine(v => v === 0 || (v >= 5 && v <= 30)).nullish(),
     segmento: z.enum(SEGMENTOS_PROGRAMABLES as unknown as [string, ...string[]]).nullish(),
     cantidad: z.coerce.number().nullish(),
     toqueHasta: z.coerce.number().nullish(),
@@ -652,11 +669,13 @@ const especificacionProgramacionSchema = z.object({
     porcentajeControl: z.coerce.number().nullish(),
     // Los ids se aceptan crudos: `idsValidos` descarta los que no son enteros positivos. Un id
     // basura en la lista no tiene por qué tumbar toda la programación.
-    incluirIds: z.array(z.coerce.number()).nullish(),
-    excluirIds: z.array(z.coerce.number()).nullish(),
+    incluirIds: z.array(z.coerce.number()).max(500).nullish(),
+    excluirIds: z.array(z.coerce.number()).max(500).nullish(),
 })
 
 const previewProgramacionSchema = z.object({
+    fechaObjetivo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+    horaObjetivo: z.coerce.number().int().min(11).max(21).nullish(),
     segmento: z.preprocess((v) => (v === '' ? undefined : v), z.enum(SEGMENTOS_PROGRAMABLES as unknown as [string, ...string[]]).nullish()),
     cantidad: z.coerce.number().nullish(),
     limite: z.coerce.number().nullish(),
@@ -709,6 +728,8 @@ clientesRoute.get(
         try {
             const q = c.req.valid('query')
             const data = await previewProgramacion(db, restauranteId, {
+                fechaObjetivo: q.fechaObjetivo,
+                horaObjetivo: q.horaObjetivo,
                 segmento: (q.segmento ?? null) as any,
                 cantidad: q.cantidad ?? null,
                 buscar: q.buscar ?? null,
@@ -716,6 +737,7 @@ clientesRoute.get(
             })
             return c.json({ success: true, data }, 200)
         } catch (error) {
+            if (error instanceof ErrorProgramacion) return c.json({ success: false, message: error.message }, 400)
             console.error('Error previsualizando programación de recompra:', error)
             return c.json({ success: false, message: 'Error interno del servidor' }, 500)
         }
@@ -739,6 +761,12 @@ clientesRoute.post(
         try {
             const body = c.req.valid('json')
             const resultado = await programarEnvios(db, restauranteId, {
+                soloIncluidos: body.soloIncluidos,
+                fechaObjetivo: body.fechaObjetivo,
+                horaObjetivo: body.horaObjetivo,
+                mensaje: body.mensaje,
+                descuentoPorcentaje: body.descuentoPorcentaje,
+                marketerId: (c as any).user.marketerId ?? null,
                 segmento: (body.segmento ?? null) as any,
                 cantidad: body.cantidad ?? null,
                 toqueHasta: body.toqueHasta ?? null,
@@ -769,6 +797,7 @@ clientesRoute.post(
                 data: resultado,
             }, 200)
         } catch (error) {
+            if (error instanceof ErrorProgramacion) return c.json({ success: false, message: error.message }, 400)
             console.error('Error programando envíos del motor de recompra:', error)
             return c.json({ success: false, message: 'Error interno del servidor' }, 500)
         }
@@ -879,6 +908,7 @@ clientesRoute.put(
                 },
             }, 200)
         } catch (error) {
+            if (error instanceof ErrorProgramacion) return c.json({ success: false, message: error.message }, 400)
             console.error('Error configurando motor de recompra:', error)
             return c.json({ success: false, message: 'Error interno del servidor' }, 500)
         }
@@ -895,6 +925,7 @@ clientesRoute.put('/recompra/modo', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), a
         const aplicado = await setModoMotor(db, restauranteId, modo)
         return c.json({ success: true, message: `Modo ${aplicado} activado`, data: { modo: aplicado } }, 200)
     } catch (error) {
+        if (error instanceof ErrorProgramacion) return c.json({ success: false, message: error.message }, 400)
         console.error('Error actualizando modo del motor de recompra:', error)
         return c.json({ success: false, message: 'Error interno del servidor' }, 500)
     }
@@ -935,8 +966,9 @@ clientesRoute.get(
  *
  * Body opcional con `segmento` + `toque` + `link` + `descuento`: lo que el operador efectivamente
  * mandó. Se registra tal cual —incluido un envío sin descuento— sin reiniciar el nivel de la escalera
- * del cliente, y ACÁ es donde se emite el cupón (el diálogo no toca la base). La respuesta devuelve lo
- * registrado para que la pantalla no tenga que adivinarlo.
+ * del cliente. El cupón ya lo armó la vista previa al habilitar WhatsApp (o se arma acá, si el
+ * operador cambió el descuento). La respuesta devuelve lo registrado para que la pantalla no tenga
+ * que adivinarlo.
  */
 clientesRoute.post(
     '/recompra/cola/:id/marcar-enviado',

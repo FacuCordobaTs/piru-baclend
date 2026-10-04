@@ -13,6 +13,8 @@ import {
   suscripcion as SuscripcionTable,
 } from '../db/schema'
 import { internoAuthMiddleware } from '../middleware/interno'
+import { internoMarketersRoute } from './interno-marketers'
+import { marketer, restauranteMarketer } from '../db/schema'
 import { resumenWallet } from '../lib/mensajes-wallet'
 import {
   resolverEstadoVigente,
@@ -78,6 +80,7 @@ internoRoute.post('/login', zValidator('json', loginSchema), async (c) => {
 
 // A partir de acá, todo exige el token interno.
 internoRoute.use('*', internoAuthMiddleware)
+internoRoute.route('/', internoMarketersRoute)
 
 /**
  * Emite una sesión corta para entrar al admin de un local desde el panel interno.
@@ -149,6 +152,9 @@ internoRoute.get('/locales', async (c) => {
       .from(RestauranteTable)
       .orderBy(asc(RestauranteTable.id))
 
+    const marketersVinculados = await db.select({ restauranteId: restauranteMarketer.restauranteId, id: marketer.id, nombre: marketer.nombre })
+      .from(restauranteMarketer).innerJoin(marketer, eq(marketer.id, restauranteMarketer.marketerId))
+      .where(and(eq(restauranteMarketer.estado, 'activo'), eq(marketer.activo, true)))
     const data = await Promise.all(
       restaurantes.map(async (r) => {
         // Transición lazy de estado antes de leer (vencido → gracia → suspendida). Devuelve la
@@ -169,6 +175,7 @@ internoRoute.get('/locales', async (c) => {
 
         return {
           id: r.id,
+          marketer: marketersVinculados.find(m => m.restauranteId === r.id) ?? null,
           nombre: r.nombre,
           username: r.username,
           email: r.email,

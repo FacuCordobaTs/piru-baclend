@@ -21,6 +21,7 @@
 // El envío usa las credenciales de Meta del propio local (marca del local).
 
 import { type MySql2Database } from 'drizzle-orm/mysql2'
+import { componerMensajeManual } from './dias-flojos'
 import { and, eq, inArray, notInArray, desc } from 'drizzle-orm'
 import {
   cliente as ClienteTable,
@@ -218,12 +219,18 @@ function opcionReceta(
  * Crea (o reemite) el cupón de descuento asociado a un toque de recupero. Código determinístico
  * por (cliente, descuento) para no acumular basura al reintentar. Un solo uso; el escalón con
  * vencimiento (nivel 3) vence en 48 hs.
+ *
+ * Se arma una vez por toque. Un cupón armado DESPUÉS del último toque registrado es el de este
+ * mismo mensaje (en modo manual lo deja listo la vista previa, antes de abrir WhatsApp): se le
+ * renueva el plazo, pero si el cliente ya lo usó no se revive. Uno más viejo es de un mensaje
+ * anterior y se rearma para este.
  */
 async function upsertCuponRecupero(
   db: Db,
   restauranteId: number,
   clienteId: number,
   beneficio: BeneficioRecompra,
+  ultimoToqueMs: number | null,
 ): Promise<string> {
   const codigo = `VOLVE${beneficio.descuento}-${clienteId}`
   const fechaFin = beneficio.expiraHoras != null
@@ -231,7 +238,7 @@ async function upsertCuponRecupero(
     : null
 
   const [existente] = await db
-    .select({ id: CodigoDescuentoTable.id })
+    .select({ id: CodigoDescuentoTable.id, fechaInicio: CodigoDescuentoTable.fechaInicio })
     .from(CodigoDescuentoTable)
     .where(
       and(
@@ -241,7 +248,15 @@ async function upsertCuponRecupero(
     )
     .limit(1)
 
-  if (existente) {
+  const armadoMs = existente?.fechaInicio ? new Date(existente.fechaInicio).getTime() : null
+  const esDeEsteMensaje = armadoMs != null && (ultimoToqueMs == null || armadoMs > ultimoToqueMs)
+
+  if (existente && esDeEsteMensaje) {
+    await db
+      .update(CodigoDescuentoTable)
+      .set({ fechaFin })
+      .where(eq(CodigoDescuentoTable.id, existente.id))
+  } else if (existente) {
     await db
       .update(CodigoDescuentoTable)
       .set({
@@ -338,6 +353,9 @@ export interface ResultadoEnvioRecupero {
 }
 
 export interface OpcionesEnvioRecupero {
+  mensajePersonalizado?: string | null
+  /** `false`: la vista previa de un mensaje que todavía no puede salir no arma el cupón. */
+  emitirCupon?: boolean
   /** Clave estable del intento lógico. Impide dobles débitos y dobles envíos al reintentar. */
   operacionId?: string
   /** Segmento que clasificó la campaña. Si falta, se deriva del RFM del cliente. */
@@ -608,8 +626,12 @@ export async function prepararMensajeRecupero(
   // `codigoDescuentoId`, nunca el % del link, así que el cupón determinístico del cliente es lo que
   // hace que el descuento se aplique solo. El mensaje no lo menciona: el cliente no tipea nada.
   let codigo: string | null = null
-  if (envio.emiteCupon) {
-    codigo = await upsertCuponRecupero(db, restauranteId, clienteId, beneficio)
+  if (envio.emiteCupon && opciones.emitirCupon !== false) {
+    const ultimoToqueMs = (toquesMap[clienteId] ?? []).reduce<number | null>(
+      (max, t) => (max == null || t.createdAt.getTime() > max ? t.createdAt.getTime() : max),
+      null,
+    )
+    codigo = await upsertCuponRecupero(db, restauranteId, clienteId, beneficio, ultimoToqueMs)
   }
 
   // 5. Link de micro-campaña con el carrito del último pedido adentro del token cifrado (antes:
@@ -656,11 +678,14 @@ export async function prepararMensajeRecupero(
     beneficio: incentivo,
   } satisfies Record<VariableToque, string>)
   // En modo manual no hay botón de plantilla: el link va pegado abajo del texto.
-  const texto = `${cuerpo}\n\n${urlTienda}`
+  const texto = opciones.mensajePersonalizado
+    ? componerMensajeManual(opciones.mensajePersonalizado, { nombre: nombreCliente, local: nombreLocal,
+      favorito: productoFavorito, tiempo: tiempoSinPedir, beneficio: incentivo, link: urlTienda })
+    : `${cuerpo}\n\n${urlTienda}`
 
   const norm = normalizarTelefonoCliente(cli.telefono)
   const telWa = norm ? (norm.startsWith('54') ? norm : norm.length === 10 ? `549${norm}` : norm) : null
-  const waMeUrl = telWa ? `https://wa.me/${telWa}?text=${encodeURIComponent(texto)}` : null
+  const waMeUrl = telWa ? `https://api.whatsapp.com/send?phone=${telWa}&text=${encodeURIComponent(texto)}` : null
 
   // 6. Menú de recetas: cada una con el beneficio que tendría si se eligiera. Se calcula sin tocar
   // la base (sólo se emite el cupón de la receta aplicada), así que abrir el selector no ensucia
@@ -946,6 +971,9 @@ export async function enviarRecuperoDormido(
 export const PORCENTAJE_CONTROL = 0.1
 
 export interface ClienteCohorte {
+  optOut?: boolean
+  topeAlcanzado?: boolean
+  cooldownHasta?: string | null
   clienteId: number
   nombre: string
   telefono: string
@@ -975,7 +1003,7 @@ export interface ClienteCohorte {
 export async function cargarCohorteRecompra(
   db: Db,
   restauranteId: number,
-  opciones: { incluirEnCooldown?: boolean } = {},
+  opciones: { incluirEnCooldown?: boolean; incluirProtegidos?: boolean } = {},
 ): Promise<ClienteCohorte[]> {
   const clientes = await db
     .select({
@@ -1043,15 +1071,21 @@ export async function cargarCohorteRecompra(
     if (!cl.telefono) return
     // Protección de la base (4.5): fuera de la cohorte los que pidieron la baja (opt-out) y los que
     // ya tocaron el tope de marketing del mes. Así el batch no los alcanza ni figuran en la preview.
-    if (cl.marketingOptOut) return
-    if (contarToquesEnVentana(toques[cl.id] ?? []) >= TOPE_MARKETING_POR_CLIENTE) return
+    const optOut = !!cl.marketingOptOut
+    const topeAlcanzado = contarToquesEnVentana(toques[cl.id] ?? []) >= TOPE_MARKETING_POR_CLIENTE
+    if (optOut && !opciones.incluirProtegidos) return
+    if (topeAlcanzado && !opciones.incluirProtegidos) return
     const estado = estadoRecupero(toques[cl.id] ?? [], ultimoPedidoMs)
-    if (!estado.puedeEnviar && !opciones.incluirEnCooldown) return
+    if (!estado.puedeEnviar && !opciones.incluirEnCooldown && !opciones.incluirProtegidos) return
     const ultimoToqueMs = (toques[cl.id] ?? []).reduce<number | null>(
       (max, t) => (max == null || t.createdAt.getTime() > max ? t.createdAt.getTime() : max),
       null,
     )
     cohorte.push({
+      optOut,
+      topeAlcanzado,
+      cooldownHasta: ultimoToqueMs != null && Date.now() - ultimoToqueMs < COOLDOWN_HORAS * MS_POR_HORA
+        ? new Date(ultimoToqueMs + COOLDOWN_HORAS * MS_POR_HORA).toISOString() : null,
       clienteId: cl.id,
       nombre: cl.nombre || 'Cliente',
       telefono: cl.telefono,

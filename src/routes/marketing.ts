@@ -1648,7 +1648,7 @@ function telefonoWaMe(telefono: string | null): string | null {
 }
 
 function urlWaMe(telefono: string, texto: string): string {
-  return `https://wa.me/${telefono}?text=${encodeURIComponent(texto)}`
+  return `https://api.whatsapp.com/send?phone=${telefono}&text=${encodeURIComponent(texto)}`
 }
 
 /**

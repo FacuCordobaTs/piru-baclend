@@ -33,6 +33,13 @@ export const PORCENTAJE_CONTROL_MAX = 30
 
 /** Lo que el dueño pidió desde la pantalla del motor. Todo opcional salvo la cantidad. */
 export interface EspecificacionProgramacion {
+  /** Lista explícita de destinatarios: no sumar candidatos automáticos. */
+  soloIncluidos?: boolean
+  fechaObjetivo?: string | null
+  horaObjetivo?: number | null
+  mensaje?: string | null
+  descuentoPorcentaje?: number | null
+  marketerId?: number | null
   /** Segmento elegido. `null`/ausente = "en general" (todos los recuperables). */
   segmento?: SegmentoRecompra | null
   /** N: mensajes que el asistente selecciona automáticamente. Los `incluirIds` se suman aparte. */
@@ -53,6 +60,7 @@ export interface EspecificacionProgramacion {
 
 /** La especificación ya acotada: nada fuera de rango llega a la base ni al planificador. */
 export interface EspecificacionNormalizada {
+  soloIncluidos: boolean
   segmento: SegmentoRecompra | null
   cantidad: number
   toqueHasta: ToqueRecompra
@@ -103,6 +111,7 @@ export function normalizarEspecificacion(
   const excluidos = new Set(excluirIds)
 
   return {
+    soloIncluidos: spec.soloIncluidos === true,
     segmento: segmento && SEGMENTOS_PROGRAMABLES.includes(segmento) ? segmento : null,
     cantidad: enteroEnRango(spec.cantidad, CANTIDAD_MIN, CANTIDAD_MAX) ?? CANTIDAD_MIN,
     toqueHasta: normalizarToque(spec.toqueHasta ?? 1),
@@ -209,7 +218,7 @@ export function seleccionarCandidatos(
   const yaElegidos = new Set(manuales.map((cl) => cl.clienteId))
   const resto = base.filter((cl) => !excluidos.has(cl.clienteId) && !yaElegidos.has(cl.clienteId))
 
-  const automaticos = resto.slice(0, spec.cantidad)
+  const automaticos = spec.soloIncluidos ? [] : resto.slice(0, spec.cantidad)
   const contactar = [...manuales, ...automaticos]
 
   // El control sale del tramo que sigue en la lista, no de la lista entera: un control elegido entre
