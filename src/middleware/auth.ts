@@ -9,7 +9,10 @@ import {
   marketerAccion,
 } from '../db/schema'
 import { and, eq, sql } from 'drizzle-orm'
-import { marketerPuede } from '../lib/marketer-permisos'
+import {
+  duenioAppMarketingPuede,
+  marketerPuede,
+} from '../lib/marketer-permisos'
 
 export interface AuthenticatedContext extends Context {
   user: {
@@ -35,7 +38,12 @@ export const createAuthMiddleware =
 
     const token = authHeader.substring(7) // Remove 'Bearer ' prefix
 
-    let decoded: { id: number; scope?: string; marketerId?: number }
+    let decoded: {
+      id: number
+      scope?: string
+      marketerId?: number
+      appMarketing?: unknown
+    }
     try {
       decoded = jwt.verify(
         token,
@@ -90,16 +98,30 @@ export const createAuthMiddleware =
           },
           403,
         )
+    } else if (decoded.appMarketing !== undefined) {
+      // Sesión del dueño en la app de marketers (/marketing-duenio/sesion): es su local, pero
+      // sólo alcanza lo que esa app usa. Lo demás se sigue manejando desde el panel.
+      if (decoded.appMarketing !== true || decoded.scope !== 'restaurante')
+        return c.json({ error: 'Token inválido' }, 401)
+      if (!duenioAppMarketingPuede(c.req.method, c.req.path))
+        return c.json(
+          {
+            error: 'Esto se maneja desde tu panel de Piru',
+            code: 'app_marketing_sin_permiso',
+          },
+          403,
+        )
     }
+    const restringido =
+      decoded.marketerId !== undefined || decoded.appMarketing !== undefined
     const restauranteResult = await db
       .select({
         id: RestauranteTable.id,
         email: RestauranteTable.email,
         nombre: RestauranteTable.nombre,
-        rapiboyToken:
-          decoded.marketerId === undefined
-            ? RestauranteTable.rapiboyToken
-            : sql<null>`NULL`,
+        rapiboyToken: restringido
+          ? sql<null>`NULL`
+          : RestauranteTable.rapiboyToken,
       })
       .from(RestauranteTable)
       .where(eq(RestauranteTable.id, decoded.id))

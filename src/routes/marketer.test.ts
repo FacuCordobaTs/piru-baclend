@@ -1,8 +1,14 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, setSystemTime, test } from 'bun:test'
 import * as jwt from 'jsonwebtoken'
 import { createMarketerRoute } from './marketer'
 import { hashActivacionMarketer } from '../lib/marketer-identidad'
 import { marketer } from '../db/schema'
+import {
+  AHORA_CARTERA,
+  TARJETA_BRASA,
+  datosCarteraEjemplo,
+  dbCarteraFalsa,
+} from '../lib/marketer-cartera-db.fakes'
 
 const TOKEN = 'activacion-segura-con-mas-de-32-caracteres'
 function caso() {
@@ -82,5 +88,57 @@ describe('activación marketer', () => {
     const c = caso()
     expect((await c.activar('123')).status).toBe(400)
     expect(c.row.passwordHash).toBeNull()
+  })
+})
+
+describe('cartera del marketer', () => {
+  afterEach(() => setSystemTime())
+  test('sólo campos seguros, ordenada por mensajes de hoy y con los revocados aparte', async () => {
+    setSystemTime(AHORA_CARTERA)
+    const { db } = dbCarteraFalsa(datosCarteraEjemplo())
+    const app = createMarketerRoute(
+      () => db,
+      async (c, next) => {
+        ;(c as any).marketer = { id: 2, comisionPorcentaje: '20.00', activo: true }
+        await next()
+      },
+    )
+    const res = await app.request('/locales')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      activos: [
+        {
+          restauranteId: 7,
+          nombre: 'Local 7',
+          username: null,
+          imagenUrl: 'https://cdn.example/pizza.png',
+          colorPrimario: null,
+          baseTienda: 'https://pizza.example',
+          desde: '2026-09-10T12:00:00.000Z',
+          whatsappConectado: false,
+          retencionActiva: false,
+          crecimientoActivo: false,
+          codigosDescuentoActivo: true,
+          suscripcion: { estado: 'trial', montoMensual: 40000 },
+          ventas30d: 2000,
+          ventas30dAnterior: 0,
+          pedidos30d: 1,
+          ventasSemanales: [0, 0, 0, 0, 0, 0, 0, 2000],
+          clientesNuevos30d: 1,
+          diaMasFlojo: null,
+          mensajesParaHoy: 3,
+          comisionEstimadaMensual: 6000,
+        },
+        TARJETA_BRASA,
+      ],
+      revocados: [
+        {
+          restauranteId: 8,
+          nombre: 'Vieja',
+          imagenUrl: null,
+          revocadoAt: '2026-09-20T12:00:00.000Z',
+        },
+      ],
+    })
   })
 })

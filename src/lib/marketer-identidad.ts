@@ -6,13 +6,16 @@ import { marketer, restaurante, restauranteMarketer } from '../db/schema'
 
 export const hashActivacionMarketer = (token: string) =>
   createHash('sha256').update(token).digest('hex')
+/** Base de la app de marketers (`MARKETING_URL`), sin barra final. */
+export const urlAppMarketing = () =>
+  (process.env.MARKETING_URL || 'https://marketing.piru.app').replace(/\/$/, '')
 export function generarActivacionMarketer(ahora = new Date()) {
   const token = randomBytes(32).toString('base64url')
   return {
     token,
     tokenHash: hashActivacionMarketer(token),
     expiraAt: new Date(ahora.getTime() + 7 * 86400000),
-    linkActivacion: `${(process.env.MARKETING_URL || 'https://marketing.piru.app').replace(/\/$/, '')}/activar#token=${token}`,
+    linkActivacion: `${urlAppMarketing()}/activar#token=${token}`,
   }
 }
 export function datosMarketer(row: typeof marketer.$inferSelect) {

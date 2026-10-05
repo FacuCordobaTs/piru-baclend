@@ -47,6 +47,7 @@ import { pagoRoute } from './routes/pago';
 import { internoRoute } from './routes/interno';
 import { marketerRoute } from './routes/marketer';
 import { miMarketerRoute } from './routes/mi-marketer';
+import { marketingDuenioRoute } from './routes/marketing-duenio';
 import { marketerPuedeSocketAdmin } from './lib/marketer-permisos';
 import { claimRoute } from './routes/claim';
 import { staffLoginRoute, staffRoute } from './routes/staff';
@@ -243,6 +244,7 @@ app.basePath('/api')
   .route('/interno', internoRoute)
   .route('/marketer', marketerRoute)
   .route('/mi-marketer', miMarketerRoute)
+  .route('/marketing-duenio', marketingDuenioRoute)
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
 // because :qrToken would match "admin" as a token
 app.get(

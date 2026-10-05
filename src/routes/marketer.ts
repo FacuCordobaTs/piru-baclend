@@ -3,22 +3,14 @@ import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 import * as bcrypt from 'bcrypt'
 import * as jwt from 'jsonwebtoken'
-import { and, desc, eq, gte, inArray, lt, ne, sql } from 'drizzle-orm'
+import { and, desc, eq, gte } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
 import {
   marketer,
   restaurante,
   restauranteMarketer,
-  pedidoUnificado,
-  colaRecompra,
-  campanaRecompra,
-  horarioRestaurante,
-  suscripcion,
-  restauranteModulo,
-  modulo,
   comisionMarketer,
-  configuracionSuscripcion,
 } from '../db/schema'
 import {
   marketerAuthMiddleware,
@@ -28,17 +20,10 @@ import {
   datosMarketer,
   hashActivacionMarketer,
 } from '../lib/marketer-identidad'
-import { metricasCartera } from '../lib/marketer-cartera'
-import { calcularDiasFlojos } from '../lib/dias-flojos'
-import { anclajePublico } from '../lib/marketing-enlaces'
 import {
-  moduloEstaActivoAhora,
-  resolverModulosFacturablesDeListado,
-} from '../lib/modulos'
-import {
-  crearDateArgentina,
-  obtenerComponentesArgentina,
-} from '../lib/motor-recompra-patron'
+  columnasLocalCartera,
+  tarjetasDeCartera,
+} from '../lib/marketer-cartera-db'
 
 const secreto = () => process.env.JWT_SECRET || 'fallback-secret'
 const sesion = (row: typeof marketer.$inferSelect) => ({
@@ -245,13 +230,7 @@ export function createMarketerRoute(
       const ahora = new Date()
       const locales = await db
         .select({
-          restauranteId: restaurante.id,
-          nombre: restaurante.nombre,
-          username: restaurante.username,
-          imagenUrl: restaurante.imagenUrl,
-          colorPrimario: restaurante.colorPrimario,
-          dominioTienda: restaurante.dominioTienda,
-          whatsappConectado: sql<number>`(${restaurante.whatsappEnabled} = TRUE AND ${restaurante.whatsappAccessToken} IS NOT NULL)`,
+          ...columnasLocalCartera,
           desde: restauranteMarketer.activadoAt,
           estado: restauranteMarketer.estado,
           revocadoAt: restauranteMarketer.revocadoAt,
@@ -264,7 +243,6 @@ export function createMarketerRoute(
         )
         .where(eq(restauranteMarketer.marketerId, partner.id))
       const activos = locales.filter((l) => l.estado === 'activo')
-      const ids = activos.map((l) => l.restauranteId)
       const revocados = locales
         .filter((l) => l.estado === 'revocado')
         .map(({ restauranteId, nombre, imagenUrl, revocadoAt }) => ({
@@ -273,208 +251,13 @@ export function createMarketerRoute(
           imagenUrl,
           revocadoAt,
         }))
-      if (!ids.length) return c.json({ activos: [], revocados })
-      const comp = obtenerComponentesArgentina(ahora.getTime())
-      const desdeHoy = crearDateArgentina(comp.anio, comp.mes, comp.diaMes, 0)
-      const hastaHoy = new Date(desdeHoy.getTime() + 86400000)
-      const [
-        pedidos,
-        primeros,
-        subs,
-        mods,
-        horarios,
-        mensajes,
-        configuraciones,
-      ] = await Promise.all([
-        db
-          .select({
-            restauranteId: pedidoUnificado.restauranteId,
-            createdAt: pedidoUnificado.createdAt,
-            pagado: pedidoUnificado.pagado,
-            total: pedidoUnificado.total,
-            estado: pedidoUnificado.estado,
-          })
-          .from(pedidoUnificado)
-          .where(
-            and(
-              inArray(pedidoUnificado.restauranteId, ids),
-              ne(pedidoUnificado.estado, 'cancelled'),
-              gte(
-                pedidoUnificado.createdAt,
-                new Date(ahora.getTime() - 60 * 86400000),
-              ),
-            ),
-          ),
-        db
-          .select({
-            restauranteId: pedidoUnificado.restauranteId,
-            clienteId: pedidoUnificado.clienteId,
-            primero: sql<Date>`MIN(${pedidoUnificado.createdAt})`.mapWith(
-              pedidoUnificado.createdAt,
-            ),
-          })
-          .from(pedidoUnificado)
-          .where(
-            and(
-              inArray(pedidoUnificado.restauranteId, ids),
-              ne(pedidoUnificado.estado, 'cancelled'),
-              sql`${pedidoUnificado.clienteId} IS NOT NULL`,
-            ),
-          )
-          .groupBy(pedidoUnificado.restauranteId, pedidoUnificado.clienteId),
-        db
-          .select({
-            restauranteId: suscripcion.restauranteId,
-            estado: suscripcion.estado,
-            montoMensual: suscripcion.montoTotalMensual,
-            precioBase: suscripcion.precioBaseMensual,
-            precioMensual: suscripcion.precioMensual,
-          })
-          .from(suscripcion)
-          .where(inArray(suscripcion.restauranteId, ids)),
-        db
-          .select({
-            restauranteId: restauranteModulo.restauranteId,
-            codigo: modulo.codigo,
-            tipo: modulo.tipo,
-            precio: modulo.precioMensual,
-            estado: restauranteModulo.estado,
-            origen: restauranteModulo.origen,
-            precioMensualCongelado: restauranteModulo.precioMensualCongelado,
-            vigenteHasta: restauranteModulo.vigenteHasta,
-            catalogoActivo: modulo.activo,
-          })
-          .from(restauranteModulo)
-          .innerJoin(modulo, eq(modulo.id, restauranteModulo.moduloId))
-          .where(inArray(restauranteModulo.restauranteId, ids)),
-        db
-          .select({
-            restauranteId: horarioRestaurante.restauranteId,
-            diaSemana: horarioRestaurante.diaSemana,
-          })
-          .from(horarioRestaurante)
-          .where(inArray(horarioRestaurante.restauranteId, ids)),
-        db
-          .select({
-            restauranteId: colaRecompra.restauranteId,
-            cantidad: sql<number>`COUNT(*)`,
-          })
-          .from(colaRecompra)
-          .innerJoin(
-            campanaRecompra,
-            eq(campanaRecompra.id, colaRecompra.campanaId),
-          )
-          .where(
-            and(
-              inArray(colaRecompra.restauranteId, ids),
-              eq(colaRecompra.estado, 'pendiente'),
-              eq(colaRecompra.rol, 'contactado'),
-              eq(campanaRecompra.estado, 'activa'),
-              gte(colaRecompra.dueDate, desdeHoy),
-              lt(colaRecompra.dueDate, hastaHoy),
-            ),
-          )
-          .groupBy(colaRecompra.restauranteId),
-        db
-          .select({ precioMensual: configuracionSuscripcion.precioMensual })
-          .from(configuracionSuscripcion)
-          .where(eq(configuracionSuscripcion.codigo, 'piru'))
-          .limit(1),
-      ])
-      const nombres = [
-        'Domingo',
-        'Lunes',
-        'Martes',
-        'Miércoles',
-        'Jueves',
-        'Viernes',
-        'Sábado',
-      ]
-      const filas = activos
-        .map((local) => {
-          const stats = metricasCartera(
-            pedidos.filter((p) => p.restauranteId === local.restauranteId),
-            ahora,
-          )
-          const sub = subs.find((s) => s.restauranteId === local.restauranteId)
-          const propios = mods.filter(
-            (m) => m.restauranteId === local.restauranteId,
-          )
-          const vigentes = propios.filter(
-            (m) =>
-              m.catalogoActivo &&
-              moduloEstaActivoAhora(
-                { ...m, estadoSuscripcion: sub?.estado ?? null },
-                ahora,
-              ),
-          )
-          const activo = (codigo: string) =>
-            vigentes.some((m) => m.codigo === codigo)
-          const facturables = resolverModulosFacturablesDeListado(
-            propios.map((m) => ({ ...m, precioMensual: m.precio })),
-          )
-          const montoMensual = sub
-            ? Number(
-                configuraciones[0]?.precioMensual ??
-                  sub.precioBase ??
-                  sub.precioMensual ??
-                  0,
-              ) + facturables.reduce((total, m) => total + m.montoMensual, 0)
-            : 0
-          const abiertos = horarios
-            .filter((h) => h.restauranteId === local.restauranteId)
-            .map((h) => h.diaSemana)
-          const dias = Array.from(
-            new Set(abiertos.length ? abiertos : [0, 1, 2, 3, 4, 5, 6]),
-          )
-          const flojo = calcularDiasFlojos(
-            pedidos.filter((p) => p.restauranteId === local.restauranteId),
-            { semanas: 8, ahora: ahora.getTime(), diasAbiertos: dias },
-          ).flojos.find((f) => f.franja === null)
-          const anclaje = anclajePublico(local)
-          return {
-            restauranteId: local.restauranteId,
-            nombre: local.nombre || `Local ${local.restauranteId}`,
-            username: local.username,
-            imagenUrl: local.imagenUrl,
-            colorPrimario: local.colorPrimario,
-            baseTienda: anclaje
-              ? `${anclaje.base}${anclaje.prefijo}`.replace(/\/$/, '')
-              : null,
-            desde: local.desde,
-            whatsappConectado: Boolean(local.whatsappConectado),
-            retencionActiva: activo('motor_recompra'),
-            crecimientoActivo: activo('crecimiento'),
-            codigosDescuentoActivo: activo('codigos_descuento'),
-            suscripcion: sub ? { estado: sub.estado, montoMensual } : null,
-            ventas30d: stats.ventas30d,
-            ventas30dAnterior: stats.ventas30dAnterior,
-            pedidos30d: stats.pedidos30d,
-            ventasSemanales: stats.ventasSemanales,
-            clientesNuevos30d: primeros.filter(
-              (p) =>
-                p.restauranteId === local.restauranteId &&
-                new Date(p.primero).getTime() >=
-                  ahora.getTime() - 30 * 86400000,
-            ).length,
-            diaMasFlojo: flojo
-              ? { diaSemana: flojo.diaSemana, nombre: flojo.nombre }
-              : null,
-            mensajesParaHoy: Number(
-              mensajes.find((m) => m.restauranteId === local.restauranteId)
-                ?.cantidad ?? 0,
-            ),
-            comisionEstimadaMensual:
-              Math.round(
-                montoMensual *
-                  Number(local.porcentaje ?? partner.comisionPorcentaje),
-              ) / 100,
-          }
-        })
-        .sort(
-          (a, b) =>
-            b.mensajesParaHoy - a.mensajesParaHoy || b.ventas30d - a.ventas30d,
-        )
+      if (!activos.length) return c.json({ activos: [], revocados })
+      const filas = await tarjetasDeCartera(
+        db,
+        activos,
+        partner.comisionPorcentaje,
+        ahora,
+      )
       return c.json({ activos: filas, revocados })
     })
     .get(

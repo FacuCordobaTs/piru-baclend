@@ -125,3 +125,56 @@ describe('auth del marketer en rutas existentes', () => {
     ).toBe(200)
   })
 })
+
+describe('sesión del dueño en la app de marketers', () => {
+  const sesionApp = { id: 6, scope: 'restaurante', appMarketing: true }
+  test('opera su local sólo dentro de la superficie de la app y sin auditoría de marketer', async () => {
+    const c = caso()
+    const res = await c.pedir('/api/clientes/list', 'GET', sesionApp as any)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ id: 6 })
+    expect(
+      (
+        await c.pedir(
+          '/api/modulos/motor_recompra/checkout',
+          'POST',
+          sesionApp as any,
+        )
+      ).status,
+    ).toBe(200)
+    expect(
+      (await c.pedir('/api/clientes/7/pedidos/4', 'DELETE', sesionApp as any))
+        .status,
+    ).toBe(200)
+    expect(c.consultas).not.toContain(restauranteMarketer)
+    expect(c.acciones).toEqual([])
+  })
+  test('el resto del panel no llega al handler ni lee el perfil', async () => {
+    for (const [path, method] of [
+      ['/api/restaurante/profile', 'GET'],
+      ['/api/sucursales/list', 'GET'],
+      ['/api/pedido-unificado', 'GET'],
+      ['/api/marketing-duenio/entrada', 'POST'],
+    ]) {
+      const c = caso()
+      const res = await c.pedir(path, method, sesionApp as any)
+      expect(res.status).toBe(403)
+      expect(await res.json()).toMatchObject({
+        code: 'app_marketing_sin_permiso',
+      })
+      expect(c.consultas).toEqual([])
+    }
+  })
+  test('una marca de la app mal formada no es un token de dueño', async () => {
+    for (const payload of [
+      { id: 6, appMarketing: true },
+      { id: 6, scope: 'restaurante', appMarketing: 'si' },
+    ]) {
+      const c = caso()
+      expect(
+        (await c.pedir('/api/clientes/list', 'GET', payload as any)).status,
+      ).toBe(401)
+      expect(c.consultas).toEqual([])
+    }
+  })
+})
