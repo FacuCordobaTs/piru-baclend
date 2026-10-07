@@ -117,6 +117,8 @@ app.use('*', cors({
     'https://alfajorconpapas.com',
     'https://che-milanesa.pages.dev',
     'https://che-milanesa.com',
+    'https://juanchosandwicheria.com',
+    'https://www.juanchosandwicheria.com',
     'https://panther-d5w.pages.dev',
     'https://pantherburger.com',
     'https://www.pantherburger.com',

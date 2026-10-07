@@ -272,12 +272,14 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
     const tokenValido = await obtenerTokenValido(restauranteId)
     if (!tokenValido) return c.json({ success: false, error: 'Restaurante MP error' }, 401)
 
-    // 3. URL de retorno Checkout Pro → …/pedido/:id (multi-tenant my.piru.app; dominios propios Alfajor / Burgers del Sur)
+    // 3. URL de retorno Checkout Pro → …/pedido/:id en la tienda del local.
     let successUrl: string
     if (restauranteId === 6) {
       successUrl = `https://alfajorconpapas.com/pedido/${pedidoId}`
     } else if (restauranteId === 13) {
       successUrl = `https://burgersdelsur.com/pedido/${pedidoId}`
+    } else if (restauranteId === 39) {
+      successUrl = `https://juanchosandwicheria.com/pedido/${pedidoId}`
     } else {
       successUrl = `https://my.piru.app/pedido/${pedidoId}`
     }

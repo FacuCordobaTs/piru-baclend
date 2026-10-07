@@ -1,5 +1,5 @@
 import { sucursalPublica } from '../lib/sucursales-operacion'
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { pool } from '../db'
 import { restaurante as RestauranteTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, agregado as AgregadoTable, productoAgregado as ProductoAgregadoTable, horarioRestaurante as HorarioRestauranteTable, codigoDescuento as CodigoDescuentoTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable, marketingCampana as MarketingCampanaTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
@@ -235,13 +235,20 @@ async function aliasTransferenciaDeSucursal(
     return sucursal?.transferenciaAlias?.trim() || null
 }
 
-publicRoute.get('/restaurante/:username', async (c) => {
+// Ambos accesos comparten el mismo catálogo y la misma selección de datos públicos.
+const obtenerRestaurantePublico = async (c: Context) => {
     const db = drizzle(pool)
     const username = c.req.param('username')
+    const idParam = c.req.param('id')
+    const id = idParam === undefined ? undefined : Number(idParam)
+    if (idParam !== undefined && (!/^\d+$/.test(idParam) || !Number.isSafeInteger(id) || id! <= 0)) {
+        return c.json({ message: 'ID de restaurante inválido', success: false }, 400)
+    }
 
     try {
         const restaurante = await db.select({
             id: RestauranteTable.id,
+            username: RestauranteTable.username,
             nombre: RestauranteTable.nombre,
             imagenUrl: RestauranteTable.imagenUrl,
             imagenLightUrl: RestauranteTable.imagenLightUrl,
@@ -280,7 +287,7 @@ publicRoute.get('/restaurante/:username', async (c) => {
             soloPedidosProgramados: RestauranteTable.soloPedidosProgramados,
         })
             .from(RestauranteTable)
-            .where(eq(RestauranteTable.username, username))
+            .where(id === undefined ? eq(RestauranteTable.username, username!) : eq(RestauranteTable.id, id))
             .limit(1)
 
         if (!restaurante || restaurante.length === 0) {
@@ -515,7 +522,10 @@ publicRoute.get('/restaurante/:username', async (c) => {
         console.error('Error getting public restaurant profile:', error)
         return c.json({ message: 'Error getting profile', error: (error as Error).message }, 500)
     }
-})
+}
+
+publicRoute.get('/restaurante/id/:id', obtenerRestaurantePublico)
+publicRoute.get('/restaurante/:username', obtenerRestaurantePublico)
 
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
