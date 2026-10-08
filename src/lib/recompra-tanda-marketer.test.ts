@@ -159,7 +159,7 @@ const tandaConTextoLibre = {
   descuentoPorcentaje: 15,
 }
 describe('tandas de marketer: escritura real del planificador con repositorio de prueba', () => {
-  test('un mensaje que todavía no puede salir se ve, pero sin link para abrir WhatsApp ni cupón armado', async () => {
+  test('el horario futuro es sugerido: permite abrir WhatsApp con el cupón listo antes de la hora', async () => {
     const ahora = hoyALas15()
     const { db, inserts } = repositorio({
       fila: filaDeTanda(new Date(ahora + 4 * 3600000)),
@@ -170,9 +170,9 @@ describe('tandas de marketer: escritura real del planificador con repositorio de
     if (!resultado.ok) return
     expect(resultado.data.texto).toContain('Hola Cliente 1, vení a Brasa.')
     expect(resultado.data.descuento).toBe(15)
-    expect(resultado.data.envio).toMatchObject({ puedeEnviar: false })
-    expect(resultado.data.envio.motivo).toContain('programado')
-    expect(resultado.data.waMeUrl).toBeNull()
+    expect(resultado.data.envio).toEqual({ puedeEnviar: true, motivo: null })
+    expect(resultado.data.horarioSugerido).toBe('Martes 19:00 hs')
+    expect(resultado.data.waMeUrl).toStartWith('https://api.whatsapp.com/send?phone=')
     const token = new URL(resultado.data.urlTienda).searchParams.get('tk')!
     expect(descifrarGrowthPayload(token)).toMatchObject({
       origen: 'recompra',
@@ -180,7 +180,7 @@ describe('tandas de marketer: escritura real del planificador con repositorio de
       rId: 7,
       cId: 1,
     })
-    expect(inserts).toHaveLength(0)
+    expect(inserts).toEqual([expect.objectContaining({ tabla: 'codigo_descuento' })])
   })
   test('un mensaje listo para salir deja armado el cupón que su link promete, antes de marcarlo', async () => {
     const ahora = hoyALas15()
@@ -261,28 +261,47 @@ describe('tandas de marketer: escritura real del planificador con repositorio de
     expect(await vencerInvitacionesPasadas(sinFilas.db, 7)).toBe(0)
     expect(sinFilas.updates).toHaveLength(0)
   })
-  test('registro manual no admite un envío futuro ni modifica el ledger en un reintento ya enviado', async () => {
+  test('registro manual permite anticipar el envío y conserva la idempotencia', async () => {
     const futuro = repositorio({
-      fila: {
-        id: 1,
-        campanaId: 19,
-        clienteId: 1,
-        estado: 'pendiente',
-        rol: 'contactado',
-        dueDate: new Date(Date.now() + 86400000),
-      },
+      fila: filaDeTanda(new Date(Date.now() + 86400000)),
+      tanda: { ...tandaConTextoLibre, toqueHasta: 1 },
     })
-    expect(
-      await marcarFilaColaComoEnviadaManual(futuro.db, 7, 1),
-    ).toMatchObject({ ok: false })
-    expect(futuro.inserts).toHaveLength(0)
+    expect(await marcarFilaColaComoEnviadaManual(futuro.db, 7, 1)).toMatchObject({ ok: true })
+    expect(futuro.inserts.filter(i => i.tabla === 'recupero_cliente')).toHaveLength(1)
+    expect(futuro.updates).toContainEqual(expect.objectContaining({
+      tabla: 'cola_recompra', valores: expect.objectContaining({ estado: 'enviado', origenContacto: 'manual' }),
+    }))
     const anterior = repositorio({
       fila: { id: 1, campanaId: 19, clienteId: 1, estado: 'enviado' },
     })
-    expect(
-      await marcarFilaColaComoEnviadaManual(anterior.db, 7, 1),
-    ).toMatchObject({ ok: true, mensaje: 'Ya estaba marcado como enviado' })
+    expect(await marcarFilaColaComoEnviadaManual(anterior.db, 7, 1))
+      .toMatchObject({ ok: true, mensaje: 'Ya estaba marcado como enviado' })
     expect(anterior.inserts).toHaveLength(0)
+  })
+  test('manual permite enviar de noche y desde otro día recomendado', async () => {
+    const ahora = hoyALas15() + 8 * 3600000
+    const { db } = repositorio({
+      fila: filaDeTanda(new Date(ahora + 86400000)),
+      tanda: tandaConTextoLibre,
+    })
+    const resultado = await obtenerMensajeFilaCola(db, 7, 1, {}, ahora)
+    expect(resultado.ok && resultado.data.envio.puedeEnviar).toBe(true)
+    expect(resultado.ok && resultado.data.waMeUrl).toStartWith('https://api.whatsapp.com/send?phone=')
+  })
+  test('adelantar el horario no elimina el descanso de 48 horas', async () => {
+    const ahora = hoyALas15()
+    const { db, inserts } = repositorio({
+      fila: filaDeTanda(new Date(ahora + 4 * 3600000)),
+      tanda: tandaConTextoLibre,
+      toques: [new Date(ahora - 24 * 3600000)],
+    })
+    const resultado = await obtenerMensajeFilaCola(db, 7, 1, {}, ahora)
+    expect(resultado.ok).toBe(true)
+    if (!resultado.ok) return
+    expect(resultado.data.envio).toMatchObject({ puedeEnviar: false })
+    expect(resultado.data.envio.motivo).toContain('48 horas')
+    expect(resultado.data.waMeUrl).toBeNull()
+    expect(inserts).toHaveLength(0)
   })
   test('fecha agenda todos a la misma hora, conserva control y texto, fuerza un mensaje y guarda autor', async () => {
     const { db, inserts } = repositorio()

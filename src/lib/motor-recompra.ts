@@ -1184,7 +1184,7 @@ async function enviarFila(
   // reserva en una transacción propia ANTES de llamar al proveedor.
   const [fila] = await db.select().from(ColaRecompraTable)
     .where(and(eq(ColaRecompraTable.id, filaId), eq(ColaRecompraTable.restauranteId, restauranteId))).limit(1)
-  if (!fila || !(await evaluarEnvioManual(db, restauranteId, fila, Date.now())).puedeEnviar) return { enviado: false, fallido: false }
+  if (!fila || !(await evaluarEnvioManual(db, restauranteId, fila, Date.now(), true)).puedeEnviar) return { enviado: false, fallido: false }
   const config = await obtenerConfigMotor(db, restauranteId)
   if (config.modo !== 'automatico' || await contarEnviadosDelDia(db, restauranteId, Date.now()) >= config.cupoDiario) return { enviado: false, fallido: false }
   const resultado = await despacharFilaAutomatica(db, restauranteId, filaId, clienteId, segmento, toque)
@@ -2058,9 +2058,6 @@ export interface PermisoEnvioManual {
   desde?: string
 }
 
-/** Al registrar se toleran unos minutos de silencio: lo abierto a las 21:58 se marca a las 22:05. */
-const TOLERANCIA_SILENCIO_REGISTRO_MS = 15 * 60 * 1000
-
 /** "el martes 14/10 a las 19:00", en hora de Argentina. */
 function momentoArgentina(fechaMs: number): string {
   const c = obtenerComponentesArgentina(fechaMs)
@@ -2073,8 +2070,8 @@ function momentoArgentina(fechaMs: number): string {
  * se miraran al registrar, el mensaje ya habría salido del WhatsApp del local sin su cupón y sin
  * contar para el tope de 4 en 30 días ni para las 48 hs entre toques.
  *
- * Al registrar se vuelven a verificar compras, bajas y descansos. Hay unos minutos de tolerancia
- * sobre el horario de silencio para confirmar un mensaje que se acaba de mandar.
+ * Al registrar se vuelven a verificar compras, bajas y descansos. En manual, el día y la hora
+ * son recomendaciones; sólo el despacho automático exige horario y silencio.
  *
  * El cupo limita los despachos automáticos; la agenda y el envío manual muestran todos los elegibles.
  */
@@ -2083,22 +2080,23 @@ async function evaluarEnvioManual(
   restauranteId: number,
   fila: typeof ColaRecompraTable.$inferSelect,
   ahora: number,
-  registrando = false,
+  automatico = false,
 ): Promise<PermisoEnvioManual> {
   const no = (motivo: string): PermisoEnvioManual => ({ puedeEnviar: false, motivo })
   if (fila.estado !== 'pendiente' || fila.rol !== 'contactado') return no('Este mensaje ya no está pendiente')
   if (!fila.dueDate) return no('Este mensaje todavía no tiene fecha de envío')
   const original = new Date(fila.dueDate).getTime()
   if (fila.tipoMensaje === 'dia_flojo' && fechaArgentina(original) < fechaArgentina(ahora)) return no('La invitación ya pasó su día')
-  const c = obtenerComponentesArgentina(original)
-  const dueMs = fila.tipoMensaje === 'dia_flojo' ? original
-    : ocurrenciaSemanal(fila.diaSemana ?? c.diaSemana, fila.minutoDia ?? c.hora * 60 + c.minutos, ahora, original).getTime()
-  if (fechaArgentina(dueMs) !== fechaArgentina(ahora) || dueMs > ahora || original > ahora) {
-    return { ...no('Este mensaje está programado para ' + horarioSemanal(fila.diaSemana ?? c.diaSemana, fila.minutoDia ?? c.hora * 60 + c.minutos)), desde: new Date(Math.max(dueMs, original)).toISOString() }
+  let dueMs = original
+  if (automatico) {
+    const c = obtenerComponentesArgentina(original)
+    dueMs = fila.tipoMensaje === 'dia_flojo' ? original
+      : ocurrenciaSemanal(fila.diaSemana ?? c.diaSemana, fila.minutoDia ?? c.hora * 60 + c.minutos, ahora, original).getTime()
+    if (fechaArgentina(dueMs) !== fechaArgentina(ahora) || dueMs > ahora || original > ahora) {
+      return { ...no('Este mensaje está programado para ' + horarioSemanal(fila.diaSemana ?? c.diaSemana, fila.minutoDia ?? c.hora * 60 + c.minutos)), desde: new Date(Math.max(dueMs, original)).toISOString() }
+    }
+    if (enHorarioSilencio(ahora)) return no('Los mensajes salen entre las 9 y las 22')
   }
-  const tolerancia = registrando ? TOLERANCIA_SILENCIO_REGISTRO_MS : 0
-  if (enHorarioSilencio(ahora) && enHorarioSilencio(ahora - tolerancia)) return no('Los mensajes salen entre las 9 y las 22')
-
 
   const [campana] = await db
     .select({ origen: CampanaRecompraTable.origen })
@@ -2215,7 +2213,7 @@ async function registrarFilaColaManual(
   if (!fila) return { ok: false, mensaje: 'Elemento de la cola no encontrado' }
   if (fila.estado === 'enviado') return { ok: true, mensaje: 'Ya estaba marcado como enviado' }
   // Las barreras de verdad se aplicaron antes de abrir WhatsApp (`obtenerMensajeFilaCola`).
-  const envio = await evaluarEnvioManual(db, restauranteId, fila, Date.now(), true)
+  const envio = await evaluarEnvioManual(db, restauranteId, fila, Date.now())
   if (!envio.puedeEnviar) return { ok: false, mensaje: envio.motivo ?? 'Este mensaje no se puede registrar' }
   const tanda = await opcionesDeTanda(db, restauranteId, fila.campanaId)
 
