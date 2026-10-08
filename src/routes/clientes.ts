@@ -37,18 +37,18 @@ import {
 } from '../lib/recupero'
 import { decisionesRecetaSchema, opcionesDeDecisiones } from '../lib/recompra-decisiones'
 import {
-    estadoMotor, pausarMotorManual, reanudarMotor, setModoMotor, guardarConfigMotor,
-    programarEnvios, previewProgramacion, listarProgramaciones, cancelarProgramacion,
+    estadoMotor, setModoMotor, guardarConfigMotor,
     listarClientesRecompra, listarColaRecompra, listarHistorialRecompra,
     obtenerMensajeFilaCola, marcarFilaColaComoEnviadaManual,
     registrarContactoManual, registrarFalloContactoManual, CUPO_DIARIO_MIN, CUPO_DIARIO_MAX,
 } from '../lib/motor-recompra'
 import {
-    CANTIDAD_MAX, CANTIDAD_MIN, PORCENTAJE_CONTROL_MAX, PORCENTAJE_CONTROL_MIN, SEGMENTOS_PROGRAMABLES,
+    CANTIDAD_MAX, CANTIDAD_MIN, PORCENTAJE_CONTROL_MAX, PORCENTAJE_CONTROL_MIN,
 } from '../lib/recompra-programacion'
 import { DIAS_ENTRE_TOQUES_MIN } from '../lib/recompra-goteo'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { obtenerDiasFlojos } from '../lib/dias-flojos-db'
+import { sincronizarAgendaSemanal, oportunidadesDiaFlojo, sumarClientesHoy } from '../lib/recompra-agenda'
 import { ErrorProgramacion } from '../lib/dias-flojos'
 import { resolverOportunidadesMarketing } from '../lib/marketing-oportunidades'
 import { resolverDatosGrowthClientes } from '../lib/clientes-growth'
@@ -643,60 +643,20 @@ clientesRoute.post('/:id/recupero', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), a
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
-// MOTOR DE RECOMPRA · PROGRAMACIONES — el dueño programa la tanda y el motor
-// la ejecuta. Nada se agenda sin una programación explícita.
+// MOTOR DE RECOMPRA · AGENDA SEMANAL — siempre activa, sin tandas.
 // Todo el contrato usa el gate canónico de Retención.
 // ═══════════════════════════════════════════════════════════════════════════
 
-/**
- * El contrato de entrada de una programación. Es el borde HTTP, no la validación de negocio: todo lo
- * que entra acá se acota después en `normalizarEspecificacion` (que es la única puerta hacia la base).
- * Por eso el zod es permisivo a propósito —`nullish()` en todo, coerción suelta en los ids—: el
- * admin manda `null` para "usá el default del local", y un 400 de Zod no deja log del lado del
- * servidor, así que rechazar por un valor que el motor sabe acotar sería un bug silencioso.
- */
-const especificacionProgramacionSchema = z.object({
-    soloIncluidos: z.boolean().optional(),
-    fechaObjetivo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
-    horaObjetivo: z.number().int().min(11).max(21).nullish(),
-    mensaje: z.string().trim().min(1).max(700).nullish(),
-    descuentoPorcentaje: z.number().int().refine(v => v === 0 || (v >= 5 && v <= 30)).nullish(),
-    segmento: z.enum(SEGMENTOS_PROGRAMABLES as unknown as [string, ...string[]]).nullish(),
-    cantidad: z.coerce.number().nullish(),
-    toqueHasta: z.coerce.number().nullish(),
-    diasToque2: z.coerce.number().nullish(),
-    diasToque3: z.coerce.number().nullish(),
-    porcentajeControl: z.coerce.number().nullish(),
-    // Los ids se aceptan crudos: `idsValidos` descarta los que no son enteros positivos. Un id
-    // basura en la lista no tiene por qué tumbar toda la programación.
-    incluirIds: z.array(z.coerce.number()).max(500).nullish(),
-    excluirIds: z.array(z.coerce.number()).max(500).nullish(),
-})
-
-const previewProgramacionSchema = z.object({
-    fechaObjetivo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
-    horaObjetivo: z.coerce.number().int().min(11).max(21).nullish(),
-    segmento: z.preprocess((v) => (v === '' ? undefined : v), z.enum(SEGMENTOS_PROGRAMABLES as unknown as [string, ...string[]]).nullish()),
-    cantidad: z.coerce.number().nullish(),
-    limite: z.coerce.number().nullish(),
-    buscar: z.preprocess((v) => (v === '' ? undefined : v), z.string().max(80).nullish()),
-})
-
 const configMotorSchema = z.object({
+    toqueHasta: z.number().int().min(1).max(3).optional(),
     cupoDiario: z.coerce.number().nullish(),
     modo: z.enum(['automatico', 'manual']).nullish(),
-    diasToque2: z.coerce.number().nullish(),
-    diasToque3: z.coerce.number().nullish(),
+    diasToque2: z.coerce.number().int().min(2).max(30).nullish(),
+    diasToque3: z.coerce.number().int().min(2).max(30).nullish(),
     porcentajeControl: z.coerce.number().nullish(),
 })
 
-/**
- * GET /clientes/recompra/estado — la pantalla del motor:
- *  - sin tandas vivas → el PLAN de activación (cohorte disponible + propuesta de cupo + días que
- *    cubre el saldo) y el asistente para programar la primera.
- *  - con tandas vivas → el DASHBOARD agregado (contactados, volvieron, plata recuperada) + la lista
- *    de programaciones con su progreso.
- */
+/** GET /clientes/recompra/estado — configuración e historial agregado de la agenda continua. */
 clientesRoute.get('/recompra/estado', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
@@ -709,165 +669,28 @@ clientesRoute.get('/recompra/estado', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA),
     }
 })
 
-/**
- * GET /clientes/recompra/programar/preview — el universo del asistente de programación.
- *
- * Devuelve los candidatos en el orden en que el motor los elegiría, con el día y la hora que le
- * tocaría a cada uno, más el control que se apartaría. Los que ya están comprometidos en otra tanda
- * viva vienen marcados (`elegible: false`) porque programarlos de nuevo les mandaría el mismo toque
- * dos veces. `buscar` busca en TODA la cohorte, para poder agregar a alguien puntual que no esté
- * entre los primeros de la lista. No escribe nada.
- */
-clientesRoute.get(
-    '/recompra/programar/preview',
-    requireModulo(MODULE_KEYS.MOTOR_RECOMPRA),
-    zValidator('query', previewProgramacionSchema),
-    async (c) => {
-        const db = drizzle(pool)
-        const restauranteId = (c as any).user.id
-        try {
-            const q = c.req.valid('query')
-            const data = await previewProgramacion(db, restauranteId, {
-                fechaObjetivo: q.fechaObjetivo,
-                horaObjetivo: q.horaObjetivo,
-                segmento: (q.segmento ?? null) as any,
-                cantidad: q.cantidad ?? null,
-                buscar: q.buscar ?? null,
-                limite: q.limite ?? null,
-            })
-            return c.json({ success: true, data }, 200)
-        } catch (error) {
-            if (error instanceof ErrorProgramacion) return c.json({ success: false, message: error.message }, 400)
-            console.error('Error previsualizando programación de recompra:', error)
-            return c.json({ success: false, message: 'Error interno del servidor' }, 500)
-        }
-    },
-)
-
-/**
- * POST /clientes/recompra/programar — LA DECISIÓN del dueño. Crea la tanda: elige a quiénes, aparta
- * el grupo de control y deja agendadas las filas del toque 1 con su día y su hora.
- *
- * No envía nada: el goteo lo hace el tick cuando cada fila vence, respetando el cupo del local.
- * Que programar no envíe es lo que hace que el dueño pueda programar tranquilo.
- */
-clientesRoute.post(
-    '/recompra/programar',
-    requireModulo(MODULE_KEYS.MOTOR_RECOMPRA),
-    zValidator('json', especificacionProgramacionSchema),
-    async (c) => {
-        const db = drizzle(pool)
-        const restauranteId = (c as any).user.id
-        try {
-            const body = c.req.valid('json')
-            const resultado = await programarEnvios(db, restauranteId, {
-                soloIncluidos: body.soloIncluidos,
-                fechaObjetivo: body.fechaObjetivo,
-                horaObjetivo: body.horaObjetivo,
-                mensaje: body.mensaje,
-                descuentoPorcentaje: body.descuentoPorcentaje,
-                marketerId: (c as any).user.marketerId ?? null,
-                segmento: (body.segmento ?? null) as any,
-                cantidad: body.cantidad ?? null,
-                toqueHasta: body.toqueHasta ?? null,
-                diasToque2: body.diasToque2 ?? null,
-                diasToque3: body.diasToque3 ?? null,
-                porcentajeControl: body.porcentajeControl ?? null,
-                incluirIds: body.incluirIds ?? null,
-                excluirIds: body.excluirIds ?? null,
-            })
-            if (resultado.moduloNoDisponible) {
-                return c.json({
-                    success: false,
-                    message: 'El módulo Retención no está disponible.',
-                    data: resultado,
-                }, 403)
-            }
-            if (resultado.vacio) {
-                return c.json({
-                    success: false,
-                    message: 'No hay clientes elegibles para programar con esos filtros',
-                    data: resultado,
-                }, 200)
-            }
-            return c.json({
-                success: true,
-                message: `Programados ${resultado.cantidad} mensajes`
-                    + (resultado.control > 0 ? ` (+${resultado.control} en el grupo de control)` : ''),
-                data: resultado,
-            }, 200)
-        } catch (error) {
-            if (error instanceof ErrorProgramacion) return c.json({ success: false, message: error.message }, 400)
-            console.error('Error programando envíos del motor de recompra:', error)
-            return c.json({ success: false, message: 'Error interno del servidor' }, 500)
-        }
-    },
-)
-
-/** GET /clientes/recompra/programaciones — las tandas del local (vivas y cerradas) con su progreso. */
-clientesRoute.get('/recompra/programaciones', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
-    const db = drizzle(pool)
-    const restauranteId = (c as any).user.id
-    try {
-        const data = await listarProgramaciones(db, restauranteId, numeroQuery(c.req.query('limite'), 20))
-        return c.json({ success: true, data }, 200)
-    } catch (error) {
-        console.error('Error listando programaciones de recompra:', error)
-        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
-    }
+// Las tandas y las pausas dejan de ser operaciones del motor continuo.
+for (const ruta of ['/recompra/programar', '/recompra/programaciones/:id/cancelar', '/recompra/pausar']) {
+    clientesRoute.post(ruta, requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), c => c.json({ success: false, message: 'El motor usa una agenda semanal continua. Abrí Hoy para ver los mensajes.' }, 410))
+}
+clientesRoute.get('/recompra/programar/preview', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), c => c.json({ success: false, message: 'Usá la agenda semanal de Hoy' }, 410))
+clientesRoute.get('/recompra/programaciones', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), c => c.json({ success: true, data: [] }))
+clientesRoute.post('/recompra/reanudar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), c => c.json({ success: true, data: { estado: 'activa' } }))
+clientesRoute.post('/recompra/sincronizar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async c => {
+    const data = await sincronizarAgendaSemanal(drizzle(pool), (c as any).user.id)
+    return c.json({ success: true, data })
 })
-
-/**
- * POST /clientes/recompra/programaciones/:id/cancelar — lo que todavía no salió, no sale.
- * Las filas ya enviadas y las del grupo de control se conservan: son la evidencia de atribución.
- */
-clientesRoute.post('/recompra/programaciones/:id/cancelar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
-    const db = drizzle(pool)
-    const restauranteId = (c as any).user.id
-    const campanaId = Number(c.req.param('id'))
-    if (!Number.isFinite(campanaId) || campanaId <= 0) {
-        return c.json({ success: false, message: 'ID de programación inválido' }, 400)
-    }
-    try {
-        const res = await cancelarProgramacion(db, restauranteId, campanaId)
-        if (!res.ok) return c.json({ success: false, message: res.mensaje }, 404)
-        return c.json({
-            success: true,
-            message: res.mensaje
-                ?? (res.canceladas > 0
-                    ? `Programación cancelada: ${res.canceladas} mensajes no salen`
-                    : 'Programación cancelada'),
-            data: res,
-        }, 200)
-    } catch (error) {
-        console.error('Error cancelando programación de recompra:', error)
-        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
-    }
+clientesRoute.get('/recompra/oportunidades-dia', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), zValidator('query', z.object({ dia: z.coerce.number().int().min(0).max(6) })), async c => {
+    const data = await oportunidadesDiaFlojo(drizzle(pool), (c as any).user.id, c.req.valid('query').dia)
+    return c.json({ success: true, data })
 })
-
-/** POST /clientes/recompra/pausar — Pausar el goteo del local (siempre disponible). No se pierde nada: la cola queda. */
-clientesRoute.post('/recompra/pausar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
-    const db = drizzle(pool)
-    const restauranteId = (c as any).user.id
+clientesRoute.post('/recompra/sumar-hoy', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), zValidator('json', z.object({ clienteIds: z.array(z.number().int().positive()).min(1) })), async c => {
     try {
-        await pausarMotorManual(db, restauranteId)
-        return c.json({ success: true, message: 'Motor pausado' }, 200)
-    } catch (error) {
-        console.error('Error pausando motor de recompra:', error)
-        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
-    }
-})
-
-/** POST /clientes/recompra/reanudar — vuelve a gotear desde donde quedó, con las tandas que ya estaban. */
-clientesRoute.post('/recompra/reanudar', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA), async (c) => {
-    const db = drizzle(pool)
-    const restauranteId = (c as any).user.id
-    try {
-        await reanudarMotor(db, restauranteId)
-        return c.json({ success: true, message: 'Motor reanudado' }, 200)
-    } catch (error) {
-        console.error('Error reanudando motor de recompra:', error)
-        return c.json({ success: false, message: 'Error interno del servidor' }, 500)
+        const data = await sumarClientesHoy(drizzle(pool), (c as any).user.id, c.req.valid('json').clienteIds)
+        return c.json({ success: true, data })
+    } catch (e) {
+        if (e instanceof ErrorProgramacion) return c.json({ success: false, message: e.message }, 400)
+        throw e
     }
 })
 
@@ -886,6 +709,7 @@ clientesRoute.put(
         try {
             const body = c.req.valid('json')
             const patch: Record<string, unknown> = {}
+            if (body.toqueHasta != null) patch.toqueHasta = body.toqueHasta
             if (body.cupoDiario != null) patch.cupoDiario = body.cupoDiario
             if (body.modo != null) patch.modo = body.modo
             if (body.diasToque2 != null) patch.diasToque2 = body.diasToque2

@@ -21,7 +21,8 @@ describe('motor-recompra-patron', () => {
 
     expect(patron.diaSemana).toBe(5) // Viernes
     expect(patron.hora).toBe(21)
-    expect(patron.horarioSugerido).toBe('Viernes 21:00 hs (habitual)')
+    expect(patron.horarioSugerido).toBe('Viernes 21:30 hs (habitual)')
+    expect(patron.minutos).toBe(30)
 
     // El dueDate debe ser el próximo viernes: 2026-08-28 a las 21:00 ART
     const dueComp = obtenerComponentesArgentina(patron.dueDate.getTime())

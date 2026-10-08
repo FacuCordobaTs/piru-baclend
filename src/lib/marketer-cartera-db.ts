@@ -152,7 +152,7 @@ export async function tarjetasDeCartera(
             eq(colaRecompra.estado, 'pendiente'),
             eq(colaRecompra.rol, 'contactado'),
             eq(campanaRecompra.estado, 'activa'),
-            gte(colaRecompra.dueDate, desdeHoy),
+            eq(colaRecompra.diaSemana, new Date(desdeHoy.getTime()).getUTCDay()),
             lt(colaRecompra.dueDate, hastaHoy),
           ),
         )

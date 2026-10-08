@@ -150,6 +150,7 @@ const filaDeTanda = (dueDate: Date) => ({
   estado: 'pendiente',
   rol: 'contactado',
   dueDate,
+  ultimoPedidoAtSnapshot: new Date(Date.now() - 10 * 86400000),
   horarioSugerido: 'Martes 19:00 hs',
 })
 const tandaConTextoLibre = {
@@ -235,7 +236,7 @@ describe('tandas de marketer: escritura real del planificador con repositorio de
   test('una invitación de día flojo que no salió en su día ya no ofrece WhatsApp ni arma cupón', async () => {
     const ahora = hoyALas15()
     const { db, inserts } = repositorio({
-      fila: filaDeTanda(new Date(ahora - 20 * 3600000)),
+      fila: { ...filaDeTanda(new Date(ahora - 20 * 3600000)), tipoMensaje: 'dia_flojo' },
       tanda: { ...tandaConTextoLibre, origen: 'dia_flojo' },
     })
     const resultado = await obtenerMensajeFilaCola(db, 7, 1, {}, ahora)

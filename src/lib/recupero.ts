@@ -424,6 +424,9 @@ export interface OpcionesMensajeRecompra {
 }
 
 export interface DatosMensajeRecupero {
+  tipoMensaje?: string
+  toqueHasta?: number
+  segmentoCliente?: string | null
   clienteId: number
   clienteNombre: string
   telefono: string | null
@@ -540,7 +543,7 @@ export async function prepararMensajeRecupero(
         eq(PedidoUnificadoTable.clienteId, clienteId),
       ),
     )
-  const pedidosValidos = pedidos
+  const pedidosValidos = pedidos.filter(p => p.estado !== 'cancelled')
   const fechasMs = pedidosValidos.map((p) => new Date(p.createdAt).getTime())
   const ultimoPedidoMs = fechasMs.length > 0 ? Math.max(...fechasMs) : null
   const diasDesdeUltimo = ultimoPedidoMs != null
@@ -931,7 +934,7 @@ export async function enviarRecuperoDormido(
   await db.insert(RecuperoClienteTable).values({
     restauranteId,
     clienteId,
-    telefono: data.telefono,
+    telefono: data.telefono!,
     nivel: data.escalon.nivel,
     toque: data.toque,
     modalidad: data.link,
@@ -971,6 +974,7 @@ export async function enviarRecuperoDormido(
 export const PORCENTAJE_CONTROL = 0.1
 
 export interface ClienteCohorte {
+  segmentoCliente?: SegmentoCliente
   optOut?: boolean
   topeAlcanzado?: boolean
   cooldownHasta?: string | null
@@ -1003,7 +1007,7 @@ export interface ClienteCohorte {
 export async function cargarCohorteRecompra(
   db: Db,
   restauranteId: number,
-  opciones: { incluirEnCooldown?: boolean; incluirProtegidos?: boolean } = {},
+  opciones: { incluirEnCooldown?: boolean; incluirProtegidos?: boolean; incluirActivos?: boolean } = {},
 ): Promise<ClienteCohorte[]> {
   const clientes = await db
     .select({
@@ -1067,6 +1071,7 @@ export async function cargarCohorteRecompra(
       segmentoRecompra = perfil.segmento
     }
 
+    if (opciones.incluirActivos && (perfil.segmento === 'activo' || perfil.segmento === 'vip')) segmentoRecompra = 'dormido'
     if (!segmentoRecompra || !SEGMENTOS_RECUPERABLES.includes(segmentoRecompra)) return
     if (!cl.telefono) return
     // Protección de la base (4.5): fuera de la cohorte los que pidieron la baja (opt-out) y los que
@@ -1082,6 +1087,7 @@ export async function cargarCohorteRecompra(
       null,
     )
     cohorte.push({
+      segmentoCliente: perfil.segmento,
       optOut,
       topeAlcanzado,
       cooldownHasta: ultimoToqueMs != null && Date.now() - ultimoToqueMs < COOLDOWN_HORAS * MS_POR_HORA

@@ -1053,3 +1053,23 @@ describe('POST /marketing/enlaces (micro-campañas lo_mismo y reactivacion)', ()
     expect(json.data.textoSugerido).toContain('20% OFF')
   })
 })
+
+
+describe('campaña exclusiva de un día de la semana', () => {
+  test('el mismo link funciona cada miércoles y fuera de ese día abre la tienda sin beneficio', async () => {
+    let instante = new Date('2026-10-07T15:46:00.000Z');
+    const deps = dependenciasSmartLinks({ ahora: () => instante });
+    const original = deps.repositorio.buscarCampanaActiva;
+    deps.repositorio.buscarCampanaActiva = async (username, slug) => {
+      const campana = await original(username, slug);
+      return campana ? { ...campana, diaSemana: 3 } : null;
+    };
+    const app = appSmartLinks(deps).app;
+    const path = '/public/marketing/campanas/pizzeria/ig-agosto';
+    expect(await (await app.request(path)).json()).toMatchObject({ data: { encontrada: true, destino: { tipo: 'producto' } } });
+    instante = new Date('2026-10-08T15:46:00.000Z');
+    expect(await (await app.request(path)).json()).toEqual({ success: true, data: { encontrada: false, destino: { tipo: 'tienda' } } });
+    instante = new Date('2026-10-14T15:46:00.000Z');
+    expect(await (await app.request(path)).json()).toMatchObject({ data: { encontrada: true, beneficio: { codigo: 'VOLVE10' } } });
+  });
+});

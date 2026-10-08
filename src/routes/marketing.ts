@@ -276,6 +276,7 @@ export interface CampanaSmartLinkPublica {
   descuentoProductoPorcentaje: number
   limiteUsos: number | null
   usosActuales: number
+  diaSemana?: number | null
   fechaInicio: Date | null
   fechaFin: Date | null
   visitas: number
@@ -350,6 +351,7 @@ export function crearMarketingSmartLinksRoute(dependencias: DependenciasSmartLin
     const vigente = Boolean(campana
     && (campana.destinoTipo !== 'producto' || campana.productoId != null)
     && (campana.destinoTipo !== 'carrito' || (campana.carritoRep != null && esCarritoPrearmadoValido(campana.carritoRep)))
+      && (campana.diaSemana == null || new Date(ahora.getTime() - 3 * 3600000).getUTCDay() === campana.diaSemana)
       && (!campana.fechaInicio || campana.fechaInicio <= ahora)
       && (!campana.fechaFin || campana.fechaFin >= ahora)
       && (campana.limiteUsos == null || campana.usosActuales < campana.limiteUsos))
@@ -430,6 +432,7 @@ function crearRepositorioSmartLinksDrizzle(): RepositorioSmartLinksMarketing {
         descuentoProductoPorcentaje: MarketingCampanaTable.descuentoProductoPorcentaje,
         limiteUsos: MarketingCampanaTable.limiteUsos,
         usosActuales: MarketingCampanaTable.usosActuales,
+        diaSemana: MarketingCampanaTable.diaSemana,
         fechaInicio: MarketingCampanaTable.fechaInicio,
         fechaFin: MarketingCampanaTable.fechaFin,
         visitas: MarketingCampanaTable.visitas,
@@ -1043,6 +1046,7 @@ const camposCampanaSchema = z.object({
   codigoDescuentoId: z.number().int().positive().nullable().optional(),
   descuentoProductoPorcentaje: z.number().int().min(0).max(100).optional(),
   limiteUsos: z.number().int().positive().nullable().optional(),
+  diaSemana: z.number().int().min(0).max(6).nullable().optional(),
   fechaInicio: fechaOpcionalSchema,
   fechaFin: fechaOpcionalSchema,
   utmSource: textoOpcionalSchema,
@@ -1091,7 +1095,7 @@ export interface RepositorioCampanasMarketing {
 
 function valoresCampana(input: Partial<CampanaInput>) {
   const valores: Record<string, unknown> = {}
-  const campos = ['nombre', 'tipo', 'categoria', 'recetaCodigo', 'estado', 'destinoTipo', 'productoId', 'carritoRep', 'codigoDescuentoId', 'descuentoProductoPorcentaje', 'limiteUsos', 'fechaInicio', 'fechaFin', 'utmSource', 'utmMedium', 'utmCampaign', 'utmTerm', 'utmContent', 'usaGrupoControl'] as const
+  const campos = ['diaSemana', 'nombre', 'tipo', 'categoria', 'recetaCodigo', 'estado', 'destinoTipo', 'productoId', 'carritoRep', 'codigoDescuentoId', 'descuentoProductoPorcentaje', 'limiteUsos', 'fechaInicio', 'fechaFin', 'utmSource', 'utmMedium', 'utmCampaign', 'utmTerm', 'utmContent', 'usaGrupoControl'] as const
   for (const campo of campos) if (input[campo] !== undefined) valores[campo] = input[campo]
   // Una campaña que abre la tienda es estrictamente de seguimiento. Limpiar
   // estos campos evita que un payload malformado conserve una oferta o un

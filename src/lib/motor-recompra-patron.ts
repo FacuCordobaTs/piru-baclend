@@ -13,6 +13,7 @@
 
 export interface PatronEnvioCliente {
   diaSemana: number // 0 = Domingo, 1 = Lunes, ..., 6 = Sábado
+  minutos: number
   hora: number // 11 .. 21
   dueDate: Date
   horarioSugerido: string
@@ -111,6 +112,8 @@ export function calcularPatronEnvio(
 
   // Acotar la hora a la ventana permitida (no molestar de 22:00 a 09:00; entre 11 y 21)
   const horaValida = Math.min(21, Math.max(11, horaFavorita))
+  const minutosHabituales = fechasPedidosMs.map(obtenerComponentesArgentina).filter(c => c.hora === horaValida).map(c => c.minutos).sort((a,b) => a-b)
+  const targetMinutos = minutosHabituales[Math.floor(minutosHabituales.length / 2)] ?? 0
 
   let targetDiaSemana: number
   let targetHora: number
@@ -144,7 +147,7 @@ export function calcularPatronEnvio(
   // Si el target es hoy:
   if (diasHastaTarget === 0) {
     // Si ya pasó la hora objetivo hoy, pasar a la próxima semana
-    if (ahoraArg.hora > targetHora || (ahoraArg.hora === targetHora && ahoraArg.minutos > 0)) {
+    if (ahoraArg.hora > targetHora || (ahoraArg.hora === targetHora && ahoraArg.minutos > targetMinutos)) {
       diasHastaTarget = 7
     }
   }
@@ -152,15 +155,16 @@ export function calcularPatronEnvio(
   // Construir la fecha objetivo sumando los días necesarios
   const targetMs = ahoraMs + diasHastaTarget * MS_DIA
   const targetArg = obtenerComponentesArgentina(targetMs)
-  const dueDate = crearDateArgentina(targetArg.anio, targetArg.mes, targetArg.diaMes, targetHora, 0)
+  const dueDate = crearDateArgentina(targetArg.anio, targetArg.mes, targetArg.diaMes, targetHora, targetMinutos)
 
   const nombreDia = NOMBRES_DIAS[targetDiaSemana]
-  const horaTexto = `${targetHora.toString().padStart(2, '0')}:00 hs`
+  const horaTexto = `${targetHora.toString().padStart(2, '0')}:${targetMinutos.toString().padStart(2, '0')} hs`
   const horarioSugerido = `${nombreDia} ${horaTexto} (${sufijoEtiqueta})`
 
   return {
     diaSemana: targetDiaSemana,
     hora: targetHora,
+    minutos: targetMinutos,
     dueDate,
     horarioSugerido,
   }

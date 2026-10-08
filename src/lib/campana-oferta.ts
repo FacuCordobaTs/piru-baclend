@@ -4,12 +4,14 @@ export interface OfertaProductoCampana {
   descuentoProductoPorcentaje: number
   limiteUsos: number | null
   usosActuales: number
+  diaSemana?: number | null
   fechaInicio: Date | null
   fechaFin: Date | null
 }
 
 export function ofertaProductoEstaVigente(oferta: OfertaProductoCampana, ahora = new Date()): boolean {
-  return (!oferta.fechaInicio || oferta.fechaInicio <= ahora)
+  return (oferta.diaSemana == null || new Date(ahora.getTime() - 3 * 3600000).getUTCDay() === oferta.diaSemana)
+    && (!oferta.fechaInicio || oferta.fechaInicio <= ahora)
     && (!oferta.fechaFin || oferta.fechaFin >= ahora)
     && (oferta.limiteUsos == null || oferta.usosActuales < oferta.limiteUsos)
 }

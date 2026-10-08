@@ -181,9 +181,10 @@ export function estadoRecupero(
   const ultimo = ordenados[ordenados.length - 1] ?? null
 
   // Toques enviados DESPUÉS del último pedido (los previos ya "cumplieron": el cliente pidió).
+  const recuperos = ordenados.filter(t => t.nivel > 0)
   const desdeUltimoPedido = ultimoPedidoMs != null
-    ? ordenados.filter((t) => t.createdAt.getTime() > ultimoPedidoMs)
-    : ordenados
+    ? recuperos.filter((t) => t.createdAt.getTime() > ultimoPedidoMs)
+    : recuperos
 
   const proximoNivel = Math.min(desdeUltimoPedido.length + 1, NIVEL_MAX)
 

@@ -662,6 +662,7 @@ export const marketingCampana = mysqlTable("marketing_campana", {
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
   nombre: varchar("nombre", { length: 255 }).notNull(),
   // Estable después de publicar: editar el nombre nunca regenera el slug.
+  diaSemana: tinyint("dia_semana"),
   slug: varchar("slug", { length: 191 }).notNull(),
   tipo: mysqlEnum("tipo", ["adquisicion", "recompra", "retencion", "lo_mismo", "reactivacion"]).notNull(),
   categoria: mysqlEnum("categoria", [
@@ -1037,6 +1038,7 @@ export const configMotorRecompra = mysqlTable("config_motor_recompra", {
   cupoDiario: int("cupo_diario").default(30).notNull(),
   // Días entre el 1º y el 2º toque, y entre el 2º y el 3º. El piso de 48 hs es un invariante anti-spam:
   // la configuración sólo puede estirarlo, nunca acortarlo (lo aplica `recompra-goteo.ts`).
+  toqueHasta: tinyint("toque_hasta").default(3).notNull(),
   diasToque2: int("dias_toque_2").default(2).notNull(),
   diasToque3: int("dias_toque_3").default(2).notNull(),
   // % del lote que se aparta como grupo de control (atribución honesta). No recibe toques ni gasta cupo.
@@ -1146,6 +1148,12 @@ export const colaRecompra = mysqlTable("cola_recompra", {
   // 'contactado' | 'control' (el 10% apartado para la atribución honesta).
   rol: varchar("rol", { length: 20 }).default("contactado").notNull(),
   // Cuándo debería salir: flujo → hoy; stock → lo antes posible ajustado a su mejor día/franja.
+  // Día y minuto locales de Argentina; dueDate es el piso del ciclo, no una cita vencida.
+  diaSemana: tinyint("dia_semana"),
+  minutoDia: int("minuto_dia"),
+  ciclo: varchar("ciclo", { length: 40 }).default("inicial").notNull(),
+  tipoMensaje: varchar("tipo_mensaje", { length: 20 }).default("recompra").notNull(),
+  mensajePersonalizado: text("mensaje_personalizado"),
   dueDate: timestamp("due_date"),
   // Indicador de cuándo enviar: ej. "Viernes 21:00 hs (habitual)" o "Martes 20:00 hs (día valle)".
   horarioSugerido: varchar("horario_sugerido", { length: 100 }),
@@ -1156,6 +1164,8 @@ export const colaRecompra = mysqlTable("cola_recompra", {
   // Tramo del goteo: 1º, 2º o 3º. Mientras la fila está `pendiente` es el ÚNICO lugar donde vive
   // el toque (no hay `nivel` ni fila en `recupero_cliente`), así que no se puede reconstruir.
   // NULL sólo en el grupo de control, que nunca recibe toques.
+  // Posición de la secuencia y copy efectivamente enviado se auditan por separado.
+  toqueEnviado: tinyint("toque_enviado"),
   toque: tinyint("toque"),
   // 'lo_mismo' | 'reactivacion' — con qué modalidad de link salió. `lo_mismo` nunca lleva descuento.
   linkModalidad: varchar("link_modalidad", { length: 20 }),
@@ -1176,10 +1186,11 @@ export const colaRecompra = mysqlTable("cola_recompra", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   // Un cliente no puede tener dos filas del MISMO toque en la misma campaña. Es lo que hace
-  // imposible el bucle del reencolado y lo que protege de dos sincronizaciones concurrentes desde
-  // los GET de la UI (la segunda recibe ER_DUP_ENTRY y lo ignora). El control queda con `toque`
+  // imposible el bucle del reencolado. Cada recompra inicia otro ciclo; la agenda se sincroniza
+  // desde el job o un POST explícito, bajo bloqueo por local. El control queda con `toque`
   // NULL y MySQL admite múltiples NULL en un índice único, así que no colisiona.
-  uniqueIndex("uq_cola_recompra_toque").on(table.campanaId, table.clienteId, table.toque),
+  uniqueIndex("uq_cola_recompra_toque").on(table.campanaId, table.clienteId, table.ciclo, table.toque),
+  index("idx_cola_recompra_semana").on(table.restauranteId, table.estado, table.diaSemana),
 ]);
 
 

@@ -57,6 +57,7 @@ async function resolverOfertaProductoCampana(
     descuentoProductoPorcentaje: MarketingCampanaTable.descuentoProductoPorcentaje,
     limiteUsos: MarketingCampanaTable.limiteUsos,
     usosActuales: MarketingCampanaTable.usosActuales,
+    diaSemana: MarketingCampanaTable.diaSemana,
     fechaInicio: MarketingCampanaTable.fechaInicio,
     fechaFin: MarketingCampanaTable.fechaFin,
   }).from(MarketingCampanaTable).where(and(
@@ -99,6 +100,7 @@ async function consumirCupoOfertaProducto(
     .where(and(
       eq(MarketingCampanaTable.id, oferta.id),
       eq(MarketingCampanaTable.estado, 'activa'),
+      or(isNull(MarketingCampanaTable.diaSemana), eq(MarketingCampanaTable.diaSemana, new Date(ahora.getTime() - 3 * 3600000).getUTCDay())),
       or(isNull(MarketingCampanaTable.fechaInicio), lte(MarketingCampanaTable.fechaInicio, ahora)),
       or(isNull(MarketingCampanaTable.fechaFin), gte(MarketingCampanaTable.fechaFin, ahora)),
       or(isNull(MarketingCampanaTable.limiteUsos), lt(MarketingCampanaTable.usosActuales, MarketingCampanaTable.limiteUsos)),
