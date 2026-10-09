@@ -721,7 +721,18 @@ async function processIncomingWhatsApp(c: any, body: any) {
             phoneNumberId: creds.phoneId,
             token: creds.token,
             timestamp: message.timestamp,
-          }).catch(() => console.error('[WhatsApp Alfajor] No se pudo procesar la respuesta automática'));
+          }).catch((error) => {
+            // Drizzle/driver pueden incluir tokens o SQL en el mensaje: registrar
+            // sólo códigos seguros y los errores propios de esta respuesta.
+            const causa = error?.cause ?? error;
+            const motivo = error instanceof Error && [
+              'Alfajor no tiene credenciales para responder por WhatsApp',
+              'No se pudo enviar la respuesta automática de Alfajor',
+            ].includes(error.message) ? error.message : undefined;
+            console.error('[WhatsApp Alfajor] No se pudo procesar la respuesta automática', {
+              motivo, code: causa?.code, errno: causa?.errno,
+            });
+          });
           continue;
         }
 
