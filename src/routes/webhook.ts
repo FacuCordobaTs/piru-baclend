@@ -20,7 +20,7 @@ import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { procesarMensajeIA, notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
 import { procesarComandoOptOut } from '../lib/proteccion-base'
 import { acreditarPuntosPedidoAprobado } from '../lib/puntos'
-import { crearRespuestaAlfajor, RESTAURANTE_ALFAJOR } from '../services/whatsapp-alfajor'
+import { crearRespuestaAlfajor, RESTAURANTE_ALFAJOR, restauranteDeAtencionWhatsApp } from '../services/whatsapp-alfajor'
 
 const webhookRoute = new Hono()
 const responderConsultaAlfajor = crearRespuestaAlfajor(pool, sendWhatsAppText)
@@ -699,15 +699,29 @@ async function processIncomingWhatsApp(c: any, body: any) {
           })
           .from(RestauranteTable)
           .where(eq(RestauranteTable.whatsappPhoneId, phoneNumberId))
-          .limit(1);
+          .limit(3);
 
         if (restaurantes.length === 0) {
           console.warn(`⚠️ [WhatsApp] No se encontró restaurante para phone_number_id: ${phoneNumberId}`);
           continue;
         }
 
-        const restaurante = restaurantes[0];
-        console.log(`✅ [WhatsApp] Enrutado a restaurante ${restaurante.id} (${restaurante.nombre})`);
+        const restaurante = restauranteDeAtencionWhatsApp(restaurantes);
+        if (!restaurante) {
+          console.error('[WhatsApp] El número está asociado a varios restaurantes; corregir la asociación', {
+            phone_number_id: phoneNumberId,
+            numero_destino: metadata?.display_phone_number,
+            restaurantes: restaurantes.map(local => ({ id: local.id, nombre: local.nombre })),
+          });
+          continue;
+        }
+
+        console.log(`✅ [WhatsApp] Enrutado a restaurante ${restaurante.id} (${restaurante.nombre})`, {
+          phone_number_id: phoneNumberId,
+          numero_destino: metadata?.display_phone_number,
+          mensaje_id: message.id,
+          compartido_con_prueba: restaurantes.length > 1,
+        });
 
         if (restaurante.id === RESTAURANTE_ALFAJOR) {
           // Preservar BAJA/ALTA sin sumar otra respuesta fuera del límite.

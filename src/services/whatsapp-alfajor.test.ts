@@ -1,6 +1,28 @@
 import { describe, expect, test } from 'bun:test'
 import type { Pool } from 'mysql2/promise'
-import { COOLDOWN_ALFAJOR_MS, crearRespuestaAlfajor, RESPUESTA_ALFAJOR } from './whatsapp-alfajor'
+import { COOLDOWN_ALFAJOR_MS, crearRespuestaAlfajor, RESPUESTA_ALFAJOR, restauranteDeAtencionWhatsApp } from './whatsapp-alfajor'
+
+describe('enrutado del número de WhatsApp', () => {
+  const prueba = { id: 1, token: 'token-prueba' }
+  const alfajor = { id: 6, token: 'token-alfajor' }
+
+  test('el número compartido para debug usa Alfajor, independientemente del orden de DB', () => {
+    expect(restauranteDeAtencionWhatsApp([prueba, alfajor])).toBe(alfajor)
+    expect(restauranteDeAtencionWhatsApp([alfajor, prueba])).toBe(alfajor)
+  })
+
+  test('la excepción de debug no mezcla la atención de otros locales', () => {
+    expect(restauranteDeAtencionWhatsApp([alfajor, { id: 7, token: 'otro' }])).toBeUndefined()
+    expect(restauranteDeAtencionWhatsApp([prueba, alfajor, { id: 7, token: 'otro' }])).toBeUndefined()
+    expect(restauranteDeAtencionWhatsApp([prueba, { id: 7, token: 'otro' }])).toBeUndefined()
+  })
+
+  test('un número exclusivo conserva su local, incluido Piru Prueba', () => {
+    expect(restauranteDeAtencionWhatsApp([prueba])).toBe(prueba)
+    expect(restauranteDeAtencionWhatsApp([alfajor])).toBe(alfajor)
+    expect(restauranteDeAtencionWhatsApp([])).toBeUndefined()
+  })
+})
 
 const consulta = {
   restauranteId: 6, telefono: '5493511234567', phoneNumberId: 'numero-propio-alfajor', token: 'token-propio-alfajor',

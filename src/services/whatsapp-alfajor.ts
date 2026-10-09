@@ -6,6 +6,17 @@ export const RESPUESTA_ALFAJOR = 'Cualquier duda o consulta, escribinos por Inst
 export const COOLDOWN_ALFAJOR_MS = 24 * 60 * 60 * 1000
 const TIPO_RESPUESTA = 'alfajor_instagram'
 
+/** El local 1 comparte el número con Alfajor para debug; la atención es de Alfajor.
+ * Cualquier otra asociación múltiple es ambigua y requiere corregir la configuración.
+ */
+export function restauranteDeAtencionWhatsApp<T extends { id: number }>(locales: T[]): T | undefined {
+  if (locales.length === 1) return locales[0]
+  if (locales.length === 2 && locales.every(local => local.id === 1 || local.id === RESTAURANTE_ALFAJOR)) {
+    return locales.find(local => local.id === RESTAURANTE_ALFAJOR)
+  }
+  return undefined
+}
+
 interface Consulta {
   restauranteId: number
   telefono: string
