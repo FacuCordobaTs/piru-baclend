@@ -20,8 +20,10 @@ import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { procesarMensajeIA, notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
 import { procesarComandoOptOut } from '../lib/proteccion-base'
 import { acreditarPuntosPedidoAprobado } from '../lib/puntos'
+import { crearRespuestaAlfajor, RESTAURANTE_ALFAJOR } from '../services/whatsapp-alfajor'
 
 const webhookRoute = new Hono()
+const responderConsultaAlfajor = crearRespuestaAlfajor(pool, sendWhatsAppText)
 
 webhookRoute.get('/', async (c) => {
   return c.json({ message: 'Webhook get received' }, 200)
@@ -677,29 +679,24 @@ async function processIncomingWhatsApp(c: any, body: any) {
       const value = change?.value;
       if (!value) continue;
 
-      // Ignorar status updates
-      if ((value?.statuses ?? []).length > 0) continue;
-
       const messages = value?.messages ?? [];
       const metadata = value?.metadata;
 
       for (const message of messages) {
-        if (message.type !== 'text') {
-          console.log(`[WhatsApp] Mensaje tipo ${message.type} ignorado`);
-          continue;
-        }
-
         const fromPhone     = message.from;
         const messageText   = message.text?.body ?? '';
         const phoneNumberId = metadata?.phone_number_id;
 
-        if (!fromPhone || !messageText || !phoneNumberId) continue;
-
-        console.log(`📱 [WhatsApp] Mensaje de ${fromPhone}: "${messageText.substring(0, 80)}"`);
+        if (!fromPhone || !phoneNumberId || message.type === 'system' || message.errors?.length) continue;
 
         const db = drizzle(pool);
         const restaurantes = await db
-          .select({ id: RestauranteTable.id, nombre: RestauranteTable.nombre })
+          .select({
+            id: RestauranteTable.id,
+            nombre: RestauranteTable.nombre,
+            whatsappPhoneId: RestauranteTable.whatsappPhoneId,
+            whatsappAccessToken: RestauranteTable.whatsappAccessToken,
+          })
           .from(RestauranteTable)
           .where(eq(RestauranteTable.whatsappPhoneId, phoneNumberId))
           .limit(1);
@@ -711,6 +708,24 @@ async function processIncomingWhatsApp(c: any, body: any) {
 
         const restaurante = restaurantes[0];
         console.log(`✅ [WhatsApp] Enrutado a restaurante ${restaurante.id} (${restaurante.nombre})`);
+
+        if (restaurante.id === RESTAURANTE_ALFAJOR) {
+          // Preservar BAJA/ALTA sin sumar otra respuesta fuera del límite.
+          if (message.type === 'text' && messageText) {
+            await procesarComandoOptOut(db, restaurante.id, fromPhone, messageText);
+          }
+          const creds = resolverCredsRestaurante(restaurante)!;
+          await responderConsultaAlfajor({
+            restauranteId: restaurante.id,
+            telefono: fromPhone,
+            phoneNumberId: creds.phoneId,
+            token: creds.token,
+            timestamp: message.timestamp,
+          }).catch(() => console.error('[WhatsApp Alfajor] No se pudo procesar la respuesta automática'));
+          continue;
+        }
+
+        if (message.type !== 'text' || !messageText) continue;
 
         // Protección de la base (Motor de Recompra · 4.5): opt-out automático y respetado. Si el
         // cliente responde "BAJA"/"STOP" (o "ALTA" para volver), se marca el flag y NO se lo pasa a la
