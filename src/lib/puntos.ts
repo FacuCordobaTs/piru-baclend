@@ -695,6 +695,58 @@ export async function listarClientesConPuntos(
   }
 }
 
+export interface ActividadPuntosCliente {
+  puntosOtorgados: number
+  puntosCanjeados: number
+  canjes: number
+  movimientos: number
+  ultimoMovimientoAt: string | null
+}
+
+/**
+ * Lo que cada cliente ganó y canjeó, para el detalle de Clientes: las mismas
+ * agregaciones que `listarClientesConPuntos`, de una vez para varios clientes
+ * (los de la página que se muestra). Un cliente sin movimientos no figura.
+ */
+export async function actividadPuntosPorClientes(
+  db: any,
+  restauranteId: number,
+  clienteIds: number[]
+): Promise<Map<number, ActividadPuntosCliente>> {
+  const actividad = new Map<number, ActividadPuntosCliente>()
+  if (clienteIds.length === 0) return actividad
+
+  const canje = condicionCanjeSql()
+  const filas = await db
+    .select({
+      clienteId: TransaccionPuntosTable.clienteId,
+      movimientos: sql<number>`count(*)`,
+      puntosOtorgados: sql<number>`coalesce(sum(CASE WHEN ${TransaccionPuntosTable.puntos} > 0 THEN ${TransaccionPuntosTable.puntos} ELSE 0 END), 0)`,
+      puntosCanjeados: sql<number>`coalesce(sum(CASE WHEN ${canje} THEN -${TransaccionPuntosTable.puntos} ELSE 0 END), 0)`,
+      canjes: sql<number>`count(CASE WHEN ${canje} THEN 1 END)`,
+      ultimoMovimientoAt: sql`max(${TransaccionPuntosTable.createdAt})`,
+    })
+    .from(TransaccionPuntosTable)
+    .where(
+      and(
+        eq(TransaccionPuntosTable.restauranteId, restauranteId),
+        inArray(TransaccionPuntosTable.clienteId, clienteIds)
+      )
+    )
+    .groupBy(TransaccionPuntosTable.clienteId)
+
+  for (const fila of filas) {
+    actividad.set(Number(fila.clienteId), {
+      puntosOtorgados: aNumero(fila.puntosOtorgados),
+      puntosCanjeados: aNumero(fila.puntosCanjeados),
+      canjes: aNumero(fila.canjes),
+      movimientos: aNumero(fila.movimientos),
+      ultimoMovimientoAt: iso(fila.ultimoMovimientoAt),
+    })
+  }
+  return actividad
+}
+
 export interface MovimientoPuntosData {
   id: number
   clienteId: number

@@ -4,19 +4,13 @@ import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
 import { setCookie } from 'hono/cookie'
 import { restaurante, registroTelefono } from '../db/schema'
-import { and, eq, gt } from 'drizzle-orm'
+import { and, eq, gt, or } from 'drizzle-orm'
 import { createAccessToken } from '../libs/jwt'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import * as bcrypt from 'bcrypt'
 import { authMiddleware } from '../middleware/auth'
 import { sendVerificationCodeWhatsApp } from '../services/whatsapp'
-
-const signUpRestauranteSchema = z.object({
-  email: z.string().email().min(3),
-  password: z.string().min(3),
-  nombre: z.string().min(3),
-});
 
 // ---- Registro por WhatsApp (self-serve) ----
 const OTP_EXPIRACION_MS = 10 * 60 * 1000 // el código vive 10 minutos
@@ -66,45 +60,6 @@ export const authRoute = new Hono()
 })
 
 
-.post('/register-restaurante', zValidator("json", signUpRestauranteSchema), async (c) => {
-  const { email, nombre, password } = c.req.valid("json");
-  const db = drizzle(pool);
-
-  try {
-      const existingEmail = await db.select().from(restaurante)
-          .where(eq(restaurante.email, email));
-
-      if (existingEmail.length) {
-          return c.json({ error: 'Email ya utilizado', existingEmail }, 409);
-      }
-
-      const passwordHash = await bcrypt.hash(password, 10);
-      await db.insert(restaurante).values({
-          email,
-          nombre,
-          password: passwordHash,
-          // Alta con hard paywall: no entra al panel sin suscripción base con acceso.
-          requiereSuscripcion: true,
-          createdAt: new Date()
-      });
-
-      const newRestaurante = await db.select().from(restaurante)
-          .where(eq(restaurante.email, email))
-          .limit(1);
-
-      const token = await createAccessToken({ id: newRestaurante[0].id });
-      setCookie(c, 'token', token as string, {
-          path: '/',
-          sameSite: 'None',
-          secure: true,
-          maxAge: 365 * 24 * 60 * 60,
-      });
-
-      return c.json({ message: 'Restaurante registrado correctamente', newRestaurante, token }, 200);
-  } catch (error: any) {
-      return c.json({ message: 'Error al registrar el usuario'}, 400);
-  }
-})
 .post('/login-restaurante', zValidator("json", loginRestauranteSchema), async (c) => {
   const { email, password } = c.req.valid("json");
   const db = drizzle(pool);
@@ -139,74 +94,7 @@ export const authRoute = new Hono()
   }
 })
 
-// 1) Iniciar registro por WhatsApp: genera un código, lo envía y devuelve un verificationId único.
-authRoute.post('/register-telefono/start', zValidator('json', startTelefonoSchema), async (c) => {
-  const db = drizzle(pool)
-  const telefono = normalizarTelefono(c.req.valid('json').telefono)
-
-  if (telefono.length < 8) {
-    return c.json({ message: 'El número de celular no es válido', success: false }, 400)
-  }
-
-  try {
-    // Si ya existe una cuenta verificada con ese número, no dejamos volver a registrar.
-    const cuentaExistente = await db.select({ id: restaurante.id })
-      .from(restaurante)
-      .where(and(eq(restaurante.telefono, telefono), eq(restaurante.telefonoVerificado, true)))
-      .limit(1)
-
-    if (cuentaExistente.length) {
-      return c.json({ message: 'Ya existe una cuenta registrada con este número de WhatsApp', success: false }, 409)
-    }
-
-    // Anti-spam: no permitir generar otro código para el mismo número dentro del cooldown.
-    const desde = new Date(Date.now() - OTP_REENVIO_COOLDOWN_MS)
-    const reciente = await db.select({ id: registroTelefono.id })
-      .from(registroTelefono)
-      .where(and(
-        eq(registroTelefono.telefono, telefono),
-        eq(registroTelefono.verificado, false),
-        gt(registroTelefono.createdAt, desde),
-      ))
-      .limit(1)
-
-    if (reciente.length) {
-      return c.json({ message: 'Ya te enviamos un código hace unos segundos. Esperá un momento antes de pedir otro.', success: false }, 429)
-    }
-
-    const codigo = generarCodigo()
-    const codigoHash = await bcrypt.hash(codigo, 10)
-    const verificationId = randomUUID()
-    const expiraEn = new Date(Date.now() + OTP_EXPIRACION_MS)
-
-    await db.insert(registroTelefono).values({
-      id: verificationId,
-      telefono,
-      codigoHash,
-      expiraEn,
-    })
-
-    const envio = await sendVerificationCodeWhatsApp(c, { phone: telefono, code: codigo })
-    if (!envio.success) {
-      // Limpiamos la sesión inservible para no dejar basura ni bloquear reintentos.
-      await db.delete(registroTelefono).where(eq(registroTelefono.id, verificationId))
-      return c.json({ message: 'No pudimos enviar el código por WhatsApp. Revisá el número e intentá de nuevo.', success: false }, 502)
-    }
-
-    return c.json({
-      message: 'Código enviado por WhatsApp',
-      success: true,
-      verificationId,
-      telefono,
-      expiraEnSegundos: Math.floor(OTP_EXPIRACION_MS / 1000),
-    }, 200)
-  } catch (error) {
-    console.error('Error iniciando registro por teléfono:', error)
-    return c.json({ message: 'Error al iniciar el registro', success: false }, 500)
-  }
-})
-
-// 2) Reenviar el código para una sesión existente (mismo verificationId).
+// Reenvío de códigos de login por WhatsApp.
 authRoute.post('/register-telefono/resend', zValidator('json', resendTelefonoSchema), async (c) => {
   const db = drizzle(pool)
   const { verificationId } = c.req.valid('json')
@@ -252,153 +140,10 @@ authRoute.post('/register-telefono/resend', zValidator('json', resendTelefonoSch
   }
 })
 
-// 3) Verificar el código y crear la cuenta.
-authRoute.post('/register-telefono/verify', zValidator('json', verifyTelefonoSchema), async (c) => {
-  const db = drizzle(pool)
-  const { verificationId, codigo } = c.req.valid('json')
-
-  try {
-    const [reg] = await db.select().from(registroTelefono)
-      .where(eq(registroTelefono.id, verificationId))
-      .limit(1)
-
-    if (!reg) {
-      return c.json({ message: 'Sesión de verificación no encontrada', success: false }, 404)
-    }
-
-    // Idempotencia: si esta verificación ya creó (o asoció) una cuenta, devolvemos ESA cuenta en
-    // vez de crear otra. Cubre reintentos y doble-submit del código: sin esto, un segundo POST con
-    // el mismo verificationId caía por otro camino y podía dejar dos `restaurante` con el mismo
-    // teléfono (una con nombre, otra vacía). Es una protección de identidad vigente.
-    if (reg.verificado) {
-      if (reg.restauranteId) {
-        const [cuentaPrevia] = await db.select().from(restaurante)
-          .where(eq(restaurante.id, reg.restauranteId))
-          .limit(1)
-        if (cuentaPrevia) {
-          const token = await createAccessToken({ id: cuentaPrevia.id })
-          setCookie(c, 'token', token as string, {
-            path: '/',
-            sameSite: 'None',
-            secure: true,
-            maxAge: 365 * 24 * 60 * 60,
-          })
-          return c.json({
-            message: '¡Número verificado! Bienvenido a Piru',
-            success: true,
-            newRestaurante: [cuentaPrevia],
-            token,
-          }, 200)
-        }
-      }
-      return c.json({ message: 'Esta verificación ya fue completada', success: false }, 400)
-    }
-    if (new Date(reg.expiraEn).getTime() < Date.now()) {
-      return c.json({ message: 'El código expiró. Pedí uno nuevo.', success: false }, 400)
-    }
-    if (reg.intentos >= OTP_MAX_INTENTOS) {
-      return c.json({ message: 'Demasiados intentos fallidos. Pedí un código nuevo.', success: false }, 429)
-    }
-
-    const codigoOk = await bcrypt.compare(codigo, reg.codigoHash)
-    if (!codigoOk) {
-      await db.update(registroTelefono)
-        .set({ intentos: reg.intentos + 1 })
-        .where(eq(registroTelefono.id, verificationId))
-      const restantes = OTP_MAX_INTENTOS - (reg.intentos + 1)
-      return c.json({
-        message: restantes > 0 ? `Código incorrecto. Te quedan ${restantes} intentos.` : 'Código incorrecto. Pedí un código nuevo.',
-        success: false,
-      }, 400)
-    }
-
-    // Revalidar unicidad por si otra sesión creó la cuenta mientras tanto.
-    const cuentaExistente = await db.select({ id: restaurante.id })
-      .from(restaurante)
-      .where(and(eq(restaurante.telefono, reg.telefono), eq(restaurante.telefonoVerificado, true)))
-      .limit(1)
-
-    if (cuentaExistente.length) {
-      await db.update(registroTelefono)
-        .set({ verificado: true, restauranteId: cuentaExistente[0].id })
-        .where(eq(registroTelefono.id, verificationId))
-      return c.json({ message: 'Ya existe una cuenta registrada con este número de WhatsApp', success: false }, 409)
-    }
-
-    // Reclamo atómico de la verificación ANTES de insertar: marcamos verificado=true sólo si seguía
-    // en false. Dos requests simultáneos con el mismo verificationId (código correcto) compiten acá;
-    // uno solo gana el UPDATE y crea la cuenta. Así se elimina la carrera que duplicaba `restaurante`.
-    const claim = await db.update(registroTelefono)
-      .set({ verificado: true })
-      .where(and(eq(registroTelefono.id, verificationId), eq(registroTelefono.verificado, false)))
-
-    if (claim[0].affectedRows === 0) {
-      // Perdimos la carrera: el request ganador ya está creando la cuenta. Devolvemos esa cuenta si
-      // ya quedó asociada; si todavía no, pedimos reintentar (sin crear una segunda fila).
-      const [regGanador] = await db.select().from(registroTelefono)
-        .where(eq(registroTelefono.id, verificationId))
-        .limit(1)
-      if (regGanador?.restauranteId) {
-        const [cuentaGanadora] = await db.select().from(restaurante)
-          .where(eq(restaurante.id, regGanador.restauranteId))
-          .limit(1)
-        if (cuentaGanadora) {
-          const token = await createAccessToken({ id: cuentaGanadora.id })
-          setCookie(c, 'token', token as string, {
-            path: '/',
-            sameSite: 'None',
-            secure: true,
-            maxAge: 365 * 24 * 60 * 60,
-          })
-          return c.json({
-            message: '¡Número verificado! Bienvenido a Piru',
-            success: true,
-            newRestaurante: [cuentaGanadora],
-            token,
-          }, 200)
-        }
-      }
-      return c.json({ message: 'Estamos terminando de crear tu cuenta, probá de nuevo en un momento.', success: false }, 409)
-    }
-
-    // La cuenta se crea sólo con el teléfono verificado; el nombre y demás datos
-    // se completan luego en el onboarding.
-    await db.insert(restaurante).values({
-      telefono: reg.telefono,
-      telefonoVerificado: true,
-      // Alta con hard paywall: no entra al panel sin suscripción base con acceso.
-      requiereSuscripcion: true,
-      createdAt: new Date(),
-    })
-
-    const [newRestauranteRow] = await db.select().from(restaurante)
-      .where(and(eq(restaurante.telefono, reg.telefono), eq(restaurante.telefonoVerificado, true)))
-      .limit(1)
-
-    await db.update(registroTelefono)
-      .set({ restauranteId: newRestauranteRow.id })
-      .where(eq(registroTelefono.id, verificationId))
-
-    const token = await createAccessToken({ id: newRestauranteRow.id })
-    setCookie(c, 'token', token as string, {
-      path: '/',
-      sameSite: 'None',
-      secure: true,
-      maxAge: 365 * 24 * 60 * 60,
-    })
-
-    // Devolvemos newRestaurante como array para mantener compatibilidad con el frontend de email.
-    return c.json({
-      message: '¡Número verificado! Bienvenido a Piru',
-      success: true,
-      newRestaurante: [newRestauranteRow],
-      token,
-    }, 200)
-  } catch (error) {
-    console.error('Error verificando código:', error)
-    return c.json({ message: 'Error al verificar el código', success: false }, 500)
-  }
-})
+// Las altas sólo se hacen con la identidad de interno. No quedan puertas públicas.
+for (const ruta of ['/register-restaurante', '/register-telefono/start', '/register-telefono/verify']) {
+  authRoute.post(ruta, (c) => c.json({ success: false, message: 'Las cuentas las crea el equipo de Piru' }, 403))
+}
 
 // ─────────────────────────────────────────────────────────────
 // Login por WhatsApp (para cuentas registradas con celular, que no tienen contraseña).
@@ -416,11 +161,12 @@ authRoute.post('/login-telefono/start', zValidator('json', startTelefonoSchema),
   }
 
   try {
-    // Debe existir una cuenta verificada con ese número; si no, no hay nada a lo que entrar.
-    const [cuenta] = await db.select({ id: restaurante.id })
+    // También admite una tienda creada por interno; el dueño verifica su número acá.
+    const cuentas = await db.select({ id: restaurante.id })
       .from(restaurante)
-      .where(and(eq(restaurante.telefono, telefono), eq(restaurante.telefonoVerificado, true)))
-      .limit(1)
+      .where(and(eq(restaurante.telefono, telefono), or(eq(restaurante.telefonoVerificado, true), eq(restaurante.origen, 'outbound'))))
+      .limit(2)
+    const cuenta = cuentas.length === 1 ? cuentas[0] : null
 
     if (!cuenta) {
       return c.json({ message: 'No encontramos ninguna cuenta con este número de WhatsApp', success: false }, 404)
@@ -510,7 +256,7 @@ authRoute.post('/login-telefono/verify', zValidator('json', verifyTelefonoSchema
 
     // Buscar la cuenta verificada asociada al número.
     const [cuenta] = await db.select().from(restaurante)
-      .where(and(eq(restaurante.telefono, reg.telefono), eq(restaurante.telefonoVerificado, true)))
+      .where(and(eq(restaurante.id, reg.restauranteId ?? 0), eq(restaurante.telefono, reg.telefono)))
       .limit(1)
 
     if (!cuenta) {
@@ -520,6 +266,10 @@ authRoute.post('/login-telefono/verify', zValidator('json', verifyTelefonoSchema
     await db.update(registroTelefono)
       .set({ verificado: true, restauranteId: cuenta.id })
       .where(eq(registroTelefono.id, verificationId))
+
+    await db.update(restaurante).set({ telefonoVerificado: true,
+      ...(cuenta.origen === 'outbound' && !cuenta.claimedAt ? { claimedAt: new Date() } : {}),
+    }).where(eq(restaurante.id, cuenta.id))
 
     const token = await createAccessToken({ id: cuenta.id })
     setCookie(c, 'token', token as string, {

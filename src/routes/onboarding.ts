@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { pool } from '../db'
 import { restaurante as RestauranteTable, horarioRestaurante as HorarioRestauranteTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
@@ -8,6 +8,8 @@ import { z } from 'zod'
 import { eq, and } from 'drizzle-orm'
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3"
 import UUID = require("uuid-js")
+import { AltaIncompletaError, completarAltaInterna } from '../lib/alta-completa'
+import { sembrarDatosEjemplo } from '../lib/datos-ejemplo-db'
 
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID
@@ -75,6 +77,12 @@ const completeOnboardingSchema = z.object({
   friendsOrdering: z.boolean().optional(),
   imageLight: z.string().nullable().optional(),
   imageDark: z.string().nullable().optional(),
+  colorPrimario: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+  colorSecundario: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+  usarColorUnico: z.boolean().optional(),
+  deliveryEnabled: z.boolean().optional(),
+  takeawayEnabled: z.boolean().optional(),
+  finalizar: z.boolean().optional().default(true),
   proveedorPago: z.enum(['cucuru', 'talo', 'mercadopago', 'manual']).optional(),
   metodosPago: z.object({
     transferenciaManual: z.boolean().optional(),
@@ -84,6 +92,9 @@ const completeOnboardingSchema = z.object({
 })
 
 onboardingRoute.put('/complete', zValidator('json', completeOnboardingSchema), async (c) => {
+  if (!(c as any).user.altaInterna && !(c as any).user.accesoTemporalInterno) {
+    return c.json({ message: 'La construcción de tiendas se hace desde interno' }, 403)
+  }
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
   const data = c.req.valid('json')
@@ -127,7 +138,12 @@ onboardingRoute.put('/complete', zValidator('json', completeOnboardingSchema), a
       comprobantesWhatsapp: numeroNotif ?? currentRestaurante[0].comprobantesWhatsapp,
       deliveryFee: data.deliveryPrice || "0",
       orderGroupEnabled: data.friendsOrdering ?? true,
-      completedOnboarding: true
+      completedOnboarding: data.finalizar,
+      ...(data.colorPrimario !== undefined ? { colorPrimario: data.colorPrimario } : {}),
+      ...(data.colorSecundario !== undefined ? { colorSecundario: data.colorSecundario } : {}),
+      ...(data.usarColorUnico !== undefined ? { usarColorUnico: data.usarColorUnico } : {}),
+      ...(data.deliveryEnabled !== undefined ? { deliveryEnabled: data.deliveryEnabled } : {}),
+      ...(data.takeawayEnabled !== undefined ? { takeawayEnabled: data.takeawayEnabled } : {}),
     }
 
     if (data.proveedorPago) {
@@ -177,15 +193,41 @@ onboardingRoute.put('/complete', zValidator('json', completeOnboardingSchema), a
       }
     }
 
-    // Sin trial: el local termina el onboarding pero NO entra al panel hasta elegir y pagar un
-    // plan (hard paywall). Al marcar completedOnboarding=true y no tener suscripción activa, el
-    // gate del admin lo manda a /suscribir. La suscripción se activa recién con el pago (webhook).
+    // Guardar la configuración no cierra el alta ni inicia la prueba: el alta se cierra aparte
+    // (POST /terminar-alta) y la prueba arranca cuando el dueño verifica su WhatsApp en el claim.
     return c.json({ success: true, message: 'Onboarding completado exitosamente' })
   } catch (error) {
     console.error('Error completing onboarding:', error)
     return c.json({ success: false, message: 'Error interno del servidor', error: (error as Error).message }, 500)
   }
 })
+
+// Cierra el alta asistida: la tienda queda completa, lista para la demo y para que el dueño la
+// reclame. NO inicia la prueba: arranca cuando el dueño verifica su WhatsApp (routes/claim.ts) o
+// cuando el fundador la inicia desde interno. Ver lib/alta-completa.ts.
+const terminarAlta = async (c: Context) => {
+  const user = (c as any).user
+  if (!user.altaInterna && !user.accesoTemporalInterno) {
+    return c.json({ message: 'Sólo interno puede cerrar el alta desde este recorrido' }, 403)
+  }
+  try {
+    await completarAltaInterna(drizzle(pool), user.id)
+    // La tienda quedó lista para mostrarse: el lote de datos de ejemplo corre aparte. Si falla no
+    // afecta al alta, y el panel de la demo lo vuelve a intentar al abrirse (lib/datos-ejemplo-db.ts).
+    void sembrarDatosEjemplo(drizzle(pool), user.id).then(
+      (r) => console.info(`[datos-ejemplo] Local ${user.id}: ${r.estado}`),
+      (e) => console.error(`[datos-ejemplo] No se pudieron sembrar los datos del local ${user.id}:`, (e as Error).message),
+    )
+    return c.json({ success: true })
+  } catch (error) {
+    const incompleta = error instanceof AltaIncompletaError
+    return c.json({ message: incompleta ? error.message : 'No se pudo cerrar el alta. Reintentá en un momento.' }, incompleta ? 409 : 503)
+  }
+}
+onboardingRoute.post('/terminar-alta', terminarAlta)
+// Nombre de una versión anterior del admin (cuando el botón final iniciaba la prueba). Ya no inicia
+// nada: se conserva para que un bundle en caché pueda cerrar el alta.
+onboardingRoute.post('/iniciar-prueba', terminarAlta)
 
 // Marca el onboarding como completado SIN tocar ningún otro dato (Tarea 5, claim outbound). El
 // self-serve usa /complete (que arma la tienda de cero); acá la tienda YA está construida por el

@@ -48,6 +48,9 @@ import { internoRoute } from './routes/interno';
 import { marketerRoute } from './routes/marketer';
 import { miMarketerRoute } from './routes/mi-marketer';
 import { marketingDuenioRoute } from './routes/marketing-duenio';
+import { demoPanelRoute } from './routes/demo-panel';
+import { datosEjemploRoute } from './routes/datos-ejemplo';
+import { demoSigueAbierta } from './lib/demo-panel';
 import { marketerPuedeSocketAdmin } from './lib/marketer-permisos';
 import { claimRoute } from './routes/claim';
 import { staffLoginRoute, staffRoute } from './routes/staff';
@@ -247,6 +250,8 @@ app.basePath('/api')
   .route('/marketer', marketerRoute)
   .route('/mi-marketer', miMarketerRoute)
   .route('/marketing-duenio', marketingDuenioRoute)
+  .route('/demo-panel', demoPanelRoute)
+  .route('/datos-ejemplo', datosEjemploRoute)
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
 // because :qrToken would match "admin" as a token
 app.get(
@@ -259,7 +264,10 @@ app.get(
     if (token) {
       try {
         const decoded = await verifyToken(token);
-        if (marketerPuedeSocketAdmin(decoded)) restauranteId = decoded.id;
+        if (marketerPuedeSocketAdmin(decoded)) {
+          // La sesión de la demo también ve el feed, sólo mientras la tienda no tenga dueño.
+          if (decoded.demo !== true || await demoSigueAbierta(drizzle(pool), decoded.id)) restauranteId = decoded.id;
+        }
         console.log(`🔑 Admin token válido - Restaurante ID: ${restauranteId}`);
       } catch (error) {
         console.error('❌ Invalid admin token:', error);

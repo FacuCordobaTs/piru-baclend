@@ -37,10 +37,19 @@ export interface ProductoExtraido {
   ingredientes?: string[]
   variantes?: VarianteExtraida[]
   extras?: ExtraExtraido[]
+  variantesSecundarias?: VarianteExtraida[]
+  extrasSecundarios?: ExtraExtraido[]
+  tituloVariantesPrimarias?: string
+  tituloVariantesSecundarias?: string
+  tituloExtrasPrimarios?: string
+  tituloExtrasSecundarios?: string
+  permiteNota?: boolean
+  tituloNota?: string
 }
 
 export interface CategoriaExtraida {
   nombre: string
+  esBebida?: boolean
   productos: ProductoExtraido[]
 }
 
@@ -50,6 +59,9 @@ export interface CartaExtraida {
 
 // ─── Tool de salida estructurada ────────────────────────────────────────────
 
+const opcionesSchema = {
+  type: 'array', items: { type: 'object', properties: { nombre: { type: 'string' }, precio: { type: 'number' } }, required: ['nombre', 'precio'] },
+}
 const GUARDAR_CARTA_TOOL = {
   name: 'guardar_carta',
   description:
@@ -63,6 +75,7 @@ const GUARDAR_CARTA_TOOL = {
         items: {
           type: 'object',
           properties: {
+            esBebida: { type: 'boolean', description: 'True sólo si la categoría contiene bebidas.' },
             nombre: {
               type: 'string',
               description:
@@ -116,6 +129,14 @@ const GUARDAR_CARTA_TOOL = {
                       required: ['nombre', 'precio'],
                     },
                   },
+                  variantesSecundarias: { ...opcionesSchema, description: 'Segunda elección independiente y obligatoria (ej: tamaño y luego sabor). Su precio se SUMA al precio de la variante principal; 0 si está incluida.' },
+                  extrasSecundarios: { ...opcionesSchema, description: 'Segundo grupo independiente de agregados opcionales, sólo si la carta distingue dos grupos (ej: toppings y salsas).' },
+                  tituloVariantesPrimarias: { type: 'string', description: 'Pregunta del primer grupo (ej: Elegí el tamaño).' },
+                  tituloVariantesSecundarias: { type: 'string', description: 'Pregunta de la segunda elección (ej: Elegí el sabor).' },
+                  tituloExtrasPrimarios: { type: 'string', description: 'Título del primer grupo de extras.' },
+                  tituloExtrasSecundarios: { type: 'string', description: 'Título del segundo grupo de extras.' },
+                  permiteNota: { type: 'boolean', description: 'Permite aclaraciones si la carta lo indica.' },
+                  tituloNota: { type: 'string', description: 'Pregunta para las aclaraciones.' },
                 },
                 required: ['nombre'],
               },
@@ -138,6 +159,9 @@ Tu tarea es extraer TODOS los productos que veas y devolverlos con la tool guard
 - Precios: siempre como número, sin "$", sin puntos de miles ni "ARS". Por ejemplo "$7.200" → 7200.
 - Variantes: cuando un mismo producto tiene varias versiones con distinto precio (tamaños como Chica/Grande, o Simple/Doble/Triple, o sabores con precios distintos), cargá cada una en "variantes" con su precio. En ese caso, si no hay un precio base único, dejá "precio" en null.
 - Extras / agregados: son adicionales opcionales que suman plata (ej: "agregá bacon +$800"). Van en "extras" con su precio.
+- Dos elecciones independientes: si hay tamaño y sabor, o base y acompañamiento obligatorio, usá "variantes" y "variantesSecundarias", con títulos claros para cada paso. La variante principal lleva el PRECIO TOTAL de esa versión; la secundaria sólo el RECARGO (0 si está incluido), nunca repitas el precio total en los dos grupos. Simple/Doble/Triple son opciones de UN grupo, no dos grupos. No inventes elecciones que no estén en la carta. Si una matriz de precios no se puede representar sumando un recargo independiente, conservá las combinaciones como variantes principales.
+- Dos grupos de extras: si el menú distingue adicionales y salsas, por ejemplo, conservá "extras" y "extrasSecundarios" por separado con sus títulos. Un extra doble (ej: doble cheddar) es una opción con su propio nombre y precio, no un segundo grupo. Los extras generales se asignan sólo a los productos a los que aplican según la carta.
+- Marcá "esBebida" en las categorías de bebidas. Conservá "permiteNota" y "tituloNota" si la carta permite aclaraciones.
 - Ingredientes: si la descripción del producto enumera lo que lleva (ej: "carne, cheddar, lechuga, tomate"), cargá cada uno en "ingredientes". Si es una descripción libre que no es una lista de ingredientes, ponela en "descripcion".
 - Respetá las categorías tal como están agrupadas en la carta. Si no hay categorías claras, agrupá todo en una categoría "General".
 - No dupliques productos si aparecen repetidos entre imágenes.
@@ -149,6 +173,7 @@ Tu tarea es fusionarlas en una única carta coherente y prolija, y devolverla co
 - Eliminá productos duplicados que hayan quedado repetidos entre lotes (mismo producto en varias fotos).
 - Normalizá nombres de ingredientes y de extras para que sean consistentes en toda la carta (ej: "Cheddar" y "cheddar" → uno solo).
 - No inventes ni elimines información real: sólo fusioná y limpiá.
+- Conservá ambos grupos de variantes y extras, sus títulos, precios totales/recargos, notas y categorías de bebidas. No aplanes dos elecciones independientes ni conviertas recargos en precios totales.
 Llamá SIEMPRE a la tool guardar_carta con la carta final.`
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -196,6 +221,7 @@ async function llamarClaudeConTool(system: string, content: any[]): Promise<Cart
   }
 
   const data = (await response.json()) as any
+  if (data.stop_reason === 'max_tokens') throw new Error('La carta es demasiado extensa. Dividí las fotos en una carga más chica para conservar todos los productos.')
   const toolUse = data.content?.find((b: any) => b.type === 'tool_use' && b.name === 'guardar_carta')
   if (!toolUse) {
     console.error('❌ [Carta IA] La respuesta no incluyó la tool guardar_carta:', JSON.stringify(data))
@@ -213,7 +239,7 @@ function descripcionDesdeIngredientes(ingredientes: string[]): string {
 }
 
 // Limpia / valida la estructura para que sea segura de consumir.
-function normalizarCarta(raw: any): CartaExtraida {
+export function normalizarCarta(raw: any): CartaExtraida {
   const categorias: CategoriaExtraida[] = []
   if (!raw || !Array.isArray(raw.categorias)) return { categorias }
 
@@ -222,12 +248,12 @@ function normalizarCarta(raw: any): CartaExtraida {
     const productos: ProductoExtraido[] = []
     for (const p of Array.isArray(cat.productos) ? cat.productos : []) {
       if (!p || typeof p.nombre !== 'string' || !p.nombre.trim()) continue
-      const variantes = (Array.isArray(p.variantes) ? p.variantes : [])
-        .filter((v: any) => v && typeof v.nombre === 'string' && v.nombre.trim())
-        .map((v: any) => ({ nombre: String(v.nombre).trim(), precio: Number(v.precio) || 0 }))
-      const extras = (Array.isArray(p.extras) ? p.extras : [])
-        .filter((e: any) => e && typeof e.nombre === 'string' && e.nombre.trim())
-        .map((e: any) => ({ nombre: String(e.nombre).trim(), precio: Number(e.precio) || 0 }))
+      const opciones = (raw: any): VarianteExtraida[] => (Array.isArray(raw) ? raw : [])
+        .filter(v => v && typeof v.nombre === 'string' && v.nombre.trim())
+        .map(v => ({ nombre: v.nombre.trim(), precio: Number(v.precio ?? 0) }))
+        .filter(v => Number.isFinite(v.precio) && v.precio >= 0)
+      const variantes = opciones(p.variantes)
+      const extras = opciones(p.extras)
       const ingredientes = (Array.isArray(p.ingredientes) ? p.ingredientes : [])
         .filter((i: any) => typeof i === 'string' && i.trim())
         .map((i: string) => i.trim())
@@ -243,13 +269,17 @@ function normalizarCarta(raw: any): CartaExtraida {
       productos.push({
         nombre: p.nombre.trim(),
         descripcion,
-        precio: p.precio == null ? null : Number(p.precio),
+        precio: p.precio == null || !Number.isFinite(Number(p.precio)) || Number(p.precio) < 0 ? null : Number(p.precio),
         ingredientes,
         variantes,
         extras,
+        variantesSecundarias: variantes.length ? opciones(p.variantesSecundarias) : [],
+        extrasSecundarios: opciones(p.extrasSecundarios),
+        ...Object.fromEntries(['tituloVariantesPrimarias', 'tituloVariantesSecundarias', 'tituloExtrasPrimarios', 'tituloExtrasSecundarios', 'tituloNota'].flatMap(key => typeof p[key] === 'string' && p[key].trim() ? [[key, p[key].trim().slice(0, 120)]] : [])),
+        permiteNota: p.permiteNota === true,
       })
     }
-    if (productos.length > 0) categorias.push({ nombre: cat.nombre.trim() || 'General', productos })
+    if (productos.length > 0) categorias.push({ nombre: cat.nombre.trim() || 'General', esBebida: cat.esBebida === true, productos })
   }
   return { categorias }
 }

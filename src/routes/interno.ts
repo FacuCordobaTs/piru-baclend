@@ -5,6 +5,7 @@ import { and, asc, eq } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import * as jwt from 'jsonwebtoken'
+import { createHash } from 'crypto'
 import {
   modulo as ModuloTable,
   plan as PlanTable,
@@ -16,6 +17,7 @@ import { internoAuthMiddleware } from '../middleware/interno'
 import { internoMarketersRoute } from './interno-marketers'
 import { marketer, restauranteMarketer } from '../db/schema'
 import { resumenWallet } from '../lib/mensajes-wallet'
+import { entradasDemo } from '../lib/demo-panel-visitas'
 import {
   resolverEstadoVigente,
   iniciarTrial,
@@ -81,6 +83,53 @@ internoRoute.post('/login', zValidator('json', loginSchema), async (c) => {
 // A partir de acá, todo exige el token interno.
 internoRoute.use('*', internoAuthMiddleware)
 internoRoute.route('/', internoMarketersRoute)
+
+// Alta asistida: el teléfono se verifica cuando el dueño entra por login/claim.
+// La sesión de construcción es interna y vence; nunca entrega un login permanente del dueño.
+internoRoute.post('/locales/crear-telefono', zValidator('json', z.object({
+  telefono: z.string().regex(/^\d{10,15}$/),
+})), async (c) => {
+  const { telefono } = c.req.valid('json')
+  const connection = await pool.getConnection()
+  const lock = `piru-alta:${createHash('sha256').update(telefono).digest('hex').slice(0, 40)}`
+  let locked = false
+  try {
+    const [rows] = await connection.query('SELECT GET_LOCK(?, 10) AS adquirido', [lock])
+    locked = (rows as any[])[0]?.adquirido === 1
+    if (!locked) return c.json({ message: 'Hay otra alta en curso para este número. Reintentá.' }, 409)
+    await connection.beginTransaction()
+    const db = drizzle(connection)
+    const existentes = await db.select().from(RestauranteTable)
+      .where(eq(RestauranteTable.telefono, telefono)).limit(2)
+    let local = existentes[0]
+    if (existentes.length > 1 || (local && (local.origen !== 'outbound' || local.telefonoVerificado || local.claimedAt || local.completedOnboarding))) {
+      await connection.rollback()
+      return c.json({ message: 'Ya existe una tienda con este teléfono. Entrá desde el login o desde interno.' }, 409)
+    }
+    if (!local) {
+      const insert = await db.insert(RestauranteTable).values({
+        telefono, telefonoVerificado: false, origen: 'outbound',
+        requiereSuscripcion: true, createdAt: new Date(),
+      })
+      ;[local] = await db.select().from(RestauranteTable).where(eq(RestauranteTable.id, Number(insert[0].insertId)))
+    }
+    const claim = local.claimToken && claimTokenVigente(local)
+      ? { url: buildClaimUrl(local.claimToken) }
+      : await generarClaimLink(db, local.id)
+    const token = jwt.sign({ id: local.id, scope: 'restaurante', altaInterna: true }, process.env.JWT_SECRET!, { expiresIn: '12h' })
+    await connection.commit()
+    return c.json({ success: true, token, restaurante: {
+      id: local.id, nombre: local.nombre, telefono: local.telefono, email: local.email,
+      username: local.username, completedOnboarding: local.completedOnboarding,
+    }, claimUrl: claim.url })
+  } catch {
+    await connection.rollback()
+    return c.json({ message: 'No se pudo crear la tienda' }, 500)
+  } finally {
+    try { if (locked) await connection.query('SELECT RELEASE_LOCK(?)', [lock]) }
+    finally { connection.release() }
+  }
+})
 
 /**
  * Emite una sesión corta para entrar al admin de un local desde el panel interno.
@@ -155,6 +204,8 @@ internoRoute.get('/locales', async (c) => {
     const marketersVinculados = await db.select({ restauranteId: restauranteMarketer.restauranteId, id: marketer.id, nombre: marketer.nombre })
       .from(restauranteMarketer).innerJoin(marketer, eq(marketer.id, restauranteMarketer.marketerId))
       .where(and(eq(restauranteMarketer.estado, 'activo'), eq(marketer.activo, true)))
+    // Cuándo abrió cada prospecto el panel de la demo (vacío si nunca, o sin la tabla todavía).
+    const entradasAlPanelDemo = await entradasDemo(db, restaurantes.map((r) => r.id))
     const data = await Promise.all(
       restaurantes.map(async (r) => {
         // Transición lazy de estado antes de leer (vencido → gracia → suspendida). Devuelve la
@@ -222,6 +273,8 @@ internoRoute.get('/locales', async (c) => {
             trialFin,
             diasRestantes: diasHasta(trialFin),
           },
+          // Panel de la demo de prospección: la señal de que el prospecto la vio (aditivo).
+          demo: entradasAlPanelDemo.get(r.id) ?? null,
           mensajes: {
             ilimitado: wallet.ilimitado,
             disponible: wallet.utility.disponible,
@@ -932,6 +985,11 @@ internoRoute.delete('/locales/:id', async (c) => {
       for (const [sql, params] of grandchildren) {
         await conn.query(sql, params)
       }
+      // Los datos de ejemplo de la demo: con los checks apagados el ON DELETE CASCADE no corre. Si
+      // todavía no se aplicó su migración la tabla no existe: no debe impedir borrar el local.
+      await conn
+        .query('DELETE FROM datos_ejemplo WHERE restaurante_id = ?', [restauranteId])
+        .catch(() => {})
       for (const tabla of directas) {
         await conn.query(`DELETE FROM ${tabla} WHERE restaurante_id = ?`, [restauranteId])
       }

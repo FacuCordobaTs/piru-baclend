@@ -228,6 +228,8 @@ export const TARJETA_BRASA = {
  */
 export function dbCarteraFalsa(datos: DatosCarteraFalsa) {
   const consultas: unknown[] = []
+  /** La condición de cada `where` con la tabla de su `from`: sirve para probar qué se filtra. */
+  const condiciones: { tabla: unknown; condicion: unknown }[] = []
   /** Las columnas pedidas en cada `select`, en orden: sirven para probar que no se lee de más. */
   const columnas: string[][] = []
   const filas = (tabla: unknown, agrupada: boolean) => {
@@ -255,7 +257,10 @@ export function dbCarteraFalsa(datos: DatosCarteraFalsa) {
           return query
         },
         innerJoin: () => query,
-        where: () => query,
+        where: (condicion?: unknown) => {
+          condiciones.push({ tabla, condicion })
+          return query
+        },
         limit: () => query,
         orderBy: () => query,
         groupBy: () => {
@@ -273,5 +278,5 @@ export function dbCarteraFalsa(datos: DatosCarteraFalsa) {
       return query
     },
   }
-  return { db: db as any, consultas, columnas }
+  return { db: db as any, consultas, columnas, condiciones }
 }

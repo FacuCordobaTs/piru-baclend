@@ -52,6 +52,11 @@ import { sincronizarAgendaSemanal, oportunidadesDiaFlojo, sumarClientesHoy } fro
 import { ErrorProgramacion } from '../lib/dias-flojos'
 import { resolverOportunidadesMarketing } from '../lib/marketing-oportunidades'
 import { resolverDatosGrowthClientes } from '../lib/clientes-growth'
+import {
+    repartirPedidosPorCliente, filtrarClientesListado, paginarListado, resumirClientesListado,
+    filtraPorPedidos, SEGMENTOS_LISTADO, ORDENES_LISTADO, type FiltrosListado,
+} from '../lib/clientes-listado'
+import { actividadPuntosPorClientes } from '../lib/puntos'
 
 const clientesRoute = new Hono()
 
@@ -100,10 +105,41 @@ clientesRoute.get('/indice-pos', requirePosConsulta, async (c) => {
     return c.json({ success: true, data })
 })
 
-clientesRoute.get('/list', async (c) => {
+// Los parámetros del listado se leen con tolerancia: un valor que no sirve se
+// ignora en lugar de devolver un 400 sin rastro, así la pantalla muestra la lista
+// completa en vez de quedarse sin datos.
+const enteroPositivo = z.coerce.number().int().positive().nullish().catch(null)
+const diaQuery = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish().catch(null)
+const listadoQuerySchema = z.object({
+    soloDespachados: z.string().nullish().catch(null),
+    pagina: enteroPositivo,
+    limite: enteroPositivo,
+    busqueda: z.string().trim().max(120).nullish().catch(null),
+    segmento: z.enum(SEGMENTOS_LISTADO).nullish().catch(null),
+    orden: z.enum(ORDENES_LISTADO).nullish().catch(null),
+    conPuntos: z.string().nullish().catch(null),
+    desde: diaQuery,
+    hasta: diaQuery,
+    sucursalId: enteroPositivo,
+    campanaId: z.union([z.literal('organico'), z.coerce.number().int().positive()]).nullish().catch(null),
+    cuponId: enteroPositivo,
+})
+
+const SIN_ACTIVIDAD_PUNTOS = {
+    puntosOtorgados: 0, puntosCanjeados: 0, canjes: 0, movimientos: 0, ultimoMovimientoAt: null,
+}
+
+// Sin `pagina` ni `limite` devuelve la lista completa de siempre (contrato anterior).
+// Con alguno de los dos devuelve una página —filtrada y ordenada acá— con el resumen
+// de la base entera: es lo que usa la app de marketers, donde la lista no se carga
+// de una. El segmento de cada cliente depende de toda la base, así que el perfil de
+// todos se calcula igual; el detalle pesado sólo se arma para la página.
+clientesRoute.get('/list', zValidator('query', listadoQuerySchema), async (c) => {
     const db = drizzle(pool)
     const restauranteId = (c as any).user.id
-    const soloDespachados = c.req.query('soloDespachados') === 'true'
+    const q = c.req.valid('query')
+    const soloDespachados = q.soloDespachados === 'true'
+    const paginado = q.pagina != null || q.limite != null
 
     try {
         // 1. Traer todos los clientes del restaurante
@@ -145,7 +181,7 @@ clientesRoute.get('/list', async (c) => {
             clienteTelefono: string | null,
             clienteId: number | null,
         }[] = []
-        
+
         if (pedidoIds.length > 0) {
             itemsRaw = await db.select({
                 pedidoId: ItemPedidoUnificadoTable.pedidoId,
@@ -162,7 +198,7 @@ clientesRoute.get('/list', async (c) => {
         // 4. Traer los nombres de los productos para los items
         const allProductoIds = [...new Set(itemsRaw.map(i => i.productoId))]
         let productosMap: Record<number, string> = {}
-        
+
         if (allProductoIds.length > 0) {
             const productos = await db.select({
                 id: ProductoTable.id,
@@ -202,37 +238,9 @@ clientesRoute.get('/list', async (c) => {
             items: itemsMap[p.id] || []
         }))
 
-        // Helper para resolver los pedidos atribuidos a un cliente (individuales o grupales)
-        const resolverPedidosCliente = (cliente: typeof clientes[0]) => {
-            const telNorm = cliente.telefonoNormalizado || (cliente.telefono ? normalizarTelefonoCliente(cliente.telefono) : null)
-            const matched: typeof allPedidos = []
-
-            for (const p of allPedidos) {
-                if (p.grupal) {
-                    const clientItems = p.items.filter(it => {
-                        if (it.clienteId && it.clienteId === cliente.id) return true
-                        if (it.clienteTelefono && telNorm && normalizarTelefonoCliente(it.clienteTelefono) === telNorm) return true
-                        return false
-                    })
-
-                    if (clientItems.length > 0) {
-                        const totalGastadoItems = clientItems.reduce(
-                            (sum, it) => sum + (parseFloat(it.precioUnitario || '0') * it.cantidad),
-                            0
-                        )
-                        matched.push({
-                            ...p,
-                            items: clientItems,
-                            total: totalGastadoItems.toFixed(2),
-                        })
-                    }
-                } else if (p.clienteId === cliente.id) {
-                    matched.push(p)
-                }
-            }
-
-            return deduplicarPedidosHistorial(matched)
-        }
+        // Pedidos atribuidos a cada cliente (individuales o grupales), de una vez.
+        const pedidosPorCliente = repartirPedidosPorCliente(clientes, allPedidos)
+        const resolverPedidosCliente = (cliente: typeof clientes[0]) => pedidosPorCliente.get(cliente.id) ?? []
 
         // 7. Mostrar sólo clientes con al menos un pedido despachado y calcular
         // todas sus métricas a partir de ese mismo historial.
@@ -280,13 +288,6 @@ clientesRoute.get('/list', async (c) => {
                 totalGastado: b.totalGastado,
                 fechasPedidos: b.fechasMs,
             })),
-        )
-
-        // Estado de la escalera de recupero por cliente (Motor de Recompra · 4.2). Un fetch para todos.
-        const toquesPorCliente = await cargarToquesPorCliente(
-            db,
-            restauranteId,
-            clientesParaRespuesta.map(cl => cl.id),
         )
 
         // Growth se resuelve con cargas por restaurante, nunca una consulta por
@@ -379,9 +380,15 @@ clientesRoute.get('/list', async (c) => {
             },
         )
 
-        const clientesConMetricas = base.map((b, i) => {
+        // El cliente tal como lo expone el contrato: métricas, RFM, recupero y crecimiento.
+        const armarCliente = (
+            b: (typeof base)[number],
+            i: number,
+            toquesPorCliente: Awaited<ReturnType<typeof cargarToquesPorCliente>>,
+        ) => {
             const perfil = perfiles[i]
             const ultimoPedidoMs = b.fechasMs.length > 0 ? Math.max(...b.fechasMs) : null
+            // Estado de la escalera de recupero por cliente (Motor de Recompra · 4.2).
             const recupero = estadoRecupero(toquesPorCliente[b.cliente.id] ?? [], ultimoPedidoMs)
             const crecimiento = growthPorCliente.get(b.cliente.id)
             return {
@@ -420,12 +427,85 @@ clientesRoute.get('/list', async (c) => {
                     recetaCodigo: atribucionPorPedidoId.get(pedido.id)?.recetaCodigo ?? null,
                 })),
             }
+        }
+
+        if (!paginado) {
+            // Estado de la escalera de recupero por cliente. Un fetch para todos.
+            const toquesPorCliente = await cargarToquesPorCliente(
+                db,
+                restauranteId,
+                clientesParaRespuesta.map(cl => cl.id),
+            )
+            return c.json({
+                message: 'Clientes obtenidos correctamente',
+                success: true,
+                data: base.map((b, i) => armarCliente(b, i, toquesPorCliente))
+            }, 200)
+        }
+
+        // ── Página: filtrar y ordenar con datos livianos, y armar el detalle sólo de la que se muestra.
+        const filtros: FiltrosListado = {
+            busqueda: q.busqueda,
+            segmento: q.segmento,
+            conPuntos: q.conPuntos === 'true',
+            desde: q.desde,
+            hasta: q.hasta,
+            sucursalId: q.sucursalId,
+            campana: q.campanaId ?? null,
+            cuponId: q.cuponId,
+            orden: q.orden ?? 'alta',
+        }
+        const miraPedidos = filtraPorPedidos(filtros)
+        const candidatos = base.map((b, i) => {
+            const crecimiento = growthPorCliente.get(b.cliente.id)
+            return {
+                indice: i,
+                id: b.cliente.id,
+                nombre: b.cliente.nombre,
+                telefono: b.cliente.telefono,
+                direccion: b.cliente.direccion ?? null,
+                puntos: b.cliente.puntos,
+                createdAt: b.cliente.createdAt,
+                cantidadPedidos: b.cantidadPedidos,
+                totalGastado: b.totalGastado,
+                ultimoPedidoAt: b.ultimoPedidoAt ? b.ultimoPedidoAt.toISOString() : null,
+                segmento: perfiles[i].segmento,
+                campanasParticipadas: crecimiento?.campanasParticipadas ?? [],
+                cuponesUsados: crecimiento?.cuponesUsados ?? [],
+                pedidos: miraPedidos
+                    ? b.pedidos.map((pedido) => ({
+                        createdAt: pedido.createdAt,
+                        sucursalId: pedido.sucursalId,
+                        esOrganico: pedidoIdsOrganicos.has(pedido.id),
+                        campanaId: atribucionPorPedidoId.get(pedido.id)?.campanaId ?? null,
+                        codigoDescuentoId: pedido.codigoDescuentoId,
+                    }))
+                    : [],
+            }
         })
+        const pagina = paginarListado(filtrarClientesListado(candidatos, filtros), q.pagina, q.limite)
+        const idsPagina = pagina.items.map(cliente => cliente.id)
+        const [toquesPagina, actividadPuntos] = await Promise.all([
+            cargarToquesPorCliente(db, restauranteId, idsPagina),
+            actividadPuntosPorClientes(db, restauranteId, idsPagina),
+        ])
 
         return c.json({
             message: 'Clientes obtenidos correctamente',
             success: true,
-            data: clientesConMetricas
+            data: {
+                items: pagina.items.map(cliente => ({
+                    ...armarCliente(base[cliente.indice], cliente.indice, toquesPagina),
+                    // Lo que ganó y canjeó en el club: el detalle de puntos de su ficha.
+                    club: actividadPuntos.get(cliente.id) ?? SIN_ACTIVIDAD_PUNTOS,
+                })),
+                pagina: pagina.pagina,
+                limite: pagina.limite,
+                total: pagina.total,
+                paginas: pagina.paginas,
+                // La base entera, sin filtros: los contadores de segmentos y de puntos.
+                resumen: resumirClientesListado(candidatos),
+            },
         }, 200)
 
     } catch (error) {

@@ -2,14 +2,11 @@ import { Hono } from 'hono'
 import { randomUUID } from 'crypto'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
-import { eq, and, gte, sql } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { authMiddleware } from '../middleware/auth'
-import {
-  restaurante as RestauranteTable,
-  pedidoUnificado as PedidoUnificadoTable,
-} from '../db/schema'
+import { restaurante as RestauranteTable } from '../db/schema'
 import { resolverSuscripcion } from '../lib/planes'
 import {
   catalogoSuscripcionUnica,
@@ -29,6 +26,7 @@ import { crearPreferenciaSuscripcionMP } from '../lib/mp-suscripcion'
 import { sendPaymentLinkWhatsApp } from '../services/whatsapp'
 import { crearFacturaSuscripcionPendiente } from '../lib/facturacion-suscripcion'
 import { resolverImporteMensual } from '../lib/modulos'
+import { contarValorPiru as contarValorPiruDelLocal } from '../lib/valor-piru'
 
 /** Minutos de validez del link de pago (enviado por WhatsApp) antes de vencer. */
 const PAGO_LINK_TTL_MIN = 60
@@ -84,26 +82,9 @@ planesRoute.get('/mi-suscripcion', async (c) => {
     const requiereSuscripcion = !!restauranteRow?.requiereSuscripcion
 
     // Contador de VALOR (no de días): "Recibiste X pedidos por $Y". Cuenta los pedidos que
-    // ENTRARON por Piru (web, no anotados a mano) desde que arrancó el ciclo (`fechaInicio`).
-    const contarValorPiru = async (desde: Date): Promise<{ pedidos: number; monto: number }> => {
-      const [valorRow] = await db
-        .select({
-          pedidos: sql<number>`COUNT(*)`,
-          monto: sql<string>`COALESCE(SUM(${PedidoUnificadoTable.total}), 0)`,
-        })
-        .from(PedidoUnificadoTable)
-        .where(
-          and(
-            eq(PedidoUnificadoTable.restauranteId, restauranteId),
-            eq(PedidoUnificadoTable.anotadoManualmente, false),
-            gte(PedidoUnificadoTable.createdAt, desde),
-          ),
-        )
-      return {
-        pedidos: Number(valorRow?.pedidos ?? 0),
-        monto: parseFloat(String(valorRow?.monto ?? '0')),
-      }
-    }
+    // ENTRARON por Piru (web, no anotados a mano) desde que arrancó el ciclo (`fechaInicio`), sin
+    // los de ejemplo de la demo (lib/valor-piru.ts).
+    const contarValorPiru = (desde: Date) => contarValorPiruDelLocal(db, restauranteId, desde)
 
     // Trial (Tarea 6 del Claim Flow): el día del pago la pregunta es "¿dejo de recibir esto?".
     // Sólo en trial (evita el query en cuentas ya pagas). Aditivo: nullable.

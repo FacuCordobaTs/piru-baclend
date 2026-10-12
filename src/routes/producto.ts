@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { pool } from '../db'
 import { sucursal as SucursalTable, producto as ProductoTable, categoria as CategoriaTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, itemPedido as ItemPedidoTable, itemPedidoUnificado as ItemPedidoUnificadoTable, itemPedidoDelivery as ItemPedidoDeliveryTable, itemPedidoTakeaway as ItemPedidoTakeawayTable, etiqueta as EtiquetaTable, productoPuntos as ProductoPuntosTable, productoAgregado as ProductoAgregadoTable, agregado as AgregadoTable, varianteProducto as VarianteProductoTable } from '../db/schema'
-import { drizzle } from 'drizzle-orm/mysql2'
+import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
@@ -161,9 +161,23 @@ export function generarEtiquetaAutomatica(
   return `${base}${Date.now()}`.toLowerCase()
 }
 
+async function guardarProductoAtomico(accion: (db: MySql2Database<Record<string, never>>) => Promise<Response>): Promise<Response> {
+  try {
+    return await drizzle(pool).transaction(async db => {
+      const response = await accion(db)
+      if (response.status >= 400) throw response
+      return response
+    })
+  } catch (error) {
+    if (error instanceof Response) return error
+    throw error
+  }
+}
+
 const createProductSchema = z.object({
-  nombre: z.string().min(3).max(255),
-  descripcion: z.string().min(3).max(255),
+  activo: z.boolean().optional().default(true),
+  nombre: z.string().trim().min(1).max(255),
+  descripcion: z.string().max(255),
   precio: z.number().min(0),
   image: z.string().min(10).optional(),
   eventoSucursalId: z.number().int().positive().nullable().optional(),
@@ -197,10 +211,11 @@ const createProductSchema = z.object({
 
 const updateProductSchema = z.object({
   id: z.number(),
-  nombre: z.string().min(3).max(255).optional(),
-  descripcion: z.string().min(3).max(255).optional(),
+  nombre: z.string().trim().min(1).max(255).optional(),
+  descripcion: z.string().max(255).optional(),
   precio: z.number().min(0).optional(),
   image: z.string().min(10).optional(),
+  eliminarImagen: z.boolean().optional(),
   eventoSucursalId: z.number().int().positive().nullable().optional(),
   categoriaId: z.number().nullable().optional(),
   ingredienteIds: z.array(z.number().int().positive()).optional(),
@@ -339,9 +354,9 @@ const productoRoute = new Hono()
   })
 
   .post('/create', zValidator('json', createProductSchema), async (c) => {
-    const db = drizzle(pool)
+    return guardarProductoAtomico(async (db) => {
     const restauranteId = (c as any).user.id
-    const { nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota, eventoSucursalId } = c.req.valid('json')
+    const { activo, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota, eventoSucursalId } = c.req.valid('json')
 
     if (eventoSucursalId != null) {
       const [evento] = await db.select({ id: SucursalTable.id }).from(SucursalTable).where(and(
@@ -394,6 +409,7 @@ const productoRoute = new Hono()
       descripcion,
       precio: precio.toString(),
       imagenUrl: newImageUrl,
+      activo,
       restauranteId,
       categoriaId: categoriaId || null,
       eventoSucursalId: eventoSucursalId ?? null,
@@ -532,13 +548,20 @@ const productoRoute = new Hono()
       })
     }
 
-    return c.json({ message: 'Producto creado correctamente', success: true, data: product, etiquetaAutoGenerada: etiquetaAuto }, 200)
+    const opcionesGuardadas = await db.select().from(VarianteProductoTable).where(eq(VarianteProductoTable.productoId, productoId))
+    return c.json({ message: 'Producto creado correctamente', success: true, data: product, productoId, imagenUrl: newImageUrl ?? null,
+      variantes: opcionesGuardadas.filter(v => v.grupo === 1), variantesSecundarias: opcionesGuardadas.filter(v => v.grupo === 2), etiquetaAutoGenerada: etiquetaAuto }, 200)
+    })
   })
 
   .put('/update', zValidator('json', updateProductSchema), async (c) => {
-    const db = drizzle(pool)
+    return guardarProductoAtomico(async (db) => {
     const restauranteId = (c as any).user.id
-    const { id, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota, eventoSucursalId } = c.req.valid('json')
+    const { id, nombre, descripcion, precio, image, eliminarImagen, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota, eventoSucursalId } = c.req.valid('json')
+
+    const [productoActual] = await db.select({ id: ProductoTable.id, imagenUrl: ProductoTable.imagenUrl }).from(ProductoTable)
+      .where(and(eq(ProductoTable.id, id), eq(ProductoTable.restauranteId, restauranteId))).limit(1)
+    if (!productoActual) return c.json({ success: false, message: 'Producto no encontrado' }, 404)
 
     if (eventoSucursalId != null) {
       const [evento] = await db.select({ id: SucursalTable.id }).from(SucursalTable).where(and(
@@ -593,6 +616,7 @@ const productoRoute = new Hono()
     if (descripcion !== undefined) updateData.descripcion = descripcion;
     if (precio !== undefined) updateData.precio = precio;
     if (newImageUrl) updateData.imagenUrl = newImageUrl;
+    else if (eliminarImagen) updateData.imagenUrl = null;
     if (categoriaId !== undefined) updateData.categoriaId = categoriaId;
     if (activo !== undefined) updateData.activo = activo;
     if (eventoSucursalId !== undefined) updateData.eventoSucursalId = eventoSucursalId;
@@ -810,7 +834,10 @@ const productoRoute = new Hono()
       }
     }
 
-    return c.json({ message: 'Producto actualizado correctamente', success: true }, 200)
+    const opcionesGuardadas = await db.select().from(VarianteProductoTable).where(eq(VarianteProductoTable.productoId, id))
+    return c.json({ message: 'Producto actualizado correctamente', success: true,
+      ...(newImageUrl ? { imagenUrl: newImageUrl } : {}), variantes: opcionesGuardadas.filter(v => v.grupo === 1), variantesSecundarias: opcionesGuardadas.filter(v => v.grupo === 2) }, 200)
+    })
   })
 
   // Buscar productos por etiqueta

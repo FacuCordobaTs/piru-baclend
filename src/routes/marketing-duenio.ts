@@ -10,6 +10,7 @@ import {
   tarjetasDeCartera,
 } from '../lib/marketer-cartera-db'
 import { urlAppMarketing } from '../lib/marketer-identidad'
+import { esProspectoSinReclamar } from '../lib/demo-panel'
 
 const secreto = () => process.env.JWT_SECRET || 'fallback-secret'
 /** El pase viaja en el fragmento de la URL: sólo alcanza para abrir la pestaña. */
@@ -50,11 +51,19 @@ export function createMarketingDuenioRoute(
       )
         return c.json(ENTRADA_VENCIDA, 401)
       const [local] = await getDb()
-        .select({ id: restaurante.id })
+        .select({
+          id: restaurante.id,
+          origen: restaurante.origen,
+          claimedAt: restaurante.claimedAt,
+          telefonoVerificado: restaurante.telefonoVerificado,
+        })
         .from(restaurante)
         .where(eq(restaurante.id, restauranteId))
         .limit(1)
       if (!local) return c.json(ENTRADA_VENCIDA, 401)
+      // El pase de una sesión demo sólo se canjea mientras la tienda no tenga dueño.
+      if (pase.demo === true && !esProspectoSinReclamar(local))
+        return c.json(ENTRADA_VENCIDA, 401)
       const vence = Math.min(
         Math.floor(Date.now() / 1000) + SESION_TTL_SEGUNDOS,
         Number(pase.hasta) || Infinity,
@@ -62,7 +71,14 @@ export function createMarketingDuenioRoute(
       if (vence <= Math.floor(Date.now() / 1000))
         return c.json(ENTRADA_VENCIDA, 401)
       const token = jwt.sign(
-        { id: local.id, scope: 'restaurante', appMarketing: true, exp: vence },
+        {
+          id: local.id,
+          scope: 'restaurante',
+          appMarketing: true,
+          // La marca demo viaja con la sesión: sigue limitada y muere cuando se reclama la tienda.
+          ...(pase.demo === true ? { demo: true } : {}),
+          exp: vence,
+        },
         secreto(),
       )
       return c.json({
@@ -85,6 +101,8 @@ export function createMarketingDuenioRoute(
           restauranteId,
           // Un acceso temporal de interno no se estira a 12 horas: la sesión vence con él.
           ...(origen.accesoTemporalInterno ? { hasta: origen.exp } : {}),
+          // Ni una sesión de la demo: la app de marketing hereda su marca y su vencimiento.
+          ...(origen.demo === true ? { demo: true, hasta: origen.exp } : {}),
         },
         secreto(),
         { expiresIn: ENTRADA_TTL_SEGUNDOS },
@@ -108,11 +126,14 @@ export function createMarketingDuenioRoute(
         .where(eq(restaurante.id, restauranteId))
         .limit(1)
       if (!local) return c.json({ error: 'Local no encontrado' }, 404)
-      // La misma tarjeta que ve su marketer, sin vínculo ni comisión.
+      // La misma tarjeta que ve su marketer, sin vínculo ni comisión. Con los datos de ejemplo de la
+      // demo, igual que el resto de su panel (el marketer no los ve).
       const [tarjeta] = await tarjetasDeCartera(
         db,
         [{ ...local, desde: null, porcentaje: null }],
         0,
+        new Date(),
+        { incluirEjemplo: true },
       )
       return c.json(tarjeta)
     })

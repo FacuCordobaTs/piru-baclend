@@ -14,6 +14,7 @@ import {
 import { metricasCartera } from './marketer-cartera'
 import { calcularDiasFlojos } from './dias-flojos'
 import { anclajePublico } from './marketing-enlaces'
+import { pedidoReal } from './pedido-ejemplo'
 import {
   moduloEstaActivoAhora,
   resolverModulosFacturablesDeListado,
@@ -54,15 +55,21 @@ export interface LocalDeCartera {
  * Tarjetas de la cartera (§5.2 de la spec): las ventas salen de una sola consulta de 60 días
  * para todos los locales y se agregan en JS con hora de Argentina. La usan la cartera del
  * marketer y el dueño que entra a la app desde su panel, que ve su propio local igual.
+ *
+ * Los pedidos de ejemplo de la demo (`pedido-ejemplo.ts`) cuentan sólo si `incluirEjemplo`: el
+ * dueño los ve en el resto de su panel, pero al marketer un prospecto sin pedidos no le tiene que
+ * parecer un local con ventas.
  */
 export async function tarjetasDeCartera(
   db: Db,
   locales: LocalDeCartera[],
   porcentajeMarketer: string | number,
   ahora = new Date(),
+  opciones: { incluirEjemplo?: boolean } = {},
 ) {
   const ids = locales.map((l) => l.restauranteId)
   if (!ids.length) return []
+  const soloReales = opciones.incluirEjemplo ? [] : [pedidoReal()]
   const comp = obtenerComponentesArgentina(ahora.getTime())
   const desdeHoy = crearDateArgentina(comp.anio, comp.mes, comp.diaMes, 0)
   const hastaHoy = new Date(desdeHoy.getTime() + 86400000)
@@ -85,6 +92,7 @@ export async function tarjetasDeCartera(
               pedidoUnificado.createdAt,
               new Date(ahora.getTime() - 60 * 86400000),
             ),
+            ...soloReales,
           ),
         ),
       db
@@ -101,6 +109,7 @@ export async function tarjetasDeCartera(
             inArray(pedidoUnificado.restauranteId, ids),
             ne(pedidoUnificado.estado, 'cancelled'),
             sql`${pedidoUnificado.clienteId} IS NOT NULL`,
+            ...soloReales,
           ),
         )
         .groupBy(pedidoUnificado.restauranteId, pedidoUnificado.clienteId),

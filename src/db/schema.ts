@@ -2200,3 +2200,29 @@ export const marketerAccion = mysqlTable("marketer_accion", {
   createdAt: datetime("created_at").notNull(),
 }, (t) => [index("idx_marketer_accion_restaurante").on(t.restauranteId, t.createdAt),
   index("idx_marketer_accion_marketer").on(t.marketerId, t.createdAt)]);
+
+// Datos de ejemplo de la demo de prospección (clientes, pedidos, campañas y un cupón marcados
+// "EJEMPLO"). Una fila por local: cuándo se sembraron, si el dueño los borró (y entonces no se vuelven
+// a sembrar solos) y los ids de lo sembrado, para borrar exactamente eso sin tocar nada del dueño.
+// Ver lib/datos-ejemplo.ts y docs/AUTH_AND_ONBOARDING.md ("Panel de la demo").
+export const datosEjemplo = mysqlTable("datos_ejemplo", {
+  restauranteId: int("restaurante_id").primaryKey().references(() => restaurante.id, { onDelete: "cascade" }),
+  sembradoAt: datetime("sembrado_at").notNull(),
+  borradoAt: datetime("borrado_at"),
+  registros: json("registros").notNull().$type<{
+    clientes: number[];
+    pedidos: number[];
+    campanas: number[];
+    cupones: number[];
+  }>(),
+});
+
+// Entradas al panel de la demo de prospección (`POST /api/demo-panel/sesion`): cuándo abrió el panel
+// un prospecto por primera y por última vez y cuántas veces. Es la señal para saber a quién escribirle
+// y cuándo; la lee el panel interno. Ver lib/demo-panel-visitas.ts y docs/AUTH_AND_ONBOARDING.md.
+export const demoPanelVisita = mysqlTable("demo_panel_visita", {
+  restauranteId: int("restaurante_id").primaryKey().references(() => restaurante.id, { onDelete: "cascade" }),
+  primeraEntradaAt: datetime("primera_entrada_at").notNull(),
+  ultimaEntradaAt: datetime("ultima_entrada_at").notNull(),
+  entradas: int("entradas").notNull().default(1),
+});

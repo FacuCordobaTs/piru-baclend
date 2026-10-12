@@ -22,6 +22,7 @@ import {
 } from '../db/schema'
 import { SUSCRIPCION_ESTADOS } from './planes'
 import { resolveMetodosPagoConfig, rowToPagoRow } from './metodos-pago'
+import { pedidoReal } from './pedido-ejemplo'
 
 type Db = MySql2Database<Record<string, never>>
 
@@ -114,7 +115,8 @@ export async function computarInventarioClaim(
   const [[prodRow], [zonaRow], [pedidoRow]] = await Promise.all([
     db.select({ n: count() }).from(ProductoTable).where(eq(ProductoTable.restauranteId, restauranteId)),
     db.select({ n: count() }).from(ZonaDeliveryTable).where(eq(ZonaDeliveryTable.restauranteId, restauranteId)),
-    db.select({ n: count() }).from(PedidoUnificadoTable).where(eq(PedidoUnificadoTable.restauranteId, restauranteId)),
+    // Sin los de ejemplo de la demo: el gate pide un pedido de prueba de verdad.
+    db.select({ n: count() }).from(PedidoUnificadoTable).where(and(eq(PedidoUnificadoTable.restauranteId, restauranteId), pedidoReal())),
   ])
 
   const tieneCobros = !!(

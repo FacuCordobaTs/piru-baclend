@@ -4,6 +4,7 @@ import {
   pedidoUnificado as PedidoUnificadoTable,
   itemPedidoUnificado as ItemPedidoUnificadoTable,
   producto as ProductoTable,
+  categoria as CategoriaTable,
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
@@ -126,6 +127,79 @@ metricasRoute.get('/', async (c) => {
     totalVendido: parseFloat(p.totalVendido as string || '0')
   }))
 
+  // Las series de abajo cuentan sólo pedidos cobrados del período, como los ingresos:
+  // sus totales suman lo mismo que `ingresos.mensual`. La conexión corre en horario
+  // del local (db.ts), así que HOUR() y DATE() ya son la hora y el día de Argentina.
+  const cobradosDelPeriodo = and(
+    eq(PedidoUnificadoTable.restauranteId, restauranteId),
+    eq(PedidoUnificadoTable.pagado, true),
+    periodFilter
+  )
+  const numero = (valor: unknown) => {
+    const n = Number(valor ?? 0)
+    return Number.isFinite(n) ? n : 0
+  }
+
+  // 7. Pedidos y facturación por hora del día (sólo las horas con actividad).
+  const porHoraRes = await db
+    .select({
+      hora: sql<number>`HOUR(${PedidoUnificadoTable.createdAt})`,
+      pedidos: sql<number>`COUNT(*)`,
+      total: sql<string>`SUM(${PedidoUnificadoTable.total})`,
+    })
+    .from(PedidoUnificadoTable)
+    .where(cobradosDelPeriodo)
+    .groupBy(sql`HOUR(${PedidoUnificadoTable.createdAt})`)
+    .orderBy(sql`HOUR(${PedidoUnificadoTable.createdAt})`)
+
+  // 8. Pedidos y facturación por día (sólo los días con actividad).
+  const porDiaRes = await db
+    .select({
+      fecha: sql<string>`DATE(${PedidoUnificadoTable.createdAt})`,
+      pedidos: sql<number>`COUNT(*)`,
+      total: sql<string>`SUM(${PedidoUnificadoTable.total})`,
+    })
+    .from(PedidoUnificadoTable)
+    .where(cobradosDelPeriodo)
+    .groupBy(sql`DATE(${PedidoUnificadoTable.createdAt})`)
+    .orderBy(sql`DATE(${PedidoUnificadoTable.createdAt})`)
+
+  // 9. Unidades y facturación por categoría. Los productos sin categoría (o ya
+  // borrados) quedan juntos con `categoriaId` y `nombre` en null.
+  const porCategoriaRes = await db
+    .select({
+      categoriaId: ProductoTable.categoriaId,
+      nombre: CategoriaTable.nombre,
+      cantidad: sql`SUM(${ItemPedidoUnificadoTable.cantidad})`,
+      totalVendido: sql`SUM(${ItemPedidoUnificadoTable.cantidad} * ${ItemPedidoUnificadoTable.precioUnitario})`,
+    })
+    .from(ItemPedidoUnificadoTable)
+    .innerJoin(PedidoUnificadoTable, eq(ItemPedidoUnificadoTable.pedidoId, PedidoUnificadoTable.id))
+    .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
+    .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
+    .where(cobradosDelPeriodo)
+    .groupBy(ProductoTable.categoriaId, CategoriaTable.nombre)
+    .orderBy(sql`SUM(${ItemPedidoUnificadoTable.cantidad} * ${ItemPedidoUnificadoTable.precioUnitario}) DESC`)
+
+  // 10. Productos más vendidos, con su categoría: el ranking completo que el
+  // top 5 de arriba no alcanza a mostrar (por categoría hace falta ver más).
+  const productosVendidosRes = await db
+    .select({
+      productoId: ItemPedidoUnificadoTable.productoId,
+      nombre: ProductoTable.nombre,
+      categoria: CategoriaTable.nombre,
+      cantidad: sql`SUM(${ItemPedidoUnificadoTable.cantidad})`,
+      totalVendido: sql`SUM(${ItemPedidoUnificadoTable.cantidad} * ${ItemPedidoUnificadoTable.precioUnitario})`,
+    })
+    .from(ItemPedidoUnificadoTable)
+    .innerJoin(PedidoUnificadoTable, eq(ItemPedidoUnificadoTable.pedidoId, PedidoUnificadoTable.id))
+    .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
+    .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
+    .where(cobradosDelPeriodo)
+    .groupBy(ItemPedidoUnificadoTable.productoId, ProductoTable.nombre, CategoriaTable.nombre)
+    .orderBy(sql`SUM(${ItemPedidoUnificadoTable.cantidad}) DESC`)
+    .limit(50)
+
   return c.json({
     success: true,
     data: {
@@ -143,7 +217,30 @@ metricasRoute.get('/', async (c) => {
         historicos: pedidosHistoricos
       },
       desgloseMetodoPago: desglosePagoFormat,
-      topProductos
+      topProductos,
+      porHora: porHoraRes.map(r => ({
+        hora: numero(r.hora),
+        pedidos: numero(r.pedidos),
+        total: numero(r.total),
+      })),
+      porDia: porDiaRes.map(r => ({
+        fecha: String(r.fecha).slice(0, 10),
+        pedidos: numero(r.pedidos),
+        total: numero(r.total),
+      })),
+      porCategoria: porCategoriaRes.map(r => ({
+        categoriaId: r.categoriaId ?? null,
+        nombre: r.nombre ?? 'Sin categoría',
+        cantidad: numero(r.cantidad),
+        totalVendido: numero(r.totalVendido),
+      })),
+      productosVendidos: productosVendidosRes.map(r => ({
+        productoId: r.productoId,
+        nombre: r.nombre || 'Producto eliminado',
+        categoria: r.categoria ?? null,
+        cantidad: numero(r.cantidad),
+        totalVendido: numero(r.totalVendido),
+      })),
     }
   }, 200)
 })

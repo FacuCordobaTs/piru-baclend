@@ -3,7 +3,7 @@ import { isNull } from 'drizzle-orm'
 import { cargarSucursalesOperacion, filtroSucursalOperacion, resolverSucursalOperacion } from '../lib/sucursales-operacion'
 import { Hono } from 'hono'
 import { pool } from '../db'
-import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable, mesaLocal as MesaLocalTable, pago as PagoTable, ingrediente as IngredienteTable, pedidoUnificado as PedidoUnificadoTable, itemPedidoUnificado as ItemPedidoUnificadoTable, repartidor as RepartidorTable } from '../db/schema'
+import { pedido as PedidoTable, itemPedido as ItemPedidoTable, producto as ProductoTable, mesa as MesaTable, mesaLocal as MesaLocalTable, pago as PagoTable, ingrediente as IngredienteTable, pedidoUnificado as PedidoUnificadoTable, itemPedidoUnificado as ItemPedidoUnificadoTable, categoria as CategoriaTable, repartidor as RepartidorTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { eq, desc, and, inArray, gte, lt, sql } from 'drizzle-orm'
@@ -138,12 +138,15 @@ const pedidoRoute = new Hono()
             cantidad: ItemPedidoTable.cantidad,
             precioUnitario: ItemPedidoTable.precioUnitario,
             nombreProducto: ProductoTable.nombre,
+            categoriaId: ProductoTable.categoriaId,
+            categoria: CategoriaTable.nombre,
             estado: ItemPedidoTable.estado,
             createdAt: ItemPedidoTable.createdAt,
             agregados: ItemPedidoTable.agregados,
           })
           .from(ItemPedidoTable)
           .leftJoin(ProductoTable, eq(ItemPedidoTable.productoId, ProductoTable.id))
+          .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
           .where(eq(ItemPedidoTable.pedidoId, pedido.id))
           .orderBy(desc(ItemPedidoTable.createdAt))
 
@@ -220,10 +223,13 @@ const pedidoRoute = new Hono()
             cantidad: ItemPedidoUnificadoTable.cantidad,
             precioUnitario: ItemPedidoUnificadoTable.precioUnitario,
             nombreProducto: ProductoTable.nombre,
+            categoriaId: ProductoTable.categoriaId,
+            categoria: CategoriaTable.nombre,
             agregados: ItemPedidoUnificadoTable.agregados,
           })
           .from(ItemPedidoUnificadoTable)
           .leftJoin(ProductoTable, eq(ItemPedidoUnificadoTable.productoId, ProductoTable.id))
+          .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
           .where(eq(ItemPedidoUnificadoTable.pedidoId, pedido.id))
 
         return {
@@ -332,12 +338,18 @@ const pedidoRoute = new Hono()
       const cantidadWeb = dtNoCancelados.filter(p => !esManual(p)).length
 
       // 6. Product summary: aggregate quantity sold per product
-      const productSummary = new Map<string, { nombre: string; cantidad: number; totalVendido: number }>()
+      const productSummary = new Map<string, {
+        nombre: string; cantidad: number; totalVendido: number
+        categoria?: string | null; categoriaId?: number | null
+      }>()
 
       const addToSummary = (items: any[]) => {
         items.forEach(item => {
           const key = item.nombreProducto || `Producto #${item.productoId}`
-          const existing = productSummary.get(key) || { nombre: key, cantidad: 0, totalVendido: 0 }
+          const existing = productSummary.get(key) || {
+            nombre: key, cantidad: 0, totalVendido: 0,
+            categoria: item.categoria ?? null, categoriaId: item.categoriaId ?? null,
+          }
           existing.cantidad += item.cantidad || 1
           existing.totalVendido += parseFloat(item.precioUnitario || '0') * (item.cantidad || 1)
           productSummary.set(key, existing)

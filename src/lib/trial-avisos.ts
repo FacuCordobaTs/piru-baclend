@@ -11,14 +11,14 @@
 // NO hay cron externo: es un setInterval dentro del proceso del backend, best-effort (si falla un
 // local, se loguea y se sigue; se reintenta en el próximo tick).
 import { type MySql2Database } from 'drizzle-orm/mysql2'
-import { and, eq, gt, isNull, lte, sql } from 'drizzle-orm'
+import { and, eq, gt, isNull, lte } from 'drizzle-orm'
 import { randomUUID } from 'crypto'
 import {
   suscripcion as SuscripcionTable,
   restaurante as RestauranteTable,
-  pedidoUnificado as PedidoUnificadoTable,
 } from '../db/schema'
 import { DIAS_GRACIA } from './suscripciones'
+import { contarValorPiru } from './valor-piru'
 import { crearFacturaSuscripcionPendiente } from './facturacion-suscripcion'
 import { horaArgentina } from './proteccion-base'
 import { sendTrialEndingWhatsApp } from '../services/whatsapp'
@@ -82,20 +82,11 @@ async function procesarTrial(
   }
 
   // Valor generado en el trial: plata en pedidos que ENTRARON por Piru (web, no anotados a mano)
-  // desde que arrancó la prueba. Mismo criterio que el contador de valor de /planes/mi-suscripcion.
+  // desde que arrancó la prueba, sin los de ejemplo de la demo. Es el mismo contador de
+  // /planes/mi-suscripcion (lib/valor-piru.ts): el aviso le asegura al dueño plata que Piru le trajo.
   let plataTrial = 0
   if (sub.fechaInicio) {
-    const [valorRow] = await db
-      .select({ monto: sql<string>`COALESCE(SUM(${PedidoUnificadoTable.total}), 0)` })
-      .from(PedidoUnificadoTable)
-      .where(
-        and(
-          eq(PedidoUnificadoTable.restauranteId, sub.restauranteId),
-          eq(PedidoUnificadoTable.anotadoManualmente, false),
-          sql`${PedidoUnificadoTable.createdAt} >= ${sub.fechaInicio}`,
-        ),
-      )
-    plataTrial = parseFloat(String(valorRow?.monto ?? '0'))
+    plataTrial = (await contarValorPiru(db, sub.restauranteId, sub.fechaInicio)).monto
   }
 
   // Token de pago (página pública /pago/:token). Válido hasta el fin del trial + la gracia, para que
