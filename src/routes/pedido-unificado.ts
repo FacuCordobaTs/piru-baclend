@@ -298,6 +298,7 @@ export async function resolverItemPos(tx: any, restauranteId: number, input: Omi
     eq(ProductoTable.restauranteId, restauranteId),
   )).limit(1)
   if (!producto) return { error: 'ITEM_INVALIDO', message: 'El producto no pertenece al restaurante' } as const
+  if (producto.soloCanjePuntos) return { error: 'ITEM_INVALIDO', message: 'Este producto sólo se puede canjear por puntos en la tienda' } as const
 
   let variante: any = null
   if (input.varianteId) {
@@ -937,6 +938,9 @@ const pedidoUnificadoRoute = new Hono()
     }
 
     const productosMap = new Map(productos.map((p) => [p.id, p]))
+    if (productos.some(p => p.soloCanjePuntos)) {
+      return c.json({ message: 'Este producto sólo se puede canjear por puntos en la tienda', success: false }, 400)
+    }
 
     const uniqueVariantesIds = [...new Set(items.map((i) => i.varianteId).filter(Boolean))] as number[]
     const uniqueVariantesSecundariasIds = [...new Set(items.map((i) => i.varianteSecundariaId).filter(Boolean))] as number[]

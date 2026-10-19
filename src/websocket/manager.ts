@@ -619,7 +619,7 @@ class WebSocketManager {
     if (!origen?.restauranteId) return null;
     const [disponible] = await this.db.select({ id: ProductoTable.id }).from(ProductoTable).where(and(
       eq(ProductoTable.id, item.productoId), eq(ProductoTable.restauranteId, origen.restauranteId),
-      isNull(ProductoTable.eventoSucursalId), eq(ProductoTable.activo, true),
+      isNull(ProductoTable.eventoSucursalId), eq(ProductoTable.activo, true), eq(ProductoTable.soloCanjePuntos, false),
     )).limit(1);
     if (!disponible) {
       this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'El producto no está disponible en la tienda.' } });
@@ -1424,7 +1424,7 @@ class WebSocketManager {
       const idsProductos = Array.from(new Set(items.map(i => i.productoId)));
       const disponibles = await this.db.select({ id: ProductoTable.id }).from(ProductoTable).where(and(
         inArray(ProductoTable.id, idsProductos), eq(ProductoTable.restauranteId, sala[0].restauranteId!),
-        isNull(ProductoTable.eventoSucursalId), eq(ProductoTable.activo, true),
+        isNull(ProductoTable.eventoSucursalId), eq(ProductoTable.activo, true), eq(ProductoTable.soloCanjePuntos, false),
       ));
       if (disponibles.length !== idsProductos.length) {
         this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'Hay productos que ya no están disponibles en la tienda. Revisá el pedido.' } });

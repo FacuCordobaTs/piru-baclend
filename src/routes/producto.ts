@@ -194,6 +194,7 @@ const createProductSchema = z.object({
   etiquetas: z.array(z.string().min(1).max(100)).optional(),
   puntosGanados: z.number().int().min(0).optional().default(0),
   puntosNecesarios: z.number().int().min(0).optional().default(0),
+  soloCanjePuntos: z.boolean().optional().default(false),
   descuento: z.number().int().min(0).max(100).optional().default(0),
   descuentoFechaInicio: z.string().optional().nullable(),
   descuentoFechaFin: z.string().optional().nullable(),
@@ -231,6 +232,7 @@ const updateProductSchema = z.object({
   etiquetas: z.array(z.string().min(1).max(100)).optional(),
   puntosGanados: z.number().int().min(0).optional(),
   puntosNecesarios: z.number().int().min(0).optional(),
+  soloCanjePuntos: z.boolean().optional(),
   descuento: z.number().int().min(0).max(100).optional(),
   descuentoFechaInicio: z.string().optional().nullable(),
   descuentoFechaFin: z.string().optional().nullable(),
@@ -283,6 +285,7 @@ const productoRoute = new Hono()
           esBebida: CategoriaTable.esBebida,
         },
         puntosGanados: ProductoPuntosTable.puntosGanados,
+        soloCanjePuntos: ProductoTable.soloCanjePuntos,
         puntosNecesarios: ProductoPuntosTable.puntosNecesarios
       })
       .from(ProductoTable)
@@ -357,6 +360,9 @@ const productoRoute = new Hono()
     return guardarProductoAtomico(async (db) => {
     const restauranteId = (c as any).user.id
     const { activo, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota, eventoSucursalId } = c.req.valid('json')
+    if (c.req.valid('json').soloCanjePuntos && puntosNecesarios <= 0) {
+      return c.json({ success: false, message: 'Un producto sólo canjeable debe tener un costo en puntos mayor a cero' }, 400)
+    }
 
     if (eventoSucursalId != null) {
       const [evento] = await db.select({ id: SucursalTable.id }).from(SucursalTable).where(and(
@@ -410,6 +416,7 @@ const productoRoute = new Hono()
       precio: precio.toString(),
       imagenUrl: newImageUrl,
       activo,
+      soloCanjePuntos: c.req.valid('json').soloCanjePuntos,
       restauranteId,
       categoriaId: categoriaId || null,
       eventoSucursalId: eventoSucursalId ?? null,
@@ -559,9 +566,18 @@ const productoRoute = new Hono()
     const restauranteId = (c as any).user.id
     const { id, nombre, descripcion, precio, image, eliminarImagen, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota, eventoSucursalId } = c.req.valid('json')
 
-    const [productoActual] = await db.select({ id: ProductoTable.id, imagenUrl: ProductoTable.imagenUrl }).from(ProductoTable)
+    const [productoActual] = await db.select({ id: ProductoTable.id, imagenUrl: ProductoTable.imagenUrl, soloCanjePuntos: ProductoTable.soloCanjePuntos }).from(ProductoTable)
       .where(and(eq(ProductoTable.id, id), eq(ProductoTable.restauranteId, restauranteId))).limit(1)
     if (!productoActual) return c.json({ success: false, message: 'Producto no encontrado' }, 404)
+    if (c.req.valid('json').soloCanjePuntos ?? productoActual.soloCanjePuntos) {
+      const [configPuntos] = puntosNecesarios === undefined
+        ? await db.select({ puntosNecesarios: ProductoPuntosTable.puntosNecesarios }).from(ProductoPuntosTable)
+          .where(and(eq(ProductoPuntosTable.productoId, id), eq(ProductoPuntosTable.restauranteId, restauranteId))).limit(1)
+        : []
+      if ((puntosNecesarios ?? configPuntos?.puntosNecesarios ?? 0) <= 0) {
+        return c.json({ success: false, message: 'Un producto sólo canjeable debe tener un costo en puntos mayor a cero' }, 400)
+      }
+    }
 
     if (eventoSucursalId != null) {
       const [evento] = await db.select({ id: SucursalTable.id }).from(SucursalTable).where(and(
@@ -619,6 +635,7 @@ const productoRoute = new Hono()
     else if (eliminarImagen) updateData.imagenUrl = null;
     if (categoriaId !== undefined) updateData.categoriaId = categoriaId;
     if (activo !== undefined) updateData.activo = activo;
+    if (c.req.valid('json').soloCanjePuntos !== undefined) updateData.soloCanjePuntos = c.req.valid('json').soloCanjePuntos;
     if (eventoSucursalId !== undefined) updateData.eventoSucursalId = eventoSucursalId;
     if (descuento !== undefined) updateData.descuento = descuento;
     if (descuentoFechaInicio !== undefined) updateData.descuentoFechaInicio = descuentoFechaInicio ? new Date(descuentoFechaInicio) : null;

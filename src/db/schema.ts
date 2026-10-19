@@ -422,6 +422,7 @@ export const producto = mysqlTable("producto", {
   id: int("id").primaryKey().autoincrement(),
   // NULL conserva el catálogo habitual; asignado, sólo se vende en ese evento.
   eventoSucursalId: int("evento_sucursal_id").references(() => sucursal.id, { onDelete: "restrict" }),
+  soloCanjePuntos: boolean("solo_canje_puntos").default(false).notNull(),
   restauranteId: int("restaurante_id").references(() => restaurante.id),
   categoriaId: int("categoria_id").references(() => categoria.id),
   nombre: varchar("nombre", { length: 255 }).notNull(),

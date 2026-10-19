@@ -828,6 +828,9 @@ const pedidoRoute = new Hono()
     if (!producto[0].activo) {
       return c.json({ message: 'El producto no está disponible', success: false }, 400)
     }
+    if (producto[0].soloCanjePuntos) {
+      return c.json({ message: 'Este producto sólo se puede canjear por puntos en la tienda', success: false }, 400)
+    }
 
     // Calcular total de agregados si los hay
     let totalAgregados = 0;

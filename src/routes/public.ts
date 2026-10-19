@@ -475,6 +475,7 @@ const obtenerRestaurantePublico = async (c: Context) => {
                     categoria: p.categoriaId ? categoriasMap.get(p.categoriaId)?.nombre ?? null : null,
                     categoriaOrden: p.categoriaId ? categoriasMap.get(p.categoriaId)?.orden ?? null : null,
                     puntosNecesarios: puntos?.puntosNecesarios ?? null,
+                    soloCanjePuntos: p.soloCanjePuntos,
                     puntosGanados: puntos?.puntosGanados ?? null,
                     ingredientes,
                     agregados,
@@ -915,6 +916,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             }
             if (item.varianteSecundariaId && variantesSecundariasMap.get(item.varianteSecundariaId)?.productoId !== item.productoId) {
                 return c.json({ message: 'La segunda variante no pertenece al producto', success: false }, 400)
+            }
+            if (row.producto.soloCanjePuntos && !item.esCanjePuntos) {
+                return c.json({ message: 'Este producto sólo se puede canjear por puntos', success: false }, 400)
             }
             if (item.esCanjePuntos) {
                 if (!row.puntos || row.puntos.puntosNecesarios <= 0) {
@@ -1576,6 +1580,9 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             }
             if (item.varianteSecundariaId && variantesSecundariasMap.get(item.varianteSecundariaId)?.productoId !== item.productoId) {
                 return c.json({ message: 'La segunda variante no pertenece al producto', success: false }, 400)
+            }
+            if (row.producto.soloCanjePuntos && !item.esCanjePuntos) {
+                return c.json({ message: 'Este producto sólo se puede canjear por puntos', success: false }, 400)
             }
             if (item.esCanjePuntos) {
                 if (!row.puntos || row.puntos.puntosNecesarios <= 0) {

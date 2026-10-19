@@ -22,8 +22,8 @@ import { restaurante } from '../db/schema'
 
 type Db = MySql2Database<Record<string, never>>
 
-/** La demo del panel dura lo que una jornada: para seguir, se vuelve a entrar desde la tienda. */
-export const DEMO_SESION_TTL_SEGUNDOS = 12 * 3600
+/** La sesión de la demo del panel dura una semana desde la entrada desde la tienda. */
+export const DEMO_SESION_TTL_SEGUNDOS = 7 * 24 * 3600
 
 export interface LocalParaDemo {
   origen?: string | null

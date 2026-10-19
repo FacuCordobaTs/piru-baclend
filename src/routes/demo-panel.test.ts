@@ -67,7 +67,8 @@ function appDemo(
 describe('la entrada al panel desde la demo de la tienda', () => {
   afterEach(() => setSystemTime())
 
-  test('un prospecto sin reclamar entrega una sesión demo de 12 horas y prepara los datos de ejemplo', async () => {
+  test('un prospecto sin reclamar entrega una sesión demo de 7 días y prepara los datos de ejemplo', async () => {
+    setSystemTime(new Date('2026-10-13T12:00:00Z'))
     const { entrar, llamadas } = appDemo(PROSPECTO)
     const res = await entrar('brasa')
     expect(res.status).toBe(200)
@@ -76,6 +77,8 @@ describe('la entrada al panel desde la demo de la tienda', () => {
     const sesion = jwt.verify(cuerpo.token, secreto) as jwt.JwtPayload
     expect(sesion).toMatchObject({ id: 6, scope: 'restaurante', demo: true })
     expect(sesion.exp! - sesion.iat!).toBe(DEMO_SESION_TTL_SEGUNDOS)
+    expect(sesion.exp! - sesion.iat!).toBe(604800)
+    expect(new Date(cuerpo.expira).getTime() / 1000).toBe(sesion.exp!)
     // No es una sesión de construcción ni un acceso de interno.
     expect(sesion.altaInterna).toBeUndefined()
     expect(sesion.accesoTemporalInterno).toBeUndefined()

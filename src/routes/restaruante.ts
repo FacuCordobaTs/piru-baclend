@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono'
 import { pool } from '../db'
-import { restaurante as RestauranteTable, mesa as MesaTable, producto as ProductoTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, horarioRestaurante as HorarioRestauranteTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, productoAgregado as ProductoAgregadoTable, agregado as AgregadoTable } from '../db/schema'
+import { restaurante as RestauranteTable, mesa as MesaTable, producto as ProductoTable, productoPuntos as ProductoPuntosTable, categoria as CategoriaTable, etiqueta as EtiquetaTable, horarioRestaurante as HorarioRestauranteTable, varianteProducto as VarianteProductoTable, franjaHorarioPedido as FranjaHorarioPedidoTable, productoIngrediente as ProductoIngredienteTable, ingrediente as IngredienteTable, productoAgregado as ProductoAgregadoTable, agregado as AgregadoTable } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { zValidator } from '@hono/zod-validator'
@@ -161,6 +161,9 @@ restauranteRoute.get('/profile', async (c) => {
         categoriaNombre: CategoriaTable.nombre,
         categoriaOrden: CategoriaTable.orden,
         categoriaEsBebida: CategoriaTable.esBebida,
+        puntosGanados: ProductoPuntosTable.puntosGanados,
+        puntosNecesarios: ProductoPuntosTable.puntosNecesarios,
+        soloCanjePuntos: ProductoTable.soloCanjePuntos,
         descuento: ProductoTable.descuento,
         tieneVariantes: ProductoTable.tieneVariantes,
         tituloVariantesPrimarias: ProductoTable.tituloVariantesPrimarias,
@@ -170,6 +173,10 @@ restauranteRoute.get('/profile', async (c) => {
       })
       .from(ProductoTable)
       .leftJoin(CategoriaTable, eq(ProductoTable.categoriaId, CategoriaTable.id))
+      .leftJoin(ProductoPuntosTable, and(
+        eq(ProductoPuntosTable.productoId, ProductoTable.id),
+        eq(ProductoPuntosTable.restauranteId, restauranteId),
+      ))
       .where(eq(ProductoTable.restauranteId, restauranteId))
 
     // Obtener todas las etiquetas del restaurante en una sola query
@@ -278,6 +285,9 @@ restauranteRoute.get('/profile', async (c) => {
       categoriaOrden: p.categoriaOrden ?? null,
       categoriaEsBebida: p.categoriaEsBebida ?? false,
       descuento: p.descuento,
+      puntosGanados: p.puntosGanados ?? 0,
+      puntosNecesarios: p.puntosNecesarios ?? 0,
+      soloCanjePuntos: p.soloCanjePuntos,
       tieneVariantes: p.tieneVariantes,
       tituloVariantesPrimarias: p.tituloVariantesPrimarias,
       tituloVariantesSecundarias: p.tituloVariantesSecundarias,

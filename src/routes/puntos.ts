@@ -31,9 +31,12 @@ puntosRoute.put('/productos/:id', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA),
     const restauranteId = Number((c as any).user.id)
     const productoId = c.req.valid('param').id
     const datos = c.req.valid('json')
-    const [item] = await db.select({ id: producto.id }).from(producto)
+    const [item] = await db.select({ id: producto.id, soloCanjePuntos: producto.soloCanjePuntos }).from(producto)
       .where(and(eq(producto.id, productoId), eq(producto.restauranteId, restauranteId))).limit(1)
     if (!item) return c.json({ success: false, message: 'Producto no encontrado' }, 404)
+    if (item.soloCanjePuntos && datos.puntosNecesarios <= 0) {
+      return c.json({ success: false, message: 'Un producto sólo canjeable debe tener un costo en puntos mayor a cero' }, 400)
+    }
     await db.transaction(async tx => {
       const [existente] = await tx.select({ id: productoPuntos.id }).from(productoPuntos)
         .where(and(eq(productoPuntos.productoId, productoId), eq(productoPuntos.restauranteId, restauranteId))).limit(1)
