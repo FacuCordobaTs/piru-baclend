@@ -8,9 +8,8 @@ import { z } from 'zod'
 import { eq, and, inArray, like, notInArray, isNull, sql } from 'drizzle-orm'
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import UUID = require("uuid-js");
+import { errorImagenDataUrl, leerImagenesExtra, MAX_IMAGENES_EXTRA, resolverImagenesProducto } from '../lib/producto-imagenes'
 
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
-const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/jpg"];
 
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
@@ -161,6 +160,17 @@ export function generarEtiquetaAutomatica(
   return `${base}${Date.now()}`.toLowerCase()
 }
 
+/** Rechaza cualquier imagen nueva inválida antes de subir nada a R2. */
+function errorImagenesNuevas(image: string | undefined, imagenesExtra: string[] | undefined): string | null {
+  for (const img of [image, ...(imagenesExtra ?? [])]) {
+    if (img?.startsWith('data:')) {
+      const error = errorImagenDataUrl(img)
+      if (error) return error
+    }
+  }
+  return null
+}
+
 async function guardarProductoAtomico(accion: (db: MySql2Database<Record<string, never>>) => Promise<Response>): Promise<Response> {
   try {
     return await drizzle(pool).transaction(async db => {
@@ -180,6 +190,8 @@ const createProductSchema = z.object({
   descripcion: z.string().max(255),
   precio: z.number().min(0),
   image: z.string().min(10).optional(),
+  /** Fotos adicionales en orden: data URL (se sube) o URL que el producto ya tenía (se conserva). */
+  imagenesExtra: z.array(z.string().min(10)).max(MAX_IMAGENES_EXTRA + 1).optional(),
   eventoSucursalId: z.number().int().positive().nullable().optional(),
   categoriaId: z.number().nullable().optional(),
   ingredienteIds: z.array(z.number().int().positive()).optional(),
@@ -217,6 +229,7 @@ const updateProductSchema = z.object({
   precio: z.number().min(0).optional(),
   image: z.string().min(10).optional(),
   eliminarImagen: z.boolean().optional(),
+  imagenesExtra: z.array(z.string().min(10)).max(MAX_IMAGENES_EXTRA + 1).optional(),
   eventoSucursalId: z.number().int().positive().nullable().optional(),
   categoriaId: z.number().nullable().optional(),
   ingredienteIds: z.array(z.number().int().positive()).optional(),
@@ -268,6 +281,7 @@ const productoRoute = new Hono()
         activo: ProductoTable.activo,
         eventoSucursalId: ProductoTable.eventoSucursalId,
         imagenUrl: ProductoTable.imagenUrl,
+        imagenesExtra: ProductoTable.imagenesExtra,
         descuento: ProductoTable.descuento,
         descuentoFechaInicio: ProductoTable.descuentoFechaInicio,
         descuentoFechaFin: ProductoTable.descuentoFechaFin,
@@ -336,6 +350,7 @@ const productoRoute = new Hono()
 
         return {
           ...p,
+          imagenesExtra: leerImagenesExtra(p.imagenesExtra),
           categoria: p.categoria?.nombre || null,
           categoriaEsBebida: p.categoria?.esBebida ?? false,
           ingredientes: ingredientes,
@@ -359,7 +374,7 @@ const productoRoute = new Hono()
   .post('/create', zValidator('json', createProductSchema), async (c) => {
     return guardarProductoAtomico(async (db) => {
     const restauranteId = (c as any).user.id
-    const { activo, nombre, descripcion, precio, image, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota, eventoSucursalId } = c.req.valid('json')
+    const { activo, nombre, descripcion, precio, image, imagenesExtra, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota, eventoSucursalId } = c.req.valid('json')
     if (c.req.valid('json').soloCanjePuntos && puntosNecesarios <= 0) {
       return c.json({ success: false, message: 'Un producto sólo canjeable debe tener un costo en puntos mayor a cero' }, 400)
     }
@@ -390,23 +405,11 @@ const productoRoute = new Hono()
       }
     }
 
-    let newImageUrl: string | undefined;
-
-    if (image) {
-      const [meta, data] = image.split(",");
-      const mimeType = meta.match(/:(.*?);/)?.[1];
-
-      if (!mimeType || !ALLOWED_MIME_TYPES.includes(mimeType)) {
-        newImageUrl = undefined;
-      }
-
-      const buffer = Buffer.from(data, "base64");
-      if (buffer.byteLength > MAX_FILE_SIZE) {
-        newImageUrl = undefined;
-      }
-
-      newImageUrl = await saveImage(image);
-    }
+    const errorImagen = errorImagenesNuevas(image, imagenesExtra)
+    if (errorImagen) return c.json({ success: false, message: errorImagen }, 400)
+    const imagenes = await resolverImagenesProducto({ image, imagenesExtra }, { imagenUrl: null, imagenesExtra: [] }, saveImage)
+    const newImageUrl = imagenes.imagenUrl ?? undefined
+    const imagenesExtraGuardadas = imagenes.imagenesExtra ?? []
 
     const tieneVariantes = !!(variantes && variantes.length > 0);
 
@@ -415,6 +418,7 @@ const productoRoute = new Hono()
       descripcion,
       precio: precio.toString(),
       imagenUrl: newImageUrl,
+      imagenesExtra: imagenesExtraGuardadas.length > 0 ? imagenesExtraGuardadas : null,
       activo,
       soloCanjePuntos: c.req.valid('json').soloCanjePuntos,
       restauranteId,
@@ -556,17 +560,19 @@ const productoRoute = new Hono()
     }
 
     const opcionesGuardadas = await db.select().from(VarianteProductoTable).where(eq(VarianteProductoTable.productoId, productoId))
-    return c.json({ message: 'Producto creado correctamente', success: true, data: product, productoId, imagenUrl: newImageUrl ?? null,
+    return c.json({ message: 'Producto creado correctamente', success: true, data: product, productoId, imagenUrl: newImageUrl ?? null, imagenesExtra: imagenesExtraGuardadas,
       variantes: opcionesGuardadas.filter(v => v.grupo === 1), variantesSecundarias: opcionesGuardadas.filter(v => v.grupo === 2), etiquetaAutoGenerada: etiquetaAuto }, 200)
     })
   })
 
   .put('/update', zValidator('json', updateProductSchema), async (c) => {
-    return guardarProductoAtomico(async (db) => {
+    // Extras quitadas: se borran de R2 recién cuando la transacción confirmó.
+    let huerfanas: string[] = []
+    const respuesta = await guardarProductoAtomico(async (db) => {
     const restauranteId = (c as any).user.id
-    const { id, nombre, descripcion, precio, image, eliminarImagen, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota, eventoSucursalId } = c.req.valid('json')
+    const { id, nombre, descripcion, precio, image, eliminarImagen, imagenesExtra, categoriaId, ingredienteIds, agregadoIds, agregadoIdsSecundarios, activo, etiquetas, puntosGanados, puntosNecesarios, descuento, descuentoFechaInicio, descuentoFechaFin, variantes, variantesSecundarias, tituloVariantesPrimarias, tituloVariantesSecundarias, tituloExtrasPrimarios, tituloExtrasSecundarios, permiteNota, tituloNota, eventoSucursalId } = c.req.valid('json')
 
-    const [productoActual] = await db.select({ id: ProductoTable.id, imagenUrl: ProductoTable.imagenUrl, soloCanjePuntos: ProductoTable.soloCanjePuntos }).from(ProductoTable)
+    const [productoActual] = await db.select({ id: ProductoTable.id, imagenUrl: ProductoTable.imagenUrl, imagenesExtra: ProductoTable.imagenesExtra, soloCanjePuntos: ProductoTable.soloCanjePuntos }).from(ProductoTable)
       .where(and(eq(ProductoTable.id, id), eq(ProductoTable.restauranteId, restauranteId))).limit(1)
     if (!productoActual) return c.json({ success: false, message: 'Producto no encontrado' }, 404)
     if (c.req.valid('json').soloCanjePuntos ?? productoActual.soloCanjePuntos) {
@@ -609,30 +615,22 @@ const productoRoute = new Hono()
       }
     }
 
-    let newImageUrl: string | undefined;
-
-    if (image) {
-      const [meta, data] = image.split(",");
-      const mimeType = meta.match(/:(.*?);/)?.[1];
-
-      if (!mimeType || !ALLOWED_MIME_TYPES.includes(mimeType)) {
-        newImageUrl = undefined;
-      }
-
-      const buffer = Buffer.from(data, "base64");
-      if (buffer.byteLength > MAX_FILE_SIZE) {
-        newImageUrl = undefined;
-      }
-
-      newImageUrl = await saveImage(image);
-    }
+    const errorImagen = errorImagenesNuevas(image, imagenesExtra)
+    if (errorImagen) return c.json({ success: false, message: errorImagen }, 400)
+    const imagenes = await resolverImagenesProducto(
+      { image, eliminarImagen, imagenesExtra },
+      { imagenUrl: productoActual.imagenUrl, imagenesExtra: leerImagenesExtra(productoActual.imagenesExtra) },
+      saveImage,
+    )
+    huerfanas = imagenes.huerfanas
+    const newImageUrl = imagenes.imagenUrl ?? undefined
 
     const updateData: { [key: string]: any } = {};
     if (nombre !== undefined) updateData.nombre = nombre;
     if (descripcion !== undefined) updateData.descripcion = descripcion;
     if (precio !== undefined) updateData.precio = precio;
-    if (newImageUrl) updateData.imagenUrl = newImageUrl;
-    else if (eliminarImagen) updateData.imagenUrl = null;
+    if (imagenes.imagenUrl !== undefined) updateData.imagenUrl = imagenes.imagenUrl;
+    if (imagenes.imagenesExtra !== undefined) updateData.imagenesExtra = imagenes.imagenesExtra.length > 0 ? imagenes.imagenesExtra : null;
     if (categoriaId !== undefined) updateData.categoriaId = categoriaId;
     if (activo !== undefined) updateData.activo = activo;
     if (c.req.valid('json').soloCanjePuntos !== undefined) updateData.soloCanjePuntos = c.req.valid('json').soloCanjePuntos;
@@ -853,8 +851,11 @@ const productoRoute = new Hono()
 
     const opcionesGuardadas = await db.select().from(VarianteProductoTable).where(eq(VarianteProductoTable.productoId, id))
     return c.json({ message: 'Producto actualizado correctamente', success: true,
-      ...(newImageUrl ? { imagenUrl: newImageUrl } : {}), variantes: opcionesGuardadas.filter(v => v.grupo === 1), variantesSecundarias: opcionesGuardadas.filter(v => v.grupo === 2) }, 200)
+      ...(newImageUrl ? { imagenUrl: newImageUrl } : {}), ...(imagenes.imagenesExtra ? { imagenesExtra: imagenes.imagenesExtra } : {}),
+      variantes: opcionesGuardadas.filter(v => v.grupo === 1), variantesSecundarias: opcionesGuardadas.filter(v => v.grupo === 2) }, 200)
     })
+    if (respuesta.ok && huerfanas.length > 0) await Promise.all(huerfanas.map(deleteImage))
+    return respuesta
   })
 
   // Buscar productos por etiqueta
@@ -898,6 +899,7 @@ const productoRoute = new Hono()
         activo: ProductoTable.activo,
         eventoSucursalId: ProductoTable.eventoSucursalId,
         imagenUrl: ProductoTable.imagenUrl,
+        imagenesExtra: ProductoTable.imagenesExtra,
         descuento: ProductoTable.descuento,
         tituloVariantesPrimarias: ProductoTable.tituloVariantesPrimarias,
         tituloVariantesSecundarias: ProductoTable.tituloVariantesSecundarias,
@@ -960,6 +962,7 @@ const productoRoute = new Hono()
 
         return {
           ...p,
+          imagenesExtra: leerImagenesExtra(p.imagenesExtra),
           categoria: p.categoria?.nombre || null,
           categoriaEsBebida: p.categoria?.esBebida ?? false,
           ingredientes,
@@ -1164,6 +1167,7 @@ const productoRoute = new Hono()
         id: ProductoTable.id,
         nombre: ProductoTable.nombre,
         imagenUrl: ProductoTable.imagenUrl,
+        imagenesExtra: ProductoTable.imagenesExtra,
       })
       .from(ProductoTable)
       .where(and(
@@ -1210,7 +1214,9 @@ const productoRoute = new Hono()
       // La imagen se elimina sólo después de confirmar el borrado en DB. Así un
       // fallo de integridad no deja un producto existente con la imagen rota.
       await Promise.all(
-        aEliminar.map(p => p.imagenUrl ? deleteImage(p.imagenUrl) : Promise.resolve())
+        aEliminar.flatMap(p => [p.imagenUrl, ...leerImagenesExtra(p.imagenesExtra)])
+          .filter((url): url is string => !!url)
+          .map(deleteImage)
       )
     }
 
@@ -1259,9 +1265,9 @@ const productoRoute = new Hono()
       await tx.delete(ProductoTable).where(and(eq(ProductoTable.id, id), eq(ProductoTable.restauranteId, restauranteId)))
     })
 
-    if (product[0].imagenUrl) {
-      await deleteImage(product[0].imagenUrl)
-    }
+    await Promise.all([product[0].imagenUrl, ...leerImagenesExtra(product[0].imagenesExtra)]
+      .filter((url): url is string => !!url)
+      .map(deleteImage))
 
     return c.json({ message: 'Producto eliminado correctamente', success: true, data: product }, 200)
   })

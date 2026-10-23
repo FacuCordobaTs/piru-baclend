@@ -430,6 +430,9 @@ export const producto = mysqlTable("producto", {
   precio: decimal("precio", { precision: 10, scale: 2 }).notNull(),
   activo: boolean("activo").default(true),
   imagenUrl: varchar("imagen_url", { length: 255 }),
+  // Fotos adicionales, en orden, que la tienda muestra en el detalle. `imagenUrl` sigue siendo la
+  // portada. Array JSON de URLs de R2; NULL = sin galería. Ver lib/producto-imagenes.ts.
+  imagenesExtra: json("imagenes_extra"),
   descuento: int("descuento").default(0),
   descuentoFechaInicio: timestamp("descuento_fecha_inicio"),
   descuentoFechaFin: timestamp("descuento_fecha_fin"),

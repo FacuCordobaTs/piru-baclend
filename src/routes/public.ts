@@ -25,6 +25,7 @@ import {
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { contarPedidosPagadosFranja } from '../lib/franjas'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
+import { leerImagenesExtra } from '../lib/producto-imagenes'
 import {
   obtenerConfiguracionPuntos,
   calcularPuntosGanados,
@@ -463,6 +464,8 @@ const obtenerRestaurantePublico = async (c: Context) => {
                     precio: p.precio,
                     activo: p.activo,
                     imagenUrl: p.imagenUrl,
+                    // Galería opcional del detalle; la portada sigue siendo `imagenUrl`. Aditivo.
+                    imagenesExtra: leerImagenesExtra(p.imagenesExtra),
                     descuento: descuentoEfectivo,
                     descuentoFechaFin: fechaFinEfectiva,
                     tituloVariantesPrimarias: p.tituloVariantesPrimarias,
@@ -599,6 +602,7 @@ publicRoute.get('/sala/join/:token', async (c) => {
             descripcion: ProductoTable.descripcion,
             precio: ProductoTable.precio,
             imagenUrl: ProductoTable.imagenUrl,
+            imagenesExtra: ProductoTable.imagenesExtra,
             categoriaId: ProductoTable.categoriaId,
             categoria: CategoriaTable.nombre,
             categoriaOrden: CategoriaTable.orden,
@@ -637,6 +641,7 @@ publicRoute.get('/sala/join/:token', async (c) => {
                 ])
                 return {
                     ...p,
+                    imagenesExtra: leerImagenesExtra(p.imagenesExtra),
                     ingredientes,
                     agregados,
                     agregadosPrimarios: agregados.filter(a => a.grupo === 1),
