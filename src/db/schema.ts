@@ -20,6 +20,7 @@ import {
   foreignKey,
 } from "drizzle-orm/mysql-core";
 import { sql } from "drizzle-orm";
+import type { TiendaConfig } from "../lib/tienda-config";
 
 export const restaurante = mysqlTable("restaurante", {
   id: int("id").primaryKey().autoincrement(),
@@ -84,10 +85,12 @@ export const restaurante = mysqlTable("restaurante", {
   /** Overrides for enabled payment methods; merged in app with legacy columns (see resolveMetodosPagoConfig). */
   metodosPagoConfig: json("metodos_pago_config"),
 
+  /** Identidad y contenido opcionales de las tres plantillas públicas. NULL = diseño por defecto. */
+  tienda: json("tienda_config").$type<TiendaConfig>(),
   colorPrimario: varchar("color_primario", { length: 50 }),
   colorSecundario: varchar("color_secundario", { length: 50 }),
-  // Si está activo, colorPrimario se usa sólo como acento (botones/detalles),
-  // sin reemplazar la paleta neutra de fondos y textos de la tienda.
+  // Si está activo, se ignora el secundario y todos los acentos usan el primario.
+  // Cada plantilla conserva su paleta salvo overrides explícitos en tienda.colores.
   usarColorUnico: boolean("usar_color_unico").default(false).notNull(),
   // Diseño de las cartas de producto. El glassmorphism quedó discontinuado: las cartas
   // usan siempre el diseño sólido (no-glass). La columna se mantiene por retrocompat con

@@ -22,6 +22,9 @@ import { baseTiendaDe } from '../lib/marketing-enlaces'
 import { esGtmContainerIdValido, normalizarGtmContainerId } from '../lib/gtm'
 import { esMetaPixelIdValido, normalizarMetaPixelId } from '../lib/meta-pixel'
 
+import { actualizarTienda, ImagenTiendaInvalida } from '../lib/tienda-config'
+import { imagenesTienda } from '../lib/tienda-imagenes-r2'
+
 // Configuración de R2
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID
@@ -110,6 +113,7 @@ const completeProfileSchema = z.object({
 })
 
 const updateProfileSchema = z.object({
+  tienda: z.unknown().optional(),
   nombre: z.string().min(3).optional(),
   direccion: z.string().min(1).optional(),
   direccionTexto: z.string().max(512).nullable().optional(),
@@ -385,7 +389,7 @@ restauranteRoute.post('/complete-profile', zValidator('json', completeProfileSch
 restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { nombre, direccion, direccionTexto, direccionLat, direccionLng, direccionSoloTexto, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, comprobantesWhatsapp, transferenciaAlias, colorPrimario, colorSecundario, usarColorUnico, disenoAlternativo, gtmContainerId, metaPixelId } = c.req.valid('json')
+  const { nombre, direccion, direccionTexto, direccionLat, direccionLng, direccionSoloTexto, telefono, image, imageLight, username, deliveryFee, whatsappEnabled, whatsappNumber, comprobantesWhatsapp, transferenciaAlias, colorPrimario, colorSecundario, usarColorUnico, disenoAlternativo, gtmContainerId, metaPixelId, tienda } = c.req.valid('json')
 
   try {
     // Obtener datos actuales del restaurante
@@ -494,14 +498,18 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
     }
 
     // Verificar que hay algo que actualizar
-    if (Object.keys(updateData).length === 0) {
+    if (tienda === undefined && Object.keys(updateData).length === 0) {
       return c.json({ message: 'No se proporcionaron datos para actualizar', success: false }, 400)
     }
 
     // Actualizar en la base de datos
-    await db.update(RestauranteTable)
-      .set(updateData)
-      .where(eq(RestauranteTable.id, restauranteId))
+    const persistir = async (config?: unknown) => {
+      if (tienda !== undefined) updateData.tienda = config
+      await db.update(RestauranteTable).set(updateData).where(eq(RestauranteTable.id, restauranteId))
+    }
+    if (tienda !== undefined) {
+      await actualizarTienda(tienda, currentRestaurante[0].tienda, imagenesTienda(restauranteId), persistir)
+    } else await persistir()
 
     // Obtener datos actualizados
     const updatedRestaurante = await db.select()
@@ -516,6 +524,7 @@ restauranteRoute.put('/update', zValidator('json', updateProfileSchema), async (
     }, 200)
 
   } catch (error) {
+    if (error instanceof ImagenTiendaInvalida) return c.json({ success: false, message: error.message }, 400)
     console.error('Error updating profile:', error)
     return c.json({ message: 'Error al actualizar perfil', error: (error as Error).message, success: false }, 500)
   }

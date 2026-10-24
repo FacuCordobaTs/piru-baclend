@@ -64,6 +64,8 @@ const mesaRoute = new Hono()
       nombre: RestauranteTable.nombre,
       username: RestauranteTable.username,
       imagenUrl: RestauranteTable.imagenUrl,
+      imagenLightUrl: RestauranteTable.imagenLightUrl,
+      tienda: RestauranteTable.tienda,
       direccion: RestauranteTable.direccion,
       mpConnected: RestauranteTable.mpConnected,
       mpPublicKey: RestauranteTable.mpPublicKey,

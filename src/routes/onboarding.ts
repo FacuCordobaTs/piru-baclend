@@ -11,6 +11,9 @@ import UUID = require("uuid-js")
 import { AltaIncompletaError, completarAltaInterna } from '../lib/alta-completa'
 import { sembrarDatosEjemplo } from '../lib/datos-ejemplo-db'
 
+import { actualizarTienda, ImagenTiendaInvalida } from '../lib/tienda-config'
+import { imagenesTienda } from '../lib/tienda-imagenes-r2'
+
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY
@@ -65,6 +68,7 @@ export const onboardingRoute = new Hono()
 onboardingRoute.use('*', authMiddleware)
 
 const completeOnboardingSchema = z.object({
+  tienda: z.unknown().optional(),
   username: z.string().min(3),
   nombre: z.string().optional(),
   phone: z.string().optional(),
@@ -176,7 +180,13 @@ onboardingRoute.put('/complete', zValidator('json', completeOnboardingSchema), a
       updateData.imagenUrl = await saveImage(data.imageDark)
     }
 
-    await db.update(RestauranteTable).set(updateData).where(eq(RestauranteTable.id, restauranteId))
+    const persistir = async (config?: unknown) => {
+      if (data.tienda !== undefined) updateData.tienda = config
+      await db.update(RestauranteTable).set(updateData).where(eq(RestauranteTable.id, restauranteId))
+    }
+    if (data.tienda !== undefined) {
+      await actualizarTienda(data.tienda, currentRestaurante[0].tienda, imagenesTienda(restauranteId), persistir)
+    } else await persistir()
 
     // Handle horarios: duplicate input mapping to all days if passed
     if (data.turnos && data.turnos.length > 0) {
@@ -195,8 +205,9 @@ onboardingRoute.put('/complete', zValidator('json', completeOnboardingSchema), a
 
     // Guardar la configuración no cierra el alta ni inicia la prueba: el alta se cierra aparte
     // (POST /terminar-alta) y la prueba arranca cuando el dueño verifica su WhatsApp en el claim.
-    return c.json({ success: true, message: 'Onboarding completado exitosamente' })
+    return c.json({ success: true, message: 'Onboarding completado exitosamente', tienda: data.tienda !== undefined ? updateData.tienda : currentRestaurante[0].tienda })
   } catch (error) {
+    if (error instanceof ImagenTiendaInvalida) return c.json({ success: false, message: error.message }, 400)
     console.error('Error completing onboarding:', error)
     return c.json({ success: false, message: 'Error interno del servidor', error: (error as Error).message }, 500)
   }

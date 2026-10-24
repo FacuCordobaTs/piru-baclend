@@ -255,6 +255,7 @@ const obtenerRestaurantePublico = async (c: Context) => {
             nombre: RestauranteTable.nombre,
             imagenUrl: RestauranteTable.imagenUrl,
             imagenLightUrl: RestauranteTable.imagenLightUrl,
+            tienda: RestauranteTable.tienda,
             // Configuración pública (no secreta) necesaria para que el storefront
             // cargue dinámicamente el contenedor propio del restaurante.
             gtmContainerId: RestauranteTable.gtmContainerId,
