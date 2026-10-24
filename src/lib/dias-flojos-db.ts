@@ -2,7 +2,6 @@ import { and, eq, gte, inArray, lte, notInArray } from 'drizzle-orm'
 import {
   pedidoUnificado,
   horarioRestaurante,
-  franjaHorarioPedido,
   colaRecompra,
   campanaRecompra,
   producto,
@@ -33,7 +32,7 @@ export async function obtenerDiasFlojos(
   franjaId?: string,
 ) {
   const ahora = Date.now()
-  const [pedidos, franjas, diasAbiertos] = await Promise.all([
+  const [pedidos, diasAbiertos] = await Promise.all([
     db
       .select({
         id: pedidoUnificado.id,
@@ -55,28 +54,27 @@ export async function obtenerDiasFlojos(
           notInArray(pedidoUnificado.estado, ['cancelled']),
         ),
       ),
-    db
-      .select()
-      .from(franjaHorarioPedido)
-      .where(
-        and(
-          eq(franjaHorarioPedido.restauranteId, restauranteId),
-          eq(franjaHorarioPedido.activo, true),
-        ),
-      ),
     cargarDiasAbiertos(db, restauranteId),
   ])
-  const analisis = calcularDiasFlojos(pedidos, {
-    semanas,
-    ahora,
-    diasAbiertos,
-    franjas: franjas.map((f) => ({
-      id: String(f.id),
-      nombre: f.nombre,
-      horaInicio: f.horaInicio,
-      horaFin: f.horaFin,
-    })),
-  })
+  // Las franjas son partes del día de venta (mediodía, tarde, noche), no los turnos de entrega de la
+  // tienda: esos (p. ej. «22 a 22 h») dejaban afuera los pedidos reales y todo daba 0.
+  const completo = calcularDiasFlojos(pedidos, { semanas, ahora, diasAbiertos })
+  // Una franja en la que nunca se pidió (un local que abre de noche no tiene mediodía) no se muestra.
+  const conPedidos = new Set(
+    completo.dias.flatMap((d) =>
+      d.franjas.filter((f) => f.pedidosPromedio > 0).map((f) => f.id),
+    ),
+  )
+  const analisis = conPedidos.size
+    ? {
+        ...completo,
+        franjas: completo.franjas.filter((f) => conPedidos.has(f.id)),
+        dias: completo.dias.map((d) => ({
+          ...d,
+          franjas: d.franjas.filter((f) => conPedidos.has(f.id)),
+        })),
+      }
+    : completo
   if (dia === undefined) return analisis
   const franja = analisis.franjas.find((f) => f.id === franjaId)
   const [cohorte, comprometidos, favoritos] = await Promise.all([
