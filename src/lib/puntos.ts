@@ -453,6 +453,9 @@ export async function listarTransaccionesCliente(
 // Lo que sigue alimenta la mitad "Puntos" de la pantalla de Retención: totales
 // del programa, clientes con saldo y el ledger global de movimientos.
 
+/** Lo que el cliente gana por comprar o por unirse: la compra y la bienvenida, sin ajustes ni devoluciones. */
+export const TIPOS_GANANCIA_PUNTOS: readonly TipoTransaccionPuntos[] = ['suma_compra', 'bonus_bienvenida']
+
 /** Canjes: los tres tipos que consumen puntos del saldo del cliente. */
 export const TIPOS_CANJE_PUNTOS: readonly TipoTransaccionPuntos[] = [
   'canje_producto',
@@ -762,8 +765,8 @@ export interface MovimientoPuntosData {
 
 export interface FiltrosMovimientosPuntos {
   clienteId?: number | null
-  /** Un tipo concreto, o `canje` para los tres tipos de canje juntos. */
-  tipo?: TipoTransaccionPuntos | 'canje' | null
+  /** Un tipo concreto, `canje` para los tres tipos de canje juntos o `ganancia` para compras y bienvenida. */
+  tipo?: TipoTransaccionPuntos | 'canje' | 'ganancia' | null
   busqueda?: string | null
   pagina?: number
   limite?: number
@@ -792,6 +795,8 @@ export async function listarMovimientosPuntos(
   if (filtros.clienteId) condiciones.push(eq(TransaccionPuntosTable.clienteId, filtros.clienteId))
   if (filtros.tipo === 'canje') {
     condiciones.push(inArray(TransaccionPuntosTable.tipo, TIPOS_CANJE_PUNTOS as TipoTransaccionPuntos[]))
+  } else if (filtros.tipo === 'ganancia') {
+    condiciones.push(inArray(TransaccionPuntosTable.tipo, TIPOS_GANANCIA_PUNTOS as TipoTransaccionPuntos[]))
   } else if (filtros.tipo) {
     condiciones.push(eq(TransaccionPuntosTable.tipo, filtros.tipo))
   }

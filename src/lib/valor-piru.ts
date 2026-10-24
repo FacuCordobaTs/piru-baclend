@@ -9,9 +9,8 @@ type Db = MySql2Database<Record<string, never>>
  * El contador de VALOR de la prueba y de la pausa: "Recibiste X pedidos por $Y". Cuenta los pedidos
  * que ENTRARON por Piru (web, no anotados a mano) desde que arrancó el ciclo (`desde`).
  *
- * Lo comparten el panel (`/planes/mi-suscripcion`) y el aviso de vencimiento por WhatsApp
- * (`trial-avisos.ts`): los dos le muestran al dueño plata que Piru supuestamente le trajo, así que
- * nunca cuentan los pedidos de ejemplo de la demo (`pedidoReal`).
+ * El panel (`/planes/mi-suscripcion`) muestra al dueño el valor generado por Piru:
+ * nunca cuenta los pedidos de ejemplo de la demo (`pedidoReal`).
  */
 export async function contarValorPiru(
   db: Db,

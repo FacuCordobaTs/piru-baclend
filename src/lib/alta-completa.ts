@@ -10,8 +10,7 @@ export class AltaIncompletaError extends Error {}
  *
  * NO inicia la prueba. El reloj de los 5 días arranca cuando el dueño verifica su WhatsApp en el
  * claim (`arrancarTrialClaim`, routes/claim.ts) o cuando el fundador la inicia a mano desde interno.
- * Si corriera desde acá, la prueba vencería antes de que el dueño vea la tienda: el aviso de
- * vencimiento con el link de pago le saldría solo desde el número de Piru (`trial-avisos.ts`) y a los
+ * Si corriera desde acá, la prueba vencería antes de que el dueño vea la tienda y a los
  * 5 días + 7 de gracia la tienda pública quedaría "cerrada temporalmente" (`estaPausadoPorSuscripcion`).
  *
  * Tampoco toca `requiereSuscripcion`: lo fija el alta y el claim, y hacerlo acá le sacaría el panel a

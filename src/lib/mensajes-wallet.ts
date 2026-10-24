@@ -56,7 +56,7 @@ const TEXTO_ESTADO_SALDO: Record<number, string> = {
   [NIVEL_AVISO_AGOTADO]: 'tu saldo de avisos quedó en cero',
 }
 
-/** Contexto falso para leer env fuera de un request (mismo patrón que trial-avisos). */
+/** Contexto falso para leer env fuera de un request. */
 const fakeCtx = { env: process.env } as any
 
 const MS_UN_CICLO = 30 * 24 * 60 * 60 * 1000 // ~1 mes

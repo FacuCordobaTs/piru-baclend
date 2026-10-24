@@ -85,7 +85,8 @@ const ajusteManualSchema = z.object({
 })
 
 // Tipos del ledger que el admin puede filtrar. `canje` es un pseudo-tipo que
-// agrupa los tres canjes reales; no existe como valor en la base.
+// agrupa los tres canjes reales y `ganancia` la compra y la bienvenida; ninguno existe como
+// valor en la base.
 const tiposMovimientoQuery = [
   'suma_compra',
   'canje_producto',
@@ -96,6 +97,7 @@ const tiposMovimientoQuery = [
   'devolucion_cancelacion',
   'expiracion',
   'canje',
+  'ganancia',
 ] as const
 
 // Los query params llegan como string: se coercionan y se aceptan nulos
