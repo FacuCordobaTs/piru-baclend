@@ -173,7 +173,7 @@ export async function resolverModulosRestaurante(
       ),
     )
 
-  return rows.map((row) => {
+  const resueltos = rows.map((row) => {
     const estado = (row.estado ?? null) as EstadoModulo
     const origen = (row.origen ?? null) as OrigenModulo
     const precioMensualCongelado = row.precioMensualCongelado?.toString() ?? null

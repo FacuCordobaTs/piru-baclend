@@ -14,7 +14,7 @@ import {
   suscripcion as SuscripcionTable,
 } from '../db/schema'
 import { authMiddleware } from '../middleware/auth'
-import { MODULE_KEYS, resolverModulosRestaurante } from '../lib/modulos'
+import { MODULE_KEYS, moduloEstaActivoAhora, resolverModulosRestaurante } from '../lib/modulos'
 import { crearFacturaSuscripcionPendiente } from '../lib/facturacion-suscripcion'
 import { crearPreferenciaSuscripcionMP, pagosSuscripcionDisponibles } from '../lib/mp-suscripcion'
 import { sendPaymentLinkWhatsApp } from '../services/whatsapp'
@@ -119,18 +119,33 @@ modulosRoute.put('/:codigo/activar', zValidator('param', codigoSchema), async (c
       }, 409)
     }
 
-    const [actual] = await db
-      .select({ estado: RestauranteModuloTable.estado })
-      .from(RestauranteModuloTable)
-      .where(and(eq(RestauranteModuloTable.restauranteId, restauranteId), eq(RestauranteModuloTable.moduloId, modulo.id)))
+    // La misma política que aplica el gate debe permitir el resultado de la activación.
+    // Guardar una fila activa no alcanza si la suscripción está suspendida/cancelada.
+    const [sub] = await db.select({ estado: SuscripcionTable.estado })
+      .from(SuscripcionTable)
+      .where(eq(SuscripcionTable.restauranteId, restauranteId))
       .limit(1)
-    if (actual?.estado === 'activo') {
-      const modulos = await resolverModulosRestaurante(db, restauranteId)
+    if (!moduloEstaActivoAhora({
+      tipo: 'incluido',
+      estado: 'activo',
+      origen: 'usuario',
+      precioMensualCongelado: null,
+      vigenteHasta: null,
+      estadoSuscripcion: sub?.estado ?? null,
+    })) {
       return c.json({
-        success: true,
-        idempotent: true,
-        data: modulos.find((item) => item.codigo === codigo),
-      })
+        success: false,
+        code: 'suscripcion_sin_acceso',
+        message: 'Tu suscripción está suspendida o cancelada. Regularizala desde el panel para activar esta herramienta.',
+      }, 403)
+    }
+
+    const actuales = await resolverModulosRestaurante(db, restauranteId)
+    const actual = actuales.find((item) => item.codigo === codigo)
+    // Una fila vencida o con baja programada debe pasar por el upsert para limpiar
+    // la vigencia anterior. De otro modo respondíamos éxito sin habilitar el módulo.
+    if (actual?.estado === 'activo' && actual.activoAhora) {
+      return c.json({ success: true, idempotent: true, data: actual })
     }
 
     const ahora = new Date()
