@@ -19,17 +19,20 @@ codigoDescuentoRoute.use('*', authMiddleware)
 
 const createCodigoSchema = z.object({
   codigo: z.string().min(1, 'El código es requerido').max(50).transform((v) => v.toUpperCase().trim()),
-  tipo: z.enum(['porcentaje', 'monto_fijo']),
-  valor: z.string().min(1, 'El valor es requerido'),
+  tipo: z.enum(['porcentaje', 'monto_fijo', 'envio_gratis']),
+  valor: z.string().min(1).optional(),
   limiteUsos: z.number().int().min(0).nullable().optional(),
   montoMinimo: z.string().optional(),
   fechaInicio: z.string().nullable().optional(),
   fechaFin: z.string().nullable().optional(),
-})
+}).refine((v) => v.tipo === 'envio_gratis' || (
+  v.valor !== undefined && Number.isFinite(Number(v.valor)) && Number(v.valor) > 0
+  && (v.tipo !== 'porcentaje' || Number(v.valor) <= 100)
+), { message: 'Indicá un valor válido para el descuento', path: ['valor'] })
 
 const updateCodigoSchema = z.object({
   codigo: z.string().min(1).max(50).transform((v) => v.toUpperCase().trim()).optional(),
-  tipo: z.enum(['porcentaje', 'monto_fijo']).optional(),
+  tipo: z.enum(['porcentaje', 'monto_fijo', 'envio_gratis']).optional(),
   valor: z.string().min(1).optional(),
   limiteUsos: z.number().int().min(0).nullable().optional(),
   montoMinimo: z.string().optional(),
@@ -198,7 +201,7 @@ codigoDescuentoRoute.post('/create', requireModulo(MODULE_KEYS.CODIGOS_DESCUENTO
       restauranteId,
       codigo: body.codigo,
       tipo: body.tipo,
-      valor: body.valor,
+      valor: body.tipo === 'envio_gratis' ? '0.00' : body.valor!,
       limiteUsos: body.limiteUsos ?? null,
       montoMinimo: body.montoMinimo ?? '0.00',
       fechaInicio: body.fechaInicio ? new Date(body.fechaInicio) : null,
@@ -264,10 +267,16 @@ codigoDescuentoRoute.put('/:id', requireModulo(MODULE_KEYS.CODIGOS_DESCUENTO), z
       }
     }
 
+    const tipoFinal = body.tipo ?? existing.tipo
+    const valorFinal = body.valor ?? existing.valor
+    if (tipoFinal !== 'envio_gratis' && (!Number.isFinite(Number(valorFinal)) || Number(valorFinal) <= 0 || (tipoFinal === 'porcentaje' && Number(valorFinal) > 100))) {
+      return c.json({ success: false, message: 'Indicá un valor válido para el descuento' }, 400)
+    }
     const updateData: Record<string, unknown> = {}
     if (body.codigo !== undefined) updateData.codigo = body.codigo
     if (body.tipo !== undefined) updateData.tipo = body.tipo
-    if (body.valor !== undefined) updateData.valor = body.valor
+    if (tipoFinal === 'envio_gratis') updateData.valor = '0.00'
+    else if (body.valor !== undefined) updateData.valor = body.valor
     if (body.limiteUsos !== undefined) updateData.limiteUsos = body.limiteUsos
     if (body.montoMinimo !== undefined) updateData.montoMinimo = body.montoMinimo
     if (body.fechaInicio !== undefined) updateData.fechaInicio = body.fechaInicio ? new Date(body.fechaInicio) : null

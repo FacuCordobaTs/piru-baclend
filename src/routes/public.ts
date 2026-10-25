@@ -1,3 +1,4 @@
+import { calcularBeneficioCupon } from '../lib/cupones'
 import { sucursalPublica } from '../lib/sucursales-operacion'
 import { Hono, type Context } from 'hono'
 import { pool } from '../db'
@@ -703,12 +704,14 @@ publicRoute.post('/sala/create', zValidator('json', createSalaSchema), async (c)
 const validarDescuentoSchema = z.object({
     restauranteId: z.number().int().positive(),
     codigo: z.string().min(1).max(50).transform((v) => v.toUpperCase().trim()),
-    totalCarrito: z.number().min(0),
+    totalCarrito: z.number().finite().min(0),
+    tipoPedido: z.enum(['delivery', 'takeaway']).optional(),
+    costoEnvio: z.number().finite().min(0).optional(),
 })
 
 publicRoute.post('/descuentos/validar', zValidator('json', validarDescuentoSchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, codigo, totalCarrito } = c.req.valid('json')
+    const { restauranteId, codigo, totalCarrito, tipoPedido, costoEnvio } = c.req.valid('json')
 
     try {
         const [restauranteCfg] = await db
@@ -757,26 +760,13 @@ publicRoute.post('/descuentos/validar', zValidator('json', validarDescuentoSchem
             return c.json({ success: false, message: 'Este código ha expirado' }, 200)
         }
 
-        const montoMin = parseFloat(cupon.montoMinimo || '0')
-        if (totalCarrito < montoMin) {
-            return c.json({
-                success: false,
-                message: `Monto mínimo para este código: $${montoMin.toFixed(0)}`,
-            }, 200)
-        }
-
         if (cupon.limiteUsos !== null && (cupon.usosActuales || 0) >= cupon.limiteUsos) {
             return c.json({ success: false, message: 'Este código alcanzó su límite de usos' }, 200)
         }
 
-        let montoDescuento = 0
-        if (cupon.tipo === 'porcentaje') {
-            const pct = parseFloat(cupon.valor)
-            montoDescuento = totalCarrito * (pct / 100)
-        } else {
-            montoDescuento = parseFloat(cupon.valor)
-        }
-        montoDescuento = Math.min(montoDescuento, totalCarrito)
+        const beneficio = calcularBeneficioCupon(cupon, { total: totalCarrito, tipoPedido, costoEnvio })
+        if (beneficio.error) return c.json({ success: false, message: beneficio.error }, 200)
+        const montoDescuento = beneficio.montoDescuento!
         const totalConDescuento = Math.max(0, totalCarrito - montoDescuento)
 
         return c.json({
@@ -784,6 +774,7 @@ publicRoute.post('/descuentos/validar', zValidator('json', validarDescuentoSchem
             data: {
                 codigoDescuentoId: cupon.id,
                 codigo: cupon.codigo,
+                tipo: cupon.tipo,
                 montoDescuento: montoDescuento.toFixed(2),
                 totalConDescuento: totalConDescuento.toFixed(2),
             },
@@ -1114,13 +1105,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             if (!cupon.activo || (cupon.fechaInicio && new Date(cupon.fechaInicio) > ahoraCupon) || (cupon.fechaFin && new Date(cupon.fechaFin) < ahoraCupon)) {
                 return c.json({ message: 'El código de descuento no está vigente', success: false }, 400)
             }
-            if (total < parseFloat(cupon.montoMinimo || '0')) {
-                return c.json({ message: `El código requiere un mínimo de $${parseFloat(cupon.montoMinimo || '0').toFixed(0)}`, success: false }, 400)
-            }
-            let desc = 0
-            if (cupon.tipo === 'porcentaje') desc = total * (parseFloat(cupon.valor) / 100)
-            else desc = parseFloat(cupon.valor)
-            montoDescuento = Math.min(desc, total)
+            const beneficio = calcularBeneficioCupon(cupon, { total, tipoPedido: 'delivery', costoEnvio: deliveryFeeAplicado })
+            if (beneficio.error) return c.json({ message: beneficio.error, success: false }, 400)
+            montoDescuento = beneficio.montoDescuento!
             const updateResult = await db.update(CodigoDescuentoTable)
                 .set({ usosActuales: sql`${CodigoDescuentoTable.usosActuales} + 1` })
                 .where(
@@ -1720,13 +1707,9 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             if (!cupon.activo || (cupon.fechaInicio && new Date(cupon.fechaInicio) > ahoraCupon) || (cupon.fechaFin && new Date(cupon.fechaFin) < ahoraCupon)) {
                 return c.json({ message: 'El código de descuento no está vigente', success: false }, 400)
             }
-            if (total < parseFloat(cupon.montoMinimo || '0')) {
-                return c.json({ message: `El código requiere un mínimo de $${parseFloat(cupon.montoMinimo || '0').toFixed(0)}`, success: false }, 400)
-            }
-            let desc = 0
-            if (cupon.tipo === 'porcentaje') desc = total * (parseFloat(cupon.valor) / 100)
-            else desc = parseFloat(cupon.valor)
-            montoDescuentoTk = Math.min(desc, total)
+            const beneficio = calcularBeneficioCupon(cupon, { total, tipoPedido: 'takeaway' })
+            if (beneficio.error) return c.json({ message: beneficio.error, success: false }, 400)
+            montoDescuentoTk = beneficio.montoDescuento!
             const updateResult = await db.update(CodigoDescuentoTable)
                 .set({ usosActuales: sql`${CodigoDescuentoTable.usosActuales} + 1` })
                 .where(

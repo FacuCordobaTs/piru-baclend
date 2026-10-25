@@ -11,7 +11,7 @@ function cadena(filas: unknown[]) {
     get: (_, prop) => prop === 'then'
       ? (ok: any, err: any) => Promise.resolve(filas).then(ok, err)
       : (...args: unknown[]) => {
-          if (prop === 'values') escrituras.push(args[0])
+          if (prop === 'values' || prop === 'set') escrituras.push(args[0])
           return q
         },
   })
@@ -23,6 +23,7 @@ const db = {
     return cadena(cola.shift()!)
   },
   insert: () => cadena([{ insertId: 42 }]),
+  update: () => cadena([{ affectedRows: 1 }]),
 }
 const rutaDb = resolve(import.meta.dir, '../db')
 const dbReal = await import(rutaDb)
@@ -70,6 +71,34 @@ for (const marketer of [false, true]) describe(marketer ? 'sesión marketer' : '
     expect(cupon.status).toBe(201)
     expect(await cupon.json()).toMatchObject({ success: true, data: { id: 42, codigo: 'MARTES' } })
     expect(escrituras).toContainEqual(expect.objectContaining({ restauranteId: 6, codigo: 'MARTES', generadoAutomaticamente: false }))
+    expect(cola).toHaveLength(0)
+  })
+
+  test('crea envío gratis sin importe y lo normaliza a cero', async () => {
+    const body = { codigo: 'envio', tipo: 'envio_gratis', montoMinimo: '10000', limiteUsos: 20 }
+    cola = [...auth(marketer), [{ estado: 'activa' }], [modulo], [], [{ id: 42, ...body }]]
+    const res = await pedir('/codigo-descuento/create', 'POST', body, marketer)
+    expect(res.status).toBe(201)
+    expect(escrituras).toContainEqual(expect.objectContaining({
+      restauranteId: 6, codigo: 'ENVIO', tipo: 'envio_gratis', valor: '0.00', montoMinimo: '10000', limiteUsos: 20,
+    }))
+    expect(cola).toHaveLength(0)
+  })
+
+  test('cambiar un cupón a envío gratis descarta el importe anterior', async () => {
+    const anterior = { id: 42, restauranteId: 6, codigo: 'ENVIO', tipo: 'monto_fijo', valor: '1500' }
+    cola = [...auth(marketer), [{ estado: 'activa' }], [modulo], [anterior], [{ ...anterior, tipo: 'envio_gratis', valor: '0.00' }]]
+    const res = await pedir('/codigo-descuento/42', 'PUT', { tipo: 'envio_gratis', valor: '9999' }, marketer)
+    expect(res.status).toBe(200)
+    expect(escrituras).toContainEqual({ tipo: 'envio_gratis', valor: '0.00' })
+    expect(cola).toHaveLength(0)
+  })
+
+  test('al pasar de envío gratis a monto fijo exige un importe positivo', async () => {
+    cola = [...auth(marketer), [{ estado: 'activa' }], [modulo], [{ id: 42, restauranteId: 6, codigo: 'ENVIO', tipo: 'envio_gratis', valor: '0.00' }]]
+    const res = await pedir('/codigo-descuento/42', 'PUT', { tipo: 'monto_fijo' }, marketer)
+    expect(res.status).toBe(400)
+    expect(escrituras.filter((fila: any) => fila.marketerId === undefined)).toHaveLength(0)
     expect(cola).toHaveLength(0)
   })
 

@@ -1,3 +1,6 @@
+import { calcularBeneficioCupon } from '../lib/cupones'
+import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
+import { findZoneForPoint } from '../utils/geo'
 import { sucursalPublica } from '../lib/sucursales-operacion'
 // src/websocket/manager.ts
 import { drizzle } from 'drizzle-orm/mysql2';
@@ -20,6 +23,7 @@ import {
   codigoDescuento as CodigoDescuentoTable,
   cliente as ClienteTable,
   sucursal as SucursalTable,
+  zonaDelivery as ZonaDeliveryTable,
 } from '../db/schema';
 import { MesaSession, WebSocketMessage, ItemPedidoWS, AdminSession, AdminNotification, AdminNotificationType, CheckoutDeliveryData } from '../types/websocket';
 import { asignarAliasAPedido } from '../services/cucuru';
@@ -1264,6 +1268,7 @@ class WebSocketManager {
     itemsTotal: string;
     total: string;
     codigoDescuentoId: number | null;
+    cuponEnvioGratis: boolean;
     montoDescuento: number;
     metodoPago: string | null;
     horarioProgramado: string;
@@ -1438,6 +1443,8 @@ class WebSocketManager {
         cucuruCollectorId: RestauranteTable.cucuruCollectorId,
         cucuruConfigurado: RestauranteTable.cucuruConfigurado,
         direccionSoloTexto: RestauranteTable.direccionSoloTexto,
+        deliveryFee: RestauranteTable.deliveryFee,
+        codigoDescuentoEnabled: RestauranteTable.codigoDescuentoEnabled,
       }).from(RestauranteTable).where(eq(RestauranteTable.id, sala[0].restauranteId!)).limit(1);
 
       if (!restaurante[0]) {
@@ -1530,10 +1537,38 @@ class WebSocketManager {
       if (checkoutData.codigoDescuentoId) {
         const [cupon] = await this.db.select().from(CodigoDescuentoTable).where(eq(CodigoDescuentoTable.id, checkoutData.codigoDescuentoId)).limit(1);
         if (cupon && cupon.restauranteId === sala[0].restauranteId) {
-          let desc = 0;
-          if (cupon.tipo === 'porcentaje') desc = total * (parseFloat(cupon.valor) / 100);
-          else desc = parseFloat(cupon.valor);
-          montoDescuento = Math.min(desc, total);
+          const esSistema = /^(CRECE-|GROWTH-|VOLVE)/.test(cupon.codigo);
+          if (!esSistema && (!restaurante[0].codigoDescuentoEnabled || !await tieneModuloActivo(this.db, sala[0].restauranteId!, MODULE_KEYS.CODIGOS_DESCUENTO))) {
+            this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'Este local no tiene habilitados los códigos de descuento.' } });
+            return;
+          }
+          const ahora = new Date();
+          if (!cupon.activo || (cupon.fechaInicio && cupon.fechaInicio > ahora) || (cupon.fechaFin && cupon.fechaFin < ahora)) {
+            this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'El código de descuento no está vigente.' } });
+            return;
+          }
+          // El beneficio nunca usa un monto de envío enviado por el navegador.
+          if (cupon.tipo === 'envio_gratis' && checkoutData.tipoPedido === 'delivery') {
+            const zonas = await this.db.select().from(ZonaDeliveryTable).where(and(
+              eq(ZonaDeliveryTable.restauranteId, sala[0].restauranteId!),
+            ));
+            const zona = checkoutData.lat != null && checkoutData.lng != null
+              ? findZoneForPoint({ lat: checkoutData.lat, lng: checkoutData.lng }, zonas) : null;
+            if (zonas.length && checkoutData.lat != null && checkoutData.lng != null && !zona) {
+              this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'La dirección está fuera de la zona de delivery.' } });
+              return;
+            }
+            checkoutData.deliveryFee = Number(zona ? zona.precio : restaurante[0].deliveryFee || 0);
+            total = subtotalItems + checkoutData.deliveryFee;
+          }
+          const beneficio = calcularBeneficioCupon(cupon, {
+            total, tipoPedido: checkoutData.tipoPedido, costoEnvio: checkoutData.deliveryFee,
+          });
+          if (beneficio.error) {
+            this.broadcast(mesaId, { type: 'ERROR', payload: { message: beneficio.error } });
+            return;
+          }
+          montoDescuento = beneficio.montoDescuento!;
           const updateResult = await this.db.update(CodigoDescuentoTable)
             .set({ usosActuales: sql`${CodigoDescuentoTable.usosActuales} + 1` })
             .where(
@@ -1552,6 +1587,9 @@ class WebSocketManager {
           }
           total = Math.max(0, total - montoDescuento);
           codigoDescuentoIdFinal = checkoutData.codigoDescuentoId;
+        } else {
+          this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'Código de descuento inválido.' } });
+          return;
         }
       }
 
@@ -1566,6 +1604,7 @@ class WebSocketManager {
         metodoPago: checkoutData.metodoPago || 'transferencia',
         estado: 'pending',
         total: total.toFixed(2),
+        deliveryFee: checkoutData.tipoPedido === 'delivery' ? checkoutData.deliveryFee.toFixed(2) : '0.00',
         direccion: checkoutData.tipoPedido === 'delivery' ? checkoutData.direccion : null,
         latitud: checkoutData.tipoPedido === 'delivery' && checkoutData.lat != null ? String(checkoutData.lat) : null,
         longitud: checkoutData.tipoPedido === 'delivery' && checkoutData.lng != null ? String(checkoutData.lng) : null,

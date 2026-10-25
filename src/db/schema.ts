@@ -628,7 +628,7 @@ export const codigoDescuento = mysqlTable(
       .references(() => restaurante.id)
       .notNull(),
     codigo: varchar("codigo", { length: 50 }).notNull(),
-    tipo: mysqlEnum("tipo", ["porcentaje", "monto_fijo"]).notNull(),
+    tipo: mysqlEnum("tipo", ["porcentaje", "monto_fijo", "envio_gratis"]).notNull(),
     valor: decimal("valor", { precision: 10, scale: 2 }).notNull(),
     limiteUsos: int("limite_usos"),
     usosActuales: int("usos_actuales").default(0).notNull(),

@@ -80,6 +80,7 @@ export interface CheckoutDeliveryData {
   itemsTotal: string;
   total: string;
   codigoDescuentoId?: number | null;
+  cuponEnvioGratis?: boolean;
   montoDescuento?: number;
   metodoPago?: string | null;
   horarioProgramado?: string;
