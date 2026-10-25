@@ -61,7 +61,8 @@ for (const marketer of [false, true]) describe(marketer ? 'sesión marketer' : '
     const activacion = await pedir('/modulos/codigos_descuento/activar', 'PUT', undefined, marketer)
     expect(activacion.status).toBe(200)
     expect(await activacion.json()).toMatchObject({ success: true, idempotent: false, data: { activoAhora: true } })
-    expect(escrituras[0]).toMatchObject({ restauranteId: 6, estado: 'activo', vigenteHasta: null })
+    expect(escrituras).toContainEqual(expect.objectContaining({ restauranteId: 6, estado: 'activo', vigenteHasta: null }))
+    expect(escrituras).toContainEqual({ codigoDescuentoEnabled: true })
     expect(cola).toHaveLength(0)
 
     const body = { codigo: 'martes', tipo: 'porcentaje', valor: '10', limiteUsos: null,
@@ -69,6 +70,7 @@ for (const marketer of [false, true]) describe(marketer ? 'sesión marketer' : '
     cola = [...auth(marketer), [{ estado: 'activa' }], [modulo], [], [{ id: 42, ...body, codigo: 'MARTES' }]]
     const cupon = await pedir('/codigo-descuento/create', 'POST', body, marketer)
     expect(cupon.status).toBe(201)
+    expect(escrituras).toContainEqual({ codigoDescuentoEnabled: true })
     expect(await cupon.json()).toMatchObject({ success: true, data: { id: 42, codigo: 'MARTES' } })
     expect(escrituras).toContainEqual(expect.objectContaining({ restauranteId: 6, codigo: 'MARTES', generadoAutomaticamente: false }))
     expect(cola).toHaveLength(0)
@@ -79,6 +81,7 @@ for (const marketer of [false, true]) describe(marketer ? 'sesión marketer' : '
     cola = [...auth(marketer), [{ estado: 'activa' }], [modulo], [], [{ id: 42, ...body }]]
     const res = await pedir('/codigo-descuento/create', 'POST', body, marketer)
     expect(res.status).toBe(201)
+    expect(escrituras).toContainEqual({ codigoDescuentoEnabled: true })
     expect(escrituras).toContainEqual(expect.objectContaining({
       restauranteId: 6, codigo: 'ENVIO', tipo: 'envio_gratis', valor: '0.00', montoMinimo: '10000', limiteUsos: 20,
     }))
@@ -128,12 +131,12 @@ test('mis-modulos y el gate usan el mismo estado después de activar', async () 
   expect(cola).toHaveLength(0)
 })
 
-test('activar un módulo ya operativo es idempotente', async () => {
+test('reactivar Cupones conserva el entitlement y habilita el input histórico', async () => {
   cola = [[local], [modulo], [{ estado: 'trial' }], [{ estado: 'trial' }], [modulo]]
   const res = await pedir('/modulos/codigos_descuento/activar', 'PUT')
   expect(res.status).toBe(200)
   expect(await res.json()).toMatchObject({ success: true, idempotent: true, data: { activoAhora: true } })
-  expect(escrituras).toHaveLength(0)
+  expect(escrituras).toEqual([{ codigoDescuentoEnabled: true }])
 })
 
 test('una herramienta paga nunca se activa por el endpoint gratuito', async () => {
@@ -142,4 +145,14 @@ test('una herramienta paga nunca se activa por el endpoint gratuito', async () =
   expect(res.status).toBe(409)
   expect(await res.json()).toMatchObject({ success: false, paymentRequired: true })
   expect(escrituras).toHaveLength(0)
+})
+
+
+test('activar otra herramienta no cambia la configuración de cupones', async () => {
+  const otra = { ...modulo, codigo: 'crecimiento' }
+  cola = [[local], [otra], [{ estado: 'trial' }], [{ estado: 'trial' }], [otra]]
+  const res = await pedir('/modulos/crecimiento/activar', 'PUT')
+  expect(res.status).toBe(200)
+  expect(escrituras).toHaveLength(0)
+  expect(cola).toHaveLength(0)
 })

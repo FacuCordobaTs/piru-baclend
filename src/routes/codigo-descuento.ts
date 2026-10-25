@@ -4,6 +4,7 @@ import {
   codigoDescuento as CodigoDescuentoTable,
   pedidoUnificado as PedidoUnificadoTable,
   cliente as ClienteTable,
+  restaurante as RestauranteTable,
 } from '../db/schema'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
@@ -210,6 +211,11 @@ codigoDescuentoRoute.post('/create', requireModulo(MODULE_KEYS.CODIGOS_DESCUENTO
       // sobrevivir al filtro de la lista (ver GET / más abajo).
       generadoAutomaticamente: false,
     })
+
+    // Crear un cupón manual implica poder usarlo en la tienda. El gate del
+    // módulo ya se verificó antes de entrar, y el flag se limita a este local.
+    await db.update(RestauranteTable).set({ codigoDescuentoEnabled: true })
+      .where(eq(RestauranteTable.id, restauranteId))
 
     const insertedId = Number(result[0].insertId)
     const [nuevo] = await db

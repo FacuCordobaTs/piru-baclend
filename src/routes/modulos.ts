@@ -142,6 +142,12 @@ modulosRoute.put('/:codigo/activar', zValidator('param', codigoSchema), async (c
 
     const actuales = await resolverModulosRestaurante(db, restauranteId)
     const actual = actuales.find((item) => item.codigo === codigo)
+    // El editor actual activa Cupones desde el módulo. El interruptor antiguo
+    // ya no tiene UI: reactivarlo también debe volver a ofrecer el input público.
+    if (codigo === MODULE_KEYS.CODIGOS_DESCUENTO) {
+      await db.update(RestauranteTable).set({ codigoDescuentoEnabled: true })
+        .where(eq(RestauranteTable.id, restauranteId))
+    }
     // Una fila vencida o con baja programada debe pasar por el upsert para limpiar
     // la vigencia anterior. De otro modo respondíamos éxito sin habilitar el módulo.
     if (actual?.estado === 'activo' && actual.activoAhora) {
