@@ -335,10 +335,14 @@ restauranteRoute.get('/profile', async (c) => {
       accesoPanel: tieneAccesoAlPanelSuscripcion(requiereSuscripcion, suscripcionResuelta),
     }
 
-    const sistemaPuntosActivo = await tieneModuloActivo(db, restauranteId, MODULE_KEYS.PUNTOS_CLIENTES)
+    const [sistemaPuntosActivo, codigosDescuentoActivos] = await Promise.all([
+      tieneModuloActivo(db, restauranteId, MODULE_KEYS.PUNTOS_CLIENTES),
+      tieneModuloActivo(db, restauranteId, MODULE_KEYS.CODIGOS_DESCUENTO),
+    ])
     const restauranteEnriquecido = {
       ...restaurante[0],
       sistemaPuntos: sistemaPuntosActivo,
+      codigoDescuentoEnabled: codigosDescuentoActivos,
       // Base ya armada de la tienda (dominio propio o my.piru.app/<username>) para que el admin
       // copie links sin reimplementar la regla. Quien la use tiene que tolerar `null`: el perfil
       // puede llegar antes que el local tenga username.
@@ -890,37 +894,6 @@ restauranteRoute.put('/toggle-whatsapp-enabled', async (c) => {
   } catch (error) {
     console.error('Error updating whatsapp enabled:', error)
     return c.json({ message: 'Error al cambiar configuración', error: (error as Error).message, success: false }, 500)
-  }
-})
-
-// Toggle habilitar/deshabilitar uso de códigos de descuento en checkout
-restauranteRoute.put('/toggle-codigo-descuento-enabled', async (c) => {
-  const db = drizzle(pool)
-  const restauranteId = (c as any).user.id
-
-  try {
-    const [restaurante] = await db.select({ codigoDescuentoEnabled: RestauranteTable.codigoDescuentoEnabled })
-      .from(RestauranteTable)
-      .where(eq(RestauranteTable.id, restauranteId))
-
-    if (!restaurante) {
-      return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
-    }
-
-    const nuevoEstado = !restaurante.codigoDescuentoEnabled
-
-    await db.update(RestauranteTable)
-      .set({ codigoDescuentoEnabled: nuevoEstado })
-      .where(eq(RestauranteTable.id, restauranteId))
-
-    return c.json({
-      message: nuevoEstado ? 'Códigos de descuento habilitados' : 'Códigos de descuento deshabilitados',
-      success: true,
-      codigoDescuentoEnabled: nuevoEstado
-    }, 200)
-  } catch (error) {
-    console.error('Error updating codigo descuento enabled:', error)
-    return c.json({ message: 'Error al cambiar configuración de códigos de descuento', error: (error as Error).message, success: false }, 500)
   }
 })
 

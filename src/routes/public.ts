@@ -281,7 +281,6 @@ const obtenerRestaurantePublico = async (c: Context) => {
             usarColorUnico: RestauranteTable.usarColorUnico,
             disenoAlternativo: RestauranteTable.disenoAlternativo,
             orderGroupEnabled: RestauranteTable.orderGroupEnabled,
-            codigoDescuentoEnabled: RestauranteTable.codigoDescuentoEnabled,
             deliveryEnabled: RestauranteTable.deliveryEnabled,
             direccionSoloTexto: RestauranteTable.direccionSoloTexto,
             takeawayEnabled: RestauranteTable.takeawayEnabled,
@@ -332,13 +331,16 @@ const obtenerRestaurantePublico = async (c: Context) => {
             proveedorPago: _pp,
             metodosPagoConfig: _mpc,
             taloCredencialesOk: _taloOk,
-            ...restauranteSeguro
+            ...restaurantePublicoBase
         } = r0
-        // El toggle histórico se conserva, pero el catálogo público sólo
-        // ofrece cupones cuando también existe el entitlement explícito.
-        restauranteSeguro.codigoDescuentoEnabled = r0.codigoDescuentoEnabled && descuentosActivos
-        restauranteSeguro.sistemaPuntos = sistemaPuntosHabilitado
-        restauranteSeguro.configuracionPuntos = sistemaPuntosHabilitado ? configPuntos : null
+        // La misma activación de Cupones gobierna el panel, el input y su validación.
+        // El nombre del DTO se conserva para las tiendas; el flag histórico de DB no participa.
+        const restauranteSeguro = {
+            ...restaurantePublicoBase,
+            codigoDescuentoEnabled: descuentosActivos,
+            sistemaPuntos: sistemaPuntosHabilitado,
+            configuracionPuntos: sistemaPuntosHabilitado ? configPuntos : null,
+        }
 
         // Obtener horarios de atención
         const horarios = await db
@@ -714,13 +716,13 @@ publicRoute.post('/descuentos/validar', zValidator('json', validarDescuentoSchem
     const { restauranteId, codigo, totalCarrito, tipoPedido, costoEnvio } = c.req.valid('json')
 
     try {
-        const [restauranteCfg] = await db
-            .select({ codigoDescuentoEnabled: RestauranteTable.codigoDescuentoEnabled })
+        const [restauranteExistente] = await db
+            .select({ id: RestauranteTable.id })
             .from(RestauranteTable)
             .where(eq(RestauranteTable.id, restauranteId))
             .limit(1)
 
-        if (!restauranteCfg) {
+        if (!restauranteExistente) {
             return c.json({ success: false, message: 'Restaurante no encontrado' }, 404)
         }
 
@@ -741,9 +743,6 @@ publicRoute.post('/descuentos/validar', zValidator('json', validarDescuentoSchem
 
         const esCuponGrowth = cupon.codigo.startsWith('CRECE-') || cupon.codigo.startsWith('GROWTH-') || cupon.codigo.startsWith('VOLVE')
         if (!esCuponGrowth) {
-            if (!restauranteCfg.codigoDescuentoEnabled) {
-                return c.json({ success: false, message: 'Este local no tiene habilitados los códigos de descuento' }, 200)
-            }
             if (!(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.CODIGOS_DESCUENTO))) {
                 return c.json({ success: false, message: 'Este local no tiene habilitados los códigos de descuento' }, 200)
             }

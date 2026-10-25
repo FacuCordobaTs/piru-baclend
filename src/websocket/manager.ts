@@ -1444,7 +1444,6 @@ class WebSocketManager {
         cucuruConfigurado: RestauranteTable.cucuruConfigurado,
         direccionSoloTexto: RestauranteTable.direccionSoloTexto,
         deliveryFee: RestauranteTable.deliveryFee,
-        codigoDescuentoEnabled: RestauranteTable.codigoDescuentoEnabled,
       }).from(RestauranteTable).where(eq(RestauranteTable.id, sala[0].restauranteId!)).limit(1);
 
       if (!restaurante[0]) {
@@ -1538,7 +1537,7 @@ class WebSocketManager {
         const [cupon] = await this.db.select().from(CodigoDescuentoTable).where(eq(CodigoDescuentoTable.id, checkoutData.codigoDescuentoId)).limit(1);
         if (cupon && cupon.restauranteId === sala[0].restauranteId) {
           const esSistema = /^(CRECE-|GROWTH-|VOLVE)/.test(cupon.codigo);
-          if (!esSistema && (!restaurante[0].codigoDescuentoEnabled || !await tieneModuloActivo(this.db, sala[0].restauranteId!, MODULE_KEYS.CODIGOS_DESCUENTO))) {
+          if (!esSistema && !await tieneModuloActivo(this.db, sala[0].restauranteId!, MODULE_KEYS.CODIGOS_DESCUENTO)) {
             this.broadcast(mesaId, { type: 'ERROR', payload: { message: 'Este local no tiene habilitados los códigos de descuento.' } });
             return;
           }
