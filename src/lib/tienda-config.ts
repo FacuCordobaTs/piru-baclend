@@ -5,6 +5,7 @@ export interface TiendaConfig {
   plantilla?: 'elegante' | 'moderna' | 'artesanal'
   colores?: { fondo?: string; texto?: string; acento?: string; superficie?: string }
   fuentes?: { titulos?: string; cuerpo?: string; cssUrl?: string; pesoTitulos?: number }
+  productoDestacadoId?: number
   frase?: string
   bajada?: string
   portadaUrl?: string
@@ -41,6 +42,7 @@ export function normalizarTienda(raw: unknown): TiendaConfig | null {
     cssUrl: typeof f.cssUrl === 'string' && /^https:\/\//.test(f.cssUrl.trim()) ? f.cssUrl.trim() : undefined,
     pesoTitulos: Number.isFinite(peso) && peso >= 100 && peso <= 900 ? peso : undefined })
   if (Object.keys(fuentes).length) config.fuentes = fuentes
+  if (typeof t.productoDestacadoId === 'number' && Number.isSafeInteger(t.productoDestacadoId) && t.productoDestacadoId > 0) config.productoDestacadoId = t.productoDestacadoId
   config.frase = texto(t.frase, 90)
   config.bajada = texto(t.bajada, 220)
   config.portadaUrl = url(t.portadaUrl)

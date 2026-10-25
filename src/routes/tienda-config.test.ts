@@ -4,7 +4,7 @@ import { getTableName } from 'drizzle-orm'
 import { MySqlDialect } from 'drizzle-orm/mysql-core'
 import * as jwt from 'jsonwebtoken'
 
-const config = { plantilla: 'moderna', frase: 'Nuestra cocina', portadaUrl: 'https://fotos.test/local.jpg' }
+const config = { plantilla: 'moderna', productoDestacadoId: 42, frase: 'Nuestra cocina', portadaUrl: 'https://fotos.test/local.jpg' }
 let local: Record<string, any>
 const escrituras: Array<{ data: Record<string, any>; params: unknown[] }> = []
 const dialect = new MySqlDialect()

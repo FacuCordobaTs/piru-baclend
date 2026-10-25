@@ -10,7 +10,7 @@ describe('configuración opcional de la tienda', () => {
   })
   test('acepta JSON y todos los campos sin convertir los colores de marca en paleta', () => {
     const config = {
-      plantilla: 'moderna', colores: { fondo: '#fff', texto: '#123456', acento: '#fed', superficie: '#eeeeee' },
+      plantilla: 'moderna', productoDestacadoId: 42, colores: { fondo: '#fff', texto: '#123456', acento: '#fed', superficie: '#eeeeee' },
       fuentes: { titulos: 'DM Sans', cuerpo: 'Nunito Sans', cssUrl: 'https://fonts.test/estilos.css', pesoTitulos: 800 },
       frase: 'Hecho en casa', bajada: 'Cocina de estación', portadaUrl: '/portada.jpg', galeria: ['https://img.test/1.jpg', '/foto.jpg'], cinta: ['Ingredientes locales'],
       historia: { titulo: 'Desde 1980', texto: 'Primera línea.\nSegunda línea.' }, instagram: 'local', whatsapp: '5491112345678',
@@ -58,4 +58,12 @@ describe('fotos y persistencia', () => {
     await actualizarTienda(null, { portadaUrl: '/vieja.jpg' }, { guardar: async () => '', borrar: async url => { borradas.push(url) } }, async config => { expect(config).toBeNull() })
     expect(borradas).toEqual(['/vieja.jpg'])
   })
+})
+
+
+test('destacado opcional: sólo guarda un ID entero positivo y permite quitarlo', () => {
+  expect(normalizarTienda({ productoDestacadoId: 42 })).toEqual({ productoDestacadoId: 42 })
+  for (const id of [undefined, null, 0, -1, 1.5, '42', true, Number.MAX_SAFE_INTEGER + 1]) {
+    expect(normalizarTienda({ productoDestacadoId: id })).toBeNull()
+  }
 })
