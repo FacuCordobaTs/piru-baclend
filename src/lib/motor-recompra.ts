@@ -53,7 +53,7 @@ import {
 import { contarToquesEnVentana, enHorarioSilencio, horaArgentina, TOPE_MARKETING_POR_CLIENTE } from './proteccion-base'
 import { crearRecargaPendiente, resumenWallet } from './mensajes-wallet'
 import { MODULE_KEYS, tieneModuloActivo } from './modulos'
-import type { SegmentoCliente } from './clientes-rfm'
+import { calcularCadencia, type SegmentoCliente } from './clientes-rfm'
 import { calcularPrioridadStock } from './motor-recompra-prioridad'
 import { calcularPatronEnvio, obtenerComponentesArgentina } from './motor-recompra-patron'
 import { ErrorProgramacion, NOMBRES_DIAS, validarFechaObjetivo } from './dias-flojos'
@@ -1782,6 +1782,24 @@ export async function listarColaRecompra(
 
   const total = Number(conteo?.total ?? 0)
   const posiciones = new Map(ordenGlobal.map((fila, indice) => [fila.id, indice]))
+  // El ritmo habitual de cada cliente (mediana de días entre pedidos, como en clientes-rfm.ts): con
+  // él, Hoy dice cuántos días se pasó. Sin un segundo pedido no hay ritmo y queda en null.
+  const idsPagina = [...new Set(filas.map((fila) => fila.clienteId))]
+  const fechasPedidos = idsPagina.length === 0 ? [] : await db.select({
+    clienteId: PedidoUnificadoTable.clienteId,
+    createdAt: PedidoUnificadoTable.createdAt,
+  }).from(PedidoUnificadoTable).where(and(
+    eq(PedidoUnificadoTable.restauranteId, restauranteId),
+    inArray(PedidoUnificadoTable.clienteId, idsPagina),
+    notInArray(PedidoUnificadoTable.estado, ['cancelled']),
+  ))
+  const fechasPorCliente = new Map<number, number[]>()
+  for (const p of fechasPedidos) {
+    if (p.clienteId == null || !p.createdAt) continue
+    const lista = fechasPorCliente.get(p.clienteId) ?? []
+    lista.push(new Date(p.createdAt).getTime())
+    fechasPorCliente.set(p.clienteId, lista)
+  }
   const items = filas.map((fila, indicePagina) => {
     const original = fila.dueDate ? new Date(fila.dueDate).getTime() : ahora.getTime()
     const c = obtenerComponentesArgentina(original)
@@ -1794,6 +1812,7 @@ export async function listarColaRecompra(
       prioridad: Number(fila.prioridad ?? 0), totalGastado: Number(fila.totalGastado ?? 0),
       dueDate: proyectada.toISOString(), horarioSugerido: horarioSemanal(diaSemana, minutoDia),
       ultimoPedidoAt: iso(fila.ultimoPedidoAt), createdAt: iso(fila.createdAt),
+      cadenciaDias: calcularCadencia(fechasPorCliente.get(fila.clienteId) ?? []),
       posicionPrioridad: (posiciones.get(fila.id) ?? offset + indicePagina) + 1,
       fechaProyectada: diaArgentina(proyectada.getTime()),
     }

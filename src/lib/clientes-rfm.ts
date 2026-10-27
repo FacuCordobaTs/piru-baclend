@@ -80,7 +80,7 @@ function percentil(nums: number[], p: number): number | null {
 const MS_POR_DIA = 1000 * 60 * 60 * 24
 
 /** Cadencia individual = mediana de los intervalos (en días) entre pedidos consecutivos. */
-function calcularCadencia(fechasMs: number[]): number | null {
+export function calcularCadencia(fechasMs: number[]): number | null {
   if (fechasMs.length < 2) return null
   const sorted = [...fechasMs].sort((a, b) => a - b)
   const gaps: number[] = []
