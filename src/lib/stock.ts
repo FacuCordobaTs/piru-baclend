@@ -660,10 +660,18 @@ export async function eliminarInsumo(db: any, restauranteId: number, insumoId: n
       .for('update')
     if (!actual) return { ok: false as const, motivo: 'no_encontrado' as const }
 
+    // Un insumo recién creado puede tener un ajuste por stock inicial. Ese
+    // movimiento no es historial real de compras/consumos: si el usuario se
+    // equivocó, debe poder borrarlo. En cambio, una compra o un consumo sí
+    // obligan a desactivar para no perder trazabilidad.
     const [movimiento] = await tx
       .select({ id: StockMovimientoTable.id })
       .from(StockMovimientoTable)
-      .where(and(eq(StockMovimientoTable.restauranteId, restauranteId), eq(StockMovimientoTable.insumoId, insumoId)))
+      .where(and(
+        eq(StockMovimientoTable.restauranteId, restauranteId),
+        eq(StockMovimientoTable.insumoId, insumoId),
+        inArray(StockMovimientoTable.tipo, ['compra', 'consumo', 'devolucion']),
+      ))
       .limit(1)
     if (movimiento) return { ok: false as const, motivo: 'con_movimientos' as const }
 
@@ -674,6 +682,10 @@ export async function eliminarInsumo(db: any, restauranteId: number, insumoId: n
       .limit(1)
     if (gastoItem) return { ok: false as const, motivo: 'con_movimientos' as const }
 
+    await tx.delete(StockMovimientoTable).where(and(
+      eq(StockMovimientoTable.restauranteId, restauranteId),
+      eq(StockMovimientoTable.insumoId, insumoId),
+    ))
     await tx.delete(ProductoConsumoTable).where(eq(ProductoConsumoTable.insumoId, insumoId))
     await tx.delete(InsumoTable).where(and(eq(InsumoTable.id, insumoId), eq(InsumoTable.restauranteId, restauranteId)))
     return { ok: true as const }
