@@ -4,7 +4,7 @@ import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
 import { setCookie } from 'hono/cookie'
 import { restaurante, registroTelefono } from '../db/schema'
-import { and, eq, gt, or } from 'drizzle-orm'
+import { and, eq, gt, ne, or } from 'drizzle-orm'
 import { createAccessToken } from '../libs/jwt'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
@@ -323,6 +323,39 @@ authRoute.put('/change-password', authMiddleware, zValidator('json', changePassw
   } catch (error) {
     console.error('Error changing password:', error)
     return c.json({ message: 'Error al cambiar contraseña', success: false }, 500)
+  }
+})
+
+const changeEmailSchema = z.object({
+  email: z.string().trim().min(5).max(255).email(),
+})
+
+// El email es la credencial de login del local: se edita desde Cuenta y no pasa por
+// `/restaurante/update`, que la demo puede usar para otros datos del perfil.
+authRoute.put('/change-email', authMiddleware, zValidator('json', changeEmailSchema), async (c) => {
+  const email = c.req.valid('json').email.toLowerCase()
+  const db = drizzle(pool)
+  const restauranteId = (c as any).user.id
+
+  try {
+    const [existente] = await db.select({ id: restaurante.id })
+      .from(restaurante)
+      .where(and(eq(restaurante.email, email), ne(restaurante.id, restauranteId)))
+      .limit(1)
+
+    if (existente) {
+      return c.json({ message: 'Ese email ya está en uso', success: false }, 409)
+    }
+
+    await db.update(restaurante).set({ email }).where(eq(restaurante.id, restauranteId))
+
+    return c.json({ message: 'Email actualizado correctamente', success: true, email }, 200)
+  } catch (error) {
+    if ((error as { code?: string }).code === 'ER_DUP_ENTRY') {
+      return c.json({ message: 'Ese email ya está en uso', success: false }, 409)
+    }
+    console.error('Error changing email:', error)
+    return c.json({ message: 'Error al cambiar el email', success: false }, 500)
   }
 })
 
