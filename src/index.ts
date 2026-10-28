@@ -42,6 +42,7 @@ import { cartaIaRoute } from './routes/carta-ia';
 import { planesRoute, suscripcionRoute } from './routes/planes';
 import { mensajesRoute } from './routes/mensajes';
 import { modulosRoute } from './routes/modulos';
+import { stockRoute } from './routes/stock';
 import { puntosRoute } from './routes/puntos';
 import { pagoRoute } from './routes/pago';
 import { internoRoute } from './routes/interno';
@@ -239,6 +240,7 @@ app.basePath('/api')
   .route('/suscripcion', suscripcionRoute)
   .route('/planes', planesRoute)
   .route('/modulos', modulosRoute)
+  .route('/stock', stockRoute)
   .route('/puntos', puntosRoute)
   .route('/staff', staffLoginRoute)
   .route('/staff', staffRoute)

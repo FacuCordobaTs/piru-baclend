@@ -2233,3 +2233,98 @@ export const demoPanelVisita = mysqlTable("demo_panel_visita", {
   ultimaEntradaAt: datetime("ultima_entrada_at").notNull(),
   entradas: int("entradas").notNull().default(1),
 });
+
+// ─── Control de stock (módulo `gestion_stock`) ───────────────────────────────
+// Los insumos son la unidad de inventario (medallones, gramos de carne, ml de
+// salsa). La receta de cada producto vive en `producto_consumo` y puede sumar
+// cantidades distintas por variante. `stock_movimiento` es el ledger: toda
+// compra, ajuste o consumo queda asentado con su cantidad firmada.
+export const insumo = mysqlTable("insumo", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id, { onDelete: "cascade" }).notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  // La receta y las compras se expresan en esta misma unidad. No se convierten
+  // automáticamente: elegir "gramo" o "kilogramo" es una decisión del local.
+  unidad: mysqlEnum("unidad", ["unidad", "gramo", "kilogramo", "mililitro", "litro"]).default("unidad").notNull(),
+  stockActual: decimal("stock_actual", { precision: 14, scale: 3 }).default("0.000").notNull(),
+  // NULL = umbral automático (20% del máximo histórico). El cálculo vive en
+  // lib/stock.ts para que API y UI muestren exactamente el mismo valor.
+  stockMinimo: decimal("stock_minimo", { precision: 14, scale: 3 }),
+  stockMaximo: decimal("stock_maximo", { precision: 14, scale: 3 }).default("0.000").notNull(),
+  costoUltimo: decimal("costo_ultimo", { precision: 12, scale: 2 }),
+  activo: boolean("activo").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+}, (table) => [
+  index("idx_insumo_restaurante_activo").on(table.restauranteId, table.activo, table.nombre),
+]);
+
+// `varianteId` NULL = receta base, que se descuenta siempre. Una fila con
+// variante se suma sólo cuando el ítem eligió esa variante (primaria o
+// secundaria). Ej.: base 1 medallón + variante "Doble" 1 medallón.
+export const productoConsumo = mysqlTable("producto_consumo", {
+  id: int("id").primaryKey().autoincrement(),
+  productoId: int("producto_id").references(() => producto.id, { onDelete: "cascade" }).notNull(),
+  insumoId: int("insumo_id").references(() => insumo.id, { onDelete: "cascade" }).notNull(),
+  varianteId: int("variante_id").references(() => varianteProducto.id, { onDelete: "cascade" }),
+  cantidad: decimal("cantidad", { precision: 14, scale: 3 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_producto_consumo_producto").on(table.productoId),
+  index("idx_producto_consumo_insumo").on(table.insumoId),
+]);
+
+export const stockGasto = mysqlTable("stock_gasto", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id, { onDelete: "cascade" }).notNull(),
+  descripcion: varchar("descripcion", { length: 255 }).notNull(),
+  proveedor: varchar("proveedor", { length: 255 }),
+  fecha: datetime("fecha").notNull(),
+  total: decimal("total", { precision: 12, scale: 2 }).default("0.00").notNull(),
+  creadoPorUsuarioId: int("creado_por_usuario_id").references(() => usuarioRestaurante.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_stock_gasto_restaurante_fecha").on(table.restauranteId, table.fecha),
+]);
+
+export const stockGastoItem = mysqlTable("stock_gasto_item", {
+  id: int("id").primaryKey().autoincrement(),
+  gastoId: int("gasto_id").references(() => stockGasto.id, { onDelete: "cascade" }).notNull(),
+  insumoId: int("insumo_id").references(() => insumo.id, { onDelete: "restrict" }).notNull(),
+  cantidad: decimal("cantidad", { precision: 14, scale: 3 }).notNull(),
+  costoUnitario: decimal("costo_unitario", { precision: 12, scale: 2 }).default("0.00").notNull(),
+  subtotal: decimal("subtotal", { precision: 12, scale: 2 }).default("0.00").notNull(),
+}, (table) => [
+  index("idx_stock_gasto_item_gasto").on(table.gastoId),
+]);
+
+// Ledger inmutable de existencias. `cantidad` es firmada: positiva para
+// compras/ajustes que suman y negativa para consumos. `item_pedido_id` es la
+// clave de idempotencia del consumo (un movimiento por ítem e insumo).
+export const stockMovimiento = mysqlTable("stock_movimiento", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id, { onDelete: "cascade" }).notNull(),
+  insumoId: int("insumo_id").references(() => insumo.id, { onDelete: "restrict" }).notNull(),
+  tipo: mysqlEnum("tipo", ["compra", "consumo", "ajuste", "devolucion"]).notNull(),
+  cantidad: decimal("cantidad", { precision: 14, scale: 3 }).notNull(),
+  costoUnitario: decimal("costo_unitario", { precision: 12, scale: 2 }),
+  // Sin FK a pedido_unificado: el ledger debe sobrevivir al borrado del pedido
+  // para poder restaurar el stock y detectar consumos huérfanos.
+  pedidoId: int("pedido_id"),
+  itemPedidoId: int("item_pedido_id"),
+  gastoId: int("gasto_id").references(() => stockGasto.id, { onDelete: "set null" }),
+  nota: varchar("nota", { length: 255 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_stock_movimiento_item_insumo").on(table.itemPedidoId, table.insumoId),
+  index("idx_stock_movimiento_restaurante_fecha").on(table.restauranteId, table.createdAt),
+  index("idx_stock_movimiento_pedido").on(table.pedidoId),
+]);
+
+// Cursor de conciliación con pedidos. La primera sincronización toma `now` como
+// base: el stock empieza a descontarse desde que el local usa el módulo, no
+// desde pedidos históricos anteriores a su configuración.
+export const stockSync = mysqlTable("stock_sync", {
+  restauranteId: int("restaurante_id").primaryKey().references(() => restaurante.id, { onDelete: "cascade" }),
+  ultimaSincronizacion: datetime("ultima_sincronizacion").notNull(),
+});

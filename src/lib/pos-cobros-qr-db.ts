@@ -332,7 +332,9 @@ export function crearRepositorioCobrosQr(db: any): RepositorioCobrosQr {
           .where(and(eq(PedidoTable.id, pedidoId), eq(PedidoTable.restauranteId, restauranteId)))
           .limit(1)
         if (!fila || fila.pagado || ESTADOS_PEDIDO_CERRADOS.includes(fila.estado)) return null
-        await tx.update(PedidoTable).set({ estado: 'cancelled' }).where(eq(PedidoTable.id, pedidoId))
+        // Mueve `updatedAt` para que la conciliación de stock detecte la
+        // cancelación y devuelva el consumo del pedido.
+        await tx.update(PedidoTable).set({ estado: 'cancelled', updatedAt: new Date() }).where(eq(PedidoTable.id, pedidoId))
         return aPedido({ ...fila, estado: 'cancelled' })
       })
     },

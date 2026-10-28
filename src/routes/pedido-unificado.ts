@@ -1172,7 +1172,9 @@ const pedidoUnificadoRoute = new Hono()
 
     const pedido = pedidos[0]
 
-    const updateData: any = { estado }
+    // `updatedAt` también mueve el cursor de conciliación de stock: una
+    // cancelación posterior al alta debe poder restaurar el consumo.
+    const updateData: any = { estado, updatedAt: new Date() }
     if (estado === 'delivered') {
       updateData.deliveredAt = new Date()
     }
