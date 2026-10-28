@@ -72,11 +72,24 @@ export function duenioAppMarketingPuede(metodo: string, ruta: string): boolean {
   return method === 'POST' && /^\/api\/modulos\/[^/]+\/checkout$/.test(path)
 }
 
+/**
+ * Sesión del dueño en Páginas (`pages.piru.app`, docs/PAGINAS_PROPIAS.md): sólo `/sitios/*`.
+ * `/sitios/entrada` queda afuera: los pases salen únicamente de la sesión del panel.
+ */
+export function sitiosPuede(metodo: string, ruta: string): boolean {
+  const verificable = rutaVerificable(metodo, ruta)
+  if (!verificable) return false
+  const { path } = verificable
+  if (path === '/api/sitios/entrada' || path === '/api/sitios/sesion') return false
+  return /^\/api\/sitios(?:\/|$)/.test(path)
+}
+
 export function marketerPuedeSocketAdmin(decoded: {
   id?: unknown
   scope?: unknown
   marketerId?: unknown
   appMarketing?: unknown
+  appSitios?: unknown
 }): boolean {
   return (
     Number.isInteger(decoded.id) &&
@@ -84,6 +97,8 @@ export function marketerPuedeSocketAdmin(decoded: {
     decoded.scope !== 'marketer' &&
     decoded.marketerId === undefined &&
     // La sesión del dueño en la app de marketers tampoco es el feed de pedidos del panel.
-    decoded.appMarketing === undefined
+    decoded.appMarketing === undefined &&
+    // Ni la de Páginas.
+    decoded.appSitios === undefined
   )
 }

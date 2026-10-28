@@ -62,7 +62,10 @@ import { MODULE_KEYS, tieneModuloActivo } from './lib/modulos';
 import { tickMotorRecompra } from './lib/motor-recompra';
 import { serveStatic } from 'hono/bun';
 import { readFileSync } from 'node:fs';
-import { publicStoreApiPath, publicStoreOrigin } from './lib/public-store-origin';
+import { publicStoreApiPath, publicStoreOrigin, storeSlugFromHostname } from './lib/public-store-origin';
+import { esSitioDePaginas, iniciarCacheSitios, paginasApiPath } from './lib/sitios-publicados';
+import { sitiosRoute } from './routes/sitios';
+import { carritosPublicosRoute, limpiarCarritosVencidos } from './routes/carritos-publicos';
 
 // Destructure upgradeWebSocket and websocket from the helper function's return
 const { upgradeWebSocket, websocket } = createBunWebSocket<ServerWebSocket>();
@@ -112,6 +115,8 @@ const ORIGENES_CONOCIDOS = [
     'https://my.piru.app',
     'https://mozos.piru.app',
     'https://www.piru.app',
+    'https://pages.piru.app',        // Páginas: editor de sitios propios (docs/PAGINAS_PROPIAS.md)
+    'http://localhost:5177',         // Páginas (Vite dev)
     // 👇 AGREGA ESTOS PARA TAURI DESKTOP 👇
     'tauri://localhost',        // Protocolo estándar de Tauri en Windows/Linux (antiguo/custom)
     'https://tauri.localhost',  // Protocolo estándar de Tauri v2 en Windows
@@ -130,8 +135,26 @@ const ORIGENES_CONOCIDOS = [
     'https://www.burgersdelsur.com'
 ]
 
+/** Slug de un sitio de Páginas publicado si el origen es uno, o `null`. */
+const origenDePaginas = (origin: string | undefined): string | null => {
+  if (!origin || !publicStoreOrigin(origin)) return null
+  const slug = storeSlugFromHostname(new URL(origin).hostname)
+  return esSitioDePaginas(slug) ? slug : null
+}
+
+// Un sitio de Páginas corre código de terceros: el CORS solo no alcanza, porque un `sendBeacon` o un
+// `fetch` no-cors igual ejecuta el handler. Fuera de su lista cerrada, 403 antes de cualquier ruta.
+// Sin `Origin` (curl, jobs) no cambia nada. Ver docs/PAGINAS_PROPIAS.md, 10.5.
+app.use('*', async (c, next) => {
+  if (origenDePaginas(c.req.header('Origin')) && !paginasApiPath(c.req.path) && c.req.method !== 'OPTIONS')
+    return c.json({ error: 'No disponible desde un sitio propio', code: 'sitio_sin_permiso' }, 403)
+  await next()
+})
+
 app.use('*', cors({
   origin: (origin, c) => {
+    // Sitios de Páginas: sólo su lista cerrada (leer la tienda, campañas, eventos y el carrito).
+    if (origenDePaginas(origin)) return paginasApiPath(c.req.path) ? origin : null
     // Tiendas propias (`<tienda>.piru.app`): sólo los caminos públicos y de pago. La autorización
     // sigue en cada endpoint; habilitar CORS no da acceso a rutas privadas.
     if (publicStoreApiPath(c.req.path) && publicStoreOrigin(origin)) return origin
@@ -226,6 +249,8 @@ app.basePath('/api')
   .route('/notificacion', notificacionRoute)
   .route('/public', publicRoute)
   .route('/public', marketingPublicRoute)
+  .route('/public/carritos', carritosPublicosRoute)
+  .route('/sitios', sitiosRoute)
   .route('/ropa', ropaRoute)
   .route('/marketing', marketingCampanasRoute)
   .route('/public/claim', claimRoute)
@@ -819,6 +844,12 @@ app.get(
 // ── Motor de Recompra · scheduler del goteo programado ──────────────────────
 // La agenda continua incorpora clientes nuevos y reconcilia sus siguientes toques cada 15 minutos.
 const MOTOR_TICK_MS = 15 * 60 * 1000
+// Páginas: qué subdominios son sitios publicados (CORS) y limpieza de carritos de handoff vencidos.
+iniciarCacheSitios(() => drizzle(pool));
+setInterval(() => {
+  limpiarCarritosVencidos(drizzle(pool)).catch(() => console.error('[carritos] No se pudo limpiar'));
+}, 15 * 60_000);
+
 setInterval(() => {
   tickMotorRecompra(drizzle(pool)).catch((err) => {
     console.error('❌ [Motor Recompra] tick del scheduler falló:', err)

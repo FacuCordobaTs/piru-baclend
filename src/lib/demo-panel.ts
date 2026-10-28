@@ -75,7 +75,8 @@ function rutaVerificable(metodo: string, ruta: string) {
 }
 
 /** Lecturas que el panel de la demo nunca necesita: operación interna y cuentas de otros. */
-const LECTURAS_CERRADAS = /^\/api\/(?:interno|marketer|onboarding|staff|facturacion|auth)(?:\/|$)/
+// `sitios`: Páginas (docs/PAGINAS_PROPIAS.md) no es parte de la demo, ni para leer.
+const LECTURAS_CERRADAS = /^\/api\/(?:interno|marketer|onboarding|staff|facturacion|auth|sitios)(?:\/|$)/
 
 /**
  * Lo único que la demo puede escribir: la operación del servicio, el menú, las mesas y zonas, el

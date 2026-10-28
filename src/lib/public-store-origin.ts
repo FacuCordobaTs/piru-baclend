@@ -38,6 +38,14 @@ const RESERVED = new Set([
   'panel',
   'pagos',
   'pago',
+  // Páginas propias (docs/PAGINAS_PROPIAS.md): el editor y rutas de plataforma.
+  'pages',
+  'paginas',
+  'sitios',
+  'checkout',
+  'blog',
+  'ayuda',
+  'soporte',
 ])
 
 export function isStoreSubdomain(slug: string): boolean {

@@ -2328,3 +2328,72 @@ export const stockSync = mysqlTable("stock_sync", {
   restauranteId: int("restaurante_id").primaryKey().references(() => restaurante.id, { onDelete: "cascade" }),
   ultimaSincronizacion: datetime("ultima_sincronizacion").notNull(),
 });
+
+// ─── Páginas propias (`pages.piru.app`) ─────────────────────────────────────
+// Sitio con código React propio publicado en `<username>.piru.app` (docs/PAGINAS_PROPIAS.md).
+// Un sitio por local en la v1; el slug es el `username`. El borrador vive acá; cada publicación
+// deja una fila inmutable en `sitio_version` y el manifiesto en KV, que es lo que lee el Worker.
+export const sitioTienda = mysqlTable("sitio_tienda", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id, { onDelete: "cascade" }).notNull(),
+  slug: varchar("slug", { length: 63 }).notNull(),
+  username: varchar("username", { length: 255 }).notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  estado: mysqlEnum("estado", ["activo", "deshabilitado"]).notNull().default("activo"),
+  meta: json("meta"),
+  borrador: json("borrador").notNull(),
+  borradorActualizadoAt: datetime("borrador_actualizado_at", { fsp: 3 }).notNull(),
+  borradorActualizadoPor: int("borrador_actualizado_por"),
+  versionPublicadaId: int("version_publicada_id"),
+  createdAt: datetime("created_at").notNull(),
+  updatedAt: datetime("updated_at").notNull(),
+}, (t) => [
+  uniqueIndex("uq_sitio_tienda_restaurante").on(t.restauranteId),
+  uniqueIndex("uq_sitio_tienda_slug").on(t.slug),
+]);
+
+export const sitioVersion = mysqlTable("sitio_version", {
+  id: int("id").primaryKey().autoincrement(),
+  sitioId: int("sitio_id").references(() => sitioTienda.id, { onDelete: "cascade" }).notNull(),
+  restauranteId: int("restaurante_id").notNull(),
+  numero: int("numero").notNull(),
+  archivos: json("archivos").notNull(),
+  runtimeVersion: varchar("runtime_version", { length: 10 }).notNull(),
+  bundleKey: varchar("bundle_key", { length: 512 }).notNull(),
+  cssKey: varchar("css_key", { length: 512 }),
+  meta: json("meta"),
+  buildLog: text("build_log"),
+  creadoPor: int("creado_por"),
+  createdAt: datetime("created_at").notNull(),
+}, (t) => [
+  uniqueIndex("uq_sitio_version_numero").on(t.sitioId, t.numero),
+]);
+
+export const sitioAsset = mysqlTable("sitio_asset", {
+  id: int("id").primaryKey().autoincrement(),
+  sitioId: int("sitio_id").references(() => sitioTienda.id, { onDelete: "cascade" }).notNull(),
+  restauranteId: int("restaurante_id").notNull(),
+  path: varchar("path", { length: 255 }).notNull(),
+  sha: char("sha", { length: 64 }).notNull(),
+  r2Key: varchar("r2_key", { length: 512 }).notNull(),
+  contentType: varchar("content_type", { length: 100 }).notNull(),
+  size: int("size").notNull(),
+  createdAt: datetime("created_at").notNull(),
+}, (t) => [
+  uniqueIndex("uq_sitio_asset_path").on(t.sitioId, t.path),
+]);
+
+// Carrito de handoff entre un sitio de Páginas y el checkout de `my.piru.app`. Sin precios ni PII:
+// sólo IDs, cantidades, opciones y notas. Vence a las 2 horas.
+export const carritoPublico = mysqlTable("carrito_publico", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id, { onDelete: "cascade" }).notNull(),
+  sitioId: int("sitio_id"),
+  items: json("items").notNull(),
+  contexto: json("contexto"),
+  returnUrl: varchar("return_url", { length: 512 }),
+  expiraAt: datetime("expira_at").notNull(),
+  createdAt: datetime("created_at").notNull(),
+}, (t) => [
+  index("idx_carrito_publico_expira").on(t.expiraAt),
+]);

@@ -114,9 +114,17 @@ function normalizarDominio(dominio: string): string {
  * Vuelta de Mercado Pago al seguimiento del pedido. Si el local tiene dominio propio (incluido su
  * subdominio `<tienda>.piru.app`), se vuelve ahí; si no, a la tienda compartida.
  */
-export function urlRetornoPedido(dominio: string | null | undefined, pedidoId: number): string {
+export function urlRetornoPedido(
+  dominio: string | null | undefined,
+  pedidoId: number,
+  esSitioDePaginas: (slug: string) => boolean = () => false,
+): string {
   const limpio = dominio?.trim() ? normalizarDominio(dominio) : ''
-  return limpio ? `https://${limpio}/pedido/${pedidoId}` : `https://my.piru.app/pedido/${pedidoId}`
+  // Un sitio de Páginas no tiene checkout ni seguimiento: el pedido se hizo en my.piru.app y vuelve
+  // ahí (docs/PAGINAS_PROPIAS.md, 9.2). El Worker igual redirige /pedido/:id, pero así no hay salto.
+  const slug = limpio.toLowerCase().endsWith('.piru.app') ? limpio.toLowerCase().slice(0, -'.piru.app'.length) : null
+  if (!limpio || (slug && esSitioDePaginas(slug))) return `https://my.piru.app/pedido/${pedidoId}`
+  return `https://${limpio}/pedido/${pedidoId}`
 }
 
 /** Los datos de un local que alcanzan para decidir cómo se arman sus links. */

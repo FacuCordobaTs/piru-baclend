@@ -12,6 +12,7 @@ import { and, eq, sql } from 'drizzle-orm'
 import {
   duenioAppMarketingPuede,
   marketerPuede,
+  sitiosPuede,
 } from '../lib/marketer-permisos'
 import {
   demoBloqueaEnAppMarketing,
@@ -33,6 +34,8 @@ export interface AuthenticatedContext extends Context {
     accesoTemporalInterno?: boolean
     /** Sesión de la demo de prospección: ver lib/demo-panel.ts. */
     demo?: boolean
+    /** Sesión de Páginas (`pages.piru.app`): ver routes/sitios.ts. */
+    appSitios?: boolean
   }
 }
 
@@ -53,6 +56,7 @@ export const createAuthMiddleware =
       scope?: string
       marketerId?: number
       appMarketing?: unknown
+      appSitios?: unknown
       demo?: unknown
       altaInterna?: boolean
       accesoTemporalInterno?: boolean
@@ -123,6 +127,23 @@ export const createAuthMiddleware =
           },
           403,
         )
+    } else if (decoded.appSitios !== undefined) {
+      // Sesión del dueño en Páginas (/sitios/sesion): sólo el editor de su sitio.
+      if (
+        decoded.appSitios !== true ||
+        decoded.scope !== 'restaurante' ||
+        decoded.demo !== undefined ||
+        decoded.appMarketing !== undefined
+      )
+        return c.json({ error: 'Token inválido' }, 401)
+      if (!sitiosPuede(c.req.method, c.req.path))
+        return c.json(
+          {
+            error: 'Esto se maneja desde tu panel de Piru',
+            code: 'sitios_sin_permiso',
+          },
+          403,
+        )
     } else if (decoded.appMarketing !== undefined) {
       // Sesión del dueño en la app de marketers (/marketing-duenio/sesion): es su local, pero
       // sólo alcanza lo que esa app usa. Lo demás se sigue manejando desde el panel.
@@ -162,6 +183,7 @@ export const createAuthMiddleware =
     const restringido =
       decoded.marketerId !== undefined ||
       decoded.appMarketing !== undefined ||
+      decoded.appSitios !== undefined ||
       demo
     const restauranteResult = await db
       .select({
@@ -200,6 +222,7 @@ export const createAuthMiddleware =
       altaInterna: decoded.altaInterna === true,
       accesoTemporalInterno: decoded.accesoTemporalInterno === true,
       ...(demo ? { demo: true } : {}),
+      ...(decoded.appSitios === true ? { appSitios: true } : {}),
       ...(decoded.marketerId === undefined
         ? {}
         : { marketerId: decoded.marketerId }),

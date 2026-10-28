@@ -13,6 +13,7 @@ import { confirmarRecarga } from '../lib/mensajes-wallet'
 import { confirmarPagoSuscripcion } from '../lib/suscripciones'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { urlRetornoPedido } from '../lib/marketing-enlaces'
+import { esSitioDePaginas } from '../lib/sitios-publicados'
 import { acreditarPuntosPedidoAprobado, revertirPuntosPedidoCancelado } from '../lib/puntos'
 import { esNotificacionDeOrden, validarFirmaWebhookMp } from '../lib/mp-qr'
 import { servicioCobrosQr } from '../lib/pos-cobros-qr-prod'
@@ -287,7 +288,7 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
         .from(RestauranteTable)
         .where(eq(RestauranteTable.id, restauranteId))
         .limit(1)
-      successUrl = urlRetornoPedido(local?.dominioTienda, pedidoId)
+      successUrl = urlRetornoPedido(local?.dominioTienda, pedidoId, esSitioDePaginas)
     }
 
     const mpItems = [{

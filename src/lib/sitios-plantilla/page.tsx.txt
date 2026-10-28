@@ -1,0 +1,247 @@
+import { useEffect, useState } from "react"
+import { AnimatePresence, motion, useReducedMotion } from "motion/react"
+import { Clock, Instagram, MapPin, Minus, Plus, ShoppingBag, X } from "lucide-react"
+import {
+  PiruCanjes,
+  formatPesos,
+  useCampana,
+  useCarrito,
+  useCarta,
+  useContenido,
+  useHorarios,
+  useLinks,
+  useLocal,
+  useNavegacionCarta,
+  type Producto,
+} from "@piru/tienda"
+import "./style.css"
+
+const MOTIVOS: Record<string, string> = {
+  empty: "Agregá algo para pedir",
+  closed: "Ahora estamos cerrados",
+  paused: "Cerrado temporalmente",
+  unavailable: "Sacá lo que ya no está disponible",
+}
+
+export default function Page() {
+  const { estado, local } = useLocal()
+  const { secciones, destacado } = useCarta()
+  const contenido = useContenido()
+  const horarios = useHorarios()
+  const carrito = useCarrito()
+  const campana = useCampana()
+  const links = useLinks()
+  const nav = useNavegacionCarta(secciones.length)
+  const [pedidoAbierto, setPedidoAbierto] = useState(false)
+  const quieto = useReducedMotion()
+
+  useEffect(() => {
+    if (carrito.count === 0) setPedidoAbierto(false)
+  }, [carrito.count])
+
+  if (estado === "cargando") {
+    return (
+      <div className="pv-cargando" aria-busy="true" aria-label="Cargando la tienda">
+        <span />
+      </div>
+    )
+  }
+  if (estado === "error") {
+    return (
+      <main className="pv-estado">
+        <h1>No pudimos cargar la tienda</h1>
+        <p>Probá de nuevo en un rato.</p>
+      </main>
+    )
+  }
+
+  const acento = contenido.colores.acento ?? local.colores.primario ?? "#e8b923"
+  const portada = contenido.portadaUrl ?? destacado?.fotos[0] ?? secciones[0]?.productos.find((p) => p.fotos[0])?.fotos[0]
+
+  return (
+    <main className="pv-sitio" style={{ ["--pv-acento" as string]: acento }}>
+      <header className="pv-portada">
+        {portada && <img className="pv-portada-foto" src={portada} alt="" />}
+        <div className="pv-portada-velo" />
+        <div className="pv-portada-texto">
+          {local.logo && <img className="pv-logo" src={local.logo} alt={local.nombre} />}
+          <motion.h1
+            initial={quieto ? false : { opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: [0.2, 0.8, 0.2, 1] }}
+          >
+            {contenido.frase ?? local.nombre}
+          </motion.h1>
+          {contenido.bajada && <p className="pv-bajada">{contenido.bajada}</p>}
+          <p className={`pv-estado-local ${horarios.abierto && !local.pausado ? "abierto" : ""}`}>
+            <Clock size={15} aria-hidden="true" />
+            {horarios.texto}
+          </p>
+          <a className="pv-boton" href="#carta">
+            Ver la carta
+          </a>
+        </div>
+      </header>
+
+      {local.pausado && (
+        <p className="pv-aviso" role="status">
+          La tienda está cerrada temporalmente. Podés ver la carta igual.
+        </p>
+      )}
+      {campana && (
+        <p className="pv-aviso pv-aviso-campana" role="status">
+          {campana.campana.nombre || "Promo"}
+          {campana.campana.descuentoPorcentaje > 0 && ` · ${campana.campana.descuentoPorcentaje}% off`}
+          {campana.producto && ` en ${campana.producto.nombre}`}
+        </p>
+      )}
+
+      {secciones.length > 1 && (
+        <nav className="pv-categorias" aria-label="Categorías">
+          {secciones.map((seccion, i) => (
+            <button
+              key={seccion.id}
+              type="button"
+              className={nav.activa === i ? "activa" : ""}
+              aria-current={nav.activa === i ? "true" : undefined}
+              onClick={() => nav.ir(i)}
+            >
+              {seccion.nombre}
+            </button>
+          ))}
+        </nav>
+      )}
+
+      <div id="carta" className="pv-carta">
+        {secciones.length === 0 && <p className="pv-vacio">Todavía no hay productos en la carta.</p>}
+        {secciones.map((seccion, i) => (
+          <section
+            key={seccion.id}
+            id={nav.id(i)}
+            ref={(el) => {
+              nav.seccionesRef.current[i] = el
+            }}
+            className="pv-seccion"
+            aria-labelledby={`${seccion.id}-titulo`}
+          >
+            <h2 id={`${seccion.id}-titulo`}>{seccion.nombre}</h2>
+            <ul className="pv-grilla">
+              {seccion.productos.map((producto) => (
+                <Tarjeta key={producto.id} producto={producto} cantidad={carrito.quantity(producto.id)} />
+              ))}
+            </ul>
+          </section>
+        ))}
+      </div>
+
+      <PiruCanjes />
+
+      <footer className="pv-pie">
+        <strong>{local.nombre}</strong>
+        {local.direccion && (
+          <span>
+            <MapPin size={15} aria-hidden="true" /> {local.direccion}
+          </span>
+        )}
+        {links.instagram && (
+          <a href={links.instagram} rel="noopener">
+            <Instagram size={15} aria-hidden="true" /> Instagram
+          </a>
+        )}
+      </footer>
+
+      <AnimatePresence>
+        {carrito.count > 0 && !pedidoAbierto && (
+          <motion.button
+            type="button"
+            className="pv-barra"
+            onClick={() => setPedidoAbierto(true)}
+            initial={quieto ? false : { y: 80, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 80, opacity: 0 }}
+          >
+            <span className="pv-barra-cuenta">
+              <ShoppingBag size={18} aria-hidden="true" /> {carrito.count}
+            </span>
+            <span>Ver pedido</span>
+            <span>{carrito.totalFormatted}</span>
+          </motion.button>
+        )}
+      </AnimatePresence>
+
+      {pedidoAbierto && (
+        <div className="pv-velo" onClick={(e) => e.target === e.currentTarget && setPedidoAbierto(false)}>
+          <aside className="pv-pedido" role="dialog" aria-modal="true" aria-label="Tu pedido">
+            <div className="pv-pedido-cabeza">
+              <h2>Tu pedido</h2>
+              <button type="button" className="pv-icono" onClick={() => setPedidoAbierto(false)} aria-label="Cerrar">
+                <X size={20} />
+              </button>
+            </div>
+            <ul className="pv-lineas">
+              {carrito.lines.map((linea) => (
+                <li key={linea.key} className={linea.disponible ? "" : "agotada"}>
+                  <div>
+                    <strong>{linea.nombre}</strong>
+                    {linea.opciones.length > 0 && <small>{linea.opciones.join(" · ")}</small>}
+                    {!linea.disponible && <small>Ya no está disponible</small>}
+                  </div>
+                  <div className="pv-cantidad">
+                    <button type="button" onClick={() => carrito.set(linea.key, linea.cantidad - 1)} aria-label={`Uno menos de ${linea.nombre}`}>
+                      <Minus size={16} />
+                    </button>
+                    <span>{linea.cantidad}</span>
+                    <button type="button" onClick={() => carrito.set(linea.key, linea.cantidad + 1)} aria-label={`Uno más de ${linea.nombre}`}>
+                      <Plus size={16} />
+                    </button>
+                  </div>
+                  <span className="pv-precio">{linea.subtotalFormatted}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="pv-pedido-pie">
+              <p>
+                <span>Subtotal</span>
+                <strong>{carrito.totalFormatted}</strong>
+              </p>
+              <small>El envío, los cupones y los puntos se calculan al finalizar.</small>
+              {carrito.error && <p className="pv-error" role="alert">{carrito.error}</p>}
+              <button type="button" className="pv-boton pv-boton-ancho" disabled={!carrito.canCheckout} onClick={carrito.checkout}>
+                {carrito.submitting ? "Abriendo…" : carrito.blockReason ? MOTIVOS[carrito.blockReason] : `Pedir · ${carrito.totalFormatted}`}
+              </button>
+            </div>
+          </aside>
+        </div>
+      )}
+    </main>
+  )
+}
+
+function Tarjeta({ producto, cantidad }: { producto: Producto; cantidad: number }) {
+  const foto = producto.fotos[0]
+  const agregar = () => (producto.tieneOpciones ? producto.abrir() : producto.agregar())
+  return (
+    <li className={`pv-producto ${foto ? "" : "sin-foto"} ${producto.disponible ? "" : "agotado"}`}>
+      <button type="button" className="pv-producto-abrir" onClick={() => producto.abrir()} disabled={!producto.disponible}>
+        {foto && <img src={foto} alt="" loading="lazy" />}
+        <span className="pv-producto-texto">
+          <strong>{producto.nombre}</strong>
+          {producto.descripcion && <small>{producto.descripcion}</small>}
+          <span className="pv-precio">
+            {formatPesos(producto.precioFinal)}
+            {producto.descuento > 0 && <s>{formatPesos(producto.precio)}</s>}
+          </span>
+        </span>
+      </button>
+      <button
+        type="button"
+        className="pv-agregar"
+        onClick={agregar}
+        disabled={!producto.disponible}
+        aria-label={producto.disponible ? `Agregar ${producto.nombre}` : `${producto.nombre} no disponible`}
+      >
+        {cantidad > 0 ? cantidad : <Plus size={18} />}
+      </button>
+    </li>
+  )
+}
