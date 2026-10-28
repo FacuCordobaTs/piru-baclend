@@ -292,7 +292,9 @@ authRoute.post('/login-telefono/verify', zValidator('json', verifyTelefonoSchema
 })
 
 const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1),
+  // Las cuentas registradas con celular no tienen contraseña: en ese caso se crea
+  // directamente con la nueva y no hay nada que verificar.
+  currentPassword: z.string().min(1).optional(),
   newPassword: z.string().min(6),
 })
 
@@ -307,13 +309,14 @@ authRoute.put('/change-password', authMiddleware, zValidator('json', changePassw
       .where(eq(restaurante.id, restauranteId))
       .limit(1)
 
-    if (!rest?.password) {
-      return c.json({ message: 'Error al verificar la contraseña', success: false }, 400)
-    }
-
-    const isMatch = await bcrypt.compare(currentPassword, rest.password)
-    if (!isMatch) {
-      return c.json({ message: 'La contraseña actual es incorrecta', success: false }, 400)
+    if (rest?.password) {
+      if (!currentPassword) {
+        return c.json({ message: 'Ingresá tu contraseña actual', success: false }, 400)
+      }
+      const isMatch = await bcrypt.compare(currentPassword, rest.password)
+      if (!isMatch) {
+        return c.json({ message: 'La contraseña actual es incorrecta', success: false }, 400)
+      }
     }
 
     const newHash = await bcrypt.hash(newPassword, 10)

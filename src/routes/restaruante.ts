@@ -339,8 +339,12 @@ restauranteRoute.get('/profile', async (c) => {
       tieneModuloActivo(db, restauranteId, MODULE_KEYS.PUNTOS_CLIENTES),
       tieneModuloActivo(db, restauranteId, MODULE_KEYS.CODIGOS_DESCUENTO),
     ])
+    // El hash nunca sale del backend; el admin sólo necesita saber si la cuenta ya
+    // tiene contraseña (las registradas con celular no) para pedirla o no al cambiarla.
+    const { password: passwordHash, ...restauranteSinPassword } = restaurante[0]
     const restauranteEnriquecido = {
-      ...restaurante[0],
+      ...restauranteSinPassword,
+      hasPassword: !!passwordHash,
       sistemaPuntos: sistemaPuntosActivo,
       codigoDescuentoEnabled: codigosDescuentoActivos,
       // Base ya armada de la tienda (dominio propio o my.piru.app/<username>) para que el admin
