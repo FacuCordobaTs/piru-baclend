@@ -118,7 +118,13 @@ export async function sincronizarStock(db: any, restauranteId: number): Promise<
       .for('update')
 
     if (!estado) {
-      await tx.insert(StockSyncTable).values({ restauranteId, ultimaSincronizacion: ahora }).ignore()
+      // `ignore()` no existe en esta versión de Drizzle. El no-op sobre la PK
+      // deja la fila creada sin mover un cursor que otra transacción ya haya
+      // establecido.
+      await tx
+        .insert(StockSyncTable)
+        .values({ restauranteId, ultimaSincronizacion: ahora })
+        .onDuplicateKeyUpdate({ set: { restauranteId } })
       return { procesados: 0, consumos: 0, restaurados: 0 }
     }
 
