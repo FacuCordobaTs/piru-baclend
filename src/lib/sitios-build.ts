@@ -42,12 +42,19 @@ export const urlAsset = (asset: AssetBuild) => `/_piru/a/${asset.sha}${extension
 export const hashContenido = (contenido: string | Uint8Array) =>
   createHash('sha256').update(contenido).digest('hex')
 
-type Grafo = { orden: string[]; css: string[]; assets: Set<string>; errores: string[] }
+type Grafo = {
+  orden: string[]
+  css: string[]
+  assets: Set<string>
+  errores: string[]
+  /** Íconos importados de `lucide-react`; `null` si algún import es `* as` o default (todo el paquete). */
+  lucide: Set<string> | null
+}
 
 /** Recorre los imports desde `page.tsx` en orden: así sale el orden del CSS y los assets usados. */
 function recorrerImports(borrador: Borrador, assets: Map<string, AssetBuild>): Grafo {
   const visitados = new Set<string>()
-  const grafo: Grafo = { orden: [], css: [], assets: new Set(), errores: [] }
+  const grafo: Grafo = { orden: [], css: [], assets: new Set(), errores: [], lucide: new Set() }
   const existe = (p: string) => Object.hasOwn(borrador, p) || assets.has(p)
 
   const visitar = (archivo: string) => {
@@ -62,7 +69,8 @@ function recorrerImports(borrador: Borrador, assets: Map<string, AssetBuild>): G
       return
     }
     grafo.orden.push(archivo)
-    let ast: { program: { body: Array<{ type: string; source?: { value?: unknown } | null }> } }
+    type Especificador = { type: string; imported?: { name?: string; value?: string }; local?: { name?: string } }
+    let ast: { program: { body: Array<{ type: string; source?: { value?: unknown } | null; specifiers?: Especificador[] }> } }
     try {
       ast = parse(borrador[archivo], {
         sourceType: 'module',
@@ -73,6 +81,15 @@ function recorrerImports(borrador: Borrador, assets: Map<string, AssetBuild>): G
     }
     for (const sentencia of ast.program.body) {
       const fuente = sentencia.source?.value
+      if (fuente === 'lucide-react') {
+        for (const e of sentencia.specifiers ?? []) {
+          const nombre = e.type === 'ImportSpecifier' ? (e.imported?.name ?? e.imported?.value) : e.type === 'ExportSpecifier' ? e.local?.name : undefined
+          if (nombre) grafo.lucide?.add(nombre)
+          else grafo.lucide = null
+        }
+        if (sentencia.type === 'ExportAllDeclaration') grafo.lucide = null
+        continue
+      }
       if (typeof fuente !== 'string' || !esImportRelativo(fuente)) continue
       if (!['ImportDeclaration', 'ExportNamedDeclaration', 'ExportAllDeclaration'].includes(sentencia.type)) continue
       const destino = resolverRelativo(archivo, fuente)
@@ -178,7 +195,7 @@ export async function construirSitio(
 
   const proceso = Bun.spawn({
     cmd: [process.execPath, `${import.meta.dir}/sitios-build-worker.ts`],
-    stdin: new Blob([JSON.stringify({ archivos, assets: urls })]),
+    stdin: new Blob([JSON.stringify({ archivos, assets: urls, lucide: grafo.lucide ? [...grafo.lucide] : null })]),
     cwd: `${import.meta.dir}/../..`,
     stdout: 'pipe',
     stderr: 'pipe',
