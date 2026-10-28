@@ -12,6 +12,7 @@ import { notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
 import { confirmarRecarga } from '../lib/mensajes-wallet'
 import { confirmarPagoSuscripcion } from '../lib/suscripciones'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
+import { urlRetornoPedido } from '../lib/marketing-enlaces'
 import { acreditarPuntosPedidoAprobado, revertirPuntosPedidoCancelado } from '../lib/puntos'
 import { esNotificacionDeOrden, validarFirmaWebhookMp } from '../lib/mp-qr'
 import { servicioCobrosQr } from '../lib/pos-cobros-qr-prod'
@@ -281,7 +282,12 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
     } else if (restauranteId === 39) {
       successUrl = `https://juanchosandwicheria.com/pedido/${pedidoId}`
     } else {
-      successUrl = `https://my.piru.app/pedido/${pedidoId}`
+      const [local] = await db
+        .select({ dominioTienda: RestauranteTable.dominioTienda })
+        .from(RestauranteTable)
+        .where(eq(RestauranteTable.id, restauranteId))
+        .limit(1)
+      successUrl = urlRetornoPedido(local?.dominioTienda, pedidoId)
     }
 
     const mpItems = [{

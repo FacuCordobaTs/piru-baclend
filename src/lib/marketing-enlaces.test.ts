@@ -12,6 +12,7 @@ import {
   prepararEnlaceMarketing,
   urlEnlaceReceta,
   urlMicroCampana,
+  urlRetornoPedido,
   type RepositorioEnlacesMarketing,
 } from './marketing-enlaces'
 
@@ -145,5 +146,17 @@ describe('anclaje de los links de campaña', () => {
   test('normaliza el dominio guardado (protocolo, espacios y barras sobrantes)', () => {
     expect(anclajePropio('https://alfajorconpapas.com/')).toEqual({ base: 'https://alfajorconpapas.com/', prefijo: '' })
     expect(anclajePropio(' http://alfajorconpapas.com// ')).toEqual({ base: 'https://alfajorconpapas.com/', prefijo: '' })
+  })
+})
+
+describe('vuelta de Mercado Pago', () => {
+  test('vuelve al dominio propio o al subdominio de la tienda', () => {
+    expect(urlRetornoPedido('burgers10.piru.app', 42)).toBe('https://burgers10.piru.app/pedido/42')
+    expect(urlRetornoPedido('https://che-milanesa.com/', 7)).toBe('https://che-milanesa.com/pedido/7')
+  })
+
+  test('sin dominio vuelve a la tienda compartida', () => {
+    expect(urlRetornoPedido(null, 42)).toBe('https://my.piru.app/pedido/42')
+    expect(urlRetornoPedido('   ', 42)).toBe('https://my.piru.app/pedido/42')
   })
 })

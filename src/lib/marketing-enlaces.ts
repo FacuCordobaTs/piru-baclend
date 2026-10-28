@@ -110,6 +110,15 @@ function normalizarDominio(dominio: string): string {
   return dominio.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '')
 }
 
+/**
+ * Vuelta de Mercado Pago al seguimiento del pedido. Si el local tiene dominio propio (incluido su
+ * subdominio `<tienda>.piru.app`), se vuelve ahí; si no, a la tienda compartida.
+ */
+export function urlRetornoPedido(dominio: string | null | undefined, pedidoId: number): string {
+  const limpio = dominio?.trim() ? normalizarDominio(dominio) : ''
+  return limpio ? `https://${limpio}/pedido/${pedidoId}` : `https://my.piru.app/pedido/${pedidoId}`
+}
+
 /** Los datos de un local que alcanzan para decidir cómo se arman sus links. */
 export interface LocalEnlaces {
   username: string | null

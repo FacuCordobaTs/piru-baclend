@@ -62,6 +62,7 @@ import { MODULE_KEYS, tieneModuloActivo } from './lib/modulos';
 import { tickMotorRecompra } from './lib/motor-recompra';
 import { serveStatic } from 'hono/bun';
 import { readFileSync } from 'node:fs';
+import { publicStoreApiPath, publicStoreOrigin } from './lib/public-store-origin';
 
 // Destructure upgradeWebSocket and websocket from the helper function's return
 const { upgradeWebSocket, websocket } = createBunWebSocket<ServerWebSocket>();
@@ -96,8 +97,7 @@ console.log('✅ All required environment variables are present');
 const app = new Hono()
 
 // Configure CORS
-app.use('*', cors({
-  origin: [
+const ORIGENES_CONOCIDOS = [
     'http://localhost:4321',
     'http://localhost:3000',
     'http://localhost:5173',
@@ -128,7 +128,15 @@ app.use('*', cors({
     'https://burgersdelsur.pages.dev',
     'https://burgersdelsur.com',
     'https://www.burgersdelsur.com'
-  ],
+]
+
+app.use('*', cors({
+  origin: (origin, c) => {
+    // Tiendas propias (`<tienda>.piru.app`): sólo los caminos públicos y de pago. La autorización
+    // sigue en cada endpoint; habilitar CORS no da acceso a rutas privadas.
+    if (publicStoreApiPath(c.req.path) && publicStoreOrigin(origin)) return origin
+    return ORIGENES_CONOCIDOS.includes(origin) ? origin : null
+  },
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization', 'Upgrade-Insecure-Requests', 'Idempotency-Key'],
   credentials: true,
