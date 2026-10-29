@@ -15,6 +15,8 @@ type DatosGuia = {
   productos: Record<string, unknown>[]
   horarios: unknown[]
   assets: string[]
+  /** El `contenido.ts` del borrador: textos, colores, fotos y contacto elegidos. */
+  contenido: string
 }
 
 const CAMPOS_LOCAL = [
@@ -26,7 +28,6 @@ const CAMPOS_LOCAL = [
   'colorSecundario',
   'imagenUrl',
   'imagenLightUrl',
-  'tienda',
   'deliveryEnabled',
   'takeawayEnabled',
   'deliveryFee',
@@ -62,17 +63,19 @@ export function generarGuia(datos: DatosGuia): string {
   const extensionesAsset = Object.keys(TIPOS_ASSET).join(', ')
   return `# Página de ${datos.nombre} en Piru — guía para Claude
 
-Sos diseñador web. Entregá \`page.tsx\` y \`style.css\` (y, si hace falta, componentes en \`components/\`) para la tienda online de **${datos.nombre}**, que se publica en \`https://${datos.username}.piru.app\`. Usá solo \`@piru/tienda\`, \`react\`, \`motion/react\` y \`lucide-react\`. No implementes checkout, pagos, pedidos ni analytics: eso lo hace Piru. Contemplá los estados de la sección 4. Usá HTML semántico, foco visible, buen contraste y respetá \`prefers-reduced-motion\`.
+Sos diseñador web. Entregá \`contenido.ts\`, \`page.tsx\` y \`style.css\` (y, si hace falta, componentes en \`components/\`) para la tienda online de **${datos.nombre}**, que se publica en \`https://${datos.username}.piru.app\`. Usá solo \`@piru/tienda\`, \`react\`, \`motion/react\` y \`lucide-react\`. No implementes checkout, pagos, pedidos ni analytics: eso lo hace Piru. Contemplá los estados de la sección 4. Usá HTML semántico, foco visible, buen contraste y respetá \`prefers-reduced-motion\`.
 
 ## 1. Qué hay que entregar
 
 \`\`\`
+contenido.ts      ← textos, colores, fotos y contacto de esta página (editable)
 page.tsx          ← obligatorio: export default del componente de la página
 style.css         ← opcional, importado desde page.tsx (import "./style.css")
 components/*.tsx  ← opcional, importados con rutas relativas
 assets/*          ← imágenes, fuentes y video que el dueño sube desde el editor
 \`\`\`
 
+- El contenido elegido por el local vive en \`contenido.ts\`, **dentro del código**. Podés leerlo, moverlo a tu diseño o reemplazarlo; no hay una configuración del backend que lo pise.
 - Código: solo \`.tsx\`, \`.ts\` y \`.css\`. Assets: ${extensionesAsset}.
 - Imports permitidos: rutas relativas del sitio (\`./components/Hero\`, \`./assets/logo.png\`, \`./style.css\`) y los paquetes \`react\`, \`react-dom\`, \`motion/react\`, \`react-router\`, \`@piru/tienda\` y \`lucide-react\`. Cualquier otro (\`lodash\`, \`https://…\`, \`node:*\`) no compila.
 - Un asset importado devuelve su URL: \`import foto from "./assets/portada.jpg"\`.
@@ -88,7 +91,7 @@ Los datos y las reglas (precios, descuentos, horarios, disponibilidad) vienen de
 - \`useCarta()\` → \`{ secciones, productos, canjes, destacado }\`. Cada producto tiene \`precioFinal\` (con descuento), \`fotos\`, \`disponible\`, \`tieneOpciones\`, \`abrir()\` y \`agregar()\`.
 - \`producto.abrir()\` abre la hoja de opciones de Piru (variantes, extras, ingredientes, nota y cantidad). Es el camino recomendado: si \`producto.tieneOpciones\`, abrí la hoja; si no, \`producto.agregar()\`.
 - \`useCarrito()\` → \`lines\`, \`count\`, \`totalFormatted\` (subtotal), \`set(key, n)\`, \`remove\`, \`canCheckout\`, \`blockReason\` y \`checkout()\`. \`checkout()\` lleva al checkout de Piru en otra página: ahí se piden los datos, el envío, los cupones, los puntos y el pago. Mostrá "Subtotal" o "Pedir · $X", nunca un total final.
-- \`useContenido()\` → lo que el local cargó en las preferencias de la tienda: frase, bajada, portada, galería, historia, colores.
+- \`useContenido()\` → opcional: la personalización de la **tienda estándar**. La plantilla inicial no lo usa; el contenido de esta página vive en \`contenido.ts\`.
 - \`useHorarios()\` → \`{ abierto, texto, turnos, … }\`. \`texto\` ya viene armado ("Abierto · hasta las 23:45").
 - \`useCampana()\` → la campaña cuando se entra por un link de promo (\`/c/:slug\`), o \`null\`.
 - \`useNavegacionCarta(secciones.length)\` → categoría activa y \`ir(i)\` para un índice de categorías.
@@ -128,6 +131,12 @@ ${TIPOS_SDK.trim()}
 
 ## 6. Ejemplo completo y funcional
 
+\`contenido.ts\`:
+
+\`\`\`ts
+${(datos.contenido || PLANTILLA_INICIAL['contenido.ts']).trim()}
+\`\`\`
+
 \`page.tsx\`:
 
 \`\`\`tsx
@@ -142,7 +151,7 @@ ${PLANTILLA_INICIAL['style.css'].trim()}
 
 ## 7. Datos reales de ${datos.nombre}
 
-Diseñá con este contenido; no inventes platos ni precios. En la página, leelos siempre del SDK (pueden cambiar).
+El contenido y los recursos visuales de esta página están en \`contenido.ts\` (sección 6): textos, colores, tipografías, fotos, logos, historia y contacto. Podés usar esas URLs o reemplazarlas por assets propios. No inventes platos, precios ni fotos.
 
 Assets ya subidos: ${datos.assets.length ? datos.assets.map((a) => `\`${a}\``).join(', ') : 'ninguno todavía'}.
 

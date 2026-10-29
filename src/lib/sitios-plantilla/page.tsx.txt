@@ -8,22 +8,18 @@ import {
   useCampana,
   useCarrito,
   useCarta,
-  useContenido,
   useHorarios,
-  useLinks,
   useLocal,
   useNavegacionCarta,
-  type Contenido,
-  type Local,
   type Producto,
 } from "@piru/tienda"
+import { CONTENIDO, type ContenidoSitio } from "./contenido"
 import "./style.css"
 
 /*
- * Tienda de Páginas: el diseño nace de la plantilla y las preferencias elegidas en el panel.
- * Todo lo visual sale de `useContenido()` y de los colores de marca, así que cambiar una
- * preferencia se ve en la próxima carga sin volver a publicar. Editá el código con libertad:
- * lo que no cambies sigue leyendo esas preferencias.
+ * Tienda de Páginas: el contenido inicial (plantilla, textos, colores, fotos y contacto) vive
+ * en `contenido.ts` y es parte del código. No se lee de la configuración del local: podés
+ * cambiarlo acá mismo o pedirle a un LLM que rehaga el diseño con estos datos.
  */
 
 type Plantilla = "elegante" | "moderna" | "artesanal"
@@ -83,17 +79,17 @@ const contraste = (a: string, b: string) => {
 
 const tintaSobre = (hex: string) => (luminancia(hex) > 0.36 ? "#17130f" : "#ffffff")
 
-function temaDe(contenido: Contenido, local: Local | null, plantilla: Plantilla): Tema {
+function temaDe(contenido: ContenidoSitio, plantilla: Plantilla): Tema {
   const base = BASES[plantilla] ?? BASES.artesanal
-  const c = contenido.colores
-  const marca = local?.colores
+  const c = contenido.colores ?? {}
+  const marca = contenido.marca
   const fondo = c.fondo ?? base.fondo
   const texto = c.texto && contraste(c.texto, fondo) >= 4.5 ? c.texto : contraste(base.texto, fondo) >= 4.5 ? base.texto : tintaSobre(fondo)
   const superficie = c.superficie ?? (c.fondo ? mezclar(fondo, "#ffffff", luminancia(fondo) < 0.18 ? 0.06 : 0.5) : base.superficie)
-  const primario = c.acento ?? marca?.primario ?? base.primario
-  const secundario = marca?.secundario ?? base.secundario
-  const titulos = contenido.fuentes.titulos ?? base.titulos
-  const cuerpo = contenido.fuentes.cuerpo ?? base.cuerpo
+  const primario = c.acento ?? marca?.colorPrimario ?? base.primario
+  const secundario = marca?.usarColorUnico ? primario : marca?.colorSecundario ?? base.secundario
+  const titulos = contenido.fuentes?.titulos ?? base.titulos
+  const cuerpo = contenido.fuentes?.cuerpo ?? base.cuerpo
   return {
     plantilla,
     fondo,
@@ -130,18 +126,20 @@ function useFuentes(titulos: string, cuerpo: string) {
 
 export default function Page() {
   const { estado, local } = useLocal()
-  const { secciones, destacado } = useCarta()
-  const contenido = useContenido()
+  const { secciones, productos, destacado: destacadoDelLocal } = useCarta()
+  const contenido = CONTENIDO
   const horarios = useHorarios()
   const carrito = useCarrito()
   const campana = useCampana()
-  const links = useLinks()
   const nav = useNavegacionCarta(secciones.length)
   const [pedidoAbierto, setPedidoAbierto] = useState(false)
   const quieto = useReducedMotion()
-  const plantilla: Plantilla = contenido.plantilla
-  const tema = temaDe(contenido, local, plantilla)
+  const plantilla: Plantilla = contenido.plantilla ?? "artesanal"
+  const tema = temaDe(contenido, plantilla)
   useFuentes(tema.titulos, tema.cuerpo)
+  const destacado = (contenido.productoDestacadoId ? productos.find((p) => p.id === contenido.productoDestacadoId) : null) ?? destacadoDelLocal
+  const cinta = contenido.cinta ?? []
+  const galeria = contenido.galeria ?? []
 
   useEffect(() => {
     if (carrito.count === 0) setPedidoAbierto(false)
@@ -165,7 +163,18 @@ export default function Page() {
 
   const portada = contenido.portadaUrl ?? destacado?.fotos[0] ?? secciones[0]?.productos.find((p) => p.fotos[0])?.fotos[0]
   // El hero de Moderna es del color primario: el logo se elige según la tinta que lo va a rodear.
-  const logo = logoPara(local, plantilla === "moderna" && tema.sobrePrimario === "#ffffff")
+  const sobreOscuro = plantilla === "moderna" && tema.sobrePrimario === "#ffffff"
+  const logo = (sobreOscuro ? contenido.logo : contenido.logoClaro) ?? logoPara(local, sobreOscuro)
+  const instagram = contenido.instagram
+    ? /^https?:\/\//i.test(contenido.instagram)
+      ? contenido.instagram
+      : `https://instagram.com/${contenido.instagram.replace(/^@/, "")}`
+    : local.instagram
+  const whatsapp = contenido.whatsapp
+    ? `https://wa.me/${contenido.whatsapp.replace(/\D/g, "")}`
+    : local.whatsapp
+      ? `https://wa.me/${local.whatsapp.replace(/\D/g, "")}`
+      : null
   const estilo = {
     "--pv-fondo": tema.fondo,
     "--pv-texto": tema.texto,
@@ -200,8 +209,8 @@ export default function Page() {
             <a className="pv-boton" href="#carta">
               Ver la carta
             </a>
-            {links.whatsapp && (
-              <a className="pv-boton pv-boton-secundario" href={links.whatsapp} rel="noopener">
+            {whatsapp && (
+              <a className="pv-boton pv-boton-secundario" href={whatsapp} rel="noopener">
                 Escribinos
               </a>
             )}
@@ -210,9 +219,9 @@ export default function Page() {
         </div>
       </header>
 
-      {contenido.cinta.length > 0 && (
+      {cinta.length > 0 && (
         <div className="pv-cinta" aria-hidden="true">
-          <span className="pv-cinta-texto">{[...contenido.cinta, ...contenido.cinta].join("  ·  ")}</span>
+          <span className="pv-cinta-texto">{[...cinta, ...cinta].join("  ·  ")}</span>
         </div>
       )}
 
@@ -277,9 +286,9 @@ export default function Page() {
         </section>
       )}
 
-      {contenido.galeria.length > 0 && (
+      {galeria.length > 0 && (
         <section className="pv-galeria" aria-label="Fotos del local">
-          {contenido.galeria.map((foto, i) => (
+          {galeria.map((foto, i) => (
             <img key={i} src={foto} alt="" loading="lazy" />
           ))}
         </section>
@@ -294,13 +303,13 @@ export default function Page() {
             <MapPin size={15} aria-hidden="true" /> {local.direccion}
           </span>
         )}
-        {links.instagram && (
-          <a href={links.instagram} rel="noopener">
+        {instagram && (
+          <a href={instagram} rel="noopener">
             <Instagram size={15} aria-hidden="true" /> Instagram
           </a>
         )}
-        {links.whatsapp && (
-          <a href={links.whatsapp} rel="noopener">
+        {whatsapp && (
+          <a href={whatsapp} rel="noopener">
             WhatsApp
           </a>
         )}

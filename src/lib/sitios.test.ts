@@ -6,7 +6,7 @@ import { validarBorrador, resolverRelativo, pathValido, importPermitido, PAQUETE
 import { slugDisponible, SLUGS_REGISTRADOS } from './sitios-slugs'
 import { esSitioDePaginas, fijarPublicados, paginasApiPath } from './sitios-publicados'
 import { sitiosPuede, marketerPuede, duenioAppMarketingPuede, marketerPuedeSocketAdmin } from './marketer-permisos'
-import { PLANTILLA_INICIAL } from './sitios-plantilla'
+import { PLANTILLA_INICIAL, plantillaInicial } from './sitios-plantilla'
 import { generarGuia } from './sitios-guia'
 import { urlRetornoPedido } from './marketing-enlaces'
 import { normalizarMeta } from './sitios-meta'
@@ -91,10 +91,27 @@ describe('build', () => {
     expect(r.jsHash).toMatch(/^[a-f0-9]{20}$/)
   }, 20_000)
 
+  test('el contenido elegido queda escrito en contenido.ts y el diseño lo importa', () => {
+    const borrador = plantillaInicial({
+      plantilla: 'moderna',
+      marca: { colorPrimario: '#E63A1E', colorSecundario: '#FFC21A', usarColorUnico: false },
+      logo: 'https://images.piru.app/tiendas/1/logo.png',
+      logoClaro: null,
+      frase: 'Smash, cheddar y cero vueltas.',
+      cinta: ['Smash burgers'],
+    })
+    expect(borrador['contenido.ts']).toContain('/* piru:contenido */')
+    expect(borrador['contenido.ts']).toContain('"frase": "Smash, cheddar y cero vueltas."')
+    expect(borrador['contenido.ts']).toContain('"colorPrimario": "#E63A1E"')
+    expect(borrador['page.tsx']).toContain('CONTENIDO')
+    expect(borrador['page.tsx']).not.toContain('useContenido')
+  })
+
   test('la plantilla inicial nace de las preferencias y compone las tres plantillas', () => {
     const page = PLANTILLA_INICIAL['page.tsx'] ?? ''
     const css = PLANTILLA_INICIAL['style.css'] ?? ''
-    expect(page).toContain('useContenido()')
+    expect(page).toContain('CONTENIDO')
+    expect(page).toContain('from "./contenido"')
     expect(page).toContain('pv-${plantilla}')
     for (const plantilla of ['elegante', 'moderna', 'artesanal']) expect(css).toContain(`.pv-${plantilla}`)
   })
@@ -167,8 +184,8 @@ describe('permisos de la sesión de Páginas', () => {
     expect(sitiosPuede('GET', '/api/sitios')).toBe(true)
     expect(sitiosPuede('PUT', '/api/sitios/3/borrador')).toBe(true)
     expect(sitiosPuede('POST', '/api/sitios/3/publicar')).toBe(true)
-    expect(sitiosPuede('GET', '/api/sitios/tienda')).toBe(true)
-    expect(sitiosPuede('PUT', '/api/sitios/tienda')).toBe(true)
+    expect(sitiosPuede('GET', '/api/sitios/base')).toBe(true)
+    expect(sitiosPuede('POST', '/api/sitios/imagenes')).toBe(true)
     for (const [m, p] of [['POST', '/api/sitios/entrada'], ['GET', '/api/restaurante/profile'], ['GET', '/api/sitios/../restaurante/profile'], ['GET', '/api/sitiosx'], ['DELETE', '/api/clientes/1']])
       expect(sitiosPuede(m, p)).toBe(false)
   })
@@ -198,10 +215,12 @@ describe('guía para Claude', () => {
       productos: [{ id: 1, nombre: 'Doble cheddar', precio: '9000', categoria: 'Burgers' }],
       horarios: [],
       assets: ['assets/logo.png'],
+      contenido: PLANTILLA_INICIAL['contenido.ts'] ?? '',
     })
     expect(md).toContain('https://bronx.piru.app')
     expect(md).toContain("declare module '@piru/tienda'")
     expect(md).toContain('export default function Page()')
+    expect(md).toContain('contenido.ts')
     expect(md).toContain('Doble cheddar')
     expect(md).toContain('assets/logo.png')
     expect(md).not.toContain('clave-ultra-privada')
