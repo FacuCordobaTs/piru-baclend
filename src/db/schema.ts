@@ -113,6 +113,14 @@ export const restaurante = mysqlTable("restaurante", {
   usarFranjasHorario: boolean("usar_franjas_horario").default(false).notNull(),
   // Si está activo, el cliente está obligado a elegir una franja de horario (no puede pedir "para ahora")
   soloPedidosProgramados: boolean("solo_pedidos_programados").default(false).notNull(),
+  // Zonas especiales (countries/barrios cerrados): interruptor maestro. Apagado
+  // por defecto: la tienda no muestra ni consulta nada de countries hasta que el
+  // local lo active. La capacidad sigue exigiendo el módulo de avisos automáticos
+  // de WhatsApp (ver routes/zonas-especiales.ts).
+  zonasEspecialesHabilitadas: boolean("zonas_especiales_habilitadas").default(false).notNull(),
+  // Permite armar el pedido fuera del horario de entrega de la zona para la
+  // próxima ventana (o con el local cerrado).
+  permitirPrePedidosZonasEspeciales: boolean("permitir_pre_pedidos_zonas_especiales").default(false).notNull(),
 
   createdAt: timestamp("created_at").defaultNow().notNull(),
 
@@ -215,6 +223,25 @@ export const repartidor = mysqlTable("repartidor", {
   estado: mysqlEnum("estado", ["activo", "inactivo"]).default("activo").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// Zonas especiales: countries, barrios cerrados o puntos de entrega con una
+// ventana horaria fija (por ejemplo 17:00–20:00). No son polígonos: el cliente
+// elige la zona en el checkout y el pedido se entrega en su puerta. El precio
+// sale de acá, nunca de una constante del frontend.
+export const zonaEspecial = mysqlTable("zona_especial", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id")
+    .references(() => restaurante.id, { onDelete: "cascade" })
+    .notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  precio: decimal("precio", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  horaInicio: varchar("hora_inicio", { length: 5 }).notNull(), // "HH:mm"
+  horaFin: varchar("hora_fin", { length: 5 }).notNull(), // "HH:mm"
+  activa: boolean("activa").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_zona_especial_restaurante_activa").on(table.restauranteId, table.activa, table.nombre),
+]);
 
 // Identidades operativas del restaurante. No reutilizan la contraseña ni el
 // JWT del dueño: los mozos usan OTP y una sesion revocable. PIN/codigo quedan
@@ -353,6 +380,9 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   repartidorId: int("repartidor_id").references(() => repartidor.id),
   // Fee de delivery exacto cobrado al cliente (calculado por zona)
   deliveryFee: decimal("delivery_fee", { precision: 10, scale: 2 }),
+  // Zona especial elegida en el checkout (country/barrio cerrado). Cuando existe,
+  // `direccion` guarda el nombre de la zona y el fee sale de `zona_especial.precio`.
+  zonaEspecialId: int("zona_especial_id").references(() => zonaEspecial.id, { onDelete: "set null" }),
 
   // Pedido grupal: items con clienteNombre individual (flujo sala/grupo)
   grupal: boolean("grupal").default(false).notNull(),
@@ -375,6 +405,7 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   uniqueIndex("uq_pedido_restaurante_request").on(table.restauranteId, table.clientRequestId),
   index("idx_pedido_unificado_creado_por_usuario").on(table.creadoPorUsuarioId),
   index("idx_pedido_unificado_marketing_campana").on(table.restauranteId, table.marketingCampanaId, table.createdAt),
+  index("idx_pedido_unificado_zona_especial").on(table.zonaEspecialId),
 ]);
 
 export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {
@@ -971,7 +1002,7 @@ export const mensajeWhatsapp = mysqlTable("mensaje_whatsapp", {
   pedidoUnificadoId: int("pedido_unificado_id").references(() => pedidoUnificado.id),
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
   telefono: varchar("telefono", { length: 50 }).notNull(),
-  tipo: mysqlEnum("tipo_mensaje", ["pedido_confirmado", "pedido_despachado"]),
+  tipo: mysqlEnum("tipo_mensaje", ["pedido_confirmado", "pedido_despachado", "zona_especial_llegada"]),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

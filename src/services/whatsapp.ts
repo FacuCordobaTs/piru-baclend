@@ -357,6 +357,79 @@ export const sendClientOrderDispatchedWhatsApp = async (c: any, data: ClientOrde
     }
 };
 
+export interface ZonaEspecialLlegadaData {
+    phone: string
+    customerName: string
+    nombreZona: string
+    restaurantName: string
+}
+
+/**
+ * Avisa a un cliente que su pedido llegó a la puerta de una zona especial
+ * (country/barrio cerrado). Usa la plantilla utility `zona_especial_llegada_v1`
+ * con parámetros nombrados `nombre_cliente`, `nombre_zona` y `nombre_del_local`.
+ * El cuerpo sugerido de la plantilla en Meta:
+ *
+ *   Hola {{nombre_cliente}}, tu pedido de {{nombre_del_local}} ya está en la
+ *   puerta de {{nombre_zona}} esperándote. ¡Te esperamos!
+ *
+ * Se envía desde el WhatsApp del local (o el de plataforma si no tiene) y el
+ * endpoint que la dispara ya validó el módulo de avisos automáticos.
+ */
+export const sendZonaEspecialLlegadaWhatsApp = async (c: any, data: ZonaEspecialLlegadaData, creds?: WaCredentials) => {
+    const { WHATSAPP_API_TOKEN, WHATSAPP_PHONE_ID } = env<{ WHATSAPP_API_TOKEN: string; WHATSAPP_PHONE_ID: string }>(c);
+    const phoneId = creds?.phoneId ?? WHATSAPP_PHONE_ID;
+    const token = creds?.token ?? WHATSAPP_API_TOKEN;
+
+    const url = `https://graph.facebook.com/v22.0/${phoneId}/messages`;
+
+    const body = {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: data.phone,
+        type: "template",
+        template: {
+            name: "zona_especial_llegada_v1",
+            language: { code: "es_AR" },
+            components: [
+                {
+                    type: "body",
+                    parameters: [
+                        { type: "text", parameter_name: "nombre_cliente", text: data.customerName },
+                        { type: "text", parameter_name: "nombre_zona", text: data.nombreZona },
+                        { type: "text", parameter_name: "nombre_del_local", text: data.restaurantName },
+                    ]
+                }
+            ]
+        }
+    };
+
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            console.error("❌ Error WhatsApp API (zona especial):", JSON.stringify(result, null, 2));
+            return { success: false, error: result };
+        }
+
+        console.log("✅ Aviso de llegada a zona especial enviado");
+        return { success: true, id: result.messages?.[0]?.id };
+
+    } catch (error) {
+        console.error("❌ Error de red enviando aviso de zona especial:", error);
+        return { success: false, error };
+    }
+};
+
 export interface VerificationCodeData {
     phone: string; // Número del usuario que se está registrando (formato internacional, solo dígitos)
     code: string;  // Código de 6 dígitos

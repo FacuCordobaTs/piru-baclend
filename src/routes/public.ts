@@ -9,7 +9,7 @@ import type { MySql2Database } from 'drizzle-orm/mysql2'
 import { eq, and, desc, or, lt, lte, gte, isNull, sql, inArray } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
 import { sendOrderWhatsApp, notificarClientePagoConfirmado } from '../services/whatsapp'
-import { productoPuntos as ProductoPuntosTable, zonaDelivery as ZonaDeliveryTable } from '../db/schema'
+import { productoPuntos as ProductoPuntosTable, zonaDelivery as ZonaDeliveryTable, zonaEspecial as ZonaEspecialTable } from '../db/schema'
 import { asignarAliasAPedido } from '../services/cucuru'
 import { crearPagoTalo } from '../services/talo'
 import { findZoneForPoint } from '../utils/geo'
@@ -37,6 +37,7 @@ import { estaPausadoPorSuscripcion } from '../lib/suscripciones'
 import { salirDeColaPorPedido } from '../lib/motor-recompra'
 import { atribuirPedidoMarketingBestEffort } from '../lib/marketing-atribucion'
 import { aplicarOfertaProducto, ofertaProductoEstaVigente, type OfertaProductoCampana } from '../lib/campana-oferta'
+import { estadoVentanaZona, horarioValido, puedePedirZonaEspecial } from '../lib/zonas-especiales'
 
 function isDiscountActive(descuento: number | null, inicio: Date | null, fin: Date | null): boolean {
   if (!descuento || descuento === 0) return false
@@ -117,6 +118,45 @@ function isFranjaVigente(horaInicio: string): boolean {
   const now = new Date()
   const nowMinutos = now.getHours() * 60 + now.getMinutes()
   return nowMinutos < (h * 60 + m)
+}
+
+function minutosDeHorario(hora: string | null | undefined): number | null {
+  const [h, m] = (hora ?? '').slice(0, 5).split(':').map(Number)
+  if (!Number.isInteger(h) || !Number.isInteger(m)) return null
+  return h * 60 + m
+}
+
+/** Misma semántica que el estado de la tienda: sin horarios cargados, está abierto. */
+async function localAbiertoAhora(
+  db: any,
+  restauranteId: number,
+  ahora: Date = new Date(),
+): Promise<boolean> {
+  const horarios = await db
+    .select({
+      diaSemana: HorarioRestauranteTable.diaSemana,
+      horaApertura: HorarioRestauranteTable.horaApertura,
+      horaCierre: HorarioRestauranteTable.horaCierre,
+    })
+    .from(HorarioRestauranteTable)
+    .where(eq(HorarioRestauranteTable.restauranteId, restauranteId))
+  if (horarios.length === 0) return true
+
+  const diaHoy = ahora.getDay()
+  const diaAyer = (diaHoy + 6) % 7
+  const minutos = ahora.getHours() * 60 + ahora.getMinutes()
+  for (const horario of horarios) {
+    const apertura = minutosDeHorario(horario.horaApertura)
+    const cierre = minutosDeHorario(horario.horaCierre)
+    if (apertura === null || cierre === null) continue
+    if (cierre > apertura) {
+      if (horario.diaSemana === diaHoy && minutos >= apertura && minutos < cierre) return true
+    } else {
+      if (horario.diaSemana === diaHoy && minutos >= apertura) return true
+      if (horario.diaSemana === diaAyer && minutos < cierre) return true
+    }
+  }
+  return false
 }
 
 // Si el restaurante obliga a programar el pedido (soloPedidosProgramados), valida que se haya
@@ -501,6 +541,67 @@ const obtenerRestaurantePublico = async (c: Context) => {
             MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP,
         )
 
+        // Las zonas especiales (countries/barrios cerrados) sólo se ofrecen con el
+        // módulo de avisos activo y con su interruptor maestro encendido. El
+        // interruptor nace apagado: por defecto la tienda no menciona countries.
+        let zonasEspecialesHabilitadas = false
+        let permitirPrePedidosZonasEspeciales = false
+        if (avisosWhatsappClienteEnabled) {
+            try {
+                const [cfgZonas] = await db
+                    .select({
+                        habilitadas: RestauranteTable.zonasEspecialesHabilitadas,
+                        permitir: RestauranteTable.permitirPrePedidosZonasEspeciales,
+                    })
+                    .from(RestauranteTable)
+                    .where(eq(RestauranteTable.id, restauranteId))
+                    .limit(1)
+                zonasEspecialesHabilitadas = cfgZonas?.habilitadas === true
+                permitirPrePedidosZonasEspeciales = cfgZonas?.permitir === true
+            } catch (error) {
+                console.error('Error leyendo la configuración de zonas especiales:', error)
+            }
+        }
+
+        const ahoraZonasEspeciales = new Date()
+        let zonasEspeciales: Array<{
+            id: number
+            nombre: string
+            precio: string
+            horaInicio: string
+            horaFin: string
+            enVentana: boolean
+            proximaVentana: string
+        }> = []
+        if (avisosWhatsappClienteEnabled && zonasEspecialesHabilitadas) {
+            try {
+                const zonasRaw = await db
+                    .select()
+                    .from(ZonaEspecialTable)
+                    .where(and(
+                        eq(ZonaEspecialTable.restauranteId, restauranteId),
+                        eq(ZonaEspecialTable.activa, true),
+                    ))
+                    .orderBy(ZonaEspecialTable.nombre, ZonaEspecialTable.id)
+                zonasEspeciales = zonasRaw.filter(horarioValido).map((zona) => {
+                    const estado = estadoVentanaZona(zona, ahoraZonasEspeciales)
+                    return {
+                        id: zona.id,
+                        nombre: zona.nombre,
+                        precio: zona.precio,
+                        horaInicio: zona.horaInicio,
+                        horaFin: zona.horaFin,
+                        enVentana: estado.enVentana,
+                        proximaVentana: estado.ventana.etiqueta,
+                    }
+                })
+            } catch (error) {
+                // Si la migración todavía no se aplicó, la tienda no puede caerse
+                // entera: simplemente no ofrece zonas especiales.
+                console.error('Error cargando zonas especiales públicas:', error)
+            }
+        }
+
         // ¿El local está "pausado" por su suscripción (suspendida/cancelada)? La tienda se muestra
         // "cerrada temporalmente" y no toma pedidos nuevos (Claim Flow · Tarea 8: degradación, no
         // apagón — el menú sigue visible, nada se borra). Aditivo: bundles viejos lo ignoran.
@@ -519,12 +620,22 @@ const obtenerRestaurantePublico = async (c: Context) => {
                     transferenciaAlias: transferenciaAliasCliente,
                     metodosPago: metodosPagoPublicos,
                     avisosWhatsappClienteEnabled,
+                    // Aditivo: los storefronts viejos lo ignoran. Sólo tiene efecto
+                    // si además hay zonas especiales activas.
+                    permitirPrePedidosZonasEspeciales: zonasEspecialesHabilitadas
+                        ? permitirPrePedidosZonasEspeciales
+                        : false,
+                    // Va también dentro de `restaurante` porque es lo que guardan
+                    // los storefronts al recibir el perfil (MenuDelivery y el
+                    // checkout leen `restaurante.zonasEspeciales`).
+                    zonasEspeciales,
                     pausadoPorSuscripcion,
                 },
                 productos: productosConIngredientes,
                 horarios,
                 sucursales,
                 franjas: franjasActivas,
+                zonasEspeciales,
             }
         }, 200)
 
@@ -786,7 +897,10 @@ publicRoute.post('/descuentos/validar', zValidator('json', validarDescuentoSchem
 
 const createDeliverySchema = z.object({
     restauranteId: z.number().int().positive(),
-    direccion: z.string().min(5),
+    // Con `zonaEspecialId` la dirección no se pide: el pedido va a la puerta del
+    // country/barrio cerrado y sólo se valida la zona en el servidor.
+    direccion: z.string().min(5).optional(),
+    zonaEspecialId: z.number().int().positive().optional(),
     lat: z.number().optional(),
     lng: z.number().optional(),
     nombreCliente: z.string().optional(),
@@ -830,7 +944,7 @@ const createDeliverySchema = z.object({
 
 publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), async (c) => {
     const db = drizzle(pool)
-    const { restauranteId, direccion, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, canjeEnvioGratis, canjeDescuento, items, notificarWhatsapp, horarioProgramado, grupal, visitorId, sesionUuid, campaniaSlug, campanaId, recetaToken } = c.req.valid('json')
+    const { restauranteId, direccion, zonaEspecialId, lat, lng, nombreCliente, telefono, notas, metodoPago, codigoDescuentoId, canjeEnvioGratis, canjeDescuento, items, notificarWhatsapp, horarioProgramado, grupal, visitorId, sesionUuid, campaniaSlug, campanaId, recetaToken } = c.req.valid('json')
 
     try {
         const [deliveryCheck] = await db.select({
@@ -841,8 +955,67 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         if (deliveryCheck && deliveryCheck.deliveryEnabled === false) {
             return c.json({ message: 'El delivery no está disponible en este momento', success: false }, 400)
         }
-        if (deliveryCheck && !deliveryCheck.direccionSoloTexto && (lat === undefined || lng === undefined)) {
-            return c.json({ message: 'Seleccioná una dirección válida de Google Maps', success: false }, 400)
+
+        // Zona especial: la dirección se reemplaza por el nombre del country y el
+        // fee/ventana salen de la zona configurada. Sin `zonaEspecialId` sigue el
+        // flujo normal con Google Maps o dirección escrita.
+        let zonaEspecialSeleccionada: typeof ZonaEspecialTable.$inferSelect | null = null
+        if (zonaEspecialId) {
+            const [zona] = await db
+                .select()
+                .from(ZonaEspecialTable)
+                .where(and(
+                    eq(ZonaEspecialTable.id, zonaEspecialId),
+                    eq(ZonaEspecialTable.restauranteId, restauranteId),
+                    eq(ZonaEspecialTable.activa, true),
+                ))
+                .limit(1)
+            if (!zona) {
+                return c.json({ message: 'La zona especial elegida no está disponible', success: false }, 400)
+            }
+            if (!(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP))) {
+                return c.json({ message: 'Las zonas especiales no están habilitadas en este local', success: false }, 400)
+            }
+            let zonasEspecialesHabilitadas = false
+            let permitirPrePedidos = false
+            try {
+                const [cfgZona] = await db
+                    .select({
+                        habilitadas: RestauranteTable.zonasEspecialesHabilitadas,
+                        permitir: RestauranteTable.permitirPrePedidosZonasEspeciales,
+                    })
+                    .from(RestauranteTable)
+                    .where(eq(RestauranteTable.id, restauranteId))
+                    .limit(1)
+                zonasEspecialesHabilitadas = cfgZona?.habilitadas === true
+                permitirPrePedidos = cfgZona?.permitir === true
+            } catch (error) {
+                console.error('Error leyendo la configuración de zona especial:', error)
+            }
+            if (!zonasEspecialesHabilitadas) {
+                return c.json({ message: 'Las zonas especiales están desactivadas en este local', success: false }, 400)
+            }
+            const abierto = await localAbiertoAhora(db, restauranteId)
+            const decision = puedePedirZonaEspecial(zona, {
+                pedidosPreOrdenadosHabilitados: permitirPrePedidos,
+                localCerrado: !abierto,
+            })
+            if (!decision.permitido) {
+                return c.json({
+                    message: decision.motivo === 'fuera_de_ventana'
+                        ? 'La zona especial no está en su horario de entrega. El local todavía no habilitó los pre-pedidos.'
+                        : 'La zona especial no está disponible en este momento.',
+                    success: false,
+                }, 400)
+            }
+            zonaEspecialSeleccionada = zona
+        } else {
+            if (deliveryCheck && !deliveryCheck.direccionSoloTexto && (lat === undefined || lng === undefined)) {
+                return c.json({ message: 'Seleccioná una dirección válida de Google Maps', success: false }, 400)
+            }
+            if (!direccion || direccion.trim().length < 5) {
+                return c.json({ message: 'Ingresá una dirección de entrega', success: false }, 400)
+            }
         }
 
         // Local pausado por suscripción (Claim Flow · Tarea 8): la tienda está "cerrada
@@ -852,9 +1025,13 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             return c.json({ message: 'El local no está recibiendo pedidos en este momento', success: false }, 400)
         }
 
-        const errorHorarioProgramado = await validarHorarioProgramadoObligatorio(db, restauranteId, horarioProgramado)
-        if (errorHorarioProgramado) {
-            return c.json({ message: errorHorarioProgramado, success: false }, 400)
+        // La zona especial ya trae su propia ventana horaria: no compite con las
+        // franjas de "pedidos programados" del local.
+        if (!zonaEspecialSeleccionada) {
+            const errorHorarioProgramado = await validarHorarioProgramadoObligatorio(db, restauranteId, horarioProgramado)
+            if (errorHorarioProgramado) {
+                return c.json({ message: errorHorarioProgramado, success: false }, 400)
+            }
         }
 
         const uniqueProductosIds = [...new Set(items.map(i => i.productoId))]
@@ -975,44 +1152,57 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         let deliveryFeeAplicado = 0
         let zonaNombre: string | null = null
         let pedidoSucursalId: number | null = null
+        // Con zona especial no hay polígono ni dirección: la entrega es en la
+        // puerta del country y el nombre de la zona ocupa el lugar de la dirección.
+        const direccionEntrega = zonaEspecialSeleccionada
+            ? `Country · ${zonaEspecialSeleccionada.nombre}`.slice(0, 255)
+            : direccion!.trim()
+        const horarioEntregaFinal = zonaEspecialSeleccionada
+            ? `${zonaEspecialSeleccionada.horaInicio}-${zonaEspecialSeleccionada.horaFin}`
+            : horarioProgramado
 
-        // 1. Buscar zonas configuradas para este restaurante
-        const zonasDelivery = await db.select().from(ZonaDeliveryTable)
-            .where(eq(ZonaDeliveryTable.restauranteId, restauranteId))
+        if (zonaEspecialSeleccionada) {
+            deliveryFeeAplicado = parseFloat(zonaEspecialSeleccionada.precio)
+            zonaNombre = zonaEspecialSeleccionada.nombre
+        } else {
+            // 1. Buscar zonas configuradas para este restaurante
+            const zonasDelivery = await db.select().from(ZonaDeliveryTable)
+                .where(eq(ZonaDeliveryTable.restauranteId, restauranteId))
 
-        if (zonasDelivery.length > 0 && lat !== undefined && lng !== undefined) {
-            // Hay zonas configuradas → validar que el punto caiga en alguna
-            const zonaMatch = findZoneForPoint({ lat, lng }, zonasDelivery)
+            if (zonasDelivery.length > 0 && lat !== undefined && lng !== undefined) {
+                // Hay zonas configuradas → validar que el punto caiga en alguna
+                const zonaMatch = findZoneForPoint({ lat, lng }, zonasDelivery)
 
-            if (!zonaMatch) {
-                return c.json({
-                    message: 'Lo sentimos, tu ubicación está fuera de nuestra área de delivery.',
-                    success: false,
-                    code: 'FUERA_DE_ZONA'
-                }, 400)
-            }
-
-            if (zonaMatch.sucursalId) {
-                const [sc] = await db
-                    .select({ activo: SucursalTable.activo })
-                    .from(SucursalTable)
-                    .where(and(eq(SucursalTable.id, zonaMatch.sucursalId), sucursalPublica(restauranteId)))
-                    .limit(1)
-                if (!sc || !sc.activo) {
+                if (!zonaMatch) {
                     return c.json({
-                        message: 'El local de esta zona no está disponible en este momento.',
+                        message: 'Lo sentimos, tu ubicación está fuera de nuestra área de delivery.',
                         success: false,
                         code: 'FUERA_DE_ZONA'
                     }, 400)
                 }
-            }
 
-            deliveryFeeAplicado = parseFloat(zonaMatch.precio)
-            zonaNombre = zonaMatch.nombre
-            pedidoSucursalId = zonaMatch.sucursalId ?? null
-        } else if (resRestaurante.length > 0 && resRestaurante[0].deliveryFee) {
-            // Fallback: usar deliveryFee global del restaurante
-            deliveryFeeAplicado = parseFloat(resRestaurante[0].deliveryFee)
+                if (zonaMatch.sucursalId) {
+                    const [sc] = await db
+                        .select({ activo: SucursalTable.activo })
+                        .from(SucursalTable)
+                        .where(and(eq(SucursalTable.id, zonaMatch.sucursalId), sucursalPublica(restauranteId)))
+                        .limit(1)
+                    if (!sc || !sc.activo) {
+                        return c.json({
+                            message: 'El local de esta zona no está disponible en este momento.',
+                            success: false,
+                            code: 'FUERA_DE_ZONA'
+                        }, 400)
+                    }
+                }
+
+                deliveryFeeAplicado = parseFloat(zonaMatch.precio)
+                zonaNombre = zonaMatch.nombre
+                pedidoSucursalId = zonaMatch.sucursalId ?? null
+            } else if (resRestaurante.length > 0 && resRestaurante[0].deliveryFee) {
+                // Fallback: usar deliveryFee global del restaurante
+                deliveryFeeAplicado = parseFloat(resRestaurante[0].deliveryFee)
+            }
         }
 
         const sistemaPuntosModuloActivo = await tieneModuloActivo(db, restauranteId, MODULE_KEYS.PUNTOS_CLIENTES)
@@ -1151,7 +1341,10 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             marketingCampanaId,
             tipo: 'delivery',
             sucursalId: pedidoSucursalId,
-            direccion,
+            direccion: direccionEntrega,
+            // Aditivo: no se nombra la columna en pedidos normales para que un
+            // deploy sin la migración de zonas especiales siga creando pedidos.
+            ...(zonaEspecialSeleccionada ? { zonaEspecialId: zonaEspecialSeleccionada.id } : {}),
             latitud: lat !== undefined ? lat.toString() : null,
             longitud: lng !== undefined ? lng.toString() : null,
             nombreCliente: nombreCliente || null,
@@ -1166,7 +1359,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             codigoDescuentoId: codigoDescuentoIdFinal,
             montoDescuento: montoDescuentoTotal.toFixed(2),
             notificarWhatsapp: notificarWhatsapp || false,
-            horarioProgramado: horarioProgramado || null,
+            horarioProgramado: horarioEntregaFinal || null,
             deliveryFee: deliveryFeeAplicado.toFixed(2),
             puntosGanados,
             puntosUsados,
@@ -1379,7 +1572,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                     restauranteId,
                     phone: whatsappLocalNumber,
                     customerName: nombreCliente || 'Cliente no especificado',
-                    address: direccion || 'Sin dirección',
+                    address: direccionEntrega || 'Sin dirección',
                     total: metodoPagoEfectivoDelivery ? `${total.toFixed(2)} (${metodoPagoEfectivoDelivery})` : total.toFixed(2),
                     items: orderItemsForWa,
                     orderId: pedidoId.toString(),
@@ -1429,7 +1622,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             success: true,
             data: {
                 id: pedidoId,
-                direccion,
+                direccion: direccionEntrega,
+                zonaEspecialId: zonaEspecialSeleccionada?.id ?? null,
+                zonaEspecialNombre: zonaEspecialSeleccionada?.nombre ?? null,
                 nombreCliente,
                 telefono,
                 total: total.toFixed(2),
@@ -1443,7 +1638,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 // usando el WhatsApp general del restaurante.
                 whatsappDestino: await whatsappPropioDeSucursal(db, restauranteId, pedidoSucursalId),
                 transferenciaAliasDestino: await aliasTransferenciaDeSucursal(db, restauranteId, pedidoSucursalId),
-                horarioProgramado: horarioProgramado || null,
+                horarioProgramado: horarioEntregaFinal || null,
                 // Diagnóstico aditivo para storefronts nuevos; no altera el
                 // contrato que consumen las versiones instaladas.
                 marketingAttribution: marketingCampanaId != null ? 'atribuido' : (atribucionMarketing?.estado ?? 'sin_tracking'),
@@ -2303,6 +2498,7 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
                 clienteId: PedidoUnificadoTable.clienteId,
                 grupal: PedidoUnificadoTable.grupal,
                 direccion: PedidoUnificadoTable.direccion,
+                zonaEspecialId: PedidoUnificadoTable.zonaEspecialId,
                 latitud: PedidoUnificadoTable.latitud,
                 longitud: PedidoUnificadoTable.longitud,
                 sucursalId: PedidoUnificadoTable.sucursalId,
@@ -2320,6 +2516,19 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
                 eq(PedidoUnificadoTable.pagado, true)
             ))
             .orderBy(desc(PedidoUnificadoTable.createdAt))
+
+        const zonasEspecialesNombres = new Map<number, string>()
+        const zonaEspecialIds = [...new Set(pedidosDT.map((p) => p.zonaEspecialId).filter((id): id is number => id != null))]
+        if (zonaEspecialIds.length > 0) {
+            const zonas = await db
+                .select({ id: ZonaEspecialTable.id, nombre: ZonaEspecialTable.nombre })
+                .from(ZonaEspecialTable)
+                .where(and(
+                    eq(ZonaEspecialTable.restauranteId, restauranteId),
+                    inArray(ZonaEspecialTable.id, zonaEspecialIds),
+                ))
+            for (const zona of zonas) zonasEspecialesNombres.set(zona.id, zona.nombre)
+        }
 
         const pedidosConItems = await Promise.all(
             pedidosDT.map(async (p) => {
@@ -2358,7 +2567,12 @@ publicRoute.get('/restaurante/:id/mis-pedidos/:telefono', async (c) => {
                 }
 
                 const totalItems = itemsResultado.reduce((sum, i) => sum + (i.cantidad ?? 1), 0)
-                return { ...p, items: itemsResultado, totalItems }
+                return {
+                    ...p,
+                    zonaEspecialNombre: p.zonaEspecialId ? (zonasEspecialesNombres.get(p.zonaEspecialId) ?? null) : null,
+                    items: itemsResultado,
+                    totalItems,
+                }
             })
         )
 

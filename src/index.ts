@@ -28,6 +28,7 @@ import { webhookRoute } from './routes/webhook';
 import { cucuruRoute } from './routes/cucuru';
 import { ropaRoute } from './routes/ropa';
 import { zonaDeliveryRoute } from './routes/zona-delivery';
+import { zonaEspecialRoute } from './routes/zonas-especiales';
 import { codigoDescuentoRoute } from './routes/codigo-descuento';
 import { migrationRoute } from './routes/migration';
 import { pedidoUnificadoRoute } from './routes/pedido-unificado';
@@ -258,6 +259,7 @@ app.basePath('/api')
   .route('/webhook', webhookRoute)
   .route('/cucuru', cucuruRoute)
   .route('/zona-delivery', zonaDeliveryRoute)
+  .route('/zonas-especiales', zonaEspecialRoute)
   .route('/codigo-descuento', codigoDescuentoRoute)
   .route('/migrate-pedidos', migrationRoute)
   .route('/pedido-unificado', pedidoUnificadoRoute)
