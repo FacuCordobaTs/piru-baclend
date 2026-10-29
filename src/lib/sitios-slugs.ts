@@ -13,7 +13,7 @@ export const SLUGS_REGISTRADOS = ['burgers10'] as const
 
 export function slugDisponible(slug: string): { ok: true } | { ok: false; motivo: string } {
   if (!isStoreSubdomain(slug))
-    return { ok: false, motivo: `"${slug}" no puede ser un subdominio de Páginas. Cambiá el link de tu tienda en Ajustes → Tienda.` }
+    return { ok: false, motivo: `"${slug}" no puede ser un subdominio de Páginas. Cambiá el link de tu tienda en las preferencias de Páginas.` }
   if ((SLUGS_REGISTRADOS as readonly string[]).includes(slug))
     return { ok: false, motivo: `"${slug}.piru.app" ya tiene un diseño hecho por Piru.` }
   return { ok: true }

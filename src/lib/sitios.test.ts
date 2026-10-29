@@ -91,6 +91,14 @@ describe('build', () => {
     expect(r.jsHash).toMatch(/^[a-f0-9]{20}$/)
   }, 20_000)
 
+  test('la plantilla inicial nace de las preferencias y compone las tres plantillas', () => {
+    const page = PLANTILLA_INICIAL['page.tsx'] ?? ''
+    const css = PLANTILLA_INICIAL['style.css'] ?? ''
+    expect(page).toContain('useContenido()')
+    expect(page).toContain('pv-${plantilla}')
+    for (const plantilla of ['elegante', 'moderna', 'artesanal']) expect(css).toContain(`.pv-${plantilla}`)
+  })
+
   test('reescribe assets en JS y CSS y avisa archivos sin usar', async () => {
     const r = await construirSitio(
       {
@@ -159,6 +167,8 @@ describe('permisos de la sesión de Páginas', () => {
     expect(sitiosPuede('GET', '/api/sitios')).toBe(true)
     expect(sitiosPuede('PUT', '/api/sitios/3/borrador')).toBe(true)
     expect(sitiosPuede('POST', '/api/sitios/3/publicar')).toBe(true)
+    expect(sitiosPuede('GET', '/api/sitios/tienda')).toBe(true)
+    expect(sitiosPuede('PUT', '/api/sitios/tienda')).toBe(true)
     for (const [m, p] of [['POST', '/api/sitios/entrada'], ['GET', '/api/restaurante/profile'], ['GET', '/api/sitios/../restaurante/profile'], ['GET', '/api/sitiosx'], ['DELETE', '/api/clientes/1']])
       expect(sitiosPuede(m, p)).toBe(false)
   })

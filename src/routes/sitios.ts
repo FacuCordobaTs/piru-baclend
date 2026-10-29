@@ -1,10 +1,10 @@
 import { Hono, type Context } from 'hono'
 import * as jwt from 'jsonwebtoken'
-import { and, desc, eq, max } from 'drizzle-orm'
+import { and, desc, eq, max, ne } from 'drizzle-orm'
 import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { createHash } from 'node:crypto'
 import { pool } from '../db'
-import { restaurante, sitioAsset, sitioTienda, sitioVersion } from '../db/schema'
+import { producto, restaurante, sitioAsset, sitioTienda, sitioVersion } from '../db/schema'
 import { authMiddleware, type AuthenticatedContext } from '../middleware/auth'
 import { construirSitio, urlAsset, type ResultadoBuild } from '../lib/sitios-build'
 import {
@@ -31,6 +31,10 @@ import {
 } from '../lib/sitios-reglas'
 import { slugDisponible } from '../lib/sitios-slugs'
 import { corto, normalizarMeta, type MetaSitio } from '../lib/sitios-meta'
+import { baseTiendaDe } from '../lib/marketing-enlaces'
+import { errorImagenDataUrl } from '../lib/producto-imagenes'
+import { actualizarTienda, ImagenTiendaInvalida, normalizarTienda } from '../lib/tienda-config'
+import { imagenesTienda } from '../lib/tienda-imagenes-r2'
 import { publicRoute } from './public'
 
 /**
@@ -101,6 +105,55 @@ export function createSitiosRoute(deps: Partial<Dependencias> = {}) {
 
   async function assetsDe(sitioId: number) {
     return getDb().select().from(sitioAsset).where(eq(sitioAsset.sitioId, sitioId))
+  }
+
+  /**
+   * La personalización de la tienda (`restaurante.tienda`, marca y fotos) para la app de Páginas.
+   * Es el mismo contrato que usaba Ajustes → Tienda, ahora administrado desde `pages.piru.app`.
+   */
+  async function preferenciasDe(restauranteId: number) {
+    const db = getDb()
+    const [local] = await db
+      .select({
+        id: restaurante.id,
+        nombre: restaurante.nombre,
+        username: restaurante.username,
+        dominioTienda: restaurante.dominioTienda,
+        tienda: restaurante.tienda,
+        colorPrimario: restaurante.colorPrimario,
+        colorSecundario: restaurante.colorSecundario,
+        usarColorUnico: restaurante.usarColorUnico,
+        imagenUrl: restaurante.imagenUrl,
+        imagenLightUrl: restaurante.imagenLightUrl,
+      })
+      .from(restaurante)
+      .where(eq(restaurante.id, restauranteId))
+      .limit(1)
+    if (!local) return null
+    const productos = await db
+      .select({
+        id: producto.id,
+        nombre: producto.nombre,
+        activo: producto.activo,
+        soloCanjePuntos: producto.soloCanjePuntos,
+        eventoSucursalId: producto.eventoSucursalId,
+      })
+      .from(producto)
+      .where(eq(producto.restauranteId, restauranteId))
+    return {
+      tienda: normalizarTienda(local.tienda) ?? {},
+      marca: {
+        colorPrimario: local.colorPrimario || '#FF7A00',
+        colorSecundario: local.colorSecundario || '#FFFFFF',
+        usarColorUnico: local.usarColorUnico === true,
+      },
+      username: local.username,
+      nombre: local.nombre,
+      baseTienda: baseTiendaDe(local),
+      logo: local.imagenUrl,
+      logoClaro: local.imagenLightUrl,
+      productos,
+    }
   }
 
   const idParam = (c: Context) => {
@@ -253,7 +306,7 @@ export function createSitiosRoute(deps: Partial<Dependencias> = {}) {
           .where(eq(restaurante.id, restauranteId))
           .limit(1)
         if (!local?.username)
-          return c.json({ error: 'Primero elegí el link de tu tienda en Ajustes → Tienda', code: 'sin_username' }, 400)
+          return c.json({ error: 'Primero elegí el link de tu tienda en las preferencias de Páginas', code: 'sin_username' }, 400)
         const slug = local.username.toLowerCase()
         const disponible = slugDisponible(slug)
         if (!disponible.ok) return c.json({ error: disponible.motivo, code: 'slug_no_disponible' }, 400)
@@ -273,6 +326,113 @@ export function createSitiosRoute(deps: Partial<Dependencias> = {}) {
         })
         const sitio = await sitioPropio(c)
         return c.json({ id: sitio!.id }, 201)
+      })
+
+      // ── Preferencias de la tienda (antes Ajustes → Tienda) ──
+      .get('/tienda', async (c) => {
+        const preferencias = await preferenciasDe(usuario(c).id)
+        if (!preferencias) return c.json({ error: 'Local no encontrado' }, 404)
+        return c.json(preferencias, 200, { 'Cache-Control': 'no-store' })
+      })
+      .put('/tienda', async (c) => {
+        const restauranteId = usuario(c).id
+        const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null
+        if (!body || typeof body !== 'object') return c.json({ error: 'Cuerpo inválido' }, 400)
+        const db = getDb()
+        const [actual] = await db.select().from(restaurante).where(eq(restaurante.id, restauranteId)).limit(1)
+        if (!actual) return c.json({ error: 'Local no encontrado' }, 404)
+
+        const cambios: Partial<typeof restaurante.$inferInsert> = {}
+        const marca = (body.marca && typeof body.marca === 'object' && !Array.isArray(body.marca) ? body.marca : {}) as Record<string, unknown>
+        const color = (v: unknown) => (typeof v === 'string' && /^#(?:[\da-f]{3}|[\da-f]{6})$/i.test(v.trim()) ? v.trim() : null)
+        for (const [campo, columna, etiqueta] of [
+          ['colorPrimario', 'colorPrimario', 'El color primario'],
+          ['colorSecundario', 'colorSecundario', 'El color secundario'],
+        ] as const) {
+          if (marca[campo] === undefined) continue
+          const valor = color(marca[campo])
+          if (!valor) return c.json({ error: `${etiqueta} tiene que ser un color hexadecimal, por ejemplo #FF7A00.` }, 400)
+          cambios[columna] = valor
+        }
+        if (marca.usarColorUnico !== undefined) {
+          if (typeof marca.usarColorUnico !== 'boolean') return c.json({ error: '«Usar un solo color» tiene que ser sí o no.' }, 400)
+          cambios.usarColorUnico = marca.usarColorUnico
+        }
+
+        if (body.username !== undefined) {
+          const username = String(body.username ?? '').trim().toLowerCase()
+          if (username.length < 3) return c.json({ error: 'Usá al menos 3 caracteres para el link.' }, 400)
+          if (!/^[a-z0-9_-]+$/.test(username)) return c.json({ error: 'El link sólo puede tener letras, números, guiones y guiones bajos.' }, 400)
+          if (username !== actual.username) {
+            // El slug del sitio y las claves de R2 se arman con el username. Con una página ya
+            // creada, cambiarlo es una tarea coordinada (docs/PAGINAS_PROPIAS.md §17).
+            const [sitio] = await db
+              .select({ id: sitioTienda.id })
+              .from(sitioTienda)
+              .where(eq(sitioTienda.restauranteId, restauranteId))
+              .limit(1)
+            if (sitio)
+              return c.json(
+                { error: 'El link de una página ya creada se cambia con soporte: escribinos y lo coordinamos.', code: 'username_con_sitio' },
+                409,
+              )
+            const disponible = slugDisponible(username)
+            if (!disponible.ok) return c.json({ error: disponible.motivo, code: 'slug_no_disponible' }, 400)
+            const [existente] = await db
+              .select({ id: restaurante.id })
+              .from(restaurante)
+              .where(and(eq(restaurante.username, username), ne(restaurante.id, restauranteId)))
+              .limit(1)
+            if (existente) return c.json({ error: 'Ese link ya está en uso. Probá con otro.' }, 409)
+            cambios.username = username
+          }
+        }
+
+        // Logos: se suben al mismo namespace de fotos de la tienda y se borran los anteriores
+        // recién después de confirmar la escritura.
+        const imagenes = imagenesTienda(restauranteId)
+        const nuevas: string[] = []
+        const retiradas: string[] = []
+        try {
+          for (const [clave, columna, previa] of [
+            ['logo', 'imagenUrl', actual.imagenUrl],
+            ['logoClaro', 'imagenLightUrl', actual.imagenLightUrl],
+          ] as const) {
+            const valor = body[clave]
+            if (valor === undefined) continue
+            if (valor === null || valor === '') {
+              cambios[columna] = null
+              if (previa) retiradas.push(previa)
+              continue
+            }
+            if (typeof valor !== 'string' || !valor.startsWith('data:'))
+              return c.json({ error: 'Los logos se suben como imagen JPG, PNG o WebP.' }, 400)
+            const problema = errorImagenDataUrl(valor)
+            if (problema) return c.json({ error: problema }, 400)
+            const url = await imagenes.guardar(valor)
+            nuevas.push(url)
+            cambios[columna] = url
+            if (previa) retiradas.push(previa)
+          }
+
+          const tocaTienda = Object.hasOwn(body, 'tienda')
+          const persistir = async (config?: unknown) => {
+            if (tocaTienda) cambios.tienda = config as typeof cambios.tienda
+            if (Object.keys(cambios).length)
+              await db.update(restaurante).set(cambios).where(eq(restaurante.id, restauranteId))
+          }
+          if (tocaTienda) await actualizarTienda(body.tienda, actual.tienda, imagenes, persistir)
+          else await persistir()
+        } catch (e) {
+          await Promise.allSettled(nuevas.map((url) => imagenes.borrar(url)))
+          if (e instanceof ImagenTiendaInvalida) return c.json({ error: e.message }, 400)
+          console.error('[sitios] Error guardando las preferencias:', e)
+          return c.json({ error: 'No se pudieron guardar las preferencias. Probá de nuevo.' }, 500)
+        }
+        await Promise.allSettled(retiradas.map((url) => imagenes.borrar(url)))
+
+        const preferencias = await preferenciasDe(restauranteId)
+        return c.json(preferencias!)
       })
       .get('/:id{[0-9]+}', async (c) => {
         const sitio = await sitioPropio(c, idParam(c) ?? 0)

@@ -88,7 +88,7 @@ Los datos y las reglas (precios, descuentos, horarios, disponibilidad) vienen de
 - \`useCarta()\` → \`{ secciones, productos, canjes, destacado }\`. Cada producto tiene \`precioFinal\` (con descuento), \`fotos\`, \`disponible\`, \`tieneOpciones\`, \`abrir()\` y \`agregar()\`.
 - \`producto.abrir()\` abre la hoja de opciones de Piru (variantes, extras, ingredientes, nota y cantidad). Es el camino recomendado: si \`producto.tieneOpciones\`, abrí la hoja; si no, \`producto.agregar()\`.
 - \`useCarrito()\` → \`lines\`, \`count\`, \`totalFormatted\` (subtotal), \`set(key, n)\`, \`remove\`, \`canCheckout\`, \`blockReason\` y \`checkout()\`. \`checkout()\` lleva al checkout de Piru en otra página: ahí se piden los datos, el envío, los cupones, los puntos y el pago. Mostrá "Subtotal" o "Pedir · $X", nunca un total final.
-- \`useContenido()\` → lo que el local cargó en Ajustes → Tienda: frase, bajada, portada, galería, historia, colores.
+- \`useContenido()\` → lo que el local cargó en las preferencias de la tienda: frase, bajada, portada, galería, historia, colores.
 - \`useHorarios()\` → \`{ abierto, texto, turnos, … }\`. \`texto\` ya viene armado ("Abierto · hasta las 23:45").
 - \`useCampana()\` → la campaña cuando se entra por un link de promo (\`/c/:slug\`), o \`null\`.
 - \`useNavegacionCarta(secciones.length)\` → categoría activa y \`ir(i)\` para un índice de categorías.

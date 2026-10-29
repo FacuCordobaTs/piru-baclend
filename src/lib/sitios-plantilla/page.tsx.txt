@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, type CSSProperties } from "react"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
-import { Clock, Instagram, MapPin, Minus, Plus, ShoppingBag, X } from "lucide-react"
+import { Clock, Instagram, MapPin, Minus, Plus, ShoppingBag, Star, X } from "lucide-react"
 import {
   PiruCanjes,
   formatPesos,
+  logoPara,
   useCampana,
   useCarrito,
   useCarta,
@@ -12,15 +13,119 @@ import {
   useLinks,
   useLocal,
   useNavegacionCarta,
+  type Contenido,
+  type Local,
   type Producto,
 } from "@piru/tienda"
 import "./style.css"
+
+/*
+ * Tienda de Páginas: el diseño nace de la plantilla y las preferencias elegidas en el panel.
+ * Todo lo visual sale de `useContenido()` y de los colores de marca, así que cambiar una
+ * preferencia se ve en la próxima carga sin volver a publicar. Editá el código con libertad:
+ * lo que no cambies sigue leyendo esas preferencias.
+ */
+
+type Plantilla = "elegante" | "moderna" | "artesanal"
+
+type Tema = {
+  plantilla: Plantilla
+  fondo: string
+  texto: string
+  suave: string
+  superficie: string
+  linea: string
+  primario: string
+  secundario: string
+  sobrePrimario: string
+  titulos: string
+  cuerpo: string
+  peso: number
+}
+
+const BASES: Record<Plantilla, { fondo: string; texto: string; superficie: string; primario: string; secundario: string; titulos: string; cuerpo: string; peso: number; serif: boolean }> = {
+  elegante: { fondo: "#f6f1e8", texto: "#17130f", superficie: "#fdfbf7", primario: "#b34a2a", secundario: "#1f5c4d", titulos: "Bricolage Grotesque", cuerpo: "Bricolage Grotesque", peso: 800, serif: false },
+  moderna: { fondo: "#f5f7fa", texto: "#171d2b", superficie: "#ffffff", primario: "#315cfd", secundario: "#ffc21a", titulos: "Unbounded", cuerpo: "Manrope", peso: 700, serif: false },
+  artesanal: { fondo: "#f4ead8", texto: "#392a20", superficie: "#fffaf1", primario: "#c2410c", secundario: "#3f7d3a", titulos: "Fraunces", cuerpo: "Nunito Sans", peso: 700, serif: true },
+}
 
 const MOTIVOS: Record<string, string> = {
   empty: "Agregá algo para pedir",
   closed: "Ahora estamos cerrados",
   paused: "Cerrado temporalmente",
   unavailable: "Sacá lo que ya no está disponible",
+}
+
+const luminancia = (hex: string) => {
+  const v = hex.replace("#", "")
+  const x = v.length === 3 ? [...v].map((c) => c + c).join("") : v
+  const [r, g, b] = [0, 2, 4].map((i) => {
+    const c = parseInt(x.slice(i, i + 2), 16) / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+const mezclar = (a: string, b: string, t: number) => {
+  const n = (h: string) => {
+    const v = h.replace("#", "")
+    const x = v.length === 3 ? [...v].map((c) => c + c).join("") : v
+    return [0, 2, 4].map((i) => parseInt(x.slice(i, i + 2), 16))
+  }
+  const [ca, cb] = [n(a), n(b)]
+  return `#${ca.map((v, i) => Math.round(v + (cb[i] - v) * t).toString(16).padStart(2, "0")).join("")}`
+}
+
+const contraste = (a: string, b: string) => {
+  const [x, y] = [luminancia(a), luminancia(b)].sort((m, n) => n - m)
+  return (x + 0.05) / (y + 0.05)
+}
+
+const tintaSobre = (hex: string) => (luminancia(hex) > 0.36 ? "#17130f" : "#ffffff")
+
+function temaDe(contenido: Contenido, local: Local | null, plantilla: Plantilla): Tema {
+  const base = BASES[plantilla] ?? BASES.artesanal
+  const c = contenido.colores
+  const marca = local?.colores
+  const fondo = c.fondo ?? base.fondo
+  const texto = c.texto && contraste(c.texto, fondo) >= 4.5 ? c.texto : contraste(base.texto, fondo) >= 4.5 ? base.texto : tintaSobre(fondo)
+  const superficie = c.superficie ?? (c.fondo ? mezclar(fondo, "#ffffff", luminancia(fondo) < 0.18 ? 0.06 : 0.5) : base.superficie)
+  const primario = c.acento ?? marca?.primario ?? base.primario
+  const secundario = marca?.secundario ?? base.secundario
+  const titulos = contenido.fuentes.titulos ?? base.titulos
+  const cuerpo = contenido.fuentes.cuerpo ?? base.cuerpo
+  return {
+    plantilla,
+    fondo,
+    texto,
+    suave: mezclar(texto, fondo, 0.45),
+    superficie,
+    linea: mezclar(texto, fondo, 0.82),
+    primario,
+    secundario,
+    sobrePrimario: tintaSobre(primario),
+    titulos: `"${titulos}", ${base.serif ? "Georgia, serif" : "system-ui, sans-serif"}`,
+    cuerpo: `"${cuerpo}", system-ui, sans-serif`,
+    peso: base.peso,
+  }
+}
+
+/** Carga las letras elegidas en Preferencias. Sin elección, cada plantilla usa la suya. */
+function useFuentes(titulos: string, cuerpo: string) {
+  useEffect(() => {
+    const nombre = (fuente: string) => fuente.match(/"([^"]+)"/)?.[1] ?? fuente.split(",")[0].trim()
+    const familias = [...new Set([nombre(titulos), nombre(cuerpo)])].filter(Boolean)
+    if (!familias.length) return
+    const href = `https://fonts.googleapis.com/css2?${familias
+      .map((f) => `family=${encodeURIComponent(f).replace(/%20/g, "+")}`)
+      .join("&")}&display=swap`
+    const link = document.createElement("link")
+    link.rel = "stylesheet"
+    link.href = href
+    link.dataset.fuente = "piru-tienda"
+    document.head.appendChild(link)
+    return () => link.remove()
+  }, [titulos, cuerpo])
 }
 
 export default function Page() {
@@ -34,6 +139,9 @@ export default function Page() {
   const nav = useNavegacionCarta(secciones.length)
   const [pedidoAbierto, setPedidoAbierto] = useState(false)
   const quieto = useReducedMotion()
+  const plantilla: Plantilla = contenido.plantilla
+  const tema = temaDe(contenido, local, plantilla)
+  useFuentes(tema.titulos, tema.cuerpo)
 
   useEffect(() => {
     if (carrito.count === 0) setPedidoAbierto(false)
@@ -55,33 +163,58 @@ export default function Page() {
     )
   }
 
-  const acento = contenido.colores.acento ?? local.colores.primario ?? "#e8b923"
   const portada = contenido.portadaUrl ?? destacado?.fotos[0] ?? secciones[0]?.productos.find((p) => p.fotos[0])?.fotos[0]
+  // El hero de Moderna es del color primario: el logo se elige según la tinta que lo va a rodear.
+  const logo = logoPara(local, plantilla === "moderna" && tema.sobrePrimario === "#ffffff")
+  const estilo = {
+    "--pv-fondo": tema.fondo,
+    "--pv-texto": tema.texto,
+    "--pv-suave": tema.suave,
+    "--pv-superficie": tema.superficie,
+    "--pv-linea": tema.linea,
+    "--pv-acento": tema.primario,
+    "--pv-secundario": tema.secundario,
+    "--pv-sobre-acento": tema.sobrePrimario,
+    "--pv-titulos": tema.titulos,
+    "--pv-cuerpo": tema.cuerpo,
+    "--pv-peso": String(tema.peso),
+    "--piru-footer-bg": tema.fondo,
+    "--piru-footer-fg": tema.suave,
+  } as CSSProperties
 
   return (
-    <main className="pv-sitio" style={{ ["--pv-acento" as string]: acento }}>
+    <main className={`pv-sitio pv-${plantilla}`} style={estilo}>
       <header className="pv-portada">
         {portada && <img className="pv-portada-foto" src={portada} alt="" />}
-        <div className="pv-portada-velo" />
+        <div className="pv-portada-velo" aria-hidden="true" />
         <div className="pv-portada-texto">
-          {local.logo && <img className="pv-logo" src={local.logo} alt={local.nombre} />}
-          <motion.h1
-            initial={quieto ? false : { opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, ease: [0.2, 0.8, 0.2, 1] }}
-          >
-            {contenido.frase ?? local.nombre}
-          </motion.h1>
+          {logo && <img className="pv-logo" src={logo} alt={local.nombre} />}
+          <p className="pv-local">{local.nombre}</p>
+          <h1>{contenido.frase ?? local.nombre}</h1>
           {contenido.bajada && <p className="pv-bajada">{contenido.bajada}</p>}
           <p className={`pv-estado-local ${horarios.abierto && !local.pausado ? "abierto" : ""}`}>
             <Clock size={15} aria-hidden="true" />
             {horarios.texto}
           </p>
-          <a className="pv-boton" href="#carta">
-            Ver la carta
-          </a>
+          <div className="pv-portada-acciones">
+            <a className="pv-boton" href="#carta">
+              Ver la carta
+            </a>
+            {links.whatsapp && (
+              <a className="pv-boton pv-boton-secundario" href={links.whatsapp} rel="noopener">
+                Escribinos
+              </a>
+            )}
+          </div>
+          {destacado && <Destacado producto={destacado} />}
         </div>
       </header>
+
+      {contenido.cinta.length > 0 && (
+        <div className="pv-cinta" aria-hidden="true">
+          <span className="pv-cinta-texto">{[...contenido.cinta, ...contenido.cinta].join("  ·  ")}</span>
+        </div>
+      )}
 
       {local.pausado && (
         <p className="pv-aviso" role="status">
@@ -134,6 +267,24 @@ export default function Page() {
         ))}
       </div>
 
+      {contenido.historia && (
+        <section className="pv-historia" aria-labelledby="pv-historia-titulo">
+          <p className="pv-kicker">Nuestra historia</p>
+          <h2 id="pv-historia-titulo">{contenido.historia.titulo ?? "La casa"}</h2>
+          {contenido.historia.texto.split("\n").map((parrafo, i) => (
+            <p key={i}>{parrafo}</p>
+          ))}
+        </section>
+      )}
+
+      {contenido.galeria.length > 0 && (
+        <section className="pv-galeria" aria-label="Fotos del local">
+          {contenido.galeria.map((foto, i) => (
+            <img key={i} src={foto} alt="" loading="lazy" />
+          ))}
+        </section>
+      )}
+
       <PiruCanjes />
 
       <footer className="pv-pie">
@@ -146,6 +297,11 @@ export default function Page() {
         {links.instagram && (
           <a href={links.instagram} rel="noopener">
             <Instagram size={15} aria-hidden="true" /> Instagram
+          </a>
+        )}
+        {links.whatsapp && (
+          <a href={links.whatsapp} rel="noopener">
+            WhatsApp
           </a>
         )}
       </footer>
@@ -205,7 +361,11 @@ export default function Page() {
                 <strong>{carrito.totalFormatted}</strong>
               </p>
               <small>El envío, los cupones y los puntos se calculan al finalizar.</small>
-              {carrito.error && <p className="pv-error" role="alert">{carrito.error}</p>}
+              {carrito.error && (
+                <p className="pv-error" role="alert">
+                  {carrito.error}
+                </p>
+              )}
               <button type="button" className="pv-boton pv-boton-ancho" disabled={!carrito.canCheckout} onClick={carrito.checkout}>
                 {carrito.submitting ? "Abriendo…" : carrito.blockReason ? MOTIVOS[carrito.blockReason] : `Pedir · ${carrito.totalFormatted}`}
               </button>
@@ -214,6 +374,28 @@ export default function Page() {
         </div>
       )}
     </main>
+  )
+}
+
+function Destacado({ producto }: { producto: Producto }) {
+  const foto = producto.fotos[0]
+  return (
+    <div className="pv-destacado">
+      {foto && <img src={foto} alt="" loading="lazy" />}
+      <div className="pv-destacado-texto">
+        <span className="pv-sello">
+          <Star size={12} aria-hidden="true" /> Nuestro favorito
+        </span>
+        <strong>{producto.nombre}</strong>
+        {producto.descripcion && <small>{producto.descripcion}</small>}
+        <div className="pv-destacado-pie">
+          <span className="pv-precio">{formatPesos(producto.precioFinal)}</span>
+          <button type="button" className="pv-boton pv-boton-chico" onClick={producto.abrir} disabled={!producto.disponible}>
+            {producto.disponible ? "Agregar" : "No disponible"}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
