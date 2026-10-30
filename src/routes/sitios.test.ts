@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import * as jwt from 'jsonwebtoken'
 import { createAuthMiddleware } from '../middleware/auth'
 import { createSitiosRoute } from './sitios'
+import { sitioTienda } from '../db/schema'
 
 const secreto = process.env.JWT_SECRET || 'fallback-secret'
 const firmar = (payload: object, opciones?: jwt.SignOptions) => jwt.sign(payload, secreto, opciones)
@@ -72,5 +73,104 @@ describe('entrada a Páginas desde el panel', () => {
     expect((await pedir('/api/sitios', 'GET', firmar({ id: 42, scope: 'restaurante', appMarketing: true }))).status).toBe(403)
     // Un token de Páginas con marcas mezcladas es inválido.
     expect((await pedir('/api/sitios', 'GET', firmar({ id: 42, scope: 'restaurante', appSitios: true, demo: true }))).status).toBe(401)
+  })
+})
+
+describe('empezar de cero', () => {
+  const sitio = {
+    id: 7,
+    restauranteId: 42,
+    slug: 'bronx',
+    username: 'bronx',
+    nombre: 'Bronx',
+    estado: 'activo',
+    meta: {},
+    borrador: { 'page.tsx': '// código viejo' },
+    borradorActualizadoAt: new Date('2026-10-01T12:00:00Z'),
+    versionPublicadaId: null,
+  }
+
+  /** Base mínima: `sitioPropio` lee `sitio_tienda`; las demás consultas devuelven el local 42. */
+  function dbReinicio(alGuardar: (valores: any) => void): any {
+    const local = {
+      id: 42,
+      nombre: 'Bronx',
+      username: 'bronx',
+      tienda: null,
+      colorPrimario: null,
+      colorSecundario: null,
+      usarColorUnico: false,
+      imagenUrl: null,
+      imagenLightUrl: null,
+    }
+    const cadena = () => {
+      const q: any = { tabla: null }
+      q.from = (tabla: unknown) => {
+        q.tabla = tabla
+        return q
+      }
+      q.where = () => q
+      q.limit = async () => [q.tabla === sitioTienda ? sitio : local]
+      return q
+    }
+    return {
+      select: () => cadena(),
+      update: () => ({ set: (valores: any) => ({ where: async () => alGuardar(valores) }) }),
+    }
+  }
+
+  test('reiniciar vuelve el borrador a la plantilla inicial con el contenido elegido', async () => {
+    let guardado: any = null
+    const db = dbReinicio((valores) => {
+      guardado = valores
+    })
+    const a = new Hono().route('/api/sitios', createSitiosRoute({ getDb: () => db, auth: createAuthMiddleware(() => db) }))
+    const res = await a.request('/api/sitios/7/reiniciar', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${firmar({ id: 42, scope: 'restaurante', appSitios: true })}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contenido: { plantilla: 'moderna', marca: { colorPrimario: '#112233', colorSecundario: '#ffffff', usarColorUnico: true } },
+      }),
+    })
+    expect(res.status).toBe(200)
+    const { borrador, borradorActualizadoAt } = await res.json()
+    expect(Object.keys(borrador).sort()).toEqual([
+      'components/Checkout.tsx',
+      'components/DetalleProducto.tsx',
+      'components/detalle.css',
+      'contenido.ts',
+      'page.tsx',
+      'style.css',
+    ])
+    expect(borrador['contenido.ts']).toContain('"plantilla": "moderna"')
+    expect(borrador['contenido.ts']).toContain('#112233')
+    // El reemplazo es el borrador: la versión publicada no se toca.
+    expect(guardado.borrador).toEqual(borrador)
+    expect(guardado.borradorActualizadoPor).toBe(42)
+    expect(guardado.borradorActualizadoAt.toISOString()).toBe(borradorActualizadoAt)
+  })
+
+  test('reiniciar un sitio ajeno o inexistente es 404', async () => {
+    const db = dbReinicio(() => {})
+    db.select = () => {
+      const q: any = { tabla: null }
+      q.from = (tabla: unknown) => {
+        q.tabla = tabla
+        return q
+      }
+      q.where = () => q
+      // Sin fila de `sitio_tienda`, pero el local de la sesión sigue existiendo.
+      q.limit = async () => (q.tabla === sitioTienda ? [] : [{ id: 42, email: null, nombre: 'Bronx', origen: null, claimedAt: null, telefonoVerificado: true, rapiboyToken: null }])
+      return q
+    }
+    const a = new Hono().route('/api/sitios', createSitiosRoute({ getDb: () => db, auth: createAuthMiddleware(() => db) }))
+    const res = await a.request('/api/sitios/9/reiniciar', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${firmar({ id: 42, scope: 'restaurante', appSitios: true })}` },
+    })
+    expect(res.status).toBe(404)
   })
 })

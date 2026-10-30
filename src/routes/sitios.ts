@@ -465,6 +465,34 @@ export function createSitiosRoute(deps: Partial<Dependencias> = {}) {
         return c.json({ borradorActualizadoAt: ahora.toISOString() })
       })
 
+      /**
+       * Empezar de cero: reemplaza el borrador por la plantilla inicial con el contenido elegido.
+       * No toca la versión publicada (sigue en vivo hasta que se publique de nuevo) ni los assets
+       * subidos, así una versión anterior todavía se puede restaurar.
+       */
+      .post('/:id{[0-9]+}/reiniciar', async (c) => {
+        const sitio = await sitioPropio(c, idParam(c) ?? 0)
+        if (!sitio) return c.json({ error: 'Sitio no encontrado' }, 404)
+        const local = await baseDe(sitio.restauranteId)
+        if (!local) return c.json({ error: 'Local no encontrado' }, 404)
+        const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
+        let contenido: ContenidoSitio
+        try {
+          contenido = await materializarContenido(body?.contenido, local, sitio.restauranteId)
+        } catch (e) {
+          if (e instanceof ContenidoInvalido) return c.json({ error: e.message }, 400)
+          console.error('[sitios] Error preparando el contenido al reiniciar:', e)
+          return c.json({ error: 'No se pudieron preparar las fotos del contenido.' }, 500)
+        }
+        const ahora = new Date()
+        const borrador = plantillaInicial(contenido)
+        await getDb()
+          .update(sitioTienda)
+          .set({ borrador, borradorActualizadoAt: ahora, borradorActualizadoPor: usuario(c).id, updatedAt: ahora })
+          .where(eq(sitioTienda.id, sitio.id))
+        return c.json({ borrador, borradorActualizadoAt: ahora.toISOString() })
+      })
+
       // ── Assets ──
       .post('/:id{[0-9]+}/assets', async (c) => {
         const sitio = await sitioPropio(c, idParam(c) ?? 0)
