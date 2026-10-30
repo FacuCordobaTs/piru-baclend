@@ -6,7 +6,8 @@ import { validarBorrador, resolverRelativo, pathValido, importPermitido, PAQUETE
 import { slugDisponible, SLUGS_REGISTRADOS } from './sitios-slugs'
 import { esSitioDePaginas, fijarPublicados, paginasApiPath } from './sitios-publicados'
 import { sitiosPuede, marketerPuede, duenioAppMarketingPuede, marketerPuedeSocketAdmin } from './marketer-permisos'
-import { PLANTILLA_INICIAL, plantillaInicial } from './sitios-plantilla'
+import { CONTENIDO_INICIAL, PLANTILLA_INICIAL, plantillaInicial } from './sitios-plantilla'
+import { marcaPorDefecto, normalizarContenidoSitio } from './sitios-contenido'
 import { generarGuia } from './sitios-guia'
 import { urlRetornoPedido } from './marketing-enlaces'
 import { normalizarMeta } from './sitios-meta'
@@ -116,6 +117,40 @@ describe('build', () => {
     for (const plantilla of ['elegante', 'moderna', 'artesanal']) expect(css).toContain(`.pv-${plantilla}`)
   })
 
+  test('el detalle de producto es un componente del diseño y el estilo elegido queda en contenido.ts', async () => {
+    const borrador = plantillaInicial({ ...CONTENIDO_INICIAL, detalleProducto: 'dialogo' })
+    const detalle = borrador['components/DetalleProducto.tsx'] ?? ''
+    expect(detalle).toContain('export function DetalleProducto')
+    expect(detalle).toContain('carrito.add')
+    for (const estilo of ['pasos', 'dialogo', 'hoja']) expect(detalle).toContain(`"${estilo}"`)
+    expect(borrador['components/detalle.css']).toContain('.pv-det-panel')
+    expect(borrador['page.tsx']).toContain('DetalleProducto')
+    expect(borrador['page.tsx']).not.toContain('producto.abrir()')
+    expect(borrador['contenido.ts']).toContain('"detalleProducto": "dialogo"')
+    expect(borrador['page.tsx']).toContain('components/Checkout')
+    expect(borrador['components/Checkout.tsx']).toContain('PiruCheckout')
+    const r = await construirSitio(borrador, [])
+    expect(r.ok).toBe(true)
+  }, 20_000)
+
+  test('el checkout tiene tres variantes y se escribe en contenido.ts', () => {
+    const base = { marca: marcaPorDefecto(), logo: null, logoClaro: null }
+    expect(normalizarContenidoSitio({ checkout: 'pagina' }, base).checkout).toBe('pagina')
+    expect(normalizarContenidoSitio({ checkout: 'hoja' }, base).checkout).toBe('hoja')
+    expect(normalizarContenidoSitio({ checkout: 'otro' }, base).checkout).toBe('pasos')
+    expect(normalizarContenidoSitio({}, base).checkout).toBe('pasos')
+    const borrador = plantillaInicial({ ...CONTENIDO_INICIAL, checkout: 'pagina' })
+    expect(borrador['contenido.ts']).toContain('"checkout": "pagina"')
+    expect(borrador['components/Checkout.tsx']).toContain('PiruCheckout')
+  })
+
+  test('el detalle de producto sólo acepta los tres estilos y cae en "pasos"', () => {
+    const base = { marca: marcaPorDefecto(), logo: null, logoClaro: null }
+    expect(normalizarContenidoSitio({ detalleProducto: 'hoja' }, base).detalleProducto).toBe('hoja')
+    expect(normalizarContenidoSitio({ detalleProducto: 'otro' }, base).detalleProducto).toBe('pasos')
+    expect(normalizarContenidoSitio({}, base).detalleProducto).toBe('pasos')
+  })
+
   test('reescribe assets en JS y CSS y avisa archivos sin usar', async () => {
     const r = await construirSitio(
       {
@@ -161,9 +196,31 @@ describe('slugs y orígenes de Páginas', () => {
   })
 
   test('un sitio de Páginas sólo llega a su lista cerrada', () => {
-    for (const p of ['/api/public/restaurante/id/42', '/public/restaurante/bronx', '/api/public/marketing/campanas/bronx/promo', '/api/public/marketing/recetas/bronx/tok', '/api/public/marketing/events', '/api/public/carritos', '/api/public/carritos/abcDEF_-'])
+    for (const p of [
+      '/api/public/restaurante/id/42',
+      '/public/restaurante/bronx',
+      '/api/public/restaurante/42/check-zona',
+      '/api/public/restaurante/42/geocodificar',
+      '/api/public/restaurante/42/cliente/3424',
+      '/api/public/pedido/delivery/7/status',
+      '/api/public/marketing/campanas/bronx/promo',
+      '/api/public/marketing/recetas/bronx/tok',
+      '/api/public/marketing/events',
+      '/api/public/carritos',
+      '/api/public/carritos/abcDEF_-',
+      '/api/public/descuentos/validar',
+      '/api/public/delivery/create',
+      '/api/public/takeaway/create',
+      '/api/mp/crear-preferencia-externo',
+    ])
       expect(paginasApiPath(p)).toBe(true)
-    for (const p of ['/api/mp/process-brick', '/api/public/delivery/create', '/api/public/takeaway/create', '/api/public/sala/create', '/api/public/descuentos/validar', '/api/public/restaurante/42/cliente/3424', '/api/public/restaurante/42/mis-pedidos/3424', '/api/restaurante/profile'])
+    for (const p of [
+      '/api/mp/process-brick',
+      '/api/public/sala/create',
+      '/api/public/restaurante/42/mis-pedidos/3424',
+      '/api/public/pedido-info/7',
+      '/api/restaurante/profile',
+    ])
       expect(paginasApiPath(p)).toBe(false)
     fijarPublicados(['bronx'])
     expect(esSitioDePaginas('bronx')).toBe(true)
@@ -221,6 +278,9 @@ describe('guía para Claude', () => {
     expect(md).toContain("declare module '@piru/tienda'")
     expect(md).toContain('export default function Page()')
     expect(md).toContain('contenido.ts')
+    expect(md).toContain('## 5.1 El detalle de producto')
+    expect(md).toContain('components/DetalleProducto.tsx')
+    expect(md).toContain('producto.abrir()')
     expect(md).toContain('Doble cheddar')
     expect(md).toContain('assets/logo.png')
     expect(md).not.toContain('clave-ultra-privada')

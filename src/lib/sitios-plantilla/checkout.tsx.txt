@@ -1,0 +1,24 @@
+import { PiruCheckout, type CheckoutEstilo, type CheckoutVariante } from "@piru/tienda"
+
+/**
+ * El checkout de Piru, incluido en la página.
+ *
+ * No reimplementes el formulario, los pagos ni el alta del pedido: `PiruCheckout` es una caja
+ * cerrada del runtime. Acá sólo elegís cómo se ve (`variante`) y su piel (`estilo`). Se activa
+ * cuando el comprador toca "Pedir" (o `useCarrito().checkout()`), y también podés abrirlo con
+ * `useCheckout().abrir()`.
+ *
+ * Variantes:
+ * - "pasos": hoja inferior, un paso por pantalla.
+ * - "hoja":  hoja inferior con todo el formulario junto, sin pasos.
+ * - "pagina": pantalla completa con todo el formulario junto, sin pasos.
+ */
+export function Checkout({
+  variante = "pasos",
+  estilo,
+}: {
+  variante?: CheckoutVariante
+  estilo?: CheckoutEstilo
+}) {
+  return <PiruCheckout variante={variante} estilo={estilo} />
+}

@@ -3,12 +3,26 @@ import { normalizarTienda, objetoTienda, type TiendaConfig } from './tienda-conf
 /** Los colores de marca que quedan escritos en el código del sitio. */
 export type MarcaSitio = { colorPrimario: string; colorSecundario: string; usarColorUnico: boolean }
 
+/** Los estilos del detalle de producto que genera la plantilla (en `components/DetalleProducto.tsx`). */
+export const DETALLES_PRODUCTO = ['pasos', 'dialogo', 'hoja'] as const
+export type DetalleProducto = (typeof DETALLES_PRODUCTO)[number]
+
+/** Las formas del checkout de Páginas (en `components/Checkout.tsx`, implementadas por el runtime). */
+export const CHECKOUTS_SITIO = ['pasos', 'hoja', 'pagina'] as const
+export type CheckoutSitio = (typeof CHECKOUTS_SITIO)[number]
+
 /**
  * El contenido inicial de una página de Páginas. No se guarda como configuración del local:
  * se escribe en `contenido.ts` dentro del borrador del sitio y de ahí sale el diseño.
+ * Incluye dos decisiones propias de Páginas que no viajan a `tienda_config`: `detalleProducto` y
+ * `checkout`.
  */
 export type ContenidoSitio = TiendaConfig & {
   plantilla: NonNullable<TiendaConfig['plantilla']>
+  /** Cómo se muestra el detalle de producto. Sólo de Páginas: no viaja a `tienda_config`. */
+  detalleProducto?: DetalleProducto
+  /** Cómo se abre el checkout. Sólo de Páginas: no viaja a `tienda_config`. */
+  checkout?: CheckoutSitio
   marca: MarcaSitio
   logo: string | null
   logoClaro: string | null
@@ -46,6 +60,12 @@ export function normalizarContenidoSitio(entrada: unknown, base: { marca: MarcaS
   return {
     ...tienda,
     plantilla: tienda.plantilla ?? 'artesanal',
+    detalleProducto: DETALLES_PRODUCTO.includes(t.detalleProducto as DetalleProducto)
+      ? (t.detalleProducto as DetalleProducto)
+      : 'pasos',
+    checkout: CHECKOUTS_SITIO.includes(t.checkout as CheckoutSitio)
+      ? (t.checkout as CheckoutSitio)
+      : 'pasos',
     marca: normalizarMarcaSitio(t.marca, base.marca),
     logo: t.logo === null ? null : logo(t.logo) ?? base.logo,
     logoClaro: t.logoClaro === null ? null : logo(t.logoClaro) ?? base.logoClaro,
@@ -60,7 +80,9 @@ export function archivoContenido(contenido: ContenidoSitio): string {
 // Las fotos y los logos son URLs públicas; la carta, los precios y los pedidos siguen viniendo del SDK.
 export type ContenidoSitio = {
   plantilla?: "elegante" | "moderna" | "artesanal"
-  marca: { primario: string; secundario: string; usarColorUnico: boolean }
+  detalleProducto?: "pasos" | "dialogo" | "hoja"
+  checkout?: "pasos" | "hoja" | "pagina"
+  marca: { colorPrimario: string; colorSecundario: string; usarColorUnico: boolean }
   logo: string | null
   logoClaro: string | null
   colores?: { fondo?: string; texto?: string; acento?: string; superficie?: string }

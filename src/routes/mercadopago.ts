@@ -13,6 +13,7 @@ import { confirmarRecarga } from '../lib/mensajes-wallet'
 import { confirmarPagoSuscripcion } from '../lib/suscripciones'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
 import { urlRetornoPedido } from '../lib/marketing-enlaces'
+import { validarReturnUrl } from '../lib/carrito-publico'
 import { esSitioDePaginas } from '../lib/sitios-publicados'
 import { acreditarPuntosPedidoAprobado, revertirPuntosPedidoCancelado } from '../lib/puntos'
 import { esNotificacionDeOrden, validarFirmaWebhookMp } from '../lib/mp-qr'
@@ -255,7 +256,9 @@ mercadopagoRoute.get('/callback', async (c) => {
 mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
   const db = drizzle(pool)
   try {
-    const { pedidoId } = await c.req.json()
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null
+    const pedidoId = Number(body?.pedidoId)
+    const returnUrl = typeof body?.returnUrl === 'string' ? body.returnUrl : null
     if (!pedidoId) {
       return c.json({ success: false, error: 'pedidoId es requerido' }, 400)
     }
@@ -274,7 +277,13 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
     const tokenValido = await obtenerTokenValido(restauranteId)
     if (!tokenValido) return c.json({ success: false, error: 'Restaurante MP error' }, 401)
 
-    // 3. URL de retorno Checkout Pro → …/pedido/:id en la tienda del local.
+    // 3. URL de retorno Checkout Pro → …/pedido/:id en la tienda del local. El checkout de Páginas
+    //    puede pedir volver a su propia página con `piru_pedido`; sólo se acepta el sitio de ese local.
+    const [local] = await db
+      .select({ dominioTienda: RestauranteTable.dominioTienda, username: RestauranteTable.username })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
     let successUrl: string
     if (restauranteId === 6) {
       successUrl = `https://alfajorconpapas.com/pedido/${pedidoId}`
@@ -283,12 +292,20 @@ mercadopagoRoute.post('/crear-preferencia-externo', async (c) => {
     } else if (restauranteId === 39) {
       successUrl = `https://juanchosandwicheria.com/pedido/${pedidoId}`
     } else {
-      const [local] = await db
-        .select({ dominioTienda: RestauranteTable.dominioTienda })
-        .from(RestauranteTable)
-        .where(eq(RestauranteTable.id, restauranteId))
-        .limit(1)
       successUrl = urlRetornoPedido(local?.dominioTienda, pedidoId, esSitioDePaginas)
+    }
+    if (returnUrl && local?.username) {
+      const volver = validarReturnUrl(returnUrl, local.username)
+      if (volver) {
+        const tipo = pedido.tipo === 'takeaway' ? 'takeaway' : 'delivery'
+        const params = new URLSearchParams({
+          piru_pedido: String(pedidoId),
+          piru_tipo: tipo,
+          piru_total: String(pedido.total ?? ''),
+          piru_metodo: String(pedido.metodoPago ?? ''),
+        })
+        successUrl = `${volver}${volver.includes('?') ? '&' : '?'}${params.toString()}`
+      }
     }
 
     const mpItems = [{

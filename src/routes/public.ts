@@ -38,6 +38,8 @@ import { salirDeColaPorPedido } from '../lib/motor-recompra'
 import { atribuirPedidoMarketingBestEffort } from '../lib/marketing-atribucion'
 import { aplicarOfertaProducto, ofertaProductoEstaVigente, type OfertaProductoCampana } from '../lib/campana-oferta'
 import { estadoVentanaZona, horarioValido, puedePedirZonaEspecial } from '../lib/zonas-especiales'
+import { crearLimitador } from '../lib/carrito-publico'
+import { geocodificarDireccion } from '../services/geocoding'
 
 function isDiscountActive(descuento: number | null, inicio: Date | null, fin: Date | null): boolean {
   if (!descuento || descuento === 0) return false
@@ -1629,6 +1631,11 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 telefono,
                 total: total.toFixed(2),
                 estado: 'pending',
+                // Aditivo: el checkout de Páginas muestra los puntos y el medio de pago
+                // en la pantalla de éxito sin volver a consultar el pedido.
+                metodoPago: metodoPagoEfectivoDelivery,
+                puntosGanados,
+                puntosUsados,
                 aliasDinamico: cuentaCucuru?.alias || cuentaTalo?.alias || null,
                 cvuDinamico: cuentaCucuru?.accountNumber || cuentaTalo?.cvu || null,
                 deliveryFee: deliveryFeeAplicado.toFixed(2),
@@ -2236,6 +2243,11 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 telefono,
                 total: total.toFixed(2),
                 estado: 'pending',
+                // Aditivo: el checkout de Páginas muestra los puntos y el medio de pago
+                // en la pantalla de éxito sin volver a consultar el pedido.
+                metodoPago: metodoPagoEfectivo,
+                puntosGanados,
+                puntosUsados,
                 aliasDinamico: cuentaCucuru?.alias || cuentaTalo?.alias || null,
                 cvuDinamico: cuentaCucuru?.accountNumber || cuentaTalo?.cvu || null,
                 sucursalId: pedidoSucursalIdTk,
@@ -2356,6 +2368,33 @@ publicRoute.get('/restaurante/:id/cliente/:telefono', async (c) => {
     } catch (error) {
         console.error('Error getting client:', error)
         return c.json({ message: 'Error', error: (error as Error).message }, 500)
+    }
+})
+
+// Geocodifica la dirección escrita en el checkout de Páginas. El sitio no carga Google Maps:
+// manda el texto y recibe coordenadas para consultar la zona con `check-zona`.
+const limitarGeocodificacion = crearLimitador(30, 60_000)
+publicRoute.post('/restaurante/:id/geocodificar', async (c) => {
+    const restauranteId = parseInt(c.req.param('id'), 10)
+    if (isNaN(restauranteId)) return c.json({ success: false, message: 'Local inválido' }, 400)
+    const ip = c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For')?.split(',')[0]?.trim() ?? 'local'
+    if (!limitarGeocodificacion(ip)) return c.json({ success: false, message: 'Demasiadas búsquedas; probá en un minuto.' }, 429)
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null
+    const direccion = typeof body?.direccion === 'string' ? body.direccion.trim() : ''
+    if (direccion.length < 5) return c.json({ success: false, message: 'Ingresá una dirección más completa.' }, 400)
+    try {
+        const db = drizzle(pool)
+        const [local] = await db.select({ id: RestauranteTable.id }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+        if (!local) return c.json({ success: false, message: 'Local no encontrado' }, 404)
+        const resultado = await geocodificarDireccion(direccion)
+        if (!resultado.success) return c.json({ success: false, message: resultado.error }, 200)
+        return c.json({
+            success: true,
+            data: { lat: resultado.lat, lng: resultado.lng, direccion: resultado.direccion },
+        }, 200, { 'Cache-Control': 'no-store' })
+    } catch (error) {
+        console.error('Error geocodificando dirección:', error)
+        return c.json({ success: false, message: 'No pudimos verificar la dirección.' }, 500)
     }
 })
 

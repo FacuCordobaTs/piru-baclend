@@ -1,0 +1,574 @@
+import { useEffect, useId, useRef, useState, type ReactNode } from "react"
+import { AnimatePresence, motion, useDragControls, useReducedMotion } from "motion/react"
+import { Check, ChevronLeft, ChevronRight, Minus, Plus, X } from "lucide-react"
+import { formatPesos, useCarrito, useLocal, type Producto } from "@piru/tienda"
+import type { ContenidoSitio } from "../contenido"
+import "./detalle.css"
+
+/*
+ * Detalle de producto de esta tienda.
+ *
+ * Es una pieza del diseño, no del runtime: elegí el estilo en Preferencias
+ * (`CONTENIDO.detalleProducto`) o cambialo acá. Los tres comparten datos, precios y el alta en el
+ * carrito del SDK; cambia cómo se muestra.
+ *
+ *   "pasos"    foto grande, una decisión a la vez, resumen de lo elegido y avance solo.
+ *   "dialogo"  ventana al centro con todas las opciones juntas.
+ *   "hoja"     hoja inferior que sube desde abajo, con todas las opciones y arrastre para cerrar.
+ *
+ * Reglas que no se tocan: los precios salen de `@piru/tienda`; el pedido se arma con
+ * `useCarrito().add()` y el checkout, los cupones y los puntos siguen siendo de Piru.
+ */
+
+export type EstiloDetalle = NonNullable<ContenidoSitio["detalleProducto"]>
+
+type Props = {
+  /** El producto abierto, o `null` para cerrar. */
+  producto: Producto | null
+  estilo?: EstiloDetalle
+  /** Los productos de la carta, para pasar al anterior/siguiente desde "pasos". */
+  hermanos?: Producto[]
+  onCerrar: () => void
+  onNavegar?: (producto: Producto) => void
+}
+
+/** El detalle abierto: monta y desmonta con animación según el estilo elegido. */
+export function DetalleProducto({ producto, estilo = "pasos", hermanos = [], onCerrar, onNavegar }: Props) {
+  // Si alguien edita `detalleProducto` a mano con otro valor, cae en "pasos".
+  const elegido: EstiloDetalle = estilo === "dialogo" || estilo === "hoja" ? estilo : "pasos"
+  return (
+    <AnimatePresence>
+      {producto && (
+        <Panel producto={producto} estilo={elegido} hermanos={hermanos} onCerrar={onCerrar} onNavegar={onNavegar} />
+      )}
+    </AnimatePresence>
+  )
+}
+
+/** Con una sola opción se elige sola, como en la hoja de Piru. */
+const unica = (lista: { id: number }[]) => (lista.length === 1 ? lista[0].id : undefined)
+
+/** "Cebolla" → "cebolla" para que "Sin cebolla" se lea como frase; las siglas quedan como están. */
+const minuscula = (texto: string) => (/^\p{Lu}\p{Ll}/u.test(texto) ? texto.charAt(0).toLowerCase() + texto.slice(1) : texto)
+
+function Panel({
+  producto,
+  estilo,
+  hermanos,
+  onCerrar,
+  onNavegar,
+}: {
+  producto: Producto
+  estilo: EstiloDetalle
+  hermanos: Producto[]
+  onCerrar: () => void
+  onNavegar?: (producto: Producto) => void
+}) {
+  const carrito = useCarrito()
+  const { local } = useLocal()
+  const quieto = useReducedMotion()
+  const id = useId()
+  const panel = useRef<HTMLDivElement>(null)
+  const cuerpo = useRef<HTMLDivElement>(null)
+  const arrastre = useDragControls()
+  const cerrar = useRef(onCerrar)
+  cerrar.current = onCerrar
+  const cierre = useRef<number | undefined>(undefined)
+
+  const [foto, setFoto] = useState(0)
+  const [variante, setVariante] = useState<number | undefined>(() => unica(producto.variantes))
+  const [secundaria, setSecundaria] = useState<number | undefined>(() => unica(producto.variantesSecundarias))
+  const [agregados, setAgregados] = useState<number[]>([])
+  const [sin, setSin] = useState<number[]>([])
+  const [nota, setNota] = useState("")
+  const [cantidad, setCantidad] = useState(1)
+  const [paso, setPaso] = useState(0)
+  const [intento, setIntento] = useState(false)
+  const [listo, setListo] = useState(false)
+
+  // Al cambiar de producto (con las flechas) se vuelve al principio, como en la hoja de Piru.
+  useEffect(() => {
+    setFoto(0)
+    setVariante(unica(producto.variantes))
+    setSecundaria(unica(producto.variantesSecundarias))
+    setAgregados([])
+    setSin([])
+    setNota("")
+    setCantidad(1)
+    setPaso(0)
+    setIntento(false)
+    setListo(false)
+    window.clearTimeout(cierre.current)
+  }, [producto.id])
+
+  // Cada paso arranca arriba: el scroll del anterior no se arrastra.
+  useEffect(() => {
+    cuerpo.current?.scrollTo({ top: 0 })
+  }, [paso, producto.id])
+
+  // Escape para cerrar, foco adentro y sin scroll de fondo mientras está abierto.
+  useEffect(() => {
+    const anterior = document.activeElement as HTMLElement | null
+    const scroll = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    const foco = window.setTimeout(() => panel.current?.focus(), 20)
+    const tecla = (evento: KeyboardEvent) => {
+      if (evento.key === "Escape") {
+        cerrar.current()
+        return
+      }
+      // El foco no sale del detalle mientras está abierto.
+      if (evento.key !== "Tab" || !panel.current) return
+      const focos = [...panel.current.querySelectorAll<HTMLElement>('button:not([disabled]), textarea, input, [tabindex="0"]')]
+      if (!focos.length) return
+      const primero = focos[0]
+      const ultimo = focos[focos.length - 1]
+      if (evento.shiftKey && document.activeElement === primero) {
+        evento.preventDefault()
+        ultimo.focus()
+      } else if (!evento.shiftKey && document.activeElement === ultimo) {
+        evento.preventDefault()
+        primero.focus()
+      }
+    }
+    window.addEventListener("keydown", tecla)
+    return () => {
+      window.clearTimeout(foco)
+      window.clearTimeout(cierre.current)
+      window.removeEventListener("keydown", tecla)
+      document.body.style.overflow = scroll
+      anterior?.focus?.()
+    }
+  }, [])
+
+  const fotos = producto.fotos
+  const indice = hermanos.findIndex((p) => p.id === producto.id)
+  const hayAnterior = indice > 0
+  const haySiguiente = indice >= 0 && indice < hermanos.length - 1
+  const puedeNavegar = !!onNavegar && hermanos.length > 1 && indice >= 0
+
+  const pasos = ["principal"]
+  if (producto.variantesSecundarias.length) pasos.push("secundaria")
+  if (producto.ingredientes.length || producto.agregadosPrimarios.length) pasos.push("extras")
+  if (producto.agregadosSecundarios.length) pasos.push("extras2")
+  if (producto.permiteNota) pasos.push("nota")
+  const pasoActual = pasos[Math.min(paso, pasos.length - 1)]
+  const ultimoPaso = paso >= pasos.length - 1
+
+  const precioVariante = producto.variantes.find((v) => v.id === variante)?.precio
+  const precioSecundaria = producto.variantesSecundarias.find((v) => v.id === secundaria)?.precio ?? 0
+  const precioBase = (precioVariante ?? producto.precio) + precioSecundaria
+  const precioExtras = [...producto.agregadosPrimarios, ...producto.agregadosSecundarios]
+    .filter((extra) => agregados.includes(extra.id))
+    .reduce((suma, extra) => suma + extra.precio, 0)
+  const conDescuento = producto.descuento > 0 ? precioBase * (1 - producto.descuento / 100) : precioBase
+  const unitario = conDescuento + precioExtras
+  const total = unitario * cantidad
+
+  const faltaVariante = producto.variantes.length > 0 && variante === undefined
+  const faltaSecundaria = producto.variantesSecundarias.length > 0 && secundaria === undefined
+  const faltaOpcion = faltaVariante || faltaSecundaria
+  const bloqueado = !producto.disponible || !!local?.pausado
+
+  const nombreDeAgregado = (extraId: number) =>
+    [...producto.agregadosPrimarios, ...producto.agregadosSecundarios].find((extra) => extra.id === extraId)?.nombre ?? ""
+  const resumen = [
+    producto.variantes.find((v) => v.id === variante)?.nombre,
+    producto.variantesSecundarias.find((v) => v.id === secundaria)?.nombre,
+    ...agregados.map((extraId) => `+${nombreDeAgregado(extraId)}`),
+    ...(sin.length
+      ? [`Sin ${producto.ingredientes.filter((i) => sin.includes(i.id)).map((i) => minuscula(i.nombre)).join(", ")}`]
+      : []),
+  ]
+    .filter(Boolean)
+    .join(" · ")
+
+  const alternar = (lista: number[], valor: number) =>
+    lista.includes(valor) ? lista.filter((x) => x !== valor) : [...lista, valor]
+
+  const agregar = () => {
+    setIntento(true)
+    if (bloqueado || faltaOpcion || listo) return
+    const resultado = carrito.add({
+      productoId: producto.id,
+      cantidad,
+      varianteId: variante,
+      varianteSecundariaId: secundaria,
+      agregados,
+      ingredientesExcluidos: sin,
+      nota: nota.trim() || undefined,
+    })
+    if (!resultado.ok) return
+    setListo(true)
+    window.clearTimeout(cierre.current)
+    cierre.current = window.setTimeout(() => cerrar.current(), 700)
+  }
+
+  const elegirVariante = (opcionId: number) => {
+    if (pasoActual === "principal") setVariante(opcionId)
+    else setSecundaria(opcionId)
+    if (pasoActual === "principal" || pasoActual === "secundaria") {
+      // Como en la tienda: elegir la opción pasa sola al paso siguiente.
+      window.setTimeout(() => setPaso((actual) => (actual === paso ? Math.min(actual + 1, pasos.length - 1) : actual)), 180)
+    }
+  }
+
+  const anterior = () => {
+    if (!hayAnterior) return
+    window.clearTimeout(cierre.current)
+    onNavegar?.(hermanos[indice - 1])
+  }
+  const siguiente = () => {
+    if (!haySiguiente) return
+    window.clearTimeout(cierre.current)
+    onNavegar?.(hermanos[indice + 1])
+  }
+
+  // En "pasos" sólo frena la opción que se elige en el paso actual; en los otros, cualquiera que falte.
+  const faltaAhora =
+    estilo === "pasos"
+      ? (pasoActual === "principal" && faltaVariante) || (pasoActual === "secundaria" && faltaSecundaria)
+      : faltaOpcion
+
+  const etiquetaAccion = bloqueado
+    ? !producto.disponible
+      ? "No disponible"
+      : "Cerrado"
+    : faltaAhora
+      ? "Elegí una opción"
+      : !ultimoPaso
+        ? "Continuar"
+        : `Agregar · ${formatPesos(total)}`
+
+  const accion = () => {
+    if (faltaAhora) return setIntento(true)
+    if (ultimoPaso) agregar()
+    else setPaso((actual) => Math.min(actual + 1, pasos.length - 1))
+  }
+
+  const filaVariante = (opcion: { id: number; nombre: string; precio: number }, elegida: boolean, precio: string, onElegir: () => void) => (
+    <button
+      key={opcion.id}
+      type="button"
+      className={`pv-det-fila${elegida ? " elegida" : ""}`}
+      onClick={onElegir}
+      aria-pressed={elegida}
+    >
+      <span className="pv-det-fila-nombre">{opcion.nombre}</span>
+      <span className="pv-det-fila-detalle">{precio}</span>
+      <span className="pv-det-fila-tilde" aria-hidden="true">{elegida ? <Check size={15} strokeWidth={3} /> : null}</span>
+    </button>
+  )
+
+  const grupoVariantes = () => (
+    <Grupo titulo={producto.opciones.tituloVariantes || "Elegí una opción"}>
+      {producto.variantes.map((opcion) => {
+        const precio = producto.descuento > 0 ? opcion.precio * (1 - producto.descuento / 100) : opcion.precio
+        return filaVariante(opcion, variante === opcion.id, formatPesos(precio), () => elegirVariante(opcion.id))
+      })}
+    </Grupo>
+  )
+
+  const grupoSecundarias = () => (
+    <Grupo titulo={producto.opciones.tituloVariantesSecundarias || "Elegí también una segunda opción"}>
+      {producto.variantesSecundarias.map((opcion) =>
+        filaVariante(
+          opcion,
+          secundaria === opcion.id,
+          opcion.precio > 0 ? `+ ${formatPesos(opcion.precio)}` : "Incluido",
+          () => elegirVariante(opcion.id),
+        ),
+      )}
+    </Grupo>
+  )
+
+  const grupoIngredientes = () =>
+    producto.ingredientes.length > 0 && (
+      <Grupo titulo="Ingredientes">
+        {producto.ingredientes.map((ingrediente) => {
+          const incluido = !sin.includes(ingrediente.id)
+          return (
+            <button
+              key={ingrediente.id}
+              type="button"
+              className={`pv-det-fila${incluido ? "" : " tachada"}`}
+              onClick={() => setSin((lista) => alternar(lista, ingrediente.id))}
+              aria-pressed={incluido}
+            >
+              <span className="pv-det-fila-nombre">{ingrediente.nombre}</span>
+              <span className="pv-det-fila-detalle">{incluido ? "" : "Sin"}</span>
+              <span className="pv-det-fila-tilde" aria-hidden="true">{incluido ? <Check size={15} strokeWidth={3} /> : null}</span>
+            </button>
+          )
+        })}
+      </Grupo>
+    )
+
+  const grupoExtras = (lista: Producto["agregadosPrimarios"], titulo: string) =>
+    lista.length > 0 && (
+      <Grupo titulo={titulo}>
+        {lista.map((extra) => {
+          const elegido = agregados.includes(extra.id)
+          return (
+            <button
+              key={extra.id}
+              type="button"
+              className={`pv-det-fila${elegido ? " elegida" : ""}`}
+              onClick={() => setAgregados((actuales) => alternar(actuales, extra.id))}
+              aria-pressed={elegido}
+            >
+              <span className="pv-det-fila-nombre">{extra.nombre}</span>
+              <span className="pv-det-fila-detalle">{extra.precio > 0 ? `+ ${formatPesos(extra.precio)}` : "Gratis"}</span>
+              <span className="pv-det-fila-tilde" aria-hidden="true">{elegido ? <Check size={15} strokeWidth={3} /> : null}</span>
+            </button>
+          )
+        })}
+      </Grupo>
+    )
+
+  const campoNota = () => (
+    <div className="pv-det-nota-grupo">
+      <label htmlFor={`${id}-nota`}>
+        {producto.tituloNota || "¿Querés aclarar algo?"}
+        <small>Opcional</small>
+      </label>
+      <textarea
+        id={`${id}-nota`}
+        className="pv-det-nota"
+        value={nota}
+        maxLength={300}
+        placeholder="Escribí una aclaración para este producto"
+        onChange={(evento) => setNota(evento.target.value)}
+      />
+      <span className="pv-det-nota-cuenta">{nota.length}/300</span>
+    </div>
+  )
+
+  const cuerpoPasos = () => (
+    <>
+      {resumen && <p className="pv-det-resumen">{resumen}</p>}
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={pasoActual}
+          className="pv-det-paso"
+          initial={quieto ? false : { opacity: 0, x: 18 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={quieto ? undefined : { opacity: 0, x: -18 }}
+          transition={{ duration: 0.2 }}
+        >
+          {pasoActual === "principal" && (
+            <>
+              <p className="pv-det-descripcion">{producto.descripcion || "Sin descripción."}</p>
+              {producto.variantes.length > 0 && grupoVariantes()}
+            </>
+          )}
+          {pasoActual === "secundaria" && grupoSecundarias()}
+          {pasoActual === "extras" && (
+            <>
+              {grupoIngredientes()}
+              {grupoExtras(producto.agregadosPrimarios, producto.opciones.tituloAgregadosPrimarios || "Extras")}
+            </>
+          )}
+          {pasoActual === "extras2" && grupoExtras(producto.agregadosSecundarios, producto.opciones.tituloAgregadosSecundarios || "Más opciones")}
+          {pasoActual === "nota" && campoNota()}
+        </motion.div>
+      </AnimatePresence>
+    </>
+  )
+
+  const cuerpoCompleto = () => (
+    <div className="pv-det-todo">
+      <div className="pv-det-presentacion">
+        <div className="pv-det-presentacion-texto">
+          {producto.categoria && <p className="pv-det-categoria">{producto.categoria}</p>}
+          <h2>{producto.nombre}</h2>
+          <p className="pv-det-precio-linea">
+            <strong>{formatPesos(unitario)}</strong>
+            {producto.descuento > 0 && <s>{formatPesos(precioBase + precioExtras)}</s>}
+            {producto.descuento > 0 && <span className="pv-det-sello">{producto.descuento}% OFF</span>}
+          </p>
+        </div>
+      </div>
+      {producto.descripcion && <p className="pv-det-descripcion">{producto.descripcion}</p>}
+      {producto.variantes.length > 0 && grupoVariantes()}
+      {producto.variantesSecundarias.length > 0 && grupoSecundarias()}
+      {grupoIngredientes()}
+      {grupoExtras(producto.agregadosPrimarios, producto.opciones.tituloAgregadosPrimarios || "Extras")}
+      {grupoExtras(producto.agregadosSecundarios, producto.opciones.tituloAgregadosSecundarios || "Más opciones")}
+      {producto.permiteNota && campoNota()}
+    </div>
+  )
+
+  const cabecera = estilo === "pasos" && (
+    <div className={`pv-det-cabecera${fotos.length ? "" : " sin-foto"}`}>
+      {fotos.length > 0 && (
+        <img className="pv-det-cabecera-foto" src={fotos[Math.min(foto, fotos.length - 1)]} alt="" />
+      )}
+      {fotos.length > 0 && <div className="pv-det-cabecera-velo" aria-hidden="true" />}
+      {paso > 0 && (
+        <button
+          type="button"
+          className="pv-det-volver"
+          onClick={() => setPaso((actual) => Math.max(0, actual - 1))}
+          aria-label="Volver al paso anterior"
+        >
+          <ChevronLeft size={20} />
+        </button>
+      )}
+      <div className="pv-det-cabecera-texto">
+        {producto.categoria && <p className="pv-det-categoria">{producto.categoria}</p>}
+        <div className="pv-det-cabecera-linea">
+          <h2>{producto.nombre}</h2>
+          <p className="pv-det-precio-linea">
+            <strong>{formatPesos(unitario)}</strong>
+            {producto.descuento > 0 && <s>{formatPesos(precioBase + precioExtras)}</s>}
+          </p>
+        </div>
+        {producto.descuento > 0 && <span className="pv-det-sello">{producto.descuento}% OFF</span>}
+      </div>
+      {fotos.length > 1 && (
+        <div className="pv-det-fotos">
+          {fotos.map((src, i) => (
+            <button
+              key={src}
+              type="button"
+              className={i === foto ? "activa" : ""}
+              onClick={() => setFoto(i)}
+              aria-label={`Foto ${i + 1} de ${fotos.length}`}
+              aria-current={i === foto}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+
+  const fotoCompacta = estilo !== "pasos" && fotos.length > 0 && (
+    <div className="pv-det-foto-compacta">
+      <img src={fotos[Math.min(foto, fotos.length - 1)]} alt="" />
+      {fotos.length > 1 && (
+        <div className="pv-det-fotos">
+          {fotos.map((src, i) => (
+            <button
+              key={src}
+              type="button"
+              className={i === foto ? "activa" : ""}
+              onClick={() => setFoto(i)}
+              aria-label={`Foto ${i + 1} de ${fotos.length}`}
+              aria-current={i === foto}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+
+  const entrada =
+    estilo === "dialogo"
+      ? { initial: { opacity: 0, scale: 0.94, y: 14 }, animate: { opacity: 1, scale: 1, y: 0 }, exit: { opacity: 0, scale: 0.96, y: 10 } }
+      : { initial: { y: "100%" }, animate: { y: 0 }, exit: { y: "100%" } }
+  const transicion = quieto
+    ? { duration: 0 }
+    : estilo === "dialogo"
+      ? ({ type: "spring", stiffness: 360, damping: 30 } as const)
+      : ({ type: "spring", stiffness: 320, damping: 34 } as const)
+
+  return (
+    <div
+      className={`pv-det-velo pv-det-velo-${estilo}`}
+      onClick={(evento) => evento.target === evento.currentTarget && onCerrar()}
+      onDragOver={(evento) => evento.stopPropagation()}
+      onDrop={(evento) => evento.stopPropagation()}
+    >
+      <motion.div
+        ref={panel}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={id}
+        tabIndex={-1}
+        className={`pv-det-panel pv-det-${estilo}`}
+        {...entrada}
+        transition={transicion}
+        drag={estilo === "hoja" ? "y" : false}
+        dragControls={estilo === "hoja" ? arrastre : undefined}
+        dragListener={false}
+        dragConstraints={{ top: 0, bottom: 0 }}
+        dragElastic={{ top: 0, bottom: 0.5 }}
+        onDragEnd={(_evento, info) => {
+          if (info.offset.y > 110 || info.velocity.y > 650) onCerrar()
+        }}
+      >
+        <span id={id} className="pv-det-titulo">{producto.nombre}</span>
+        {estilo === "hoja" && (
+          <div
+            className="pv-det-asa"
+            onPointerDown={(evento) => arrastre.start(evento.nativeEvent)}
+            aria-hidden="true"
+          >
+            <span />
+          </div>
+        )}
+
+        {cabecera}
+        {fotoCompacta}
+
+        <button type="button" className="pv-det-cerrar" onClick={onCerrar} aria-label="Cerrar">
+          <X size={18} />
+        </button>
+
+        <div className="pv-det-cuerpo" ref={cuerpo}>
+          {estilo === "pasos" ? cuerpoPasos() : cuerpoCompleto()}
+        </div>
+
+        <div className="pv-det-pie">
+          {puedeNavegar && estilo === "pasos" && paso === 0 && (
+            <div className="pv-det-navegar">
+              <button type="button" onClick={anterior} disabled={!hayAnterior} aria-label="Producto anterior">
+                <ChevronLeft size={16} />
+              </button>
+              <span>{indice + 1} de {hermanos.length}</span>
+              <button type="button" onClick={siguiente} disabled={!haySiguiente} aria-label="Producto siguiente">
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          )}
+          {intento && faltaAhora && <p className="pv-det-falta" role="alert">Elegí una opción para seguir.</p>}
+          <div className={`pv-det-pie-linea${estilo === "pasos" && faltaAhora && !ultimoPaso ? " sin-accion" : ""}`}>
+            <div className="pv-det-stepper">
+              <button type="button" onClick={() => setCantidad((actual) => Math.max(1, actual - 1))} disabled={cantidad <= 1} aria-label="Uno menos">
+                <Minus size={16} />
+              </button>
+              <output aria-live="polite">{cantidad}</output>
+              <button type="button" onClick={() => setCantidad((actual) => Math.min(99, actual + 1))} aria-label="Uno más">
+                <Plus size={16} />
+              </button>
+            </div>
+            {!(estilo === "pasos" && faltaAhora && !ultimoPaso) && (
+              <button
+                type="button"
+                className={`pv-det-accion${listo ? " listo" : ""}${faltaAhora ? " pendiente" : ""}`}
+                onClick={accion}
+                disabled={bloqueado || listo}
+              >
+                {listo ? (
+                  <><Check size={18} /> Agregado</>
+                ) : (
+                  etiquetaAccion
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
+function Grupo({ titulo, children }: { titulo: string; children: ReactNode }) {
+  return (
+    <fieldset className="pv-det-grupo">
+      <legend>{titulo}</legend>
+      <div className="pv-det-filas">{children}</div>
+    </fieldset>
+  )
+}

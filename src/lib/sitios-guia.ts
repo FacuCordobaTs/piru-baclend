@@ -63,7 +63,7 @@ export function generarGuia(datos: DatosGuia): string {
   const extensionesAsset = Object.keys(TIPOS_ASSET).join(', ')
   return `# Página de ${datos.nombre} en Piru — guía para Claude
 
-Sos diseñador web. Entregá \`contenido.ts\`, \`page.tsx\` y \`style.css\` (y, si hace falta, componentes en \`components/\`) para la tienda online de **${datos.nombre}**, que se publica en \`https://${datos.username}.piru.app\`. Usá solo \`@piru/tienda\`, \`react\`, \`motion/react\` y \`lucide-react\`. No implementes checkout, pagos, pedidos ni analytics: eso lo hace Piru. Contemplá los estados de la sección 4. Usá HTML semántico, foco visible, buen contraste y respetá \`prefers-reduced-motion\`.
+Sos diseñador web. Entregá \`contenido.ts\`, \`page.tsx\` y \`style.css\` (y, si hace falta, componentes en \`components/\`) para la tienda online de **${datos.nombre}**, que se publica en \`https://${datos.username}.piru.app\`. Usá solo \`@piru/tienda\`, \`react\`, \`motion/react\` y \`lucide-react\`. No reimplementes checkout, pagos, pedidos ni analytics: el checkout es \`<PiruCheckout />\` del runtime y los pagos los hace Piru. Contemplá los estados de la sección 4. Usá HTML semántico, foco visible, buen contraste y respetá \`prefers-reduced-motion\`.
 
 ## 1. Qué hay que entregar
 
@@ -71,6 +71,9 @@ Sos diseñador web. Entregá \`contenido.ts\`, \`page.tsx\` y \`style.css\` (y, 
 contenido.ts      ← textos, colores, fotos y contacto de esta página (editable)
 page.tsx          ← obligatorio: export default del componente de la página
 style.css         ← opcional, importado desde page.tsx (import "./style.css")
+components/DetalleProducto.tsx ← el detalle de producto que abre cada plato (editable)
+components/detalle.css         ← sus estilos
+components/Checkout.tsx        ← incluye <PiruCheckout /> y elige su variante y colores (no la lógica)
 components/*.tsx  ← opcional, importados con rutas relativas
 assets/*          ← imágenes, fuentes y video que el dueño sube desde el editor
 \`\`\`
@@ -89,8 +92,9 @@ Los datos y las reglas (precios, descuentos, horarios, disponibilidad) vienen de
 
 - \`useLocal()\` → \`{ estado: "cargando" | "error" | "listo", local }\`. Con \`estado === "listo"\`, \`local\` tiene nombre, logos, colores, dirección, horarios, si está \`abierto\`, si está \`pausado\` y más.
 - \`useCarta()\` → \`{ secciones, productos, canjes, destacado }\`. Cada producto tiene \`precioFinal\` (con descuento), \`fotos\`, \`disponible\`, \`tieneOpciones\`, \`abrir()\` y \`agregar()\`.
-- \`producto.abrir()\` abre la hoja de opciones de Piru (variantes, extras, ingredientes, nota y cantidad). Es el camino recomendado: si \`producto.tieneOpciones\`, abrí la hoja; si no, \`producto.agregar()\`.
-- \`useCarrito()\` → \`lines\`, \`count\`, \`totalFormatted\` (subtotal), \`set(key, n)\`, \`remove\`, \`canCheckout\`, \`blockReason\` y \`checkout()\`. \`checkout()\` lleva al checkout de Piru en otra página: ahí se piden los datos, el envío, los cupones, los puntos y el pago. Mostrá "Subtotal" o "Pedir · $X", nunca un total final.
+- \`producto.abrir()\` abre la hoja de opciones de Piru (variantes, extras, ingredientes, nota y cantidad). La plantilla inicial no la usa: abre su propio detalle (\`components/DetalleProducto.tsx\`, sección 5.1). Si preferís la hoja de Piru, \`abrir()\` sigue disponible; si no, \`producto.agregar()\` agrega sin opciones.
+- \`useCarrito()\` → \`lines\`, \`count\`, \`totalFormatted\` (subtotal), \`set(key, n)\`, \`remove\`, \`canCheckout\`, \`blockReason\` y \`checkout()\`. \`checkout()\` abre el checkout de Piru **en la misma página** (el \`<PiruCheckout />\` que incluís); ahí se piden los datos, el envío, los cupones, los puntos y el pago. Mostrá "Subtotal" o "Pedir · $X", nunca un total final.
+- \`useCheckout()\` → \`{ abierto, abrir(), cerrar() }\` por si querés otro botón además de "Pedir".
 - \`useContenido()\` → opcional: la personalización de la **tienda estándar**. La plantilla inicial no lo usa; el contenido de esta página vive en \`contenido.ts\`.
 - \`useHorarios()\` → \`{ abierto, texto, turnos, … }\`. \`texto\` ya viene armado ("Abierto · hasta las 23:45").
 - \`useCampana()\` → la campaña cuando se entra por un link de promo (\`/c/:slug\`), o \`null\`.
@@ -106,7 +110,8 @@ ${TIPOS_SDK.trim()}
 ## 3. Lo que agrega Piru alrededor de tu página
 
 - Un pie chico "Pedidos por Piru · Ver la tienda estándar". Toma sus colores de \`--piru-footer-fg\` y \`--piru-footer-bg\`; definilas en \`:root\` para que combine. No lo tapes.
-- La hoja de opciones de producto, los avisos ("agregado al pedido") y una pantalla de error si la página falla.
+- La hoja de opciones de producto de Piru (la que abre \`producto.abrir()\`) y los avisos ("agregado al pedido") del runtime. La plantilla inicial usa su propio detalle y no muestra esos avisos: avisá del alta en el diseño.
+- Una pantalla de error neutra si la página falla.
 - El acento de esas piezas sale del color del local.
 
 ## 4. Estados que el diseño tiene que contemplar
@@ -129,6 +134,44 @@ ${TIPOS_SDK.trim()}
 - Mapas: solo con \`<iframe src="https://www.google.com/maps/embed?…">\`.
 - \`fetch\` solo llega a la API de Piru: el SDK ya trae todos los datos.
 
+## 5.1 El detalle de producto (\`components/DetalleProducto.tsx\`)
+
+Cuando alguien toca un plato se abre el detalle: la foto, la descripción, las variantes, los ingredientes que se pueden sacar, los extras y la nota. **Es una pieza del diseño, no del runtime**: vive en \`components/DetalleProducto.tsx\` (con \`components/detalle.css\`) y podés rediseñarla entera.
+
+\`CONTENIDO.detalleProducto\` elige uno de tres estilos, que ya están implementados en el mismo componente:
+
+- \`"pasos"\`: foto grande arriba, una decisión por pantalla (opción, segunda opción, ingredientes y extras, nota), resumen de lo elegido y avance automático al elegir. Es el que se parece a la tienda de Piru.
+- \`"dialogo"\`: ventana al centro, con todas las opciones juntas y el botón fijo abajo.
+- \`"hoja"\`: hoja inferior que sube desde abajo con animación, todas las opciones juntas y arrastre para cerrar.
+
+Reglas que hay que respetar al tocarlo:
+
+- Los precios, el descuento y la disponibilidad salen del \`Producto\` del SDK; nunca los recalcules ni los inventes.
+- El alta va por \`useCarrito().add({ productoId, cantidad, varianteId, varianteSecundariaId, agregados, ingredientesExcluidos, nota })\`. Con variantes obligatorias sin elegir devuelve \`{ ok: false, reason: "requires-options" }\`.
+- El checkout, el envío, los cupones y los puntos siguen siendo de Piru: no hay total final ni medios de pago en el detalle.
+- Si el local está pausado o el producto no está disponible, el botón no agrega.
+- Accesibilidad: rol de diálogo, cierre con Escape y con el fondo, foco adentro, y \`prefers-reduced-motion\` sin animaciones.
+
+Si el dueño quiere otro detalle (una ficha a pantalla completa, un acordeón en la grilla, lo que sea), cambiá el componente y dejá \`CONTENIDO\` como fuente de textos e imágenes. Las únicas dependencias son \`react\`, \`motion/react\`, \`lucide-react\` y \`@piru/tienda\`.
+
+## 5.2 El checkout (\`components/Checkout.tsx\`)
+
+El checkout **no se reescribe**. Es \`<PiruCheckout />\`, una caja cerrada del runtime: el diseño lo incluye una vez en la página y sólo elige su forma y su piel. \`carrito.checkout()\` (el botón "Pedir") lo abre en la misma página; no hay redirección a la tienda estándar.
+
+\`CONTENIDO.checkout\` elige una de tres variantes:
+
+- \`"pasos"\`: hoja inferior con un paso por pantalla (tipo de pedido, datos, entrega, pago). Es la más guiada.
+- \`"hoja"\`: hoja inferior con todo el formulario junto, sin pasos.
+- \`"pagina"\`: pantalla completa con todo el formulario junto, sin pasos.
+
+\`PiruCheckout\` acepta sólo \`variante\` y \`estilo\` (\`acento\`, \`texto\`, \`superficie\`, \`linea\`, \`radio\`, \`fuente\`, \`textoConfirmar\`). No recibe el carrito, los datos del comprador ni los medios de pago: eso lo resuelve el runtime y el backend. El sitio no puede leer lo que se carga adentro.
+
+Reglas:
+- No dibujes un formulario de datos, envío o pago propio: el alta, los cupones, los puntos y el cobro se validan en el backend.
+- No pases precios ni totales: el subtotal del carrito es sólo para mostrar; el total final lo calcula el checkout.
+- El éxito también es del runtime: muestra el pedido, el alias de transferencia, los puntos y el botón de WhatsApp cuando el local no tiene avisos automáticos.
+- Si el local usa Mercado Pago, el checkout crea el pedido y redirige al pago; al volver, la página retoma el éxito en el mismo sitio.
+
 ## 6. Ejemplo completo y funcional
 
 \`contenido.ts\`:
@@ -149,6 +192,24 @@ ${PLANTILLA_INICIAL['page.tsx'].trim()}
 ${PLANTILLA_INICIAL['style.css'].trim()}
 \`\`\`
 
+\`components/DetalleProducto.tsx\` (el detalle de producto; cambialo o dejalo como está):
+
+\`\`\`tsx
+${PLANTILLA_INICIAL['components/DetalleProducto.tsx'].trim()}
+\`\`\`
+
+\`components/detalle.css\`:
+
+\`\`\`css
+${PLANTILLA_INICIAL['components/detalle.css'].trim()}
+\`\`\`
+
+\`components/Checkout.tsx\` (incluye el checkout de Piru; cambialo sólo para elegir la variante o la piel):
+
+\`\`\`tsx
+${PLANTILLA_INICIAL['components/Checkout.tsx'].trim()}
+\`\`\`
+
 ## 7. Datos reales de ${datos.nombre}
 
 El contenido y los recursos visuales de esta página están en \`contenido.ts\` (sección 6): textos, colores, tipografías, fotos, logos, historia y contacto. Podés usar esas URLs o reemplazarlas por assets propios. No inventes platos, precios ni fotos.
@@ -161,6 +222,6 @@ ${JSON.stringify({ local, horarios: datos.horarios, productos: datos.productos.m
 
 ## 8. Cómo entregar
 
-Un bloque de código por archivo, con su ruta como título (\`page.tsx\`, \`style.css\`, \`components/Hero.tsx\`), o un \`.zip\` con esa estructura. El dueño lo pega o lo sube en el editor de Páginas, lo prueba en la vista previa y lo publica.
+Un bloque de código por archivo, con su ruta como título (\`page.tsx\`, \`style.css\`, \`components/DetalleProducto.tsx\`, \`components/Checkout.tsx\`, \`components/Hero.tsx\`), o un \`.zip\` con esa estructura. El dueño lo pega o lo sube en el editor de Páginas, lo prueba en la vista previa y lo publica.
 `
 }

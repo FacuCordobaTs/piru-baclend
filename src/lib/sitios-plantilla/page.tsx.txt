@@ -15,6 +15,8 @@ import {
 } from "@piru/tienda"
 import { CONTENIDO, type ContenidoSitio } from "./contenido"
 import "./style.css"
+import { DetalleProducto } from "./components/DetalleProducto"
+import { Checkout } from "./components/Checkout"
 
 /*
  * Tienda de Páginas: el contenido inicial (plantilla, textos, colores, fotos y contacto) vive
@@ -133,6 +135,8 @@ export default function Page() {
   const campana = useCampana()
   const nav = useNavegacionCarta(secciones.length)
   const [pedidoAbierto, setPedidoAbierto] = useState(false)
+  // El detalle de producto es parte del diseño (`components/DetalleProducto.tsx`), no del runtime.
+  const [detalle, setDetalle] = useState<Producto | null>(null)
   const quieto = useReducedMotion()
   const plantilla: Plantilla = contenido.plantilla ?? "artesanal"
   const tema = temaDe(contenido, plantilla)
@@ -215,7 +219,7 @@ export default function Page() {
               </a>
             )}
           </div>
-          {destacado && <Destacado producto={destacado} />}
+          {destacado && <Destacado producto={destacado} onAbrir={setDetalle} />}
         </div>
       </header>
 
@@ -269,7 +273,7 @@ export default function Page() {
             <h2 id={`${seccion.id}-titulo`}>{seccion.nombre}</h2>
             <ul className="pv-grilla">
               {seccion.productos.map((producto) => (
-                <Tarjeta key={producto.id} producto={producto} cantidad={carrito.quantity(producto.id)} />
+                <Tarjeta key={producto.id} producto={producto} cantidad={carrito.quantity(producto.id)} onAbrir={setDetalle} />
               ))}
             </ul>
           </section>
@@ -280,7 +284,7 @@ export default function Page() {
         <section className="pv-historia" aria-labelledby="pv-historia-titulo">
           <p className="pv-kicker">Nuestra historia</p>
           <h2 id="pv-historia-titulo">{contenido.historia.titulo ?? "La casa"}</h2>
-          {contenido.historia.texto.split("\n").map((parrafo, i) => (
+          {contenido.historia.texto?.split("\n").map((parrafo, i) => (
             <p key={i}>{parrafo}</p>
           ))}
         </section>
@@ -382,11 +386,33 @@ export default function Page() {
           </aside>
         </div>
       )}
+      {detalle && (
+        <DetalleProducto
+          producto={detalle}
+          estilo={contenido.detalleProducto}
+          hermanos={productos}
+          onNavegar={setDetalle}
+          onCerrar={() => setDetalle(null)}
+        />
+      )}
+
+      {/* El checkout vive en el runtime: acá sólo se elige cómo se ve y se activa con "Pedir". */}
+      <Checkout
+        variante={contenido.checkout ?? "pasos"}
+        estilo={{
+          acento: tema.primario,
+          texto: tema.texto,
+          superficie: tema.superficie,
+          linea: tema.linea,
+          radio: plantilla === "moderna" ? 22 : 16,
+          fuente: tema.cuerpo,
+        }}
+      />
     </main>
   )
 }
 
-function Destacado({ producto }: { producto: Producto }) {
+function Destacado({ producto, onAbrir }: { producto: Producto; onAbrir: (producto: Producto) => void }) {
   const foto = producto.fotos[0]
   return (
     <div className="pv-destacado">
@@ -399,7 +425,7 @@ function Destacado({ producto }: { producto: Producto }) {
         {producto.descripcion && <small>{producto.descripcion}</small>}
         <div className="pv-destacado-pie">
           <span className="pv-precio">{formatPesos(producto.precioFinal)}</span>
-          <button type="button" className="pv-boton pv-boton-chico" onClick={producto.abrir} disabled={!producto.disponible}>
+          <button type="button" className="pv-boton pv-boton-chico" onClick={() => onAbrir(producto)} disabled={!producto.disponible}>
             {producto.disponible ? "Agregar" : "No disponible"}
           </button>
         </div>
@@ -408,12 +434,12 @@ function Destacado({ producto }: { producto: Producto }) {
   )
 }
 
-function Tarjeta({ producto, cantidad }: { producto: Producto; cantidad: number }) {
+function Tarjeta({ producto, cantidad, onAbrir }: { producto: Producto; cantidad: number; onAbrir: (producto: Producto) => void }) {
   const foto = producto.fotos[0]
-  const agregar = () => (producto.tieneOpciones ? producto.abrir() : producto.agregar())
+  const agregar = () => (producto.tieneOpciones ? onAbrir(producto) : producto.agregar())
   return (
     <li className={`pv-producto ${foto ? "" : "sin-foto"} ${producto.disponible ? "" : "agotado"}`}>
-      <button type="button" className="pv-producto-abrir" onClick={() => producto.abrir()} disabled={!producto.disponible}>
+      <button type="button" className="pv-producto-abrir" onClick={() => onAbrir(producto)} disabled={!producto.disponible}>
         {foto && <img src={foto} alt="" loading="lazy" />}
         <span className="pv-producto-texto">
           <strong>{producto.nombre}</strong>

@@ -6,9 +6,10 @@ import { sitioTienda } from '../db/schema'
  * Qué subdominios son sitios de Páginas publicados (docs/PAGINAS_PROPIAS.md, sección 10.5).
  *
  * El código de un sitio de Páginas lo escribe un tercero, así que su origen
- * (`https://<slug>.piru.app`) recibe menos que una tienda registrada o la plantilla: sólo leer la
- * tienda, resolver campañas, mandar eventos y crear el carrito de handoff. Nunca `/mp/*`, el alta de
- * pedidos, la sala, descuentos ni la búsqueda de clientes por teléfono.
+ * (`https://<slug>.piru.app`) recibe una lista cerrada: leer la tienda, resolver campañas, mandar
+ * eventos, crear el carrito de handoff y lo que necesita el checkout encapsulado (`PiruCheckout`):
+ * zona, geocodificación, saldo de puntos, cupones, alta de pedido, estado y Checkout Pro. No se
+ * abre `/public/*` entero: Bricks, sala, historial (`mis-pedidos`) y `pedido-info` siguen cerrados.
  *
  * El conjunto vive en memoria, se refresca cada 60 s y se invalida al publicar o deshabilitar en este
  * proceso. Si la consulta falla (por ejemplo, sin la migración), queda el último conjunto conocido y
@@ -60,10 +61,17 @@ export function paginasApiPath(path: string): boolean {
   return (
     /^\/public\/restaurante\/id\/\d+$/.test(ruta) ||
     /^\/public\/restaurante\/[a-z0-9-]+$/i.test(ruta) ||
+    /^\/public\/restaurante\/\d+\/(check-zona|geocodificar)$/.test(ruta) ||
+    /^\/public\/restaurante\/\d+\/cliente\/[^/]+$/.test(ruta) ||
+    /^\/public\/pedido\/(delivery|takeaway)\/\d+\/status$/.test(ruta) ||
     /^\/public\/marketing\/campanas\/[^/]+\/[^/]+$/.test(ruta) ||
     /^\/public\/marketing\/recetas\/[^/]+\/[^/]+$/.test(ruta) ||
     ruta === '/public/marketing/events' ||
     ruta === '/public/carritos' ||
-    /^\/public\/carritos\/[A-Za-z0-9_-]+$/.test(ruta)
+    /^\/public\/carritos\/[A-Za-z0-9_-]+$/.test(ruta) ||
+    ruta === '/public/descuentos/validar' ||
+    ruta === '/public/delivery/create' ||
+    ruta === '/public/takeaway/create' ||
+    ruta === '/mp/crear-preferencia-externo'
   )
 }
