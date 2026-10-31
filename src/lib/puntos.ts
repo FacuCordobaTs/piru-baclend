@@ -15,6 +15,7 @@ export type TipoTransaccionPuntos =
   | 'canje_envio'
   | 'canje_descuento'
   | 'bonus_bienvenida'
+  | 'bonus_promocion'
   | 'ajuste_manual'
   | 'devolucion_cancelacion'
   | 'expiracion'
@@ -38,6 +39,9 @@ export interface ConfiguracionPuntosData {
   descuentoMontoMinimo: string
   descuentoTope: string
   vencimientoDias: number | null
+  puntosBonusTopePorcentaje: number
+  puntosBonusMaximo: number
+  puntosBonusPorCliente30Dias: number
 }
 
 export const DEFAULT_CONFIG_PUNTOS: Omit<ConfiguracionPuntosData, 'restauranteId'> = {
@@ -57,6 +61,9 @@ export const DEFAULT_CONFIG_PUNTOS: Omit<ConfiguracionPuntosData, 'restauranteId
   descuentoMontoMinimo: '0.00',
   descuentoTope: '0.00',
   vencimientoDias: null,
+  puntosBonusTopePorcentaje: 12,
+  puntosBonusMaximo: 500,
+  puntosBonusPorCliente30Dias: 2,
 }
 
 /**
@@ -90,6 +97,9 @@ export async function obtenerConfiguracionPuntos(db: any, restauranteId: number)
       descuentoMontoMinimo: row.descuentoMontoMinimo,
       descuentoTope: row.descuentoTope,
       vencimientoDias: row.vencimientoDias,
+      puntosBonusTopePorcentaje: row.puntosBonusTopePorcentaje,
+      puntosBonusMaximo: row.puntosBonusMaximo,
+      puntosBonusPorCliente30Dias: row.puntosBonusPorCliente30Dias,
     }
   }
 
@@ -185,6 +195,9 @@ export async function registrarTransaccionPuntos(
     restauranteId: number
     clienteId: number
     pedidoUnificadoId?: number | null
+    marketingCampanaId?: number | null
+    /** Idempotencia del asiento: reintentar no duplica el bonus. */
+    claveIdempotencia?: string | null
     tipo: TipoTransaccionPuntos
     puntos: number // Positivo para sumar, negativo para restar
     motivo: string
@@ -216,6 +229,8 @@ export async function registrarTransaccionPuntos(
     restauranteId: params.restauranteId,
     clienteId: params.clienteId,
     pedidoUnificadoId: params.pedidoUnificadoId ?? null,
+    marketingCampanaId: params.marketingCampanaId ?? null,
+    claveIdempotencia: params.claveIdempotencia ?? null,
     tipo: params.tipo,
     puntos: params.puntos,
     saldoResultante: nuevoSaldo,
@@ -229,7 +244,12 @@ export async function registrarTransaccionPuntos(
 }
 
 /**
- * Acredita de manera idempotente los puntos ganados por un pedido cuyo pago fue confirmado.
+ * Acredita de manera idempotente los puntos ganados por un pedido cuyo pago fue confirmado,
+ * más el bonus de puntos que el alta del pedido resolvió (campaña o link personal).
+ *
+ * El bonus se registra con `claveIdempotencia = pedido-bonus:<id>`: un webhook repetido o un
+ * reintento del POS nunca lo duplica, y el pedido puede acreditar la compra y el bonus en dos
+ * pasos sin pisarse.
  */
 export async function acreditarPuntosPedidoAprobado(db: any, pedidoId: number): Promise<boolean> {
   return db.transaction(async (tx: any) => {
@@ -239,71 +259,104 @@ export async function acreditarPuntosPedidoAprobado(db: any, pedidoId: number): 
         restauranteId: PedidoUnificadoTable.restauranteId,
         clienteId: PedidoUnificadoTable.clienteId,
         puntosGanados: PedidoUnificadoTable.puntosGanados,
+        puntosBonus: PedidoUnificadoTable.puntosBonus,
+        puntosBonusClave: PedidoUnificadoTable.puntosBonusClave,
+        marketingCampanaId: PedidoUnificadoTable.marketingCampanaId,
       })
       .from(PedidoUnificadoTable)
       .where(eq(PedidoUnificadoTable.id, pedidoId))
       .limit(1)
 
-    if (!pedido || !pedido.clienteId || !pedido.puntosGanados || pedido.puntosGanados <= 0) {
-      return false
-    }
+    if (!pedido || !pedido.clienteId) return false
+    const puntosCompra = Math.max(0, Number(pedido.puntosGanados) || 0)
+    const puntosBonus = Math.max(0, Number(pedido.puntosBonus) || 0)
+    if (puntosCompra <= 0 && puntosBonus <= 0) return false
 
     // Verificar si el restaurante tiene el módulo activo
     const tieneModulo = await tieneModuloActivo(tx, pedido.restauranteId, MODULE_KEYS.PUNTOS_CLIENTES)
     if (!tieneModulo) return false
 
-    // Idempotencia: verificar si ya se acreditaron puntos por este pedido
-    const [existente] = await tx
-      .select({ id: TransaccionPuntosTable.id })
-      .from(TransaccionPuntosTable)
-      .where(
-        and(
-          eq(TransaccionPuntosTable.pedidoUnificadoId, pedidoId),
-          eq(TransaccionPuntosTable.tipo, 'suma_compra')
-        )
-      )
-      .limit(1)
-
-    if (existente) {
-      return false // Ya fue acreditado previamente
-    }
-
-    await registrarTransaccionPuntos(tx, {
-      restauranteId: pedido.restauranteId,
-      clienteId: pedido.clienteId,
-      pedidoUnificadoId: pedido.id,
-      tipo: 'suma_compra',
-      puntos: pedido.puntosGanados,
-      motivo: `Puntos ganados en pedido #${pedido.id}`,
-    })
-
-    // Chequear si corresponde bonus de bienvenida por primer pedido
-    const config = await obtenerConfiguracionPuntos(tx, pedido.restauranteId)
-    if (config.puntosPrimerPedido > 0) {
-      const [comprasPrevias] = await tx
-        .select({ count: sql<number>`count(*)` })
+    // Idempotencia: verificar si ya se acreditaron los puntos de compra por este pedido
+    const [existente] = puntosCompra > 0
+      ? await tx
+        .select({ id: TransaccionPuntosTable.id })
         .from(TransaccionPuntosTable)
         .where(
           and(
-            eq(TransaccionPuntosTable.clienteId, pedido.clienteId),
+            eq(TransaccionPuntosTable.pedidoUnificadoId, pedidoId),
             eq(TransaccionPuntosTable.tipo, 'suma_compra')
           )
         )
+        .limit(1)
+      : [null]
 
-      if (Number(comprasPrevias?.count || 0) <= 1) {
-        // Solo la compra actual: otorgar bonus
+    let acreditado = false
+    if (puntosCompra > 0 && !existente) {
+      await registrarTransaccionPuntos(tx, {
+        restauranteId: pedido.restauranteId,
+        clienteId: pedido.clienteId,
+        pedidoUnificadoId: pedido.id,
+        tipo: 'suma_compra',
+        puntos: puntosCompra,
+        motivo: `Puntos ganados en pedido #${pedido.id}`,
+      })
+      acreditado = true
+
+      // Chequear si corresponde bonus de bienvenida por primer pedido
+      const config = await obtenerConfiguracionPuntos(tx, pedido.restauranteId)
+      if (config.puntosPrimerPedido > 0) {
+        const [comprasPrevias] = await tx
+          .select({ count: sql<number>`count(*)` })
+          .from(TransaccionPuntosTable)
+          .where(
+            and(
+              eq(TransaccionPuntosTable.clienteId, pedido.clienteId),
+              eq(TransaccionPuntosTable.tipo, 'suma_compra')
+            )
+          )
+
+        if (Number(comprasPrevias?.count || 0) <= 1) {
+          // Solo la compra actual: otorgar bonus
+          await registrarTransaccionPuntos(tx, {
+            restauranteId: pedido.restauranteId,
+            clienteId: pedido.clienteId,
+            pedidoUnificadoId: pedido.id,
+            tipo: 'bonus_bienvenida',
+            puntos: config.puntosPrimerPedido,
+            motivo: `Bono de bienvenida primer pedido`,
+          })
+        }
+      }
+    }
+
+    if (puntosBonus > 0) {
+      const clave = pedido.puntosBonusClave || `pedido-bonus:${pedido.id}`
+      const [bonusExistente] = await tx
+        .select({ id: TransaccionPuntosTable.id })
+        .from(TransaccionPuntosTable)
+        .where(
+          and(
+            eq(TransaccionPuntosTable.restauranteId, pedido.restauranteId),
+            eq(TransaccionPuntosTable.claveIdempotencia, clave)
+          )
+        )
+        .limit(1)
+      if (!bonusExistente) {
         await registrarTransaccionPuntos(tx, {
           restauranteId: pedido.restauranteId,
           clienteId: pedido.clienteId,
           pedidoUnificadoId: pedido.id,
-          tipo: 'bonus_bienvenida',
-          puntos: config.puntosPrimerPedido,
-          motivo: `Bono de bienvenida primer pedido`,
+          marketingCampanaId: pedido.marketingCampanaId ?? null,
+          claveIdempotencia: clave,
+          tipo: 'bonus_promocion',
+          puntos: puntosBonus,
+          motivo: `Puntos extra por volver con una campaña o link (pedido #${pedido.id})`,
         })
+        acreditado = true
       }
     }
 
-    return true
+    return acreditado
   })
 }
 
@@ -321,6 +374,8 @@ export async function revertirPuntosPedidoCancelado(db: any, pedidoId: number): 
         clienteId: PedidoUnificadoTable.clienteId,
         puntosGanados: PedidoUnificadoTable.puntosGanados,
         puntosUsados: PedidoUnificadoTable.puntosUsados,
+        puntosBonus: PedidoUnificadoTable.puntosBonus,
+        puntosBonusClave: PedidoUnificadoTable.puntosBonusClave,
       })
       .from(PedidoUnificadoTable)
       .where(eq(PedidoUnificadoTable.id, pedidoId))
@@ -392,6 +447,48 @@ export async function revertirPuntosPedidoCancelado(db: any, pedidoId: number): 
         }
       }
     }
+
+    // 3. Si se había acreditado el bonus de una campaña, retirarlo para no dejar saldo indebido.
+    if (pedido.puntosBonus > 0) {
+      const clave = pedido.puntosBonusClave || `pedido-bonus:${pedido.id}`
+      const [bonusRegistrado] = await tx
+        .select({ id: TransaccionPuntosTable.id, marketingCampanaId: TransaccionPuntosTable.marketingCampanaId })
+        .from(TransaccionPuntosTable)
+        .where(
+          and(
+            eq(TransaccionPuntosTable.restauranteId, pedido.restauranteId),
+            eq(TransaccionPuntosTable.claveIdempotencia, clave),
+            eq(TransaccionPuntosTable.pedidoUnificadoId, pedidoId)
+          )
+        )
+        .limit(1)
+
+      if (bonusRegistrado) {
+        const motivoReversion = `Anulación de puntos extra por cancelación de pedido #${pedido.id}`
+        const [reversionBonus] = await tx
+          .select({ id: TransaccionPuntosTable.id })
+          .from(TransaccionPuntosTable)
+          .where(
+            and(
+              eq(TransaccionPuntosTable.pedidoUnificadoId, pedidoId),
+              eq(TransaccionPuntosTable.tipo, 'ajuste_manual'),
+              eq(TransaccionPuntosTable.motivo, motivoReversion)
+            )
+          )
+          .limit(1)
+        if (!reversionBonus) {
+          await registrarTransaccionPuntos(tx, {
+            restauranteId: pedido.restauranteId,
+            clienteId: pedido.clienteId,
+            pedidoUnificadoId: pedido.id,
+            marketingCampanaId: bonusRegistrado.marketingCampanaId ?? null,
+            tipo: 'ajuste_manual',
+            puntos: -pedido.puntosBonus,
+            motivo: motivoReversion,
+          })
+        }
+      }
+    }
   })
 }
 
@@ -454,7 +551,11 @@ export async function listarTransaccionesCliente(
 // del programa, clientes con saldo y el ledger global de movimientos.
 
 /** Lo que el cliente gana por comprar o por unirse: la compra y la bienvenida, sin ajustes ni devoluciones. */
-export const TIPOS_GANANCIA_PUNTOS: readonly TipoTransaccionPuntos[] = ['suma_compra', 'bonus_bienvenida']
+export const TIPOS_GANANCIA_PUNTOS: readonly TipoTransaccionPuntos[] = [
+  'suma_compra',
+  'bonus_bienvenida',
+  'bonus_promocion',
+]
 
 /** Canjes: los tres tipos que consumen puntos del saldo del cliente. */
 export const TIPOS_CANJE_PUNTOS: readonly TipoTransaccionPuntos[] = [
@@ -498,6 +599,10 @@ export interface ResumenPuntosData {
   canjesDescuento: number
   puntosOtorgados30Dias: number
   canjes30Dias: number
+  /** Puntos extra de campañas/links, acreditados al cobrarse el pedido. */
+  puntosPromocionales: number
+  otorgamientosPromocionales: number
+  puntosPromocionales30Dias: number
   ultimoMovimientoAt: string | null
 }
 
@@ -529,6 +634,8 @@ export async function resumenPuntos(db: any, restauranteId: number): Promise<Res
       canjesProducto: sql<number>`count(CASE WHEN ${TransaccionPuntosTable.tipo} = 'canje_producto' THEN 1 END)`,
       canjesEnvio: sql<number>`count(CASE WHEN ${TransaccionPuntosTable.tipo} = 'canje_envio' THEN 1 END)`,
       canjesDescuento: sql<number>`count(CASE WHEN ${TransaccionPuntosTable.tipo} = 'canje_descuento' THEN 1 END)`,
+      puntosPromocionales: sql<number>`coalesce(sum(CASE WHEN ${TransaccionPuntosTable.tipo} = 'bonus_promocion' THEN ${TransaccionPuntosTable.puntos} ELSE 0 END), 0)`,
+      otorgamientosPromocionales: sql<number>`count(CASE WHEN ${TransaccionPuntosTable.tipo} = 'bonus_promocion' THEN 1 END)`,
       ultimoMovimientoAt: sql`max(${TransaccionPuntosTable.createdAt})`,
     })
     .from(TransaccionPuntosTable)
@@ -538,6 +645,7 @@ export async function resumenPuntos(db: any, restauranteId: number): Promise<Res
     .select({
       puntosOtorgados30Dias: sql<number>`coalesce(sum(CASE WHEN ${TransaccionPuntosTable.puntos} > 0 THEN ${TransaccionPuntosTable.puntos} ELSE 0 END), 0)`,
       canjes30Dias: sql<number>`count(CASE WHEN ${canje} THEN 1 END)`,
+      puntosPromocionales30Dias: sql<number>`coalesce(sum(CASE WHEN ${TransaccionPuntosTable.tipo} = 'bonus_promocion' THEN ${TransaccionPuntosTable.puntos} ELSE 0 END), 0)`,
     })
     .from(TransaccionPuntosTable)
     .where(
@@ -563,6 +671,9 @@ export async function resumenPuntos(db: any, restauranteId: number): Promise<Res
     canjesDescuento: aNumero(ledger?.canjesDescuento),
     puntosOtorgados30Dias: aNumero(ultimos30?.puntosOtorgados30Dias),
     canjes30Dias: aNumero(ultimos30?.canjes30Dias),
+    puntosPromocionales: aNumero(ledger?.puntosPromocionales),
+    otorgamientosPromocionales: aNumero(ledger?.otorgamientosPromocionales),
+    puntosPromocionales30Dias: aNumero(ultimos30?.puntosPromocionales30Dias),
     ultimoMovimientoAt: iso(ledger?.ultimoMovimientoAt),
   }
 }

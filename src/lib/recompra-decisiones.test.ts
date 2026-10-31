@@ -74,6 +74,14 @@ describe('las tres decisiones del envío manual', () => {
     expect(decidir({ descuento: 20 })).toMatchObject({ link: undefined, descuento: 20 })
   })
 
+  test('el link de puntos no puede llevar descuento ni sumarse al recordatorio', () => {
+    expect(decidir({ link: 'puntos', puntos: '150' })).toMatchObject({ link: 'puntos', puntos: 150 })
+    expect(rechaza({ link: 'puntos', descuento: 10 })).toBe(true)
+    expect(decidir({ usarPuntos: 'true' })).toMatchObject({ usarPuntos: true })
+    expect(rechaza({ usarPuntos: true, link: 'reactivacion' })).toBe(true)
+    expect(rechaza({ usarPuntos: true, puntos: 100 })).toBe(true)
+  })
+
   test('`receta` sigue siendo el nombre viejo de `segmento`, y `segmento` gana', () => {
     expect(decidir({ receta: 'perdido' }).segmento).toBe('perdido')
     expect(decidir({ receta: 'perdido', segmento: 'dormido' }).segmento).toBe('dormido')

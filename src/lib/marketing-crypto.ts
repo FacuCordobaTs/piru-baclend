@@ -4,9 +4,13 @@ export interface GrowthTokenPayload {
   rId: number
   cId: number
   campana: 'lo_mismo' | 'reactivacion'
-  modalidad: 'drawer_habitual' | 'descuento_banner'
+  modalidad: 'drawer_habitual' | 'descuento_banner' | 'puntos_banner'
   rep?: string
   dto?: number
+  /** Bonus de puntos de un link personal de recompra. Firmado; el checkout lo valida de nuevo. */
+  puntos?: number
+  /** Compra mínima en pesos para que el bonus respete el techo de margen. */
+  pmin?: number
   exp?: number | null
   nonce?: string
   /**

@@ -895,6 +895,8 @@ clientesRoute.post(
                     toque: res.toque ?? null,
                     nivel: res.nivel ?? null,
                     descuento: res.descuento ?? 0,
+                    puntos: res.puntos ?? 0,
+                    beneficioTipo: res.beneficioTipo ?? null,
                     link: res.link ?? null,
                     codigoDescuento: res.codigoDescuento ?? null,
                 },

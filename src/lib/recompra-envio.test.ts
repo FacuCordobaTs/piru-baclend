@@ -28,6 +28,33 @@ function envio(over: Partial<Parameters<typeof resolverEnvioRecompra>[0]> = {}) 
   })
 }
 
+describe('puntos como beneficio del envío', () => {
+  test('el link de puntos no emite cupón ni descuento', () => {
+    const d = envio({ link: 'puntos', puntos: 150 })
+    expect(d.link).toBe('puntos')
+    expect(d.beneficioTipo).toBe('puntos')
+    expect(d.puntos).toBe(150)
+    expect(d.descuento).toBe(0)
+    expect(d.emiteCupon).toBe(false)
+  })
+
+  test('sin cantidad elegida usa la sugerencia y respeta el máximo', () => {
+    const d = envio({ link: 'puntos', puntosSugeridos: 80, puntosMax: 100 })
+    expect(d.puntos).toBe(80)
+    expect(envio({ link: 'puntos', puntos: 900, puntosMax: 100 }).puntos).toBe(100)
+  })
+
+  test('el recordatorio de saldo también apaga el cupón y no suma puntos', () => {
+    const d = envio({ usarPuntos: true, saldoPuntos: 740 })
+    expect(d.beneficioTipo).toBe('usar_puntos')
+    expect(d.link).toBe('lo-mismo')
+    expect(d.puntos).toBe(0)
+    expect(d.descuento).toBe(0)
+    expect(d.emiteCupon).toBe(false)
+    expect(d.saldoPuntos).toBe(740)
+  })
+})
+
 describe('el toque elige el copy, la escalera elige el porcentaje', () => {
   test('sin decisiones el toque y el % son los de la escalera', () => {
     const d = envio()

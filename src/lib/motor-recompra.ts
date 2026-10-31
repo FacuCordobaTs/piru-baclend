@@ -1229,6 +1229,8 @@ async function despacharFilaAutomatica(db: Db, restauranteId: number, filaId: nu
         nivel: res.nivel ?? null,
         toqueEnviado: res.toque ?? toqueFila ?? null,
         toque: toqueFila ?? null,
+        puntosOtorgados: res.puntos ?? 0,
+        beneficioTipo: res.beneficioTipo ?? null,
         codigoDescuento: res.codigoDescuento ?? null,
       })
       .where(and(eq(ColaRecompraTable.id, filaId), eq(ColaRecompraTable.restauranteId, restauranteId)))
@@ -1863,6 +1865,8 @@ export async function listarHistorialRecompra(
       toque: sql<number | null>`coalesce(${ColaRecompraTable.toqueEnviado}, ${ColaRecompraTable.toque})`,
       linkModalidad: ColaRecompraTable.linkModalidad,
       descuentoEnviado: ColaRecompraTable.descuentoEnviado,
+      puntosOtorgados: ColaRecompraTable.puntosOtorgados,
+      beneficioTipo: ColaRecompraTable.beneficioTipo,
       enviadoAt: ColaRecompraTable.enviadoAt,
       ultimoIntentoAt: ColaRecompraTable.ultimoIntentoAt,
       errorEnvio: ColaRecompraTable.errorEnvio,
@@ -2067,7 +2071,7 @@ export function horaArgentinaActual(ahora: number = Date.now()): number {
 // ── Operación manual desde la cola ───────────────────────────────────────────
 
 /** Las tres decisiones del operador sobre un envío puntual: mensaje, link y descuento. */
-type OpcionesMensajeManual = Pick<OpcionesEnvioRecupero, 'receta' | 'segmento' | 'toque' | 'link' | 'descuento'>
+type OpcionesMensajeManual = Pick<OpcionesEnvioRecupero, 'receta' | 'segmento' | 'toque' | 'link' | 'descuento' | 'puntos' | 'usarPuntos'>
 
 /** Si un mensaje manual puede salir ahora y, si no, por qué (dicho para el que lo manda). */
 export interface PermisoEnvioManual {
@@ -2186,6 +2190,8 @@ export async function obtenerMensajeFilaCola(
     toque: opciones.toque ?? fila.toque ?? undefined,
     link: fila.tipoMensaje === 'dia_flojo' ? 'lo-mismo' : opciones.link,
     descuento: fila.tipoMensaje === 'dia_flojo' ? 0 : opciones.descuento ?? tanda.descuento,
+    puntos: fila.tipoMensaje === 'dia_flojo' ? undefined : opciones.puntos,
+    usarPuntos: fila.tipoMensaje === 'dia_flojo' ? false : opciones.usarPuntos,
   })
   if (!prep.ok) return { ok: false, mensaje: prep.mensaje }
   return {
@@ -2208,7 +2214,7 @@ export async function marcarFilaColaComoEnviadaManual(
   restauranteId: number,
   filaId: number,
   opciones: OpcionesMensajeManual = {},
-): Promise<{ ok: boolean; mensaje?: string; toque?: number; nivel?: number; descuento?: number; link?: string; codigoDescuento?: string | null }> {
+): Promise<{ ok: boolean; mensaje?: string; toque?: number; nivel?: number; descuento?: number; puntos?: number; beneficioTipo?: string | null; link?: string; codigoDescuento?: string | null }> {
   return db.transaction(async tx => {
     // Serializa los registros manuales de este local: dos dispositivos que confirman la misma
     // fila a la vez no duplican el ledger (el segundo la ve ya enviada).
@@ -2223,7 +2229,7 @@ async function registrarFilaColaManual(
   restauranteId: number,
   filaId: number,
   opciones: OpcionesMensajeManual = {},
-): Promise<{ ok: boolean; mensaje?: string; toque?: number; nivel?: number; descuento?: number; link?: string; codigoDescuento?: string | null }> {
+): Promise<{ ok: boolean; mensaje?: string; toque?: number; nivel?: number; descuento?: number; puntos?: number; beneficioTipo?: string | null; link?: string; codigoDescuento?: string | null }> {
   const [fila] = await db
     .select()
     .from(ColaRecompraTable)
@@ -2246,6 +2252,8 @@ async function registrarFilaColaManual(
     toque: opciones.toque ?? fila.toque ?? undefined,
     link: fila.tipoMensaje === 'dia_flojo' ? 'lo-mismo' : opciones.link,
     descuento: fila.tipoMensaje === 'dia_flojo' ? 0 : opciones.descuento ?? tanda.descuento,
+    puntos: fila.tipoMensaje === 'dia_flojo' ? undefined : opciones.puntos,
+    usarPuntos: fila.tipoMensaje === 'dia_flojo' ? false : opciones.usarPuntos,
   })
   if (!prep.ok) return { ok: false, mensaje: prep.mensaje }
   // El nivel sigue siendo el de la escalera: cambiar de receta, de link o de descuento no reinicia
@@ -2255,6 +2263,8 @@ async function registrarFilaColaManual(
   const link = prep.ok ? prep.data.link : 'lo-mismo'
   const codigoDescuento = prep.ok ? prep.data.codigoDescuento : (fila.codigoDescuento ?? null)
   const descuento = prep.ok ? prep.data.descuento : 0
+  const puntosOtorgados = prep.ok ? prep.data.puntos : 0
+  const beneficioTipo = prep.ok ? prep.data.beneficioTipo : null
   const plantillaWhatsapp = prep.ok ? prep.data.plantillaWhatsapp : PLANTILLA_RECUPERO_WHATSAPP
 
   await db
@@ -2272,6 +2282,8 @@ async function registrarFilaColaManual(
       toque: fila.toque ?? nivel,
       linkModalidad: link,
       descuentoEnviado: descuento,
+      puntosOtorgados,
+      beneficioTipo,
       codigoDescuento,
     })
     .where(and(eq(ColaRecompraTable.id, filaId), eq(ColaRecompraTable.restauranteId, restauranteId)))
@@ -2284,6 +2296,8 @@ async function registrarFilaColaManual(
     toque,
     modalidad: link,
     descuentoPorcentaje: descuento,
+    puntosOtorgados,
+    beneficioTipo,
     codigoDescuento,
     segmento: fila.segmento,
   })
@@ -2322,6 +2336,8 @@ async function registrarFilaColaManual(
     toque,
     nivel,
     descuento,
+    puntos: puntosOtorgados,
+    beneficioTipo,
     link,
     codigoDescuento,
   }

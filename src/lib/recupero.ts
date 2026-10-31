@@ -86,7 +86,16 @@ import {
   type EstadoRecupero,
   type Toque,
 } from './recompra-goteo'
-import { resolverEnvioRecompra, type OrigenDescuento } from './recompra-envio'
+import { resolverEnvioRecompra, type OrigenDescuento, type BeneficioTipoEnvio } from './recompra-envio'
+import { cargarPoliticaIncentivosPuntos, contarBonusPuntosCliente } from './puntos-beneficios-pedido'
+import {
+  compraMinimaParaPuntos,
+  lineaBonusPuntos,
+  lineaUsarPuntos,
+  PUNTOS_BONUS_VIGENCIA_HORAS,
+  recomendarPuntosParaRecompra,
+  sugerirBonusPuntos,
+} from './puntos-incentivos'
 
 // El vocabulario del goteo vive en el recetario; se reexporta para no romper a sus consumidores
 // (motor-recompra, las rutas de clientes y los tipos del admin lo importan desde acá desde antes).
@@ -346,6 +355,8 @@ export interface ResultadoEnvioRecupero {
   /** Toque que salió (1..3). El `nivel` es el de la escalera: pueden diferir en el envío manual. */
   toque?: number
   codigoDescuento?: string | null
+  puntos?: number
+  beneficioTipo?: BeneficioTipoEnvio
   saldoMarketing?: number
   plantillaWhatsapp?: string
   errorEnvio?: string | null
@@ -372,6 +383,10 @@ export interface OpcionesEnvioRecupero {
   link?: ModalidadLink
   /** % forzado a mano (sólo modo manual). Sin él manda el escalón o el techo de la receta. */
   descuento?: number
+  /** Puntos extra elegidos a mano para el link de puntos. */
+  puntos?: number
+  /** Recordar el saldo del club, sin descuento ni bonus. */
+  usarPuntos?: boolean
 }
 
 /**
@@ -410,6 +425,25 @@ export interface OpcionLinkRecompra {
   esActual: boolean
 }
 
+export interface OpcionPuntosRecompra {
+  /** Hay club activo y el cliente puede recibir un incentivo de puntos. */
+  disponible: boolean
+  saldo: number
+  /** Puntos sugeridos para el link "sumar puntos". */
+  sugerido: number
+  /** Tope duro por pedido. */
+  maximo: number
+  /** Compra mínima que respeta el techo de margen para el sugerido. */
+  minimoCompraSugerido: number
+  premio: string | null
+  puedeUsarSaldo: boolean
+  faltan: number | null
+  topePorcentaje: number
+  maximoPorPedido: number
+  otorgadosCliente30Dias: number
+  maximoPorCliente30Dias: number
+}
+
 export interface OpcionesMensajeRecompra {
   segmentos: {
     codigo: SegmentoRecompra
@@ -421,6 +455,8 @@ export interface OpcionesMensajeRecompra {
   toques: OpcionToqueRecompra[]
   links: OpcionLinkRecompra[]
   descuentos: { min: number; max: number; sugeridos: number[]; recomendado: number }
+  /** Null cuando el club está pausado: la UI no ofrece el link de puntos. */
+  puntos: OpcionPuntosRecompra | null
 }
 
 export interface DatosMensajeRecupero {
@@ -453,6 +489,19 @@ export interface DatosMensajeRecupero {
   conImagen: boolean
   /** Con qué modalidad abre el link. */
   link: ModalidadLink
+  /** Qué beneficio lleva el envío: descuento, puntos extra o recordatorio de saldo. */
+  beneficioTipo: BeneficioTipoEnvio
+  /** Puntos extra prometidos por el link. 0 salvo `beneficioTipo='puntos'`. */
+  puntos: number
+  /** Compra mínima que exige el bonus para respetar el techo de margen. */
+  puntosCompraMinima: number
+  /** Saldo actual del cliente en el club. */
+  puntosSaldo: number
+  /** Premio que el saldo ya alcanza o casi alcanza, para el recordatorio. */
+  puntosPremio: string | null
+  puntosFaltan: number | null
+  /** Puntos que el operador puede pedir en el diálogo. */
+  puntosSugeridos: number | null
   /** De dónde salió el descuento aplicado. */
   descuentoOrigen: OrigenDescuento
   expiraHoras: number | null
@@ -549,6 +598,8 @@ export async function prepararMensajeRecupero(
   const diasDesdeUltimo = ultimoPedidoMs != null
     ? Math.max(0, Math.floor((Date.now() - ultimoPedidoMs) / MS_POR_DIA))
     : null
+  const tickets = pedidosValidos.map((p) => Number(p.total) || 0).filter((n) => n > 0)
+  const ticketPromedio = tickets.length > 0 ? tickets.reduce((a, b) => a + b, 0) / tickets.length : 0
 
   // Producto favorito (más pedido por cantidad) + su foto para el header.
   let productoFavorito = 'tu pedido de siempre'
@@ -610,8 +661,40 @@ export async function prepararMensajeRecupero(
   const estado = estadoRecupero(toquesMap[clienteId] ?? [], ultimoPedidoMs)
   const escalon = ESCALERA[estado.proximoNivel - 1]
 
-  // El toque elegido a mano se respeta tal cual (es decisión editorial); el `nivel` que se registra
-  // es igual el del escalón. Ver `recompra-envio.ts`, que es donde vive esta regla.
+  // Club de Puntos como incentivo: el motor nunca regala puntos en automático. Lo que sí hace,
+  // cuando el saldo alcanza o está cerca de un premio, es recordarlo (cuesta cero y evita un
+  // descuento). El bonus en puntos se elige a mano o se configura en una campaña.
+  const politicaPuntos = await cargarPoliticaIncentivosPuntos(db, restauranteId)
+  const puntosDisponibles = politicaPuntos.disponible && politicaPuntos.config != null
+  const configPuntosIncentivo = politicaPuntos.config
+  const saldoPuntos = Math.max(0, Number(cli.puntos) || 0)
+  const otorgadosCliente30Dias = puntosDisponibles
+    ? await contarBonusPuntosCliente(db, restauranteId, clienteId)
+    : 0
+  const recordatorio = puntosDisponibles && configPuntosIncentivo
+    ? recomendarPuntosParaRecompra({
+      config: configPuntosIncentivo,
+      ticketPromedio,
+      descuentoEscalon: escalon.descuento,
+      otorgadosCliente30Dias,
+      saldoPuntos,
+    })
+    : null
+  const sugerenciaPuntos = puntosDisponibles && configPuntosIncentivo
+    ? sugerirBonusPuntos({
+      config: configPuntosIncentivo,
+      ticketPromedio,
+      descuentoEscalon: escalon.descuento,
+      otorgadosCliente30Dias,
+    })
+    : null
+  const puedeBonusPuntos = Boolean(
+    configPuntosIncentivo && otorgadosCliente30Dias < configPuntosIncentivo.puntosBonusPorCliente30Dias,
+  )
+  const usarPuntosAutomatico = opciones.link == null && opciones.puntos == null && opciones.descuento == null
+    && opciones.receta == null && recordatorio?.tipo === 'usar_saldo'
+  const usarPuntosElegido = puntosDisponibles && opciones.usarPuntos === true && opciones.link == null && opciones.puntos == null && opciones.descuento == null
+
   const toquePlanificado = opciones.toque != null ? normalizarToque(opciones.toque) : null
   const envio = resolverEnvioRecompra({
     escalon,
@@ -621,8 +704,20 @@ export async function prepararMensajeRecupero(
     toque: toquePlanificado,
     link: opciones.link,
     descuento: opciones.descuento,
+    puntos: opciones.puntos,
+    puntosSugeridos: sugerenciaPuntos?.puntos ?? null,
+    puntosMax: configPuntosIncentivo?.puntosBonusMaximo ?? null,
+    usarPuntos: usarPuntosAutomatico || usarPuntosElegido,
+    saldoPuntos,
   })
-  const { toque, link, descuento, descuentoOrigen, beneficio, beneficioBase } = envio
+  const { toque, link, descuento, descuentoOrigen, beneficio, beneficioBase, beneficioTipo, puntos } = envio
+  if (opciones.link === 'puntos' && puntos <= 0) {
+    return {
+      ok: false,
+      motivo: 'sin_puntos',
+      mensaje: 'El club no puede ofrecer puntos extra en este momento (revisá los topes o la compra mínima)',
+    }
+  }
   const recetaToque = resolverRecetaToque(segmento, toque)
 
   // 4. Cupón: es el MECANISMO DE COBRO, no el vehículo del mensaje. El checkout recibe un
@@ -640,19 +735,30 @@ export async function prepararMensajeRecupero(
   // 5. Link de micro-campaña con el carrito del último pedido adentro del token cifrado (antes:
   // `username?rep=12x2-15x1` a la vista). La tienda resuelve el slug y reconstruye cliente +
   // carrito, así que el mensaje ya no expone ids.
-  const esReactivacion = link === 'reactivacion'
+  const esPuntos = beneficioTipo === 'puntos'
+  const esRecordatorioPuntos = beneficioTipo === 'usar_puntos'
+  const puntosCompraMinima = esPuntos && configPuntosIncentivo
+    ? compraMinimaParaPuntos(configPuntosIncentivo, puntos)
+    : 0
+  const esReactivacion = link === 'reactivacion' || esPuntos
   const tokenMicroCampana = cifrarGrowthPayload({
     rId: restauranteId,
     cId: clienteId,
     campana: esReactivacion ? 'reactivacion' : 'lo_mismo',
-    modalidad: esReactivacion ? 'descuento_banner' : 'drawer_habitual',
+    modalidad: esPuntos ? 'drawer_habitual' : esReactivacion ? 'descuento_banner' : 'drawer_habitual',
     rep: repParam || undefined,
     // El % viaja por el link: la tienda muestra el banner y la carta con descuento y de ahí siembra
-    // el cupón en el checkout, sin que el cliente tipee nada.
+    // el cupón en el checkout, sin que el cliente tipee nada. En puntos, `dto` va en 0.
     dto: descuento,
+    // Bonus de puntos firmado. La compra mínima hace que el valor de esos puntos respete el techo
+    // de margen; el checkout vuelve a validar cliente, vencimiento y mínimo.
+    ...(esPuntos ? { puntos, pmin: puntosCompraMinima } : {}),
     // El link vive lo mismo que el cupón (nivel 3: 48 hs). Es de EXHIBICIÓN: el vencimiento que se
-    // hace cumplir de verdad es `codigo_descuento.fechaFin`, que fija `upsertCuponRecupero`.
-    exp: beneficio.expiraHoras != null ? Date.now() + beneficio.expiraHoras * MS_POR_HORA : null,
+    // hace cumplir de verdad es `codigo_descuento.fechaFin`, que fija `upsertCuponRecupero`. Los
+    // puntos no necesitan urgencia de margen: viven una semana.
+    exp: esPuntos
+      ? Date.now() + PUNTOS_BONUS_VIGENCIA_HORAS * MS_POR_HORA
+      : beneficio.expiraHoras != null ? Date.now() + beneficio.expiraHoras * MS_POR_HORA : null,
     // El cupón de este link ya lo emitió el envío: el resolver de la tienda lo LEE y no lo mintea
     // (ver `resolverCuponLinkRecupero` y `marketing.ts`).
     origen: 'recompra',
@@ -667,7 +773,16 @@ export async function prepararMensajeRecupero(
   const pathBoton = pathBotonPlantilla(rest, tokenMicroCampana, slugToque)
 
   const tiempoSinPedir = tiempoSinPedirTexto(diasDesdeUltimo)
-  const incentivo = lineaBeneficioRecompra(beneficio, toque)
+  const incentivo = esPuntos && puntos > 0
+    ? lineaBonusPuntos(puntos, puntosCompraMinima)
+    : esRecordatorioPuntos
+      ? lineaUsarPuntos({
+        saldo: saldoPuntos,
+        premio: recordatorio?.tipo === 'usar_saldo' ? recordatorio.premio : null,
+        faltan: recordatorio?.tipo === 'usar_saldo' ? recordatorio.faltan : 0,
+        puedeCanjear: recordatorio?.tipo === 'usar_saldo' ? recordatorio.puedeCanjear : false,
+      })
+      : lineaBeneficioRecompra(beneficio, toque)
   const nombreCliente = cli.nombre?.trim() || 'Cliente'
   const nombreLocal = rest.nombre?.trim() || 'El local'
 
@@ -735,6 +850,12 @@ export async function prepararMensajeRecupero(
         descripcion: 'Abre la tienda con el % ya aplicado. El cliente no tipea ningún código.',
         esActual: link === 'reactivacion',
       },
+      ...(puntosDisponibles && puedeBonusPuntos ? [{
+        modalidad: 'puntos' as ModalidadLink,
+        titulo: 'Volver sumando puntos',
+        descripcion: 'Abre su pedido y le suma puntos extra al cobrarse. No lleva descuento: cuida el margen.',
+        esActual: link === 'puntos',
+      }] : []),
     ],
     descuentos: {
       min: DESCUENTO_MIN,
@@ -742,6 +863,20 @@ export async function prepararMensajeRecupero(
       sugeridos: [10, 20],
       recomendado: beneficioBase.descuento,
     },
+    puntos: puntosDisponibles && configPuntosIncentivo ? {
+      disponible: true,
+      saldo: saldoPuntos,
+      sugerido: sugerenciaPuntos?.puntos ?? 0,
+      maximo: configPuntosIncentivo.puntosBonusMaximo,
+      minimoCompraSugerido: sugerenciaPuntos?.compraMinima ?? 0,
+      premio: recordatorio?.tipo === 'usar_saldo' ? (recordatorio.premio?.descripcion ?? null) : null,
+      puedeUsarSaldo: recordatorio?.tipo === 'usar_saldo',
+      faltan: recordatorio?.tipo === 'usar_saldo' ? recordatorio.faltan : null,
+      topePorcentaje: configPuntosIncentivo.puntosBonusTopePorcentaje,
+      maximoPorPedido: configPuntosIncentivo.puntosBonusMaximo,
+      otorgadosCliente30Dias,
+      maximoPorCliente30Dias: configPuntosIncentivo.puntosBonusPorCliente30Dias,
+    } : null,
   }
 
   return {
@@ -763,6 +898,13 @@ export async function prepararMensajeRecupero(
       plantillaWhatsapp: recetaToque.plantilla,
       conImagen: recetaToque.conImagen,
       link,
+      beneficioTipo,
+      puntos,
+      puntosCompraMinima,
+      puntosSaldo: saldoPuntos,
+      puntosPremio: recordatorio?.tipo === 'usar_saldo' ? (recordatorio.premio?.descripcion ?? null) : null,
+      puntosFaltan: recordatorio?.tipo === 'usar_saldo' ? recordatorio.faltan : null,
+      puntosSugeridos: sugerenciaPuntos?.puntos ?? null,
       descuentoOrigen,
       expiraHoras: beneficio.expiraHoras,
       segmento,
@@ -807,6 +949,8 @@ export async function enviarRecuperoDormido(
     toque: opciones.toque,
     link: opciones.link,
     descuento: opciones.descuento,
+    puntos: opciones.puntos,
+    usarPuntos: opciones.usarPuntos,
   })
   if (!prep.ok) {
     return { ok: false, motivo: prep.motivo as any, mensaje: prep.mensaje, estado: prep.estado }
@@ -939,6 +1083,8 @@ export async function enviarRecuperoDormido(
     toque: data.toque,
     modalidad: data.link,
     descuentoPorcentaje: data.descuento,
+    puntosOtorgados: data.puntos,
+    beneficioTipo: data.beneficioTipo,
     codigoDescuento: data.codigoDescuento,
     segmento: data.segmento,
   })
@@ -953,6 +1099,8 @@ export async function enviarRecuperoDormido(
     nivel: data.escalon.nivel,
     toque: data.toque,
     codigoDescuento: data.codigoDescuento,
+    puntos: data.puntos,
+    beneficioTipo: data.beneficioTipo,
     saldoMarketing: confirmacion.saldoMarketingDisponible,
     plantillaWhatsapp: data.plantillaWhatsapp,
     estado: nuevoEstado,

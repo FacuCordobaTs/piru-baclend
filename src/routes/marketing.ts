@@ -58,6 +58,8 @@ import {
   type RepositorioEnlacesMarketing,
 } from '../lib/marketing-enlaces'
 import { computarPerfilesRFM } from '../lib/clientes-rfm'
+import { cargarPoliticaIncentivosPuntos } from '../lib/puntos-beneficios-pedido'
+import { maximoPuntosParaCompra } from '../lib/puntos-incentivos'
 import { chequearProteccionMarketing, VENTANA_TOPE_DIAS } from '../lib/proteccion-base'
 import { COOLDOWN_HORAS, resolverCuponLinkRecupero } from '../lib/recupero'
 import { registrarContactoManual } from '../lib/motor-recompra'
@@ -274,6 +276,12 @@ export interface CampanaSmartLinkPublica {
   codigoDescuentoId?: number | null
   codigoDescuento?: string | null
   descuentoProductoPorcentaje: number
+  beneficioTipo?: 'descuento' | 'puntos'
+  puntosBeneficio?: number
+  puntosMontoMinimo?: string | number
+  puntosLimiteOtorgamientos?: number | null
+  puntosLimitePorCliente?: number
+  puntosOtorgados?: number
   limiteUsos: number | null
   usosActuales: number
   diaSemana?: number | null
@@ -287,9 +295,27 @@ export interface CampanaSmartLinkPublica {
   utmContent: string | null
 }
 
-function beneficioSmartLink(enlace: Pick<CampanaSmartLinkPublica, 'codigoDescuentoId' | 'codigoDescuento'>) {
-  return enlace.codigoDescuentoId != null && enlace.codigoDescuento
+function beneficioSmartLink(enlace: {
+  codigoDescuentoId?: number | null
+  codigoDescuento?: string | null
+  beneficioTipo?: 'descuento' | 'puntos' | null
+  puntosBeneficio?: number | null
+  puntosMontoMinimo?: string | number | null
+}) {
+  const cupon = enlace.codigoDescuentoId != null && enlace.codigoDescuento
     ? { codigoDescuentoId: enlace.codigoDescuentoId, codigo: enlace.codigoDescuento }
+    : {}
+  const puntos = enlace.beneficioTipo === 'puntos' && (enlace.puntosBeneficio ?? 0) > 0
+    && (enlace.puntosLimiteOtorgamientos == null || (enlace.puntosOtorgados ?? 0) < enlace.puntosLimiteOtorgamientos)
+    ? {
+        puntos: {
+          cantidad: enlace.puntosBeneficio,
+          montoMinimo: Number(enlace.puntosMontoMinimo ?? 0),
+        },
+      }
+    : {}
+  return Object.keys(cupon).length || Object.keys(puntos).length
+    ? { ...cupon, ...puntos }
     : undefined
 }
 
@@ -321,7 +347,11 @@ const smartLinkContextoSchema = z.object({
   eventoUuid: identificadorSchema.optional(),
 })
 
-function destinoSmartLink(campana: CampanaSmartLinkPublica) {
+function destinoSmartLink(campana: {
+  destinoTipo: 'tienda' | 'producto' | 'carrito'
+  productoId: number | null
+  carritoRep: string | null
+}) {
   if (campana.destinoTipo === 'producto' && campana.productoId != null) {
     return { tipo: 'producto' as const, productoId: campana.productoId }
   }
@@ -389,6 +419,11 @@ export function crearMarketingSmartLinksRoute(dependencias: DependenciasSmartLin
           productoId: campana.productoId,
           carritoRep: campana.carritoRep,
           descuentoPorcentaje: campana.descuentoProductoPorcentaje,
+          beneficioTipo: campana.beneficioTipo ?? 'descuento',
+          puntosBeneficio: campana.puntosLimiteOtorgamientos != null && (campana.puntosOtorgados ?? 0) >= campana.puntosLimiteOtorgamientos
+            ? 0
+            : (campana.puntosBeneficio ?? 0),
+          puntosMontoMinimo: Number(campana.puntosMontoMinimo ?? 0),
           limiteUsos: campana.limiteUsos,
           usosActuales: campana.usosActuales,
           usosRestantes: campana.limiteUsos == null ? null : Math.max(0, campana.limiteUsos - campana.usosActuales),
@@ -430,6 +465,11 @@ function crearRepositorioSmartLinksDrizzle(): RepositorioSmartLinksMarketing {
         codigoDescuentoId: MarketingCampanaTable.codigoDescuentoId,
         codigoDescuento: CodigoDescuentoTable.codigo,
         descuentoProductoPorcentaje: MarketingCampanaTable.descuentoProductoPorcentaje,
+        beneficioTipo: MarketingCampanaTable.beneficioTipo,
+        puntosBeneficio: MarketingCampanaTable.puntosBeneficio,
+        puntosMontoMinimo: MarketingCampanaTable.puntosMontoMinimo,
+        puntosLimiteOtorgamientos: MarketingCampanaTable.puntosLimiteOtorgamientos,
+        puntosLimitePorCliente: MarketingCampanaTable.puntosLimitePorCliente,
         limiteUsos: MarketingCampanaTable.limiteUsos,
         usosActuales: MarketingCampanaTable.usosActuales,
         diaSemana: MarketingCampanaTable.diaSemana,
@@ -453,7 +493,20 @@ function crearRepositorioSmartLinksDrizzle(): RepositorioSmartLinksMarketing {
           eq(MarketingCampanaTable.slug, slug),
           eq(MarketingCampanaTable.estado, 'activa'),
         )).limit(1)
-      return campana ?? null
+      if (!campana) return null
+      if (campana.beneficioTipo === 'puntos' && campana.puntosLimiteOtorgamientos != null) {
+        const [otorgados] = await db.select({ total: sql<number>`count(*)` })
+          .from(PedidoUnificadoTable)
+          .where(and(
+            eq(PedidoUnificadoTable.restauranteId, campana.restauranteId),
+            eq(PedidoUnificadoTable.marketingCampanaId, campana.id),
+            sql`${PedidoUnificadoTable.puntosBonus} > 0`,
+            eq(PedidoUnificadoTable.pagado, true),
+            sql`${PedidoUnificadoTable.estado} <> 'cancelled'`,
+          ))
+        return { ...campana, puntosOtorgados: Number(otorgados?.total) || 0 }
+      }
+      return campana
     },
   }
 }
@@ -1004,6 +1057,15 @@ export function crearMarketingGrowthPublicRoute(db = drizzle(pool)): Hono {
           codigoCupon: cuponCodigo,
           codigoDescuentoId: cuponId,
         },
+        // El bonus de puntos del link personal. Reabrir el link no extiende el token; el
+        // checkout vuelve a validar cliente, vencimiento y compra mínima.
+        puntos: payload.puntos && payload.puntos > 0
+          ? {
+              activo: payload.exp == null || payload.exp >= Date.now(),
+              cantidad: payload.puntos,
+              montoMinimo: Math.max(0, Number(payload.pmin) || 0),
+            }
+          : undefined,
       },
     })
   } catch (err: any) {
@@ -1045,6 +1107,11 @@ const camposCampanaSchema = z.object({
   carritoRep: z.string().trim().max(2048).nullable().optional(),
   codigoDescuentoId: z.number().int().positive().nullable().optional(),
   descuentoProductoPorcentaje: z.number().int().min(0).max(100).optional(),
+  beneficioTipo: z.enum(['descuento', 'puntos']).optional(),
+  puntosBeneficio: z.number().int().min(0).max(10000).optional(),
+  puntosMontoMinimo: z.number().min(0).max(99999999).optional(),
+  puntosLimiteOtorgamientos: z.number().int().positive().nullable().optional(),
+  puntosLimitePorCliente: z.number().int().min(1).max(50).optional(),
   limiteUsos: z.number().int().positive().nullable().optional(),
   diaSemana: z.number().int().min(0).max(6).nullable().optional(),
   fechaInicio: fechaOpcionalSchema,
@@ -1068,6 +1135,14 @@ const camposCampanaSchema = z.object({
   }
   if (valor.fechaInicio && valor.fechaFin && valor.fechaFin <= valor.fechaInicio) {
     ctx.addIssue({ code: 'custom', path: ['fechaFin'], message: 'La fecha de fin debe ser posterior al inicio' })
+  }
+  if (valor.beneficioTipo === 'puntos') {
+    if (!valor.puntosBeneficio || valor.puntosBeneficio <= 0) {
+      ctx.addIssue({ code: 'custom', path: ['puntosBeneficio'], message: 'El beneficio de puntos necesita una cantidad mayor a cero' })
+    }
+    if (!valor.puntosMontoMinimo || valor.puntosMontoMinimo <= 0) {
+      ctx.addIssue({ code: 'custom', path: ['puntosMontoMinimo'], message: 'Indicá la compra mínima que protege el margen de los puntos' })
+    }
   }
 })
 
@@ -1095,8 +1170,22 @@ export interface RepositorioCampanasMarketing {
 
 function valoresCampana(input: Partial<CampanaInput>) {
   const valores: Record<string, unknown> = {}
-  const campos = ['diaSemana', 'nombre', 'tipo', 'categoria', 'recetaCodigo', 'estado', 'destinoTipo', 'productoId', 'carritoRep', 'codigoDescuentoId', 'descuentoProductoPorcentaje', 'limiteUsos', 'fechaInicio', 'fechaFin', 'utmSource', 'utmMedium', 'utmCampaign', 'utmTerm', 'utmContent', 'usaGrupoControl'] as const
+  const campos = ['diaSemana', 'nombre', 'tipo', 'categoria', 'recetaCodigo', 'estado', 'destinoTipo', 'productoId', 'carritoRep', 'codigoDescuentoId', 'descuentoProductoPorcentaje', 'beneficioTipo', 'puntosBeneficio', 'puntosMontoMinimo', 'puntosLimiteOtorgamientos', 'puntosLimitePorCliente', 'limiteUsos', 'fechaInicio', 'fechaFin', 'utmSource', 'utmMedium', 'utmCampaign', 'utmTerm', 'utmContent', 'usaGrupoControl'] as const
   for (const campo of campos) if (input[campo] !== undefined) valores[campo] = input[campo]
+  if (input.puntosMontoMinimo !== undefined) valores.puntosMontoMinimo = Number(input.puntosMontoMinimo).toFixed(2)
+  // Un link promete descuento o puntos, nunca las dos cosas. Al cambiar de beneficio se
+  // limpian los campos del otro para que un payload viejo no deje un beneficio oculto.
+  if (input.beneficioTipo === 'puntos') {
+    valores.descuentoProductoPorcentaje = 0
+    valores.codigoDescuentoId = null
+    valores.limiteUsos = null
+  }
+  if (input.beneficioTipo === 'descuento') {
+    valores.puntosBeneficio = 0
+    valores.puntosMontoMinimo = '0.00'
+    valores.puntosLimiteOtorgamientos = null
+    valores.puntosLimitePorCliente = 1
+  }
   // Una campaña que abre la tienda es estrictamente de seguimiento. Limpiar
   // estos campos evita que un payload malformado conserve una oferta o un
   // cupo de una promoción anterior al cambiarla a campaña normal.
@@ -1205,6 +1294,44 @@ async function validarReferenciasCampana(repositorio: RepositorioCampanasMarketi
   return null
 }
 
+/**
+ * Ajusta el bonus de puntos de una campaña al techo de margen del club. La promesa del link y lo
+ * que el checkout puede acreditar tienen que coincidir: si el dueño pide más puntos de los que
+ * entran en su compra mínima, se guarda el máximo permitido en vez de prometer de más.
+ * Sólo toca las campañas de puntos: una campaña de descuento no abre la configuración del club.
+ */
+async function ajustarPuntosCampana(
+  restauranteId: number,
+  input: Partial<CampanaInput>,
+  previo?: Partial<CampanaInput> | null,
+): Promise<{ ok: true; input: Partial<CampanaInput> } | { ok: false; message: string }> {
+  const tipo = input.beneficioTipo ?? previo?.beneficioTipo
+  if (tipo !== 'puntos') return { ok: true, input }
+  const puntos = Number(input.puntosBeneficio ?? previo?.puntosBeneficio ?? 0)
+  const minimo = Number(input.puntosMontoMinimo ?? previo?.puntosMontoMinimo ?? 0)
+  if (!Number.isFinite(puntos) || puntos <= 0) return { ok: false, message: 'Indicá cuántos puntos extra otorga la campaña' }
+  if (!Number.isFinite(minimo) || minimo <= 0) return { ok: false, message: 'Indicá la compra mínima que protege el margen de los puntos' }
+  const politica = await cargarPoliticaIncentivosPuntos(drizzle(pool), restauranteId)
+  if (!politica.disponible || !politica.config) {
+    return { ok: false, message: 'El Club de Puntos está pausado: activalo para ofrecer puntos en una campaña' }
+  }
+  if (politica.config.puntosBonusPorCliente30Dias < 1) {
+    return { ok: false, message: 'Los puntos extra están desactivados para los clientes: subí el cupo en el Club de puntos' }
+  }
+  const maximo = maximoPuntosParaCompra(politica.config, minimo)
+  if (maximo < 1) {
+    return { ok: false, message: 'La compra mínima es demasiado baja para un bonus de puntos: subila o reducí los puntos' }
+  }
+  return {
+    ok: true,
+    input: {
+      ...input,
+      puntosBeneficio: Math.min(Math.trunc(puntos), maximo),
+      puntosMontoMinimo: minimo,
+    },
+  }
+}
+
 const idParamSchema = z.object({ id: z.coerce.number().int().positive() })
 
 // Estas subrutas comparten /marketing. Los middlewares se registran por endpoint:
@@ -1221,7 +1348,9 @@ export function crearMarketingCampanasRoute(
     if (await repositorio.slugExiste(restauranteId, input.slug)) return c.json({ success: false, message: 'Ya existe una campaña con ese slug' }, 409)
     const error = await validarReferenciasCampana(repositorio, restauranteId, input)
     if (error) return c.json({ success: false, message: error }, 400)
-    return c.json({ success: true, data: await repositorio.crear(restauranteId, input) }, 201)
+    const ajuste = await ajustarPuntosCampana(restauranteId, input)
+    if (!ajuste.ok) return c.json({ success: false, message: ajuste.message }, 400)
+    return c.json({ success: true, data: await repositorio.crear(restauranteId, ajuste.input as CampanaCreadaInput) }, 201)
   })
   route.get('/campanas/:id', ...middlewares, zValidator('param', idParamSchema), async (c) => {
     const campana = await repositorio.buscar((c as any).user.id, c.req.valid('param').id)
@@ -1229,10 +1358,13 @@ export function crearMarketingCampanasRoute(
   })
   route.put('/campanas/:id', ...middlewares, zValidator('param', idParamSchema), zValidator('json', editarCampanaSchema), async (c) => {
     const restauranteId = (c as any).user.id as number; const id = c.req.valid('param').id; const input = c.req.valid('json')
-    if (!await repositorio.buscar(restauranteId, id)) return c.json({ success: false, message: 'Campaña no encontrada' }, 404)
+    const previo = await repositorio.buscar(restauranteId, id)
+    if (!previo) return c.json({ success: false, message: 'Campaña no encontrada' }, 404)
     const error = await validarReferenciasCampana(repositorio, restauranteId, input)
     if (error) return c.json({ success: false, message: error }, 400)
-    return c.json({ success: true, data: await repositorio.actualizar(restauranteId, id, input) })
+    const ajuste = await ajustarPuntosCampana(restauranteId, input, previo)
+    if (!ajuste.ok) return c.json({ success: false, message: ajuste.message }, 400)
+    return c.json({ success: true, data: await repositorio.actualizar(restauranteId, id, ajuste.input) })
   })
   route.post('/campanas/:id/desactivar', ...middlewares, zValidator('param', idParamSchema), async (c) => {
     const campana = await repositorio.buscar((c as any).user.id, c.req.valid('param').id)

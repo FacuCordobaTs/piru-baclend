@@ -28,11 +28,16 @@ import {
 /** De dónde salió el `%` que se va a mandar. Se guarda para poder auditar la decisión. */
 export type OrigenDescuento = 'escalon' | 'receta' | 'manual'
 
+/** Qué beneficio lleva el envío. Los ejes no se suman: hay uno solo por mensaje. */
+export type BeneficioTipoEnvio = 'descuento' | 'puntos' | 'usar_puntos' | 'sin_beneficio'
+
+export const PUNTOS_POR_ENVIO_MAX = 10000
+
 export interface DecisionEnvioRecompra {
   /** El copy que sale, ya normalizado a 1..3. */
   toque: ToqueRecompra
   link: ModalidadLink
-  /** El `%` EFECTIVO: 0 cuando el link es `lo-mismo`. */
+  /** El `%` EFECTIVO: 0 cuando el link es `lo-mismo` o de puntos. */
   descuento: number
   descuentoOrigen: OrigenDescuento
   /** Beneficio efectivo, con el `%` y el vencimiento que se van a anunciar. */
@@ -41,6 +46,11 @@ export interface DecisionEnvioRecompra {
   beneficioBase: BeneficioRecompra
   /** El cupón es el MECANISMO DE COBRO: sin descuento no hay nada que cobrar ni que emitir. */
   emiteCupon: boolean
+  beneficioTipo: BeneficioTipoEnvio
+  /** Puntos extra del envío. 0 salvo `beneficioTipo='puntos'`. */
+  puntos: number
+  /** Saldo del cliente, para el recordatorio de puntos. */
+  saldoPuntos: number | null
 }
 
 export interface EntradaEnvioRecompra {
@@ -57,16 +67,57 @@ export interface EntradaEnvioRecompra {
   link?: ModalidadLink | null
   /** `%` elegido a mano (0..30). Si falta, el de la receta (que para la recomendada es el escalón). */
   descuento?: number | null
+  /** Puntos elegidos a mano. Sin ellos se usa la sugerencia calculada por el llamador. */
+  puntos?: number | null
+  puntosSugeridos?: number | null
+  puntosMax?: number | null
+  /** El motor recomienda recordar el saldo: no hay bonus, no hay cupón y cuesta cero. */
+  usarPuntos?: boolean
+  saldoPuntos?: number | null
 }
 
 /**
  * Resuelve el envío. El descuento a mano gana sobre el propuesto, y `lo-mismo` lo apaga: ese link
  * abre el drawer de un toque, sin banner ni cupón, así que un `%` ahí sería un descuento anunciado
- * que nadie cobra. El llamador ve el `descuento` efectivo, que es el que tiene que registrar.
+ * que nadie cobra. Un envío con puntos tampoco lleva `%`: el bonus se acredita al cobrar el pedido.
  */
 export function resolverEnvioRecompra(e: EntradaEnvioRecompra): DecisionEnvioRecompra {
   const beneficioBase = resolverBeneficioRecompra(e.escalon, e.receta, e.esRecetaRecomendada)
   const toque = normalizarToque(e.toque ?? e.proximoNivel)
+
+  if (e.usarPuntos) {
+    return {
+      toque,
+      link: 'lo-mismo',
+      descuento: 0,
+      descuentoOrigen: 'manual',
+      beneficioBase,
+      beneficio: { nivel: beneficioBase.nivel, descuento: 0, expiraHoras: null },
+      emiteCupon: false,
+      beneficioTipo: 'usar_puntos',
+      puntos: 0,
+      saldoPuntos: e.saldoPuntos ?? null,
+    }
+  }
+
+  const linkElegido: ModalidadLink | null = e.link ?? null
+  if (linkElegido === 'puntos') {
+    const maximo = Math.min(Math.max(0, Math.trunc(e.puntosMax ?? PUNTOS_POR_ENVIO_MAX)), PUNTOS_POR_ENVIO_MAX)
+    const solicitados = Math.max(0, Math.trunc(e.puntos ?? e.puntosSugeridos ?? 0))
+    const puntos = Math.min(solicitados, maximo)
+    return {
+      toque,
+      link: 'puntos',
+      descuento: 0,
+      descuentoOrigen: 'manual',
+      beneficioBase,
+      beneficio: { nivel: beneficioBase.nivel, descuento: 0, expiraHoras: null },
+      emiteCupon: false,
+      beneficioTipo: puntos > 0 ? 'puntos' : 'sin_beneficio',
+      puntos,
+      saldoPuntos: e.saldoPuntos ?? null,
+    }
+  }
 
   const descuentoOrigen: OrigenDescuento = e.descuento != null
     ? 'manual'
@@ -75,7 +126,7 @@ export function resolverEnvioRecompra(e: EntradaEnvioRecompra): DecisionEnvioRec
     ? Math.min(Math.max(Math.trunc(e.descuento), 0), DESCUENTO_MAX)
     : beneficioBase.descuento
 
-  const link: ModalidadLink = e.link ?? (descuentoElegido > 0 ? 'reactivacion' : 'lo-mismo')
+  const link: ModalidadLink = linkElegido ?? (descuentoElegido > 0 ? 'reactivacion' : 'lo-mismo')
   const descuento = link === 'reactivacion' ? descuentoElegido : 0
 
   return {
@@ -91,5 +142,8 @@ export function resolverEnvioRecompra(e: EntradaEnvioRecompra): DecisionEnvioRec
       expiraHoras: descuento > 0 ? beneficioBase.expiraHoras : null,
     },
     emiteCupon: descuento > 0,
+    beneficioTipo: descuento > 0 ? 'descuento' : 'sin_beneficio',
+    puntos: 0,
+    saldoPuntos: e.saldoPuntos ?? null,
   }
 }

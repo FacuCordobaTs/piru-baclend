@@ -73,6 +73,9 @@ const guardarConfigSchema = z.object({
   descuentoMontoMinimo: decimalString.optional(),
   descuentoTope: decimalString.optional(),
   vencimientoDias: z.number().int().min(1).nullable().optional(),
+  puntosBonusTopePorcentaje: z.number().int().min(1).max(50).optional(),
+  puntosBonusMaximo: z.number().int().min(1).max(10000).optional(),
+  puntosBonusPorCliente30Dias: z.number().int().min(0).max(20).optional(),
 })
 
 const ajusteManualSchema = z.object({
@@ -93,6 +96,7 @@ const tiposMovimientoQuery = [
   'canje_envio',
   'canje_descuento',
   'bonus_bienvenida',
+  'bonus_promocion',
   'ajuste_manual',
   'devolucion_cancelacion',
   'expiracion',

@@ -327,13 +327,13 @@ export const ESCALERA: EscalonRecupero[] = [
 /** Techo de la escalera: no hay un 4º escalón, pero tampoco un 4º toque que reencolar. */
 export const NIVEL_MAX = ESCALERA.length
 
-/** `lo-mismo` abre el drawer de 1 toque y NUNCA lleva descuento; `reactivacion` siempre lleva el elegido. */
-export type ModalidadLink = 'lo-mismo' | 'reactivacion'
+/** `lo-mismo` abre el drawer de 1 toque y NUNCA lleva descuento; `reactivacion` siempre lleva el elegido; `puntos` suma puntos extra. */
+export type ModalidadLink = 'lo-mismo' | 'reactivacion' | 'puntos'
 
-export const MODALIDADES_LINK: ModalidadLink[] = ['lo-mismo', 'reactivacion']
+export const MODALIDADES_LINK: ModalidadLink[] = ['lo-mismo', 'reactivacion', 'puntos']
 
 export function esModalidadLink(valor: unknown): valor is ModalidadLink {
-  return valor === 'lo-mismo' || valor === 'reactivacion'
+  return valor === 'lo-mismo' || valor === 'reactivacion' || valor === 'puntos'
 }
 
 /**

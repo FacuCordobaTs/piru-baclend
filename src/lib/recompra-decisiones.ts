@@ -40,9 +40,23 @@ export const decisionesRecetaSchema = z
     toque: z.preprocess(ausenteSiVacio, z.coerce.number().int().min(1).max(TOQUE_MAX).optional()),
     link: z.preprocess(ausenteSiVacio, z.enum(MODALIDADES_LINK).optional()),
     descuento: z.preprocess(ausenteSiVacio, z.coerce.number().int().min(0).max(DESCUENTO_MAX).optional()),
+    puntos: z.preprocess(ausenteSiVacio, z.coerce.number().int().min(1).max(10000).optional()),
+    usarPuntos: z.preprocess(
+      (valor) => (valor === '' || valor === null || valor === undefined ? undefined : valor === true || valor === 'true' || valor === '1'),
+      z.boolean().optional(),
+    ),
   })
   .refine((decisiones) => !(decisiones.link === 'lo-mismo' && (decisiones.descuento ?? 0) > 0), {
     message: 'El link "lo mismo" no lleva descuento: elegí reactivación o dejá el descuento en 0',
+  })
+  .refine((decisiones) => !(decisiones.link === 'puntos' && (decisiones.descuento ?? 0) > 0), {
+    message: 'El link con puntos no lleva descuento: elegí uno u otro beneficio',
+  })
+  .refine((decisiones) => !(decisiones.link === 'lo-mismo' && (decisiones.puntos ?? 0) > 0), {
+    message: 'El link "lo mismo" no lleva puntos: elegí el link de puntos o dejá la cantidad vacía',
+  })
+  .refine((decisiones) => !(decisiones.usarPuntos && (decisiones.link || decisiones.puntos || (decisiones.descuento ?? 0) > 0)), {
+    message: 'El recordatorio de puntos no se combina con link, puntos ni descuento',
   })
 
 export type DecisionesReceta = z.infer<typeof decisionesRecetaSchema>
@@ -53,6 +67,8 @@ export interface OpcionesDecisionesRecompra {
   toque?: number
   link?: ModalidadLink
   descuento?: number
+  puntos?: number
+  usarPuntos?: boolean
 }
 
 /**
@@ -67,5 +83,7 @@ export function opcionesDeDecisiones(decisiones: DecisionesReceta): OpcionesDeci
     toque: decisiones.toque,
     link: decisiones.link,
     descuento: decisiones.descuento,
+    puntos: decisiones.puntos,
+    usarPuntos: decisiones.usarPuntos,
   }
 }

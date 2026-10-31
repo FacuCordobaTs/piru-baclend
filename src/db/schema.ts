@@ -359,6 +359,14 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   puntosUsados: int("puntos_usados").default(0).notNull(),
   puntosCanjeTipo: varchar("puntos_canje_tipo", { length: 50 }),
   descuentoPuntos: decimal("descuento_puntos", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  // Bonus de puntos resuelto y validado al crear el pedido (campaña o link personal). Se
+  // acredita recién al confirmarse el pago, junto con los puntos de la compra.
+  puntosBonus: int("puntos_bonus").default(0).notNull(),
+  // 'campana' | 'recompra' — trazabilidad del incentivo, sin datos del link.
+  puntosBonusOrigen: varchar("puntos_bonus_origen", { length: 20 }),
+  // Clave idempotente del bonus. Un link personal trae un nonce firmado: dos pedidos desde el
+  // mismo link no duplican los puntos. NULL = clave derivada del pedido (campaña).
+  puntosBonusClave: varchar("puntos_bonus_clave", { length: 128 }),
 
   // Trazabilidad
   impreso: boolean("impreso").default(false).notNull(),
@@ -406,6 +414,8 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
   index("idx_pedido_unificado_creado_por_usuario").on(table.creadoPorUsuarioId),
   index("idx_pedido_unificado_marketing_campana").on(table.restauranteId, table.marketingCampanaId, table.createdAt),
   index("idx_pedido_unificado_zona_especial").on(table.zonaEspecialId),
+  index("idx_pedido_unificado_puntos_bonus_clave").on(table.puntosBonusClave),
+  index("idx_pedido_unificado_puntos_bonus").on(table.restauranteId, table.marketingCampanaId, table.puntosBonus),
 ]);
 
 export const itemPedidoUnificado = mysqlTable("item_pedido_unificado", {
@@ -725,6 +735,16 @@ export const marketingCampana = mysqlTable("marketing_campana", {
   // Oferta simple de producto. Es independiente de codigo_descuento porque el
   // beneficio se aplica únicamente al producto de la campaña, no al carrito.
   descuentoProductoPorcentaje: int("descuento_producto_porcentaje").default(0).notNull(),
+  // Beneficio del link: descuento (oferta de producto) o puntos extra acreditados al cobrar.
+  // Son excluyentes: un link nunca promete las dos cosas.
+  beneficioTipo: mysqlEnum("beneficio_tipo", ["descuento", "puntos"]).default("descuento").notNull(),
+  puntosBeneficio: int("puntos_beneficio").default(0).notNull(),
+  puntosMontoMinimo: decimal("puntos_monto_minimo", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  // Presupuesto de la campaña de puntos: cuántos pedidos pueden otorgar el bonus y cuántas
+  // veces lo puede recibir un mismo cliente. NULL en el total = sin límite explícito (igual
+  // queda el cupo por cliente de la configuración del club).
+  puntosLimiteOtorgamientos: int("puntos_limite_otorgamientos"),
+  puntosLimitePorCliente: int("puntos_limite_por_cliente").default(1).notNull(),
   limiteUsos: int("limite_usos"),
   usosActuales: int("usos_actuales").default(0).notNull(),
   fechaInicio: timestamp("fecha_inicio"),
@@ -1048,6 +1068,10 @@ export const recuperoCliente = mysqlTable("recupero_cliente", {
   // cuando la escalera va por el 2º), y esa divergencia es lo que hay que poder auditar.
   toque: tinyint("toque"),
   descuentoPorcentaje: int("descuento_porcentaje").default(0).notNull(),
+  // Puntos extra prometidos/otorgados por este toque (0 = ninguno). `beneficio_tipo` distingue
+  // el descuento de los puntos: los dos ejes nunca se suman en el mismo envío.
+  puntosOtorgados: int("puntos_otorgados").default(0).notNull(),
+  beneficioTipo: varchar("beneficio_tipo", { length: 20 }),
   // Código de descuento generado para este toque (null en el nivel 1, que no lleva descuento).
   codigoDescuento: varchar("codigo_descuento", { length: 50 }),
   // Segmento del cliente al momento del envío (para atribución posterior).
@@ -1210,6 +1234,9 @@ export const colaRecompra = mysqlTable("cola_recompra", {
   // % efectivamente aplicado en ese envío (0 = sin descuento). Puede diferir del escalón si el
   // operador forzó otro a mano.
   descuentoEnviado: int("descuento_enviado"),
+  // Puntos extra del envío (`beneficio_tipo='puntos'`) y recordatorio de saldo (`usar_puntos`).
+  puntosOtorgados: int("puntos_otorgados").default(0).notNull(),
+  beneficioTipo: varchar("beneficio_tipo", { length: 20 }),
   codigoDescuento: varchar("codigo_descuento", { length: 50 }),
   enviadoAt: timestamp("enviado_at"),
   // Metadatos auditables del último intento. `origen_contacto` distingue el
@@ -1280,6 +1307,11 @@ export const configuracionPuntos = mysqlTable("configuracion_puntos", {
   descuentoMontoMinimo: decimal("descuento_monto_minimo", { precision: 10, scale: 2 }).default("0.00").notNull(),
   descuentoTope: decimal("descuento_tope", { precision: 10, scale: 2 }).default("0.00").notNull(),
   vencimientoDias: int("vencimiento_dias"),
+  // Guardarraíles de los puntos como incentivo de campañas y recompra. El techo de valor
+  // evita que un bonus de puntos valga más que una fracción acotada del ticket.
+  puntosBonusTopePorcentaje: int("puntos_bonus_tope_porcentaje").default(12).notNull(),
+  puntosBonusMaximo: int("puntos_bonus_maximo").default(500).notNull(),
+  puntosBonusPorCliente30Dias: int("puntos_bonus_por_cliente_30_dias").default(2).notNull(),
   updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -1300,10 +1332,17 @@ export const transaccionPuntos = mysqlTable("transaccion_puntos", {
     "canje_envio",
     "canje_descuento",
     "bonus_bienvenida",
+    "bonus_promocion",
     "ajuste_manual",
     "devolucion_cancelacion",
     "expiracion",
   ]).notNull(),
+  // Bonus de campaña / link personal: se guarda la campaña para poder medir y limitar el
+  // presupuesto sin reconstruirlo desde el pedido.
+  marketingCampanaId: int("marketing_campana_id"),
+  // Idempotencia del asiento. Para un bonus de pedido es `pedido-bonus:<id>`; NULL en los
+  // asientos históricos, que no participan del índice único.
+  claveIdempotencia: varchar("clave_idempotencia", { length: 128 }),
   puntos: int("puntos").notNull(),
   saldoResultante: int("saldo_resultante").notNull(),
   motivo: varchar("motivo", { length: 255 }).notNull(),
@@ -1311,6 +1350,8 @@ export const transaccionPuntos = mysqlTable("transaccion_puntos", {
 }, (table) => [
   index("idx_transaccion_puntos_cliente").on(table.restauranteId, table.clienteId, table.createdAt),
   index("idx_transaccion_puntos_pedido").on(table.pedidoUnificadoId),
+  index("idx_transaccion_puntos_campana").on(table.restauranteId, table.marketingCampanaId, table.createdAt),
+  uniqueIndex("uq_transaccion_puntos_idempotencia").on(table.restauranteId, table.claveIdempotencia),
 ]);
 
 

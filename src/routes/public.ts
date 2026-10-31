@@ -34,6 +34,7 @@ import {
   acreditarPuntosPedidoAprobado,
 } from '../lib/puntos'
 import { estaPausadoPorSuscripcion } from '../lib/suscripciones'
+import { resolverBonusPuntosPedido } from '../lib/puntos-beneficios-pedido'
 import { salirDeColaPorPedido } from '../lib/motor-recompra'
 import { atribuirPedidoMarketingBestEffort } from '../lib/marketing-atribucion'
 import { aplicarOfertaProducto, ofertaProductoEstaVigente, type OfertaProductoCampana } from '../lib/campana-oferta'
@@ -1212,6 +1213,8 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         const sistemaPuntosActivo = Boolean(sistemaPuntosModuloActivo && configPuntos?.activo)
 
         const puntosUsadosProductos = puntosUsados
+        // Base del bonus de puntos: subtotal de productos, antes del canje de puntos y del cupón.
+        const totalProductosParaBonus = Math.max(0, total)
         let puntosUsadosEnvio = 0
         let puntosUsadosDescuento = 0
         let descuentoPuntosEnvio = 0
@@ -1274,6 +1277,16 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         }))
         const clienteId = perfilCliente?.id ?? null
 
+        // Bonus de puntos de una campaña o de un link personal. Se valida acá y se acredita
+        // recién cuando el pedido se cobra; el navegador no puede inflar el monto.
+        const bonusPuntos = await resolverBonusPuntosPedido(db, {
+            restauranteId,
+            clienteId,
+            totalProductos: totalProductosParaBonus,
+            marketingCampanaId,
+            recetaToken,
+        })
+
         if (puntosUsados > (perfilCliente?.puntos ?? 0)) {
             return c.json({ message: 'Puntos insuficientes para realizar el canje', success: false }, 400)
         }
@@ -1284,6 +1297,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         let montoDescuento = 0
         let codigoDescuentoIdFinal: number | null = null
         if (codigoDescuentoId) {
+            if (bonusPuntos.puntos > 0) {
+                return c.json({ message: 'Los puntos extra no se combinan con un cupón. Quitá el cupón para sumar los puntos.', success: false }, 400)
+            }
             const [cupon] = await db.select().from(CodigoDescuentoTable).where(eq(CodigoDescuentoTable.id, codigoDescuentoId)).limit(1)
             if (!cupon || cupon.restauranteId !== restauranteId) {
                 return c.json({ message: 'Código de descuento inválido', success: false }, 400)
@@ -1365,6 +1381,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             deliveryFee: deliveryFeeAplicado.toFixed(2),
             puntosGanados,
             puntosUsados,
+            puntosBonus: bonusPuntos.puntos,
+            puntosBonusOrigen: bonusPuntos.origen,
+            puntosBonusClave: bonusPuntos.clave,
             puntosCanjeTipo,
             descuentoPuntos: descuentoPuntosTotal.toFixed(2),
             grupal: grupal || false,
@@ -1393,7 +1412,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             })
         }
 
-        if (isMetodoManualVerificable(metodoPagoEfectivoDelivery) && puntosGanados > 0) {
+        if (isMetodoManualVerificable(metodoPagoEfectivoDelivery) && (puntosGanados > 0 || bonusPuntos.puntos > 0)) {
             void acreditarPuntosPedidoAprobado(db, pedidoId).catch((err) =>
                 console.error('Error acreditando puntos pedido manual:', err)
             )
@@ -1636,6 +1655,7 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
                 metodoPago: metodoPagoEfectivoDelivery,
                 puntosGanados,
                 puntosUsados,
+                puntosBonus: bonusPuntos.puntos,
                 aliasDinamico: cuentaCucuru?.alias || cuentaTalo?.alias || null,
                 cvuDinamico: cuentaCucuru?.accountNumber || cuentaTalo?.cvu || null,
                 deliveryFee: deliveryFeeAplicado.toFixed(2),
@@ -1836,6 +1856,8 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         const sistemaPuntosActivo = Boolean(sistemaPuntosModuloActivo && configPuntos?.activo)
 
         const puntosUsadosProductos = puntosUsados
+        // Base del bonus de puntos: subtotal de productos, antes del canje de puntos y del cupón.
+        const totalProductosParaBonus = Math.max(0, total)
         let puntosUsadosDescuento = 0
         let descuentoPuntosDinero = 0
         const tiposCanje: string[] = []
@@ -1886,6 +1908,16 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         }))
         const clienteId = perfilCliente?.id ?? null
 
+        // Bonus de puntos de una campaña o de un link personal. Se valida acá y se acredita
+        // recién cuando el pedido se cobra; el navegador no puede inflar el monto.
+        const bonusPuntos = await resolverBonusPuntosPedido(db, {
+            restauranteId,
+            clienteId,
+            totalProductos: totalProductosParaBonus,
+            marketingCampanaId,
+            recetaToken,
+        })
+
         if (puntosUsados > (perfilCliente?.puntos ?? 0)) {
             return c.json({ message: 'Puntos insuficientes para realizar el canje', success: false }, 400)
         }
@@ -1896,6 +1928,9 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
         let montoDescuentoTk = 0
         let codigoDescuentoIdFinalTk: number | null = null
         if (codigoDescuentoId) {
+            if (bonusPuntos.puntos > 0) {
+                return c.json({ message: 'Los puntos extra no se combinan con un cupón. Quitá el cupón para sumar los puntos.', success: false }, 400)
+            }
             const [cupon] = await db.select().from(CodigoDescuentoTable).where(eq(CodigoDescuentoTable.id, codigoDescuentoId)).limit(1)
             if (!cupon || cupon.restauranteId !== restauranteId) {
                 return c.json({ message: 'Código de descuento inválido', success: false }, 400)
@@ -1987,6 +2022,9 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             deliveryFee: '0.00',
             puntosGanados,
             puntosUsados,
+            puntosBonus: bonusPuntos.puntos,
+            puntosBonusOrigen: bonusPuntos.origen,
+            puntosBonusClave: bonusPuntos.clave,
             puntosCanjeTipo,
             descuentoPuntos: descuentoPuntosTotal.toFixed(2),
             grupal: grupal || false,
@@ -2013,7 +2051,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
             })
         }
 
-        if (isMetodoManualVerificable(metodoPagoEfectivo) && puntosGanados > 0) {
+        if (isMetodoManualVerificable(metodoPagoEfectivo) && (puntosGanados > 0 || bonusPuntos.puntos > 0)) {
             void acreditarPuntosPedidoAprobado(db, pedidoId).catch((err) =>
                 console.error('Error acreditando puntos pedido manual takeaway:', err)
             )
@@ -2248,6 +2286,7 @@ publicRoute.post('/takeaway/create', zValidator('json', createTakeawaySchema), a
                 metodoPago: metodoPagoEfectivo,
                 puntosGanados,
                 puntosUsados,
+                puntosBonus: bonusPuntos.puntos,
                 aliasDinamico: cuentaCucuru?.alias || cuentaTalo?.alias || null,
                 cvuDinamico: cuentaCucuru?.accountNumber || cuentaTalo?.cvu || null,
                 sucursalId: pedidoSucursalIdTk,
