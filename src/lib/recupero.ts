@@ -497,6 +497,8 @@ export interface DatosMensajeRecupero {
   puntosCompraMinima: number
   /** Saldo actual del cliente en el club. */
   puntosSaldo: number
+  /** El local tiene el club activo: el mensaje prioriza puntos. */
+  puntosActivo: boolean
   /** Premio que el saldo ya alcanza o casi alcanza, para el recordatorio. */
   puntosPremio: string | null
   puntosFaltan: number | null
@@ -776,12 +778,14 @@ export async function prepararMensajeRecupero(
   const incentivo = esPuntos && puntos > 0
     ? lineaBonusPuntos(puntos, puntosCompraMinima)
     : esRecordatorioPuntos
-      ? lineaUsarPuntos({
-        saldo: saldoPuntos,
-        premio: recordatorio?.tipo === 'usar_saldo' ? recordatorio.premio : null,
-        faltan: recordatorio?.tipo === 'usar_saldo' ? recordatorio.faltan : 0,
-        puedeCanjear: recordatorio?.tipo === 'usar_saldo' ? recordatorio.puedeCanjear : false,
-      })
+      ? (recordatorio?.tipo === 'usar_saldo'
+        ? recordatorio.linea
+        : lineaUsarPuntos({
+          saldo: saldoPuntos,
+          premio: null,
+          faltan: 0,
+          puedeCanjear: false,
+        }))
       : lineaBeneficioRecompra(beneficio, toque)
   const nombreCliente = cli.nombre?.trim() || 'Cliente'
   const nombreLocal = rest.nombre?.trim() || 'El local'
@@ -902,6 +906,7 @@ export async function prepararMensajeRecupero(
       puntos,
       puntosCompraMinima,
       puntosSaldo: saldoPuntos,
+      puntosActivo: puntosDisponibles,
       puntosPremio: recordatorio?.tipo === 'usar_saldo' ? (recordatorio.premio?.descripcion ?? null) : null,
       puntosFaltan: recordatorio?.tipo === 'usar_saldo' ? recordatorio.faltan : null,
       puntosSugeridos: sugerenciaPuntos?.puntos ?? null,

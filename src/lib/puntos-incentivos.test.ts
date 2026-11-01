@@ -138,7 +138,7 @@ describe('recomendación inteligente para recompra', () => {
     expect(r.faltan).toBe(20)
   })
 
-  test('sin saldo utilizable no inventa un bonus automático', () => {
+  test('sin saldo, el motor igual prioriza el club e invita a empezar', () => {
     const r = recomendarPuntosParaRecompra({
       config: base,
       ticketPromedio: 10000,
@@ -146,7 +146,12 @@ describe('recomendación inteligente para recompra', () => {
       otorgadosCliente30Dias: 0,
       saldoPuntos: 0,
     })
-    expect(r).toBeNull()
+    expect(r?.tipo).toBe('usar_saldo')
+    if (r?.tipo === 'usar_saldo') {
+      expect(r.saldo).toBe(0)
+      expect(r.puedeCanjear).toBe(false)
+      expect(r.linea.toLocaleLowerCase()).toContain('empezá a sumar puntos')
+    }
   })
 
   test('la sugerencia de bonus reemplaza el valor del descuento del escalón', () => {

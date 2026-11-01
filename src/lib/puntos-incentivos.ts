@@ -276,33 +276,54 @@ export type RecomendacionPuntos =
  * solo: se elige a mano o se configura en una campaña, para no acumular pasivos sin que el
  * dueño lo haya decidido.
  */
+/**
+ * La decisión "inteligente" para el envío automático: si el club está activo, SIEMPRE se apoya en
+ * los puntos. Con saldo, recuerda lo que el cliente ya tiene (cuesta cero y evita un descuento);
+ * sin saldo, lo invita a empezar a sumar. El operador puede elegir un descuento a mano, pero el
+ * default del motor prioriza el club cuando el local lo tiene activo.
+ */
 export function recomendarPuntosParaRecompra(solicitud: SolicitudSugerenciaPuntos & {
   saldoPuntos: number
 }): RecomendacionPuntos | null {
   if (!solicitud.config.activo) return null
-  const saldo = evaluarSaldoParaRecordatorio(solicitud.config, solicitud.saldoPuntos)
-  if (saldo.convieneRecordar) {
+  const saldo = Math.max(0, Math.trunc(solicitud.saldoPuntos))
+  if (saldo <= 0) {
     return {
       tipo: 'usar_saldo',
-      saldo: Math.max(0, Math.trunc(solicitud.saldoPuntos)),
-      premio: saldo.premio,
-      faltan: saldo.faltan,
-      puedeCanjear: saldo.puedeCanjear,
-      linea: lineaUsarPuntos({
-        saldo: Math.max(0, Math.trunc(solicitud.saldoPuntos)),
-        premio: saldo.premio,
-        faltan: saldo.faltan,
-        puedeCanjear: saldo.puedeCanjear,
-      }),
+      saldo: 0,
+      premio: null,
+      faltan: 0,
+      puedeCanjear: false,
+      linea: lineaEmpezarPuntos(solicitud.config),
     }
   }
-  return null
+  const estado = evaluarSaldoParaRecordatorio(solicitud.config, saldo)
+  const premio = estado.premio
+  return {
+    tipo: 'usar_saldo',
+    saldo,
+    premio,
+    faltan: estado.faltan,
+    puedeCanjear: estado.puedeCanjear,
+    linea: lineaUsarPuntos({
+      saldo,
+      premio,
+      faltan: estado.faltan,
+      puedeCanjear: estado.puedeCanjear,
+    }),
+  }
 }
 
 export function lineaBonusPuntos(puntos: number, compraMinima = 0): string {
   const cantidad = Math.max(0, Math.trunc(puntos))
   const desde = compraMinima > 0 ? ` en un pedido desde ${formatearPesos(compraMinima)}` : ''
   return `Sumás ${cantidad} puntos extra${desde}. Se acreditan al cobrarse el pedido.`
+}
+
+/** Para el cliente que todavía no tiene saldo: una invitación concreta a entrar al club. */
+export function lineaEmpezarPuntos(config: ConfigIncentivosPuntos): string {
+  const cada = Math.max(1, Math.trunc(config.pesosPorPunto || 1))
+  return `Empezá a sumar puntos con tu próximo pedido: cada ${formatearPesos(cada)} sumás 1 punto y los usás en el club.`
 }
 
 export function lineaUsarPuntos(params: {
