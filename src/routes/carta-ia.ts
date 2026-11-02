@@ -17,9 +17,54 @@ import { z } from 'zod'
 import { eq } from 'drizzle-orm'
 import { extraerCartaDeImagenes } from '../services/carta-ia'
 import { generarEtiquetaAutomatica } from './producto'
+import {
+  INSTRUCTIVO_CARTA_JSON,
+  INSTRUCTIVO_CARTA_JSON_ARCHIVO,
+  INSTRUCTIVO_CARTA_JSON_VERSION,
+  avisosCartaJson,
+  cartaJsonSchema,
+  describirErroresCartaJson,
+  normalizarCartaJson,
+} from '../lib/carta-json'
 
 export const cartaIaRoute = new Hono()
+
+// ─── GET /instructivo — guía descargable para que un LLM arme el JSON ───────
+// Es pública a propósito: el instructivo no tiene datos del local y se puede
+// abrir o descargar antes de iniciar sesión.
+cartaIaRoute.get('/instructivo', (c) =>
+  c.body(INSTRUCTIVO_CARTA_JSON, 200, {
+    'Content-Type': 'text/markdown; charset=utf-8',
+    'Content-Disposition': `attachment; filename="${INSTRUCTIVO_CARTA_JSON_ARCHIVO}"`,
+    'Cache-Control': 'public, max-age=3600',
+    'X-Piru-Instructivo-Version': INSTRUCTIVO_CARTA_JSON_VERSION,
+  }),
+)
+
+// Las rutas que siguen sí requieren la sesión del local.
 cartaIaRoute.use('*', authMiddleware)
+
+// ─── POST /importar — validar una carta en JSON armada por un LLM ───────────
+cartaIaRoute.post('/importar', async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const crudo = body && typeof body === 'object' && 'carta' in body ? (body as { carta: unknown }).carta : body
+  const resultado = cartaJsonSchema.safeParse(crudo)
+  if (!resultado.success) {
+    return c.json(
+      { success: false, message: `El JSON no cumple el formato: ${describirErroresCartaJson(resultado.error)}` },
+      400,
+    )
+  }
+
+  const carta = normalizarCartaJson(resultado.data)
+  const totalProductos = carta.categorias.reduce((acc, categoria) => acc + categoria.productos.length, 0)
+  return c.json({
+    success: true,
+    carta,
+    totalProductos,
+    avisos: avisosCartaJson(resultado.data),
+  }, 200)
+})
 
 // ─── POST /extraer — leer la carta desde imágenes con IA ────────────────────
 const extraerSchema = z.object({
