@@ -160,6 +160,8 @@ export interface ConfigClaim {
     deliveryEnabled: boolean
     /** Retiro en el local habilitado. Aditivo para admins anteriores al selector del claim. */
     takeawayEnabled: boolean
+    /** Dirección del local como texto, para mostrarla ya cargada; null si no tiene. */
+    direccion: string | null
     /** Centro para el mapa (dirección del local); null si no está geocodificada. */
     lat: number | null
     lng: number | null
@@ -218,6 +220,8 @@ export async function computarConfigClaim(db: Db, restauranteId: number): Promis
       takeawayEnabled: RestauranteTable.takeawayEnabled,
       direccionLat: RestauranteTable.direccionLat,
       direccionLng: RestauranteTable.direccionLng,
+      direccion: RestauranteTable.direccion,
+      direccionTexto: RestauranteTable.direccionTexto,
     })
     .from(RestauranteTable)
     .where(eq(RestauranteTable.id, restauranteId))
@@ -328,6 +332,7 @@ export async function computarConfigClaim(db: Db, restauranteId: number): Promis
     delivery: {
       deliveryEnabled: rest?.deliveryEnabled !== false,
       takeawayEnabled: rest?.takeawayEnabled !== false,
+      direccion: rest?.direccionTexto?.trim() || rest?.direccion?.trim() || null,
       lat: rest?.direccionLat != null ? Number(rest.direccionLat) : null,
       lng: rest?.direccionLng != null ? Number(rest.direccionLng) : null,
       zonas: zonas.map((z) => ({

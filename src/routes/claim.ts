@@ -18,7 +18,7 @@ import {
   registroTelefono,
   suscripcion as SuscripcionTable,
 } from '../db/schema'
-import { and, eq, gt } from 'drizzle-orm'
+import { and, eq, gt, isNull } from 'drizzle-orm'
 import { createAccessToken } from '../libs/jwt'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
@@ -30,6 +30,7 @@ import {
   computarInventarioClaim,
   computarConfigClaim,
 } from '../lib/claim'
+import { baseTiendaDe } from '../lib/marketing-enlaces'
 import { iniciarTrial, DIAS_TRIAL_DEFAULT } from '../lib/suscripciones'
 
 /**
@@ -99,10 +100,18 @@ const verifySchema = z.object({
   codigo: z.string().regex(/^\d{6}$/),
 })
 
-// El claim SIEMPRE pide el WhatsApp: el dueño escribe el número donde quiere recibir el código y con
-// el que va a entrar. Puede diferir del que Facu cargó (o la tienda podría no tener ninguno cargado).
+// El número al que se manda el código. Si el dueño no escribe otro, se usa el que ya tiene la tienda
+// (el preview sólo lo muestra enmascarado, así que el admin no puede reenviarlo completo).
 const startSchema = z.object({
-  telefono: z.string().min(6),
+  telefono: z.string().min(6).optional(),
+})
+
+// Alternativa al código: el dueño termina con mail y contraseña. El link del claim es el secreto que
+// Facu le mandó por WhatsApp; el número que eligió para los pedidos queda guardado sin verificar.
+const credencialesSchema = z.object({
+  email: z.string().trim().min(5).max(255).email(),
+  password: z.string().min(8).max(128),
+  telefono: z.string().min(6).optional(),
 })
 
 export const claimRoute = new Hono()
@@ -138,7 +147,10 @@ claimRoute.get('/:token', async (c) => {
         username: rest.username ?? null,
         imagenUrl: rest.imagenUrl ?? null,
         imagenLightUrl: rest.imagenLightUrl ?? null,
-        telefonoEnmascarado: enmascararTelefono(rest.telefono),
+        telefonoEnmascarado: enmascararTelefono(rest.telefono ?? rest.whatsappNumber),
+        // Dónde vive la tienda de verdad: el subdominio con página propia o my.piru.app/<username>.
+        urlTienda: baseTiendaDe(rest),
+        tienePagina: !!rest.dominioTienda?.trim(),
       },
       inventario,
       config,
@@ -168,7 +180,7 @@ claimRoute.post('/:token/start', zValidator('json', startSchema), async (c) => {
       return c.json({ message: 'Este link venció', success: false, vencido: true }, 404)
     }
 
-    const telefono = normalizarConPrefijo(telefonoInput)
+    const telefono = normalizarConPrefijo(telefonoInput ?? rest.telefono ?? rest.whatsappNumber ?? '')
     if (telefono.length < 8) {
       return c.json({ message: 'Ingresá un número de WhatsApp válido', success: false }, 400)
     }
@@ -317,5 +329,75 @@ claimRoute.post('/:token/verify', zValidator('json', verifySchema), async (c) =>
   } catch (error) {
     console.error('Error verificando claim:', error)
     return c.json({ message: 'Error al verificar el código', success: false }, 500)
+  }
+})
+
+// 4) Reclamar con mail y contraseña, sin código. Mismo resultado que /verify: la cuenta queda
+// reclamada, arranca la prueba y se devuelve el token admin.
+claimRoute.post('/:token/credenciales', zValidator('json', credencialesSchema), async (c) => {
+  const db = drizzle(pool)
+  const token = c.req.param('token')
+  const { password, telefono: telefonoInput } = c.req.valid('json')
+  const email = c.req.valid('json').email.toLowerCase()
+
+  try {
+    const rest = await getRestaurantePorClaimToken(db, token)
+    if (!rest) {
+      return c.json({ message: 'Este link no es válido', success: false }, 404)
+    }
+    if (rest.claimedAt) {
+      return c.json({ message: 'Esta tienda ya fue reclamada', success: false, yaReclamada: true }, 404)
+    }
+    if (!claimTokenVigente(rest)) {
+      return c.json({ message: 'Este link venció', success: false, vencido: true }, 404)
+    }
+
+    const [emailEnUso] = await db.select({ id: RestauranteTable.id })
+      .from(RestauranteTable)
+      .where(eq(RestauranteTable.email, email))
+      .limit(1)
+    if (emailEnUso && emailEnUso.id !== rest.id) {
+      return c.json({ message: 'Ese mail ya tiene una cuenta. Usá otro o entrá con tu WhatsApp.', success: false }, 409)
+    }
+
+    const telefono = telefonoInput ? normalizarConPrefijo(telefonoInput) : ''
+    const set: Partial<typeof RestauranteTable.$inferInsert> = {
+      claimedAt: new Date(),
+      email,
+      password: await bcrypt.hash(password, 10),
+    }
+    // Número unificado del local (ver PUT /restaurante/update): las tres columnas van juntas. Queda
+    // sin verificar, así que no sirve para el login por teléfono hasta que lo verifique.
+    if (telefono.length >= 8 && telefono !== rest.telefono) {
+      set.telefono = telefono
+      set.whatsappNumber = telefono
+      set.comprobantesWhatsapp = telefono
+      set.telefonoVerificado = false
+    }
+
+    // Reclamo atómico: sólo si nadie la reclamó entre la lectura y este update.
+    const reclamo = await db.update(RestauranteTable)
+      .set(set)
+      .where(and(eq(RestauranteTable.id, rest.id), isNull(RestauranteTable.claimedAt)))
+    if (reclamo[0].affectedRows === 0) {
+      return c.json({ message: 'Esta tienda ya fue reclamada', success: false, yaReclamada: true }, 409)
+    }
+
+    await arrancarTrialClaim(db, rest.id)
+
+    const [cuenta] = await db.select().from(RestauranteTable)
+      .where(eq(RestauranteTable.id, rest.id))
+      .limit(1)
+
+    const tk = await createAccessToken({ id: rest.id })
+    setCookie(c, 'token', tk as string, { path: '/', sameSite: 'None', secure: true, maxAge: 365 * 24 * 60 * 60 })
+
+    return c.json({ message: '¡Tienda reclamada!', success: true, restaurante: cuenta, token: tk }, 200)
+  } catch (error) {
+    if ((error as { code?: string })?.code === 'ER_DUP_ENTRY') {
+      return c.json({ message: 'Ese mail ya tiene una cuenta. Usá otro o entrá con tu WhatsApp.', success: false }, 409)
+    }
+    console.error('Error reclamando con credenciales:', error)
+    return c.json({ message: 'Error al crear tu acceso', success: false }, 500)
   }
 })
