@@ -148,6 +148,8 @@ claimRoute.get('/:token', async (c) => {
         imagenUrl: rest.imagenUrl ?? null,
         imagenLightUrl: rest.imagenLightUrl ?? null,
         telefonoEnmascarado: enmascararTelefono(rest.telefono ?? rest.whatsappNumber),
+        // El número completo: el dueño tiene que reconocer a qué WhatsApp le llegan los pedidos.
+        telefono: normalizarTelefono(rest.telefono ?? rest.whatsappNumber ?? '') || null,
         // Dónde vive la tienda de verdad: el subdominio con página propia o my.piru.app/<username>.
         urlTienda: baseTiendaDe(rest),
         tienePagina: !!rest.dominioTienda?.trim(),
