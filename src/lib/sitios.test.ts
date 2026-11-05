@@ -8,7 +8,7 @@ import { esSitioDePaginas, fijarPublicados, paginasApiPath } from './sitios-publ
 import { sitiosPuede, puedeSocketAdmin } from './sesiones-app'
 import { CONTENIDO_INICIAL, PLANTILLA_INICIAL, SECCIONES_PLANTILLA, archivoFuentes, plantillaInicial } from './sitios-plantilla'
 import { marcaPorDefecto, normalizarContenidoSitio, normalizarFuentesPropias, normalizarSecciones, seccionesIniciales } from './sitios-contenido'
-import { generarGuia } from './sitios-guia'
+import { REGLAS_EDITOR, generarGuia } from './sitios-guia'
 import { urlRetornoPedido } from './marketing-enlaces'
 import { normalizarMeta } from './sitios-meta'
 
@@ -337,5 +337,45 @@ describe('guía para Claude', () => {
     expect(md).toContain('assets/logo.png')
     expect(md).not.toContain('clave-ultra-privada')
     expect(md).not.toContain('transferenciaAlias')
+  })
+})
+
+describe('guía y editor visual', () => {
+  test('las reglas del editor son las mismas en la guía y en el pedido de IA del editor', () => {
+    const editor = new URL('../../../sitios/src/editor/ia.ts', import.meta.url)
+    if (!existsSync(editor)) return
+    const texto = readFileSync(editor, 'utf8')
+    const inicio = texto.indexOf('export const REGLAS_EDITOR = `') + 'export const REGLAS_EDITOR = `'.length
+    const crudo = texto.slice(inicio, texto.indexOf('\\`\\`\\``\n', inicio) + 6)
+    // El archivo tiene el texto escapado de un template literal: se compara sin los escapes.
+    expect(crudo.replace(/\\`/g, '`')).toBe(REGLAS_EDITOR)
+    for (const frase of ['JSON estricto', 'export const CONTENIDO', 'data-piru-seccion', 'data-piru-prop', 'CONTENIDO.esquemas'])
+      expect(REGLAS_EDITOR).toContain(frase)
+  })
+
+  test('la guía trae las reglas, el código real del borrador y el formato que entienden los editores', () => {
+    const md = generarGuia({
+      nombre: 'Bronx',
+      username: 'bronx',
+      restaurante: { nombre: 'Bronx' },
+      productos: [],
+      horarios: [],
+      assets: [],
+      contenido: PLANTILLA_INICIAL['contenido.ts'] ?? '',
+      archivos: { ...PLANTILLA_INICIAL, 'secciones/Promo.tsx': 'export function Promo() { return null }\n' },
+    })
+    expect(md).toContain('## 1.1 Que el editor visual siga funcionando')
+    expect(md).toContain('`secciones/Promo.tsx`:')
+    expect(md).toContain('<!-- piru:contenido -->')
+    expect(md).toContain('«Subí lo que te devolvió»')
+  })
+
+  test('los esquemas de secciones propias se guardan como datos', () => {
+    const base = { marca: marcaPorDefecto(), logo: null, logoClaro: null }
+    const c = normalizarContenidoSitio(
+      { esquemas: { promo: { nombre: 'Promo', props: { titulo: { tipo: 'texto', etiqueta: 'Título' } } }, 'Mal tipo': {}, carta2: 'x' } },
+      base,
+    )
+    expect(c.esquemas).toEqual({ promo: { nombre: 'Promo', props: { titulo: { tipo: 'texto', etiqueta: 'Título' } } } })
   })
 })

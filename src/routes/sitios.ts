@@ -736,6 +736,7 @@ export function createSitiosRoute(deps: Partial<Dependencias> = {}) {
           horarios: (datos.horarios as unknown[]) ?? [],
           assets: assets.map((a) => a.path),
           contenido: contenidoGuia,
+          archivos: borrador,
         })
         return c.body(md, 200, {
           'Content-Type': 'text/markdown; charset=utf-8',

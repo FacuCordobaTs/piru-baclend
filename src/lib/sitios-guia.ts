@@ -1,12 +1,75 @@
 import { PLANTILLA_INICIAL } from './sitios-plantilla'
 import { TIPOS_SDK } from './sitios-sdk-tipos.generado'
-import { TIPOS_ASSET } from './sitios-reglas'
+import { TIPOS_ASSET, type Borrador } from './sitios-reglas'
 
 /**
  * Guía para Claude (docs/PAGINAS_PROPIAS.md, §16): el `.md` que el dueño descarga y le pasa a Claude
  * para que le escriba la página. Incluye el contrato del SDK (generado desde el código), las reglas,
  * los estados, la CSP, un ejemplo completo y los datos reales del local.
  */
+
+/**
+ * Lo que el código tiene que respetar para que el editor visual de Páginas siga abriendo la página.
+ * Es el mismo texto que `REGLAS_EDITOR` de `sitios/src/editor/ia.ts` (el pedido de IA del editor):
+ * si cambia uno, cambia el otro. `sitios.test.ts` los compara.
+ */
+export const REGLAS_EDITOR = `### Reglas para que el editor visual siga funcionando
+
+El dueño edita esta página con un editor visual (secciones, textos, fotos y colores, sin código). Si el código no cumple estas reglas, el editor no la puede abrir:
+
+1. \`contenido.ts\` conserva \`export const CONTENIDO\` y el bloque de datos entre \`/* piru:contenido */\` y \`/* /piru:contenido */\` en **JSON estricto**: claves y textos entre comillas dobles, sin comentarios, sin comas al final y sin expresiones ni variables. Nada de código dentro del bloque.
+2. \`page.tsx\` dibuja \`CONTENIDO.secciones\` en orden, saltea las que tienen \`"visible": false\` y elige el componente de cada \`tipo\` en \`secciones/index.ts\` (\`SECCIONES\`). Los textos, fotos y opciones de una sección salen de sus \`props\`, nunca escritos fijos en el JSX.
+3. Cada sección va dentro de \`<Seccion seccion={seccion}>\` de \`components/Sitio\`: pone el id, la marca \`data-piru-seccion\` y los colores y el espacio de la sección. Sin eso no se puede elegir desde la vista previa.
+4. Cada texto editable lleva \`data-piru-prop\` con la ruta de su propiedad (\`titulo\`, \`boton.texto\`) y contiene sólo ese texto, sin otros elementos adentro. Lo más simple: \`<Texto prop="titulo" valor={p.titulo} como="h2" />\`. Así se edita con doble clic.
+5. Antes de crear una sección nueva, fijate si alcanza con un tipo del catálogo y sus propiedades. Si hace falta un tipo nuevo: creá \`secciones/<Nombre>.tsx\`, registralo en \`secciones/index.ts\` y declará su esquema en \`CONTENIDO.esquemas["<tipo>"]\` (formato abajo). Con el esquema aparece en «Sumar sección» y el panel le muestra los mismos controles que a las de fábrica.
+6. Conservá los \`id\` de las secciones que ya existen. Los nuevos: minúsculas, números y guiones (\`promo-martes\`). La \`carta\` va una sola vez.
+7. Las propiedades son sólo datos (textos, números, sí/no, listas, objetos simples y URLs https). Nada de HTML, CSS ni JS adentro.
+8. Tiene que quedar al menos una forma de pedir visible: la sección \`carta\` o un \`destacado\`.
+
+Esquema de una sección propia (en \`CONTENIDO.esquemas\`). Tipos de propiedad: \`texto\`, \`textoLargo\` (\`max\`, \`placeholder\`), \`booleano\`, \`opcion\` (\`opciones: [{ "valor", "nombre" }]\`), \`medio\` (\`{ url, tipo }\`; \`"video": true\` acepta video), \`galeria\` (URLs, \`max\`), \`accion\` (botón \`{ texto, accion, destino? }\`), \`producto\` (id de un producto), \`lista\` (textos, \`max\`) y \`preguntas\` (\`{ pregunta, respuesta }\`, \`max\`). Todas llevan \`etiqueta\` y pueden llevar \`ayuda\` y \`porDefecto\` (el valor con el que nace la sección). Íconos: Tag, Award, CalendarDays, ChefHat, Coffee, Truck, Music, Phone, Quote, Heart, Star, Gift, Sparkles, Megaphone, Image, MapPin, Clock, Users, Utensils.
+
+\`\`\`json
+"esquemas": {
+  "promo": {
+    "nombre": "Promo de la semana",
+    "descripcion": "Una promo con foto y botón.",
+    "icono": "Tag",
+    "archivo": "secciones/Promo.tsx",
+    "props": {
+      "titulo": { "tipo": "texto", "etiqueta": "Título", "max": 60, "porDefecto": "2×1 los martes" },
+      "texto": { "tipo": "textoLargo", "etiqueta": "Texto", "max": 240 },
+      "foto": { "tipo": "medio", "etiqueta": "Foto" },
+      "boton": { "tipo": "accion", "etiqueta": "Botón", "porDefecto": { "texto": "Ver la carta", "accion": "carta" } }
+    }
+  }
+}
+\`\`\`
+
+Y su componente, \`secciones/Promo.tsx\` (registrado en \`secciones/index.ts\` como \`promo: Promo\`):
+
+\`\`\`tsx
+import type { Accion, Medio as MedioContenido } from "../contenido"
+import { BotonAccion, Medio, Seccion, Texto, propsDe } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+type Props = { titulo: string; texto: string; foto: MedioContenido | null; boton: Accion }
+
+export function Promo({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  return (
+    <Seccion seccion={seccion} etiqueta={p.titulo} className="pv-bloque-texto con-foto">
+      <div className="pv-bloque-interior">
+        <Medio medio={p.foto} className="pv-bloque-foto" />
+        <div className="pv-bloque-cuerpo">
+          <Texto prop="titulo" valor={p.titulo} como="h2" />
+          <Texto prop="texto" valor={p.texto} parrafos />
+          <BotonAccion accion={p.boton} prop="boton" />
+        </div>
+      </div>
+    </Seccion>
+  )
+}
+\`\`\``
 
 type DatosGuia = {
   nombre: string
@@ -17,6 +80,8 @@ type DatosGuia = {
   assets: string[]
   /** El `contenido.ts` del borrador: textos, colores, fotos y contacto elegidos. */
   contenido: string
+  /** El código actual del borrador. Sin él, la guía muestra la plantilla inicial. */
+  archivos?: Borrador
 }
 
 const CAMPOS_LOCAL = [
@@ -61,9 +126,17 @@ function resumirProducto(p: Record<string, unknown>) {
 export function generarGuia(datos: DatosGuia): string {
   const local = Object.fromEntries(CAMPOS_LOCAL.filter((c) => datos.restaurante[c] !== undefined).map((c) => [c, datos.restaurante[c]]))
   const extensionesAsset = Object.keys(TIPOS_ASSET).join(', ')
+  const proyecto = datos.archivos && Object.keys(datos.archivos).length ? datos.archivos : PLANTILLA_INICIAL
+  const lenguaje = (path: string) => (path.endsWith('.css') ? 'css' : path.endsWith('.tsx') ? 'tsx' : 'ts')
+  const orden = (path: string) => (path === 'page.tsx' ? 0 : path.startsWith('components/') ? 1 : path.startsWith('secciones/') ? 2 : 3)
+  const codigo = Object.entries(proyecto)
+    .filter(([path]) => path !== 'contenido.ts')
+    .sort(([a], [b]) => orden(a) - orden(b) || a.localeCompare(b))
+    .map(([path, texto]) => `\`${path}\`:\n\n\`\`\`\`${lenguaje(path)}\n${texto.trim()}\n\`\`\`\``)
+    .join('\n\n')
   return `# Página de ${datos.nombre} en Piru — guía para Claude
 
-Sos diseñador web. Trabajás sobre la tienda online de **${datos.nombre}**, que se publica en \`https://${datos.username}.piru.app\`. Usá solo \`@piru/tienda\`, \`react\`, \`motion/react\` y \`lucide-react\`. No reimplementes checkout, pagos, pedidos ni analytics: el checkout es \`<PiruCheckout />\` del runtime y los pagos los hace Piru. Contemplá los estados de la sección 4. Usá HTML semántico, foco visible, buen contraste y respetá \`prefers-reduced-motion\`.
+Sos diseñador web. Trabajás sobre la tienda online de **${datos.nombre}**, que se publica en \`https://${datos.username}.piru.app\`. Usá solo \`@piru/tienda\`, \`react\`, \`motion/react\` y \`lucide-react\`. No reimplementes checkout, pagos, pedidos ni analytics: el checkout es \`<PiruCheckout />\` del runtime y los pagos los hace Piru. Contemplá los estados de la sección 4. Usá HTML semántico, foco visible, buen contraste y respetá \`prefers-reduced-motion\`. El dueño sigue editando la página con el editor visual de Páginas: **respetá la sección 1.1** o el editor no la va a poder abrir.
 
 ## 1. Cómo está armada la página
 
@@ -86,6 +159,10 @@ assets/*          ← imágenes, fuentes y video que el dueño sube desde el edi
 - Para cambiar textos, fotos, orden o colores, cambiá los datos de \`contenido.ts\`. Para cambiar cómo se ve una sección, editá su archivo en \`secciones/\` o \`style.css\`. Para una sección nueva, creá \`secciones/MiSeccion.tsx\` (con \`Seccion\` de \`components/Sitio\`) y sumala en \`secciones/index.ts\` con un \`tipo\` nuevo.
 - Mantené \`Seccion\` como contenedor de cada sección y \`Texto\` / \`data-piru-prop\` en los textos editables: es lo que permite seleccionarlas y editarlas en el lugar desde el editor visual.
 - Tiene que quedar al menos una forma de pedir (la sección \`carta\` o un \`destacado\`).
+
+## 1.1 Que el editor visual siga funcionando
+
+${REGLAS_EDITOR}
 - Código: solo \`.tsx\`, \`.ts\` y \`.css\`. Assets: ${extensionesAsset}.
 - Imports permitidos: rutas relativas del sitio (\`./components/Hero\`, \`./assets/logo.png\`, \`./style.css\`) y los paquetes \`react\`, \`react-dom\`, \`motion/react\`, \`react-router\`, \`@piru/tienda\` y \`lucide-react\`. Cualquier otro (\`lodash\`, \`https://…\`, \`node:*\`) no compila.
 - Un asset importado devuelve su URL: \`import foto from "./assets/portada.jpg"\`.
@@ -201,7 +278,9 @@ Reglas:
 - El éxito también es del runtime: muestra el pedido, el alias de transferencia, los puntos y el botón de WhatsApp cuando el local no tiene avisos automáticos.
 - Si el local usa Mercado Pago, el checkout crea el pedido y redirige al pago; al volver, la página retoma el éxito en el mismo sitio.
 
-## 6. Ejemplo completo y funcional
+## 6. El código actual de la página
+
+Es el proyecto tal como está hoy en el borrador (si el dueño no lo tocó, es la plantilla inicial). Partí de acá: cambiá lo que haga falta y respetá la sección 1.1.
 
 \`contenido.ts\`:
 
@@ -209,61 +288,7 @@ Reglas:
 ${(datos.contenido || PLANTILLA_INICIAL['contenido.ts']).trim()}
 \`\`\`
 
-\`page.tsx\`:
-
-\`\`\`tsx
-${PLANTILLA_INICIAL['page.tsx'].trim()}
-\`\`\`
-
-\`components/Sitio.tsx\` (las piezas comunes de las secciones):
-
-\`\`\`tsx
-${PLANTILLA_INICIAL['components/Sitio.tsx'].trim()}
-\`\`\`
-
-\`secciones/index.ts\`:
-
-\`\`\`ts
-${PLANTILLA_INICIAL['secciones/index.ts'].trim()}
-\`\`\`
-
-Dos secciones de ejemplo (las demás siguen el mismo patrón y están en el borrador):
-
-\`secciones/Portada.tsx\`:
-
-\`\`\`tsx
-${PLANTILLA_INICIAL['secciones/Portada.tsx'].trim()}
-\`\`\`
-
-\`secciones/Grupo.tsx\`:
-
-\`\`\`tsx
-${PLANTILLA_INICIAL['secciones/Grupo.tsx'].trim()}
-\`\`\`
-
-\`style.css\`:
-
-\`\`\`css
-${PLANTILLA_INICIAL['style.css'].trim()}
-\`\`\`
-
-\`components/DetalleProducto.tsx\` (el detalle de producto; cambialo o dejalo como está):
-
-\`\`\`tsx
-${PLANTILLA_INICIAL['components/DetalleProducto.tsx'].trim()}
-\`\`\`
-
-\`components/detalle.css\`:
-
-\`\`\`css
-${PLANTILLA_INICIAL['components/detalle.css'].trim()}
-\`\`\`
-
-\`components/Checkout.tsx\` (incluye el checkout de Piru; cambialo sólo para elegir la variante o la piel):
-
-\`\`\`tsx
-${PLANTILLA_INICIAL['components/Checkout.tsx'].trim()}
-\`\`\`
+${codigo}
 
 ## 7. Datos reales de ${datos.nombre}
 
@@ -277,6 +302,29 @@ ${JSON.stringify({ local, horarios: datos.horarios, productos: datos.productos.m
 
 ## 8. Cómo entregar
 
-Un bloque de código por archivo, con su ruta en una línea \`<!-- piru:archivo RUTA -->\` justo antes del bloque (por ejemplo \`<!-- piru:archivo secciones/Portada.tsx -->\`). Entregá sólo los archivos que cambian, completos. Para borrar uno: \`<!-- piru:borrar RUTA -->\`. También sirve un \`.zip\` con la estructura de la sección 1. El dueño lo sube en el editor de Páginas, lo revisa en la vista previa y lo publica.
+Respondé con **un solo archivo** \`cambios-piru.md\` (o, si no podés generar archivos, ese mismo texto en un único mensaje), con estas marcas, cada una en su línea y seguida de su bloque. Incluí sólo lo que cambia:
+
+\`\`\`\`md
+<!-- piru:resumen -->
+Una o dos frases para el dueño, en castellano simple: qué cambiaste y dónde.
+
+<!-- piru:contenido -->
+\`\`\`json
+{ "plantilla": "…", "marca": { … }, "esquemas": { … }, "secciones": [ … ] }
+\`\`\`
+
+<!-- piru:archivo secciones/Portada.tsx -->
+\`\`\`tsx
+// el archivo completo, no un fragmento
+\`\`\`
+
+<!-- piru:borrar secciones/Vieja.tsx -->
+\`\`\`\`
+
+- \`piru:contenido\` lleva el objeto \`CONTENIDO\` **completo** como JSON válido: así no hace falta reescribir \`contenido.ts\`.
+- \`piru:archivo RUTA\` lleva cada archivo **completo**, con su ruta relativa al proyecto.
+- \`piru:borrar RUTA\` borra un archivo (no se puede borrar \`page.tsx\`).
+
+El dueño lo sube en Páginas: en el editor visual, con «Pedile un cambio» → «Subí lo que te devolvió», o en el editor de código con «Subir». Antes de aplicarlo se revisa con las reglas del build y de la sección 1.1, y se ve en la vista previa antes de publicar. También se acepta un \`.zip\` con la estructura de la sección 1.
 `
 }

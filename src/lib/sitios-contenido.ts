@@ -31,6 +31,11 @@ export type ContenidoSitio = TiendaConfig & {
   secciones?: SeccionSitio[]
   /** Fuentes subidas por el local (`assets/*.woff2`); el editor escribe su `@font-face` en `fuentes.css`. */
   fuentesPropias?: FuentePropia[]
+  /**
+   * Esquemas de las secciones propias (tipos que no son de la plantilla), para que el editor visual
+   * las edite. Acá sólo se guardan como datos; cada propiedad la valida `sitios/src/editor/esquemas.ts`.
+   */
+  esquemas?: Record<string, Record<string, unknown>>
 }
 
 /**
@@ -113,6 +118,15 @@ export function normalizarFuentesPropias(entrada: unknown): FuentePropia[] | und
   return fuentes.length ? fuentes : undefined
 }
 
+export function normalizarEsquemas(entrada: unknown): Record<string, Record<string, unknown>> | undefined {
+  if (!entrada || typeof entrada !== 'object' || Array.isArray(entrada)) return undefined
+  const esquemas: Record<string, Record<string, unknown>> = {}
+  for (const [tipo, valor] of Object.entries(entrada as Record<string, unknown>).slice(0, 20)) {
+    if (TIPO_SECCION.test(tipo) && valor && typeof valor === 'object' && !Array.isArray(valor)) esquemas[tipo] = limpiarProps(valor)
+  }
+  return Object.keys(esquemas).length ? esquemas : undefined
+}
+
 /**
  * La página por defecto, armada con el contenido de siempre (frase, portada, cinta, historia,
  * galería y destacado). Es lo que recibe una página nueva sin secciones y la migración de una
@@ -183,6 +197,7 @@ export function normalizarContenidoSitio(entrada: unknown, base: { marca: MarcaS
   const resto: TiendaConfig = { ...tienda }
   for (const campo of CAMPOS_MIGRADOS) delete resto[campo]
   const fuentesPropias = normalizarFuentesPropias(t.fuentesPropias)
+  const esquemas = normalizarEsquemas(t.esquemas)
   return {
     ...resto,
     plantilla: tienda.plantilla ?? 'artesanal',
@@ -196,6 +211,7 @@ export function normalizarContenidoSitio(entrada: unknown, base: { marca: MarcaS
     logo: t.logo === null ? null : logo(t.logo) ?? base.logo,
     logoClaro: t.logoClaro === null ? null : logo(t.logoClaro) ?? base.logoClaro,
     ...(fuentesPropias ? { fuentesPropias } : {}),
+    ...(esquemas ? { esquemas } : {}),
     secciones,
   }
 }
@@ -226,6 +242,25 @@ export type SeccionPagina = {
   props?: Record<string, any>
 }
 
+/** El esquema de una sección propia: qué propiedades muestra el editor visual y con qué control. */
+export type EsquemaSeccion = {
+  nombre: string
+  descripcion?: string
+  icono?: string
+  archivo?: string
+  unica?: boolean
+  props: Record<string, {
+    tipo: "texto" | "textoLargo" | "booleano" | "opcion" | "medio" | "galeria" | "accion" | "producto" | "lista" | "preguntas"
+    etiqueta: string
+    porDefecto?: any
+    max?: number
+    opciones?: { valor: string; nombre: string }[]
+    ayuda?: string
+    placeholder?: string
+    video?: boolean
+  }>
+}
+
 export type ContenidoSitio = {
   plantilla?: "elegante" | "moderna" | "artesanal"
   detalleProducto?: "pasos" | "dialogo" | "hoja"
@@ -238,6 +273,8 @@ export type ContenidoSitio = {
   fuentesPropias?: { familia: string; archivo: string }[]
   instagram?: string
   whatsapp?: string
+  /** Las secciones propias que agregaste en código, para editarlas en el editor visual. */
+  esquemas?: Record<string, EsquemaSeccion>
   secciones?: SeccionPagina[]
 }
 
