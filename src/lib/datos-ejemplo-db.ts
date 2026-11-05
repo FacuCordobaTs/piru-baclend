@@ -49,8 +49,14 @@ import { nuevoRequestIdEjemplo } from './pedido-ejemplo'
 
 type Db = MySql2Database<Record<string, never>>
 
-/** Módulos incluidos (gratis) que las campañas y los cupones de ejemplo necesitan para verse. */
-const MODULOS_INCLUIDOS_DEL_EJEMPLO = ['crecimiento', 'codigos_descuento']
+/** Módulos incluidos (gratis) que la demo necesita para mostrar clientes, recompra, puntos y campañas. */
+const MODULOS_INCLUIDOS_DEL_EJEMPLO = [
+  'crecimiento',
+  'codigos_descuento',
+  'motor_recompra',
+  'dias_flojos',
+  'puntos_clientes',
+]
 
 export interface RegistrosEjemplo {
   clientes: number[]

@@ -34,28 +34,35 @@ describe('matriz de acceso de módulos', () => {
     ], MODULE_KEYS.CRECIMIENTO)).toBe(false)
   })
 
-  test('Crecimiento tampoco activa Retención', () => {
+  test('Campañas tampoco activa Recompra', () => {
     expect(listadoHabilitaModulo([
       { codigo: MODULE_KEYS.CRECIMIENTO, activoAhora: true },
     ], MODULE_KEYS.MOTOR_RECOMPRA)).toBe(false)
   })
 
-  test('Puntos para clientes requiere exclusivamente el módulo Retención', () => {
-    // Si sólo tiene la fila legacy de puntos activa pero no motor_recompra, NO se habilita
+  test('Puntos para clientes exige su propio entitlement, no Recompra', () => {
     expect(listadoHabilitaModulo([
       { codigo: MODULE_KEYS.PUNTOS_CLIENTES, activoAhora: true },
       { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: false },
-    ], MODULE_KEYS.PUNTOS_CLIENTES)).toBe(false)
-
-    // Si tiene motor_recompra activo, SI se habilita
-    expect(listadoHabilitaModulo([
-      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: true },
     ], MODULE_KEYS.PUNTOS_CLIENTES)).toBe(true)
 
-    // Sin motor_recompra activo, NO se habilita
+    // Tener Recompra activa no activa Puntos: son capacidades separadas.
+    expect(listadoHabilitaModulo([
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: true },
+    ], MODULE_KEYS.PUNTOS_CLIENTES)).toBe(false)
+
     expect(listadoHabilitaModulo([
       { codigo: MODULE_KEYS.POS, activoAhora: true },
     ], MODULE_KEYS.PUNTOS_CLIENTES)).toBe(false)
+  })
+
+  test('Días flojos exige su propio entitlement, no Recompra', () => {
+    expect(listadoHabilitaModulo([
+      { codigo: MODULE_KEYS.DIAS_FLOJOS, activoAhora: true },
+    ], MODULE_KEYS.DIAS_FLOJOS)).toBe(true)
+    expect(listadoHabilitaModulo([
+      { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: true },
+    ], MODULE_KEYS.DIAS_FLOJOS)).toBe(false)
   })
 
   test('trial, suspensión y vencimiento bloquean el módulo', () => {
@@ -73,7 +80,7 @@ describe('matriz de acceso de módulos', () => {
     }
   })
 
-  test('Crecimiento y Retención suman cupos e importes como productos independientes', () => {
+  test('Campañas, Recompra, Días flojos y Puntos son productos independientes', () => {
     expect(listadoHabilitaModulo([
       { codigo: MODULE_KEYS.MOTOR_RECOMPRA, activoAhora: true },
       { codigo: MODULE_KEYS.CRECIMIENTO, activoAhora: true },

@@ -32,27 +32,19 @@ export const MODULE_KEYS = {
   AVISOS_AUTOMATICOS_WHATSAPP: 'avisos_automaticos_whatsapp',
   MOTOR_RECOMPRA: 'motor_recompra',
   CRECIMIENTO: 'crecimiento',
+  DIAS_FLOJOS: 'dias_flojos',
   CIERRE_TURNO_MANUAL: 'cierre_turno_manual',
 } as const
 
 export type ModuleKey = (typeof MODULE_KEYS)[keyof typeof MODULE_KEYS]
 
-const ALIASES_ACCESO_MODULO: Partial<Record<ModuleKey, readonly ModuleKey[]>> = {
-  [MODULE_KEYS.PUNTOS_CLIENTES]: [MODULE_KEYS.MOTOR_RECOMPRA],
-}
-
 /**
- * Puntos es una capacidad incluida dentro de Retención. Crecimiento y Motor de
- * Recompra no son aliases: cada gate exige su entitlement propio.
+ * Cada capacidad exige su entitlement propio. Recompra, Días flojos y Puntos
+ * nacieron del desglose de "Retención", pero no son aliases entre sí: un local
+ * puede tener el motor de recompra sin el club de puntos, o al revés.
  */
 export function codigosQueHabilitanModulo(modulo: ModuleKey): readonly ModuleKey[] {
-  if (modulo === MODULE_KEYS.PUNTOS_CLIENTES) {
-    // El Club de Puntos forma parte del módulo "Retención" (motor_recompra),
-    // que desde `update_modulo_retencion_gratuito.sql` es incluido y no tiene
-    // precio. No se habilita como módulo independiente.
-    return [MODULE_KEYS.MOTOR_RECOMPRA]
-  }
-  return [modulo, ...(ALIASES_ACCESO_MODULO[modulo] ?? [])]
+  return [modulo]
 }
 
 export const ESTADOS_SUSCRIPCION_CON_ACCESO = ['trial', 'activa', 'pago_pendiente'] as const
@@ -197,16 +189,9 @@ export async function resolverModulosRestaurante(
     }
   })
 
-  // Sincronizar puntos_clientes con el estado de motor_recompra (Retención)
-  const retencionActiva = resueltos.some(
-    (m) => m.codigo === MODULE_KEYS.MOTOR_RECOMPRA && m.activoAhora,
-  )
-  for (const m of resueltos) {
-    if (m.codigo === MODULE_KEYS.PUNTOS_CLIENTES) {
-      m.activoAhora = retencionActiva
-    }
-  }
-
+  // Puntos y Días flojos tienen su propio entitlement: ya no se derivan del
+  // motor de recompra. `resolverModulosRestaurante` devuelve cada fila tal como
+  // quedó en la base.
   return resueltos
 }
 
@@ -248,7 +233,7 @@ type ModuloFacturable = Pick<
   'codigo' | 'tipo' | 'estado' | 'precioMensual' | 'precioMensualCongelado'
 >
 
-/** Resuelve módulos pagos activos; Crecimiento y Retención son independientes y ya no se facturan. */
+/** Resuelve módulos pagos activos; Recompra, Días flojos, Puntos y Campañas son incluidos y no se facturan. */
 export function resolverModulosFacturablesDeListado(
   modulos: ModuloFacturable[],
 ): Array<{ codigo: string; montoMensual: number }> {

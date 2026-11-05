@@ -23,7 +23,7 @@ export const puntosRoute = new Hono()
 
 puntosRoute.use('*', authMiddleware)
 
-puntosRoute.put('/productos/:id', requireModulo(MODULE_KEYS.MOTOR_RECOMPRA),
+puntosRoute.put('/productos/:id', requireModulo(MODULE_KEYS.PUNTOS_CLIENTES),
   zValidator('param', z.object({ id: z.coerce.number().int().positive() })),
   zValidator('json', z.object({ puntosGanados: z.number().int().min(0).max(2147483647),
     puntosNecesarios: z.number().int().min(0).max(2147483647) }).strict()), async c => {

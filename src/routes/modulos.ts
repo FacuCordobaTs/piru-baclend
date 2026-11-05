@@ -14,7 +14,7 @@ import {
   suscripcion as SuscripcionTable,
 } from '../db/schema'
 import { authMiddleware } from '../middleware/auth'
-import { MODULE_KEYS, moduloEstaActivoAhora, resolverModulosRestaurante } from '../lib/modulos'
+import { moduloEstaActivoAhora, resolverModulosRestaurante } from '../lib/modulos'
 import { crearFacturaSuscripcionPendiente } from '../lib/facturacion-suscripcion'
 import { crearPreferenciaSuscripcionMP, pagosSuscripcionDisponibles } from '../lib/mp-suscripcion'
 import { sendPaymentLinkWhatsApp } from '../services/whatsapp'
@@ -73,8 +73,7 @@ modulosRoute.get('/catalogo', async (c) => {
       .orderBy(asc(ModuloTable.orden), asc(ModuloTable.id))
 
     const modulosVisibles = modulos
-      .filter((modulo) => modulo.codigo !== MODULE_KEYS.PUNTOS_CLIENTES
-        && !MODULOS_RETIRADOS.has(modulo.codigo))
+      .filter((modulo) => !MODULOS_RETIRADOS.has(modulo.codigo))
       .map((modulo) => categoriaComercial(modulo, categorias))
 
     return c.json({
@@ -106,7 +105,6 @@ modulosRoute.get('/mis-modulos', async (c) => {
 
     const visibles = resueltos
       .filter((modulo) => modulo.activoCatalogo
-        && modulo.codigo !== MODULE_KEYS.PUNTOS_CLIENTES
         && !MODULOS_RETIRADOS.has(modulo.codigo))
       .map((modulo) => categoriaComercial(modulo, categorias))
     return c.json({
@@ -129,12 +127,6 @@ modulosRoute.put('/:codigo/activar', zValidator('param', codigoSchema), async (c
   try {
     if (MODULOS_RETIRADOS.has(codigo)) {
       return c.json({ success: false, message: 'Módulo no encontrado' }, 404)
-    }
-    if (codigo === MODULE_KEYS.PUNTOS_CLIENTES) {
-      return c.json({
-        success: false,
-        message: 'El Club de Puntos forma parte del módulo Retención. Activá Retención para usarlo.',
-      }, 409)
     }
 
     const modulo = await buscarModuloActivo(db, codigo)

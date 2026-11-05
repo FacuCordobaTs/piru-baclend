@@ -85,7 +85,7 @@ async function borrarPedidosUnificados(tx: any, restauranteId: number, pedidoIds
 
 clientesRoute.use('*', authMiddleware)
 
-clientesRoute.get('/dias-flojos', zValidator('query', z.object({
+clientesRoute.get('/dias-flojos', requireModulo(MODULE_KEYS.DIAS_FLOJOS), zValidator('query', z.object({
     semanas: z.coerce.number().int().min(1).max(26).optional(),
     dia: z.coerce.number().int().min(0).max(6).optional(),
     franja: z.string().max(80).optional(),

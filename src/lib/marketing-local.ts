@@ -206,7 +206,9 @@ export async function tarjetaDelLocal(
       ? `${anclaje.base}${anclaje.prefijo}`.replace(/\/$/, '')
       : null,
     whatsappConectado: Boolean(local.whatsappConectado),
-    retencionActiva: activo('motor_recompra'),
+    recompraActiva: activo('motor_recompra'),
+    diasFlojosActivo: activo('dias_flojos'),
+    puntosActivo: activo('puntos_clientes'),
     crecimientoActivo: activo('crecimiento'),
     codigosDescuentoActivo: activo('codigos_descuento'),
     suscripcion: sub ? { estado: sub.estado, montoMensual } : null,
