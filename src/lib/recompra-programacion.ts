@@ -39,7 +39,6 @@ export interface EspecificacionProgramacion {
   horaObjetivo?: number | null
   mensaje?: string | null
   descuentoPorcentaje?: number | null
-  marketerId?: number | null
   /** Segmento elegido. `null`/ausente = "en general" (todos los recuperables). */
   segmento?: SegmentoRecompra | null
   /** N: mensajes que el asistente selecciona automáticamente. Los `incluirIds` se suman aparte. */

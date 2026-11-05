@@ -60,17 +60,15 @@ describe('entrada a Páginas desde el panel', () => {
     for (const pase of [
       firmar({ scope: 'entrada-sitios', restauranteId: 42 }, { expiresIn: -10 }),
       jwt.sign({ scope: 'entrada-sitios', restauranteId: 42 }, 'otro-secreto'),
-      firmar({ scope: 'entrada-app-marketing', restauranteId: 42 }),
       firmar({ id: 42 }),
     ])
       expect((await pedir('/api/sitios/sesion', 'POST', pase)).status).toBe(401)
   })
 
-  test('la demo, el marketer y la app de marketing no pueden entrar a Páginas', async () => {
+  test('la demo no puede entrar a Páginas', async () => {
     const pedir = app()
     expect((await pedir('/api/sitios/entrada', 'POST', firmar({ id: 42, scope: 'restaurante', demo: true }))).status).toBe(403)
     expect((await pedir('/api/sitios', 'GET', firmar({ id: 42, scope: 'restaurante', demo: true }))).status).toBe(403)
-    expect((await pedir('/api/sitios', 'GET', firmar({ id: 42, scope: 'restaurante', appMarketing: true }))).status).toBe(403)
     // Un token de Páginas con marcas mezcladas es inválido.
     expect((await pedir('/api/sitios', 'GET', firmar({ id: 42, scope: 'restaurante', appSitios: true, demo: true }))).status).toBe(401)
   })

@@ -158,7 +158,7 @@ const tandaConTextoLibre = {
   mensajePersonalizado: 'Hola {nombre}, vení a {local}. {beneficio} {link}',
   descuentoPorcentaje: 15,
 }
-describe('tandas de marketer: escritura real del planificador con repositorio de prueba', () => {
+describe('tandas de recompra: escritura real del planificador con repositorio de prueba', () => {
   test('el horario futuro es sugerido: permite abrir WhatsApp con el cupón listo antes de la hora', async () => {
     const ahora = hoyALas15()
     const { db, inserts } = repositorio({
@@ -303,7 +303,7 @@ describe('tandas de marketer: escritura real del planificador con repositorio de
     expect(resultado.data.waMeUrl).toBeNull()
     expect(inserts).toHaveLength(0)
   })
-  test('fecha agenda todos a la misma hora, conserva control y texto, fuerza un mensaje y guarda autor', async () => {
+  test('fecha agenda todos a la misma hora, conserva control y texto, fuerza un mensaje', async () => {
     const { db, inserts } = repositorio()
     const resultado = await programarEnvios(db, 7, {
       cantidad: 20,
@@ -313,7 +313,6 @@ describe('tandas de marketer: escritura real del planificador con repositorio de
       toqueHasta: 3,
       mensaje: 'Volvé, {nombre}: {link}',
       descuentoPorcentaje: 10,
-      marketerId: 8,
       incluirIds: [1, 2, 4],
       soloIncluidos: true,
     })
@@ -325,7 +324,6 @@ describe('tandas de marketer: escritura real del planificador con repositorio de
       restauranteId: 7,
       origen: 'dia_flojo',
       toqueHasta: 1,
-      marketerId: 8,
       mensajePersonalizado: 'Volvé, {nombre}: {link}',
       descuentoPorcentaje: 10,
     })

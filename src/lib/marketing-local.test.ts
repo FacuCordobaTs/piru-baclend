@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test'
-import { metricasCartera } from './marketer-cartera'
+import { metricasDelLocal } from './marketing-local'
 
 test('cuenta actividad pero sólo factura pedidos cobrados y conserva ocho semanas', () => {
   const ahora = new Date('2026-10-03T20:00:00Z')
-  const datos = metricasCartera(
+  const datos = metricasDelLocal(
     [
       {
         restauranteId: 6,

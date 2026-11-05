@@ -278,8 +278,8 @@ export function createSitiosRoute(deps: Partial<Dependencias> = {}) {
       .use('*', auth)
       .post('/entrada', (c) => {
         const user = usuario(c)
-        // La demo y el marketer no llegan acá (no está en sus listas); la sesión de Páginas tampoco.
-        if (user.demo || user.marketerId !== undefined || user.appSitios)
+        // La demo no llega acá (no está en su lista); la sesión de Páginas tampoco.
+        if (user.demo || user.appSitios)
           return c.json({ error: 'Esto se abre desde tu panel de Piru', code: 'sitios_sin_permiso' }, 403)
         const origen = jwt.decode(c.req.header('Authorization')!.slice(7)) as jwt.JwtPayload
         const token = jwt.sign(

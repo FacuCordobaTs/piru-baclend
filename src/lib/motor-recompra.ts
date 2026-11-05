@@ -550,7 +550,7 @@ export async function programarEnvios(
   input: EspecificacionProgramacion,
 ): Promise<ResultadoProgramacion> {
   return db.transaction(async tx => {
-    // El local y su marketer pueden confirmar tandas a la vez. El bloqueo hace que el segundo
+    // Dos pestañas del panel pueden confirmar tandas a la vez. El bloqueo hace que el segundo
     // vea los destinatarios ya comprometidos por el primero y evita dejar una tanda a medio crear.
     await tx.select({ id: RestauranteTable.id }).from(RestauranteTable)
       .where(eq(RestauranteTable.id, restauranteId)).for('update')
@@ -635,7 +635,6 @@ async function crearProgramacion(
     horaObjetivo: objetivo?.hora ?? null,
     mensajePersonalizado: input.mensaje?.trim() || null,
     descuentoPorcentaje: input.descuentoPorcentaje ?? null,
-    marketerId: input.marketerId ?? null,
     modo: config.modo,
     cupoDiario: config.cupoDiario,
     segmento: spec.segmento,

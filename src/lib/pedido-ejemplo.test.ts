@@ -3,8 +3,8 @@ import { MySqlDialect } from 'drizzle-orm/mysql-core'
 import type { SQL } from 'drizzle-orm'
 import { pedidoUnificado, producto, restaurante, zonaDelivery } from '../db/schema'
 import { computarInventarioClaim } from './claim'
-import { AHORA_CARTERA, datosCarteraEjemplo, dbCarteraFalsa } from './marketer-cartera-db.fakes'
-import { tarjetasDeCartera } from './marketer-cartera-db'
+import { AHORA_LOCAL, datosLocalEjemplo, dbLocalFalsa } from './marketing-local.fakes'
+import { tarjetaDelLocal } from './marketing-local'
 import {
   esRequestIdEjemplo,
   nuevoRequestIdEjemplo,
@@ -116,21 +116,11 @@ describe('lo que mide actividad real no cuenta los pedidos de ejemplo', () => {
     colorPrimario: '#ff7a00',
     dominioTienda: null,
     whatsappConectado: 1,
-    desde: null,
-    porcentaje: null,
   }
 
-  test('la cartera del marketer los deja afuera, en los pedidos y en los primeros pedidos', async () => {
-    const f = dbCarteraFalsa(datosCarteraEjemplo())
-    await tarjetasDeCartera(f.db, [LOCAL], 15, AHORA_CARTERA)
-    const deLosPedidos = f.condiciones.filter((c: { tabla: unknown }) => c.tabla === pedidoUnificado)
-    expect(deLosPedidos).toHaveLength(2)
-    for (const c of deLosPedidos) expect(descartaEjemplo(c.condicion)).toBe(true)
-  })
-
-  test('el dueño que abre la app desde su panel los ve, como en el resto de su panel', async () => {
-    const f = dbCarteraFalsa(datosCarteraEjemplo())
-    await tarjetasDeCartera(f.db, [LOCAL], 0, AHORA_CARTERA, { incluirEjemplo: true })
+  test('la tarjeta de Marketing los cuenta, como el resto del panel', async () => {
+    const f = dbLocalFalsa(datosLocalEjemplo())
+    await tarjetaDelLocal(f.db, LOCAL, AHORA_LOCAL)
     const deLosPedidos = f.condiciones.filter((c: { tabla: unknown }) => c.tabla === pedidoUnificado)
     expect(deLosPedidos).toHaveLength(2)
     for (const c of deLosPedidos) expect(aSql(c.condicion).sql).not.toMatch(/not like/i)

@@ -10,8 +10,8 @@ import { pedidoUnificado } from '../db/schema'
  *
  * Las filas de ejemplo son reales para el panel del local —ahí se ven y cuentan, hasta que el dueño las
  * borra— pero NO son actividad. Todo número que mida si el local recibió pedidos de verdad se calcula
- * con `pedidoReal()`: el valor de la prueba (panel y aviso de vencimiento), el "primer pedido" del claim
- * y la cartera del marketer. Una consulta nueva de ese tipo tiene que sumarla.
+ * con `pedidoReal()`: el valor de la prueba (panel y aviso de vencimiento) y el "primer pedido" del
+ * claim. Una consulta nueva de ese tipo tiene que sumarla.
  */
 export const PREFIJO_REQUEST_EJEMPLO = 'ejemplo-'
 

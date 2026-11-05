@@ -12,7 +12,7 @@ import { registrarEntradaDemo } from '../lib/demo-panel-visitas'
 
 const secreto = () => process.env.JWT_SECRET || 'fallback-secret'
 
-// Limitación por IP con expiración y tamaño acotado (mismo criterio que el login del marketer).
+// Limitación por IP con expiración y tamaño acotado.
 const intentos = new Map<string, { cantidad: number; hasta: number }>()
 function limitado(clave: string, max: number) {
   const ahora = Date.now()

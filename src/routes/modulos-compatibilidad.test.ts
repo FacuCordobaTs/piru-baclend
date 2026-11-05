@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { Hono } from 'hono'
 import * as jwt from 'jsonwebtoken'
 
-// Rutas reales con el contrato de marketers df3ff0e, sin tocar MySQL.
+// Rutas reales de módulos y cupones con la sesión del dueño, sin tocar MySQL.
 let cola: unknown[][] = []
 let escrituras: unknown[] = []
 function cadena(filas: unknown[]) {
@@ -43,22 +43,22 @@ const modulo = {
   tipo: 'incluido', precioMensual: '0.00', activable: true, activo: true,
   activoCatalogo: true, estado: 'activo', origen: 'usuario', vigenteHasta: null,
 }
-function pedir(ruta: string, method = 'GET', body?: unknown, marketer = false) {
-  const token = jwt.sign({ id: 6, scope: 'restaurante', ...(marketer ? { marketerId: 8 } : { appMarketing: true }) }, process.env.JWT_SECRET || 'fallback-secret')
+function pedir(ruta: string, method = 'GET', body?: unknown) {
+  const token = jwt.sign({ id: 6, scope: 'restaurante' }, process.env.JWT_SECRET || 'fallback-secret')
   return app.request(`/api${ruta}`, {
     method, headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
 }
-function auth(marketer: boolean) { return [...(marketer ? [[{ id: 1 }]] : []), [local]] }
+const auth = () => [[local]]
 beforeEach(() => { cola = []; escrituras = [] })
 
-for (const marketer of [false, true]) describe(marketer ? 'sesión marketer' : 'sesión dueño', () => {
+describe('sesión del dueño', () => {
   test('activar gratis renueva una fila vencida y habilita crear el cupón', async () => {
-    cola = [...auth(marketer), [modulo], [{ estado: 'activa' }],
+    cola = [...auth(), [modulo], [{ estado: 'activa' }],
       [{ estado: 'activa' }], [{ ...modulo, vigenteHasta: new Date('2020-01-01') }],
       [{ estado: 'activa' }], [modulo]]
-    const activacion = await pedir('/modulos/codigos_descuento/activar', 'PUT', undefined, marketer)
+    const activacion = await pedir('/modulos/codigos_descuento/activar', 'PUT', undefined)
     expect(activacion.status).toBe(200)
     expect(await activacion.json()).toMatchObject({ success: true, idempotent: false, data: { activoAhora: true } })
     expect(escrituras).toContainEqual(expect.objectContaining({ restauranteId: 6, estado: 'activo', vigenteHasta: null }))
@@ -67,8 +67,8 @@ for (const marketer of [false, true]) describe(marketer ? 'sesión marketer' : '
 
     const body = { codigo: 'martes', tipo: 'porcentaje', valor: '10', limiteUsos: null,
       montoMinimo: '0', fechaInicio: '2026-10-24T00:00:00-03:00', fechaFin: null }
-    cola = [...auth(marketer), [{ estado: 'activa' }], [modulo], [], [{ id: 42, ...body, codigo: 'MARTES' }]]
-    const cupon = await pedir('/codigo-descuento/create', 'POST', body, marketer)
+    cola = [...auth(), [{ estado: 'activa' }], [modulo], [], [{ id: 42, ...body, codigo: 'MARTES' }]]
+    const cupon = await pedir('/codigo-descuento/create', 'POST', body)
     expect(cupon.status).toBe(201)
     expect(escrituras).not.toContainEqual(expect.objectContaining({ codigoDescuentoEnabled: true }))
     expect(await cupon.json()).toMatchObject({ success: true, data: { id: 42, codigo: 'MARTES' } })
@@ -78,8 +78,8 @@ for (const marketer of [false, true]) describe(marketer ? 'sesión marketer' : '
 
   test('crea envío gratis sin importe y lo normaliza a cero', async () => {
     const body = { codigo: 'envio', tipo: 'envio_gratis', montoMinimo: '10000', limiteUsos: 20 }
-    cola = [...auth(marketer), [{ estado: 'activa' }], [modulo], [], [{ id: 42, ...body }]]
-    const res = await pedir('/codigo-descuento/create', 'POST', body, marketer)
+    cola = [...auth(), [{ estado: 'activa' }], [modulo], [], [{ id: 42, ...body }]]
+    const res = await pedir('/codigo-descuento/create', 'POST', body)
     expect(res.status).toBe(201)
     expect(escrituras).not.toContainEqual(expect.objectContaining({ codigoDescuentoEnabled: true }))
     expect(escrituras).toContainEqual(expect.objectContaining({
@@ -90,35 +90,35 @@ for (const marketer of [false, true]) describe(marketer ? 'sesión marketer' : '
 
   test('cambiar un cupón a envío gratis descarta el importe anterior', async () => {
     const anterior = { id: 42, restauranteId: 6, codigo: 'ENVIO', tipo: 'monto_fijo', valor: '1500' }
-    cola = [...auth(marketer), [{ estado: 'activa' }], [modulo], [anterior], [{ ...anterior, tipo: 'envio_gratis', valor: '0.00' }]]
-    const res = await pedir('/codigo-descuento/42', 'PUT', { tipo: 'envio_gratis', valor: '9999' }, marketer)
+    cola = [...auth(), [{ estado: 'activa' }], [modulo], [anterior], [{ ...anterior, tipo: 'envio_gratis', valor: '0.00' }]]
+    const res = await pedir('/codigo-descuento/42', 'PUT', { tipo: 'envio_gratis', valor: '9999' })
     expect(res.status).toBe(200)
     expect(escrituras).toContainEqual({ tipo: 'envio_gratis', valor: '0.00' })
     expect(cola).toHaveLength(0)
   })
 
   test('al pasar de envío gratis a monto fijo exige un importe positivo', async () => {
-    cola = [...auth(marketer), [{ estado: 'activa' }], [modulo], [{ id: 42, restauranteId: 6, codigo: 'ENVIO', tipo: 'envio_gratis', valor: '0.00' }]]
-    const res = await pedir('/codigo-descuento/42', 'PUT', { tipo: 'monto_fijo' }, marketer)
+    cola = [...auth(), [{ estado: 'activa' }], [modulo], [{ id: 42, restauranteId: 6, codigo: 'ENVIO', tipo: 'envio_gratis', valor: '0.00' }]]
+    const res = await pedir('/codigo-descuento/42', 'PUT', { tipo: 'monto_fijo' })
     expect(res.status).toBe(400)
-    expect(escrituras.filter((fila: any) => fila.marketerId === undefined)).toHaveLength(0)
+    expect(escrituras).toHaveLength(0)
     expect(cola).toHaveLength(0)
   })
 
   test('no anuncia éxito ni escribe si la suscripción impide usar el módulo', async () => {
-    cola = [...auth(marketer), [modulo], [{ estado: 'suspendida' }]]
-    const res = await pedir('/modulos/codigos_descuento/activar', 'PUT', undefined, marketer)
+    cola = [...auth(), [modulo], [{ estado: 'suspendida' }]]
+    const res = await pedir('/modulos/codigos_descuento/activar', 'PUT', undefined)
     expect(res.status).toBe(403)
     expect(await res.json()).toMatchObject({ success: false, code: 'suscripcion_sin_acceso' })
-    expect(escrituras.filter((fila: any) => fila.marketerId === undefined)).toHaveLength(0)
+    expect(escrituras).toHaveLength(0)
   })
 
   test('crear cupón sin herramienta activa conserva el gate y devuelve JSON', async () => {
-    cola = [...auth(marketer), [{ estado: 'activa' }], [{ ...modulo, estado: 'inactivo' }]]
-    const res = await pedir('/codigo-descuento/create', 'POST', { codigo: 'MARTES', tipo: 'porcentaje', valor: '10' }, marketer)
+    cola = [...auth(), [{ estado: 'activa' }], [{ ...modulo, estado: 'inactivo' }]]
+    const res = await pedir('/codigo-descuento/create', 'POST', { codigo: 'MARTES', tipo: 'porcentaje', valor: '10' })
     expect(res.status).toBe(403)
     expect(await res.json()).toMatchObject({ success: false, moduleRequired: true, module: 'codigos_descuento' })
-    expect(escrituras.filter((fila: any) => fila.marketerId === undefined)).toHaveLength(0)
+    expect(escrituras).toHaveLength(0)
   })
 })
 

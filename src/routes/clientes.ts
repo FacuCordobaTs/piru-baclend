@@ -131,7 +131,7 @@ const SIN_ACTIVIDAD_PUNTOS = {
 
 // Sin `pagina` ni `limite` devuelve la lista completa de siempre (contrato anterior).
 // Con alguno de los dos devuelve una página —filtrada y ordenada acá— con el resumen
-// de la base entera: es lo que usa la app de marketers, donde la lista no se carga
+// de la base entera: es lo que usa Marketing del panel, donde la lista no se carga
 // de una. El segmento de cada cliente depende de toda la base, así que el perfil de
 // todos se calcula igual; el detalle pesado sólo se arma para la página.
 clientesRoute.get('/list', zValidator('query', listadoQuerySchema), async (c) => {

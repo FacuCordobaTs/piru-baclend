@@ -2,20 +2,10 @@ import { Context, Next } from 'hono'
 import * as jwt from 'jsonwebtoken'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
+import { restaurante as RestauranteTable } from '../db/schema'
+import { eq, sql } from 'drizzle-orm'
+import { esTokenRetirado, sitiosPuede } from '../lib/sesiones-app'
 import {
-  restaurante as RestauranteTable,
-  restauranteMarketer,
-  marketer,
-  marketerAccion,
-} from '../db/schema'
-import { and, eq, sql } from 'drizzle-orm'
-import {
-  duenioAppMarketingPuede,
-  marketerPuede,
-  sitiosPuede,
-} from '../lib/marketer-permisos'
-import {
-  demoBloqueaEnAppMarketing,
   demoPuede,
   esProspectoSinReclamar,
   ocultarSecretos,
@@ -24,7 +14,6 @@ import {
 export interface AuthenticatedContext extends Context {
   user: {
     id: number
-    marketerId?: number
     email?: string | null
     nombre?: string | null
     splitPayment?: boolean
@@ -54,8 +43,6 @@ export const createAuthMiddleware =
     let decoded: {
       id: number
       scope?: string
-      marketerId?: number
-      appMarketing?: unknown
       appSitios?: unknown
       demo?: unknown
       altaInterna?: boolean
@@ -71,7 +58,7 @@ export const createAuthMiddleware =
     }
 
     if (
-      decoded.scope === 'marketer' ||
+      esTokenRetirado(decoded) ||
       !Number.isInteger(decoded.id) ||
       decoded.id <= 0
     ) {
@@ -86,54 +73,16 @@ export const createAuthMiddleware =
       decoded.demo !== undefined &&
       (decoded.demo !== true ||
         decoded.scope !== 'restaurante' ||
-        decoded.marketerId !== undefined ||
         decoded.altaInterna === true ||
         decoded.accesoTemporalInterno === true)
     )
       return c.json({ error: 'Token inválido' }, 401)
-    if (decoded.marketerId !== undefined) {
-      if (
-        decoded.scope !== 'restaurante' ||
-        !Number.isInteger(decoded.marketerId) ||
-        decoded.marketerId <= 0
-      )
-        return c.json({ error: 'Token inválido' }, 401)
-      const [vinculo] = await db
-        .select({ id: restauranteMarketer.id })
-        .from(restauranteMarketer)
-        .innerJoin(marketer, eq(marketer.id, restauranteMarketer.marketerId))
-        .where(
-          and(
-            eq(restauranteMarketer.restauranteId, decoded.id),
-            eq(restauranteMarketer.marketerId, decoded.marketerId),
-            eq(restauranteMarketer.estado, 'activo'),
-            eq(marketer.activo, true),
-          ),
-        )
-        .limit(1)
-      if (!vinculo)
-        return c.json(
-          {
-            error: 'El local te quitó el acceso',
-            code: 'acceso_marketer_revocado',
-          },
-          401,
-        )
-      if (!marketerPuede(c.req.method, c.req.path))
-        return c.json(
-          {
-            error: 'Esto lo maneja el dueño del local',
-            code: 'marketer_sin_permiso',
-          },
-          403,
-        )
-    } else if (decoded.appSitios !== undefined) {
+    if (decoded.appSitios !== undefined) {
       // Sesión del dueño en Páginas (/sitios/sesion): sólo el editor de su sitio.
       if (
         decoded.appSitios !== true ||
         decoded.scope !== 'restaurante' ||
-        decoded.demo !== undefined ||
-        decoded.appMarketing !== undefined
+        decoded.demo !== undefined
       )
         return c.json({ error: 'Token inválido' }, 401)
       if (!sitiosPuede(c.req.method, c.req.path))
@@ -141,30 +90,6 @@ export const createAuthMiddleware =
           {
             error: 'Esto se maneja desde tu panel de Piru',
             code: 'sitios_sin_permiso',
-          },
-          403,
-        )
-    } else if (decoded.appMarketing !== undefined) {
-      // Sesión del dueño en la app de marketers (/marketing-duenio/sesion): es su local, pero
-      // sólo alcanza lo que esa app usa. Lo demás se sigue manejando desde el panel.
-      if (decoded.appMarketing !== true || decoded.scope !== 'restaurante')
-        return c.json({ error: 'Token inválido' }, 401)
-      if (!duenioAppMarketingPuede(c.req.method, c.req.path))
-        return c.json(
-          {
-            error: 'Esto se maneja desde tu panel de Piru',
-            code: 'app_marketing_sin_permiso',
-          },
-          403,
-        )
-      if (
-        decoded.demo === true &&
-        demoBloqueaEnAppMarketing(c.req.method, c.req.path)
-      )
-        return c.json(
-          {
-            error: 'Esto no está disponible en la demo',
-            code: 'demo_sin_permiso',
           },
           403,
         )
@@ -180,11 +105,7 @@ export const createAuthMiddleware =
         )
     }
     const demo = decoded.demo === true
-    const restringido =
-      decoded.marketerId !== undefined ||
-      decoded.appMarketing !== undefined ||
-      decoded.appSitios !== undefined ||
-      demo
+    const restringido = decoded.appSitios !== undefined || demo
     const restauranteResult = await db
       .select({
         id: RestauranteTable.id,
@@ -223,9 +144,6 @@ export const createAuthMiddleware =
       accesoTemporalInterno: decoded.accesoTemporalInterno === true,
       ...(demo ? { demo: true } : {}),
       ...(decoded.appSitios === true ? { appSitios: true } : {}),
-      ...(decoded.marketerId === undefined
-        ? {}
-        : { marketerId: decoded.marketerId }),
       email: restaurante.email,
       nombre: restaurante.nombre,
       rapiboyToken: restaurante.rapiboyToken
@@ -248,25 +166,6 @@ export const createAuthMiddleware =
       } catch {
         // Sin cuerpo JSON legible no hay nada que limpiar.
       }
-    }
-    if (
-      decoded.marketerId !== undefined &&
-      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(c.req.method)
-    ) {
-      void db
-        .insert(marketerAccion)
-        .values({
-          marketerId: decoded.marketerId,
-          restauranteId: decoded.id,
-          metodo: c.req.method,
-          ruta: c.req.path.slice(0, 255),
-          status: c.res.status,
-          createdAt: new Date(),
-        })
-        .then(
-          () => {},
-          () => console.error('[marketer] No se pudo registrar la acción'),
-        )
     }
   }
 export const authMiddleware = createAuthMiddleware()

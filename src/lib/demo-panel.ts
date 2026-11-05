@@ -12,7 +12,7 @@
  *     quedaron abiertas dejan de servir (`authMiddleware` lo vuelve a verificar en cada request);
  *   - no cambia nada que redirija pedidos o plata (WhatsApp, alias, métodos de pago), ni credenciales,
  *     accesos, facturación ni conexiones con terceros: lista cerrada de mutaciones, como los permisos
- *     del marketer (`marketer-permisos.ts`);
+ *     de Páginas (`sesiones-app.ts`);
  *   - nunca devuelve secretos: las respuestas JSON pasan por `ocultarSecretos`.
  */
 
@@ -65,7 +65,7 @@ export async function demoSigueAbierta(db: Db, restauranteId: number): Promise<b
   return esProspectoSinReclamar(local)
 }
 
-/** Método y path verificables, o `null` si el request es ambiguo (misma regla que el marketer). */
+/** Método y path verificables, o `null` si el request es ambiguo (misma regla que Páginas). */
 function rutaVerificable(metodo: string, ruta: string) {
   const method = metodo.toUpperCase()
   const path = ruta.split('?')[0].replace(/\/+$/, '')
@@ -76,12 +76,12 @@ function rutaVerificable(metodo: string, ruta: string) {
 
 /** Lecturas que el panel de la demo nunca necesita: operación interna y cuentas de otros. */
 // `sitios`: Páginas (docs/PAGINAS_PROPIAS.md) no es parte de la demo, ni para leer.
-const LECTURAS_CERRADAS = /^\/api\/(?:interno|marketer|onboarding|staff|facturacion|auth|sitios)(?:\/|$)/
+const LECTURAS_CERRADAS = /^\/api\/(?:interno|onboarding|staff|facturacion|auth|sitios)(?:\/|$)/
 
 /**
  * Lo único que la demo puede escribir: la operación del servicio, el menú, las mesas y zonas, el
  * marketing y borrar sus datos de ejemplo. Todo lo demás se rechaza por omisión (credenciales,
- * WhatsApp, medios de pago, staff, marketer, módulos pagos, suscripción, recargas, conexiones).
+ * WhatsApp, medios de pago, staff, módulos pagos, suscripción, recargas, conexiones).
  */
 const MUTACIONES_PERMITIDAS: { permitido: RegExp; excepto?: RegExp }[] = [
   {
@@ -93,8 +93,6 @@ const MUTACIONES_PERMITIDAS: { permitido: RegExp; excepto?: RegExp }[] = [
   { permitido: /^\/api\/(?:mesas-locales|zona-delivery|repartidores|notificacion)(?:\/|$)/ },
   { permitido: /^\/api\/(?:marketing|codigo-descuento|puntos)(?:\/|$)/, excepto: /\/enviar-whatsapp$/ },
   { permitido: /^\/api\/datos-ejemplo$/ },
-  // El pase que abre la app de marketing en modo dueño (lleva la marca demo al otro lado).
-  { permitido: /^\/api\/marketing-duenio\/entrada$/ },
   // Activar un módulo incluido es gratis; uno pago responde 409 antes de tocar nada.
   { permitido: /^\/api\/modulos\/[a-z0-9_]+\/activar$/ },
 ]
@@ -109,21 +107,6 @@ export function demoPuede(metodo: string, ruta: string): boolean {
   if (method === 'GET') return !LECTURAS_CERRADAS.test(path)
   if (method === 'DELETE' && BORRADOS_DE_CLIENTES.some((re) => re.test(path))) return true
   return MUTACIONES_PERMITIDAS.some((r) => r.permitido.test(path) && !(r.excepto && r.excepto.test(path)))
-}
-
-/**
- * Dentro de la app de marketing la sesión del dueño con la marca demo alcanza lo mismo que ya le
- * alcanza al dueño allá (`duenioAppMarketingPuede`), menos lo que cobra o manda mensajes desde el
- * número de Piru. Esto sólo dice qué se le quita; se compone con esa lista, no la reemplaza.
- */
-export function demoBloqueaEnAppMarketing(metodo: string, ruta: string): boolean {
-  const verificable = rutaVerificable(metodo, ruta)
-  if (!verificable) return true
-  const { path } = verificable
-  return (
-    /^\/api\/modulos\/[^/]+\/(?:checkout|pago-link-whatsapp)$/.test(path) ||
-    /\/enviar-whatsapp$/.test(path)
-  )
 }
 
 const CLAVES_SECRETAS = new Set([

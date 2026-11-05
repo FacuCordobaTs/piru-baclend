@@ -47,13 +47,11 @@ import { stockRoute } from './routes/stock';
 import { puntosRoute } from './routes/puntos';
 import { pagoRoute } from './routes/pago';
 import { internoRoute } from './routes/interno';
-import { marketerRoute } from './routes/marketer';
-import { miMarketerRoute } from './routes/mi-marketer';
-import { marketingDuenioRoute } from './routes/marketing-duenio';
+import { marketingLocalRoute } from './routes/marketing-local';
 import { demoPanelRoute } from './routes/demo-panel';
 import { datosEjemploRoute } from './routes/datos-ejemplo';
 import { demoSigueAbierta } from './lib/demo-panel';
-import { marketerPuedeSocketAdmin } from './lib/marketer-permisos';
+import { puedeSocketAdmin } from './lib/sesiones-app';
 import { claimRoute } from './routes/claim';
 import { staffLoginRoute, staffRoute } from './routes/staff';
 import { mozosRoute } from './routes/mozos';
@@ -107,8 +105,6 @@ const ORIGENES_CONOCIDOS = [
     'http://localhost:5173',
     'http://localhost:5174', // panel interno (Vite dev, puerto siguiente al del admin)
     'http://localhost:5175', // PWA de mozos (Vite dev)
-    'http://localhost:5176',
-    'https://marketing.piru.app',
     'https://piru.app',
     'https://admin.piru.app',
     'https://interno.piru.app',      // panel interno del fundador (Cloudflare Pages)
@@ -283,9 +279,7 @@ app.basePath('/api')
   .route('/mensajes', mensajesRoute)
   .route('/pago', pagoRoute)
   .route('/interno', internoRoute)
-  .route('/marketer', marketerRoute)
-  .route('/mi-marketer', miMarketerRoute)
-  .route('/marketing-duenio', marketingDuenioRoute)
+  .route('/marketing-local', marketingLocalRoute)
   .route('/demo-panel', demoPanelRoute)
   .route('/datos-ejemplo', datosEjemploRoute)
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
@@ -300,7 +294,7 @@ app.get(
     if (token) {
       try {
         const decoded = await verifyToken(token);
-        if (marketerPuedeSocketAdmin(decoded)) {
+        if (puedeSocketAdmin(decoded)) {
           // La sesión de la demo también ve el feed, sólo mientras la tienda no tenga dueño.
           if (decoded.demo !== true || await demoSigueAbierta(drizzle(pool), decoded.id)) restauranteId = decoded.id;
         }

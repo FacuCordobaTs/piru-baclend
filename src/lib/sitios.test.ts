@@ -5,7 +5,7 @@ import { armarCss, construirSitio } from './sitios-build'
 import { validarBorrador, resolverRelativo, pathValido, importPermitido, PAQUETES_RUNTIME, PAQUETES_EMBEBIDOS, EXTENSIONES_CODIGO, TIPOS_ASSET } from './sitios-reglas'
 import { slugDisponible, SLUGS_REGISTRADOS } from './sitios-slugs'
 import { esSitioDePaginas, fijarPublicados, paginasApiPath } from './sitios-publicados'
-import { sitiosPuede, marketerPuede, duenioAppMarketingPuede, marketerPuedeSocketAdmin } from './marketer-permisos'
+import { sitiosPuede, puedeSocketAdmin } from './sesiones-app'
 import { CONTENIDO_INICIAL, PLANTILLA_INICIAL, plantillaInicial } from './sitios-plantilla'
 import { marcaPorDefecto, normalizarContenidoSitio } from './sitios-contenido'
 import { generarGuia } from './sitios-guia'
@@ -247,11 +247,9 @@ describe('permisos de la sesión de Páginas', () => {
       expect(sitiosPuede(m, p)).toBe(false)
   })
 
-  test('el marketer, la app de marketing y el socket de pedidos no entran', () => {
-    expect(marketerPuede('GET', '/api/sitios')).toBe(false)
-    expect(duenioAppMarketingPuede('POST', '/api/sitios/1/publicar')).toBe(false)
-    expect(marketerPuedeSocketAdmin({ id: 4, scope: 'restaurante', appSitios: true })).toBe(false)
-    expect(marketerPuedeSocketAdmin({ id: 4, scope: 'restaurante' })).toBe(true)
+  test('la sesión de Páginas no abre el socket de pedidos', () => {
+    expect(puedeSocketAdmin({ id: 4, scope: 'restaurante', appSitios: true })).toBe(false)
+    expect(puedeSocketAdmin({ id: 4, scope: 'restaurante' })).toBe(true)
   })
 
   test('los metadatos sólo aceptan textos cortos, colores y assets de imagen', () => {

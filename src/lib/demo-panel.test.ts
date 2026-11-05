@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  demoBloqueaEnAppMarketing,
   demoPuede,
   esProspectoSinReclamar,
   estadoPanelDemo,
@@ -50,7 +49,6 @@ describe('lo que la sesión de la demo puede hacer', () => {
       ['DELETE', '/api/datos-ejemplo'],
       ['POST', '/api/datos-ejemplo'],
       ['PUT', '/api/modulos/crecimiento/activar'],
-      ['POST', '/api/marketing-duenio/entrada'],
     ]) {
       expect(demoPuede(method, path), `${method} ${path}`).toBe(true)
     }
@@ -69,8 +67,6 @@ describe('lo que la sesión de la demo puede hacer', () => {
       // Credenciales y accesos que quedarían después de la demo.
       ['PUT', '/api/auth/change-password'],
       ['POST', '/api/staff/usuarios'],
-      ['POST', '/api/mi-marketer'],
-      ['DELETE', '/api/mi-marketer'],
       // Conexiones con terceros, facturación y plata.
       ['POST', '/api/whatsapp-oauth/connect'],
       ['POST', '/api/mp/desconectar'],
@@ -104,7 +100,6 @@ describe('lo que la sesión de la demo puede hacer', () => {
       '/api/onboarding/algo',
       '/api/staff/usuarios',
       '/api/facturacion/estado',
-      '/api/marketer/locales',
     ]) {
       expect(demoPuede('GET', path), path).toBe(false)
     }
@@ -117,21 +112,11 @@ describe('lo que la sesión de la demo puede hacer', () => {
       ['GET', '/api//restaurante/profile'],
       ['HEAD', '/api/restaurante/profile'],
       ['GET', '/restaurante/profile'],
-      ['PUT', '/api/marketing-duenio/sesion'],
       // `marketing-` no es el prefijo `marketing/`.
       ['POST', '/api/marketing-interno/campanas'],
     ]) {
       expect(demoPuede(method, path), `${method} ${path}`).toBe(false)
     }
-  })
-
-  test('dentro de la app de marketing, además, no cobra ni manda mensajes desde Piru', () => {
-    expect(demoBloqueaEnAppMarketing('POST', '/api/modulos/motor_recompra/checkout')).toBe(true)
-    expect(demoBloqueaEnAppMarketing('POST', '/api/modulos/motor_recompra/pago-link-whatsapp')).toBe(true)
-    expect(demoBloqueaEnAppMarketing('POST', '/api/marketing/enlaces/4/enviar-whatsapp')).toBe(true)
-    expect(demoBloqueaEnAppMarketing('GET', '/api/clientes/list')).toBe(false)
-    expect(demoBloqueaEnAppMarketing('POST', '/api/marketing/campanas')).toBe(false)
-    expect(demoBloqueaEnAppMarketing('GET', '/api/%2e%2e/interno')).toBe(true)
   })
 })
 

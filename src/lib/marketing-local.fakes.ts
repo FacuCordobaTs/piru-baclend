@@ -4,15 +4,13 @@ import {
   horarioRestaurante,
   pedidoUnificado,
   restaurante,
-  restauranteMarketer,
   restauranteModulo,
   sucursal,
   suscripcion,
 } from '../db/schema'
 
 /** Filas que devuelve cada tabla; los filtros SQL se ignoran, así que van ya filtradas. */
-export interface DatosCarteraFalsa {
-  vinculos?: object[]
+export interface DatosLocalFalsos {
   restaurantes?: object[]
   pedidos?: object[]
   primeros?: object[]
@@ -25,15 +23,15 @@ export interface DatosCarteraFalsa {
 }
 
 /** Instante fijo de los ejemplos: sábado 3 de octubre de 2026, 17 hs de Argentina. */
-export const AHORA_CARTERA = new Date('2026-10-03T20:00:00Z')
+export const AHORA_LOCAL = new Date('2026-10-03T20:00:00Z')
 const DIA = 86400000
-const hace = (dias: number) => new Date(AHORA_CARTERA.getTime() - dias * DIA)
+const hace = (dias: number) => new Date(AHORA_LOCAL.getTime() - dias * DIA)
 
 /**
- * Brasa (6) con un mes de pedidos salvo los martes, Retención y Campañas; Pizza (7) en prueba,
- * con dominio propio, override de comisión y mensajes para hoy; y un local que revocó (8).
+ * Brasa (6) con un mes de pedidos salvo los martes, Retención y Campañas. Las filas de Pizza (7)
+ * prueban que la tarjeta sólo cuenta las del local pedido.
  */
-export function datosCarteraEjemplo(): DatosCarteraFalsa {
+export function datosLocalEjemplo(): DatosLocalFalsos {
   const pedidosBrasa = Array.from({ length: 28 }, (_, i) => hace(i + 1))
     // 15 UTC = mediodía de Argentina: el día de la semana es el mismo en las dos zonas.
     .map((d) => new Date(d.getTime() - 5 * 3600000))
@@ -46,47 +44,6 @@ export function datosCarteraEjemplo(): DatosCarteraFalsa {
       estado: 'delivered',
     }))
   return {
-    vinculos: [
-      {
-        restauranteId: 6,
-        nombre: 'Brasa',
-        username: 'brasa',
-        imagenUrl: null,
-        colorPrimario: '#ff7a00',
-        dominioTienda: null,
-        whatsappConectado: 1,
-        desde: new Date('2026-09-01T12:00:00Z'),
-        estado: 'activo',
-        revocadoAt: null,
-        porcentaje: null,
-      },
-      {
-        restauranteId: 7,
-        nombre: null,
-        username: null,
-        imagenUrl: 'https://cdn.example/pizza.png',
-        colorPrimario: null,
-        dominioTienda: 'pizza.example',
-        whatsappConectado: 0,
-        desde: new Date('2026-09-10T12:00:00Z'),
-        estado: 'activo',
-        revocadoAt: null,
-        porcentaje: '15.00',
-      },
-      {
-        restauranteId: 8,
-        nombre: 'Vieja',
-        username: 'vieja',
-        imagenUrl: null,
-        colorPrimario: null,
-        dominioTienda: null,
-        whatsappConectado: 0,
-        desde: new Date('2026-08-01T12:00:00Z'),
-        estado: 'revocado',
-        revocadoAt: new Date('2026-09-20T12:00:00Z'),
-        porcentaje: null,
-      },
-    ],
     restaurantes: [
       {
         // `id` para el canje de la sesión; el resto, las columnas de la tarjeta.
@@ -197,7 +154,7 @@ export function datosCarteraEjemplo(): DatosCarteraFalsa {
   }
 }
 
-/** La tarjeta de Brasa que devuelve la cartera; el dueño ve la misma, sin vínculo ni comisión. */
+/** La tarjeta de Brasa que devuelve `GET /marketing-local`. */
 export const TARJETA_BRASA = {
   restauranteId: 6,
   nombre: 'Brasa',
@@ -205,7 +162,6 @@ export const TARJETA_BRASA = {
   imagenUrl: null,
   colorPrimario: '#ff7a00',
   baseTienda: 'https://my.piru.app/brasa',
-  desde: '2026-09-01T12:00:00.000Z',
   whatsappConectado: true,
   retencionActiva: true,
   crecimientoActivo: true,
@@ -218,22 +174,20 @@ export const TARJETA_BRASA = {
   clientesNuevos30d: 1,
   diaMasFlojo: { diaSemana: 2, nombre: 'Martes' },
   mensajesParaHoy: 0,
-  comisionEstimadaMensual: 7400,
 }
 
 /**
- * Doble de Drizzle para las consultas de la cartera: cada `select` resuelve por la tabla del
+ * Doble de Drizzle para las consultas de la tarjeta del local: cada `select` resuelve por la tabla del
  * `from`. Los dos `select` sobre `pedido_unificado` se distinguen porque sólo los primeros
  * pedidos llevan `groupBy`.
  */
-export function dbCarteraFalsa(datos: DatosCarteraFalsa) {
+export function dbLocalFalsa(datos: DatosLocalFalsos) {
   const consultas: unknown[] = []
   /** La condición de cada `where` con la tabla de su `from`: sirve para probar qué se filtra. */
   const condiciones: { tabla: unknown; condicion: unknown }[] = []
   /** Las columnas pedidas en cada `select`, en orden: sirven para probar que no se lee de más. */
   const columnas: string[][] = []
   const filas = (tabla: unknown, agrupada: boolean) => {
-    if (tabla === restauranteMarketer) return datos.vinculos ?? []
     if (tabla === restaurante) return datos.restaurantes ?? []
     if (tabla === pedidoUnificado)
       return (agrupada ? datos.primeros : datos.pedidos) ?? []
@@ -243,7 +197,7 @@ export function dbCarteraFalsa(datos: DatosCarteraFalsa) {
     if (tabla === colaRecompra) return datos.mensajes ?? []
     if (tabla === configuracionSuscripcion) return datos.configuracion ?? []
     if (tabla === sucursal) return datos.sucursales ?? []
-    throw new Error('Tabla sin datos en el doble de la cartera')
+    throw new Error('Tabla sin datos en el doble del local')
   }
   const db = {
     select: (campos?: Record<string, unknown>) => {

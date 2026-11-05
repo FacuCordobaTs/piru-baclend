@@ -11,7 +11,7 @@ import {
 /**
  * Los datos de ejemplo de la demo (clientes, pedidos, campañas y un cupón marcados "EJEMPLO").
  * Los ve y los borra el dueño desde el panel: la demo de prospección y, ya reclamada la tienda, la
- * cuenta que sigue. El marketer y la app de marketing no los manejan (quedan fuera de sus listas).
+ * cuenta que sigue.
  */
 export function createDatosEjemploRoute(getDb = () => drizzle(pool), auth = authMiddleware) {
   const restauranteIdDe = (c: unknown) => (c as AuthenticatedContext).user.id

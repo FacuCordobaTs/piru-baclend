@@ -143,7 +143,7 @@ describe('sembrar los datos de ejemplo', () => {
       expect(p.valores.impreso).toBe(true)
       expect(idsClientes.has(p.valores.clienteId)).toBe(true)
       expect(p.valores.nombreCliente.endsWith('EJEMPLO')).toBe(true)
-      // Marcados: el valor de la prueba, el claim y la cartera del marketer no los cuentan como reales.
+      // Marcados: el valor de la prueba, y el claim no los cuentan como reales.
       expect(esRequestIdEjemplo(p.valores.clientRequestId)).toBe(true)
     }
     expect(new Set(pedidos.map((p) => p.valores.clientRequestId)).size).toBe(pedidos.length)

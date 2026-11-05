@@ -11,7 +11,7 @@
 -- tienda y el resto del panel no dependen de la tabla).
 --
 -- Los instantes los escribe la aplicación con Drizzle y son DATETIME (sin conversión de zona), igual
--- que en `mp_conexion_qr` y `marketer`. Nunca compararlos en SQL con NOW().
+-- que en `mp_conexion_qr`. Nunca compararlos en SQL con NOW().
 --
 -- PRECONDICIÓN: backup lógico verificado antes de ejecutar (MySQL confirma DDL de forma implícita).
 -- `CREATE TABLE IF NOT EXISTS` hace la migración reintentable.

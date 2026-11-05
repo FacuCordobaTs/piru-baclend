@@ -22,6 +22,27 @@ import { asegurarTurnoAbierto, finalizarTurnoAlDesactivar } from '../lib/turnos-
 
 const PAGO_LINK_TTL_MIN = 60
 
+// Módulos retirados del catálogo comercial. La migración
+// `remove_modulo_rapiboy.sql` deja la fila inactiva; este filtro además los
+// oculta aunque la migración todavía no se haya aplicado.
+const MODULOS_RETIRADOS = new Set(['rapiboy'])
+
+/**
+ * Campañas de adquisición (`crecimiento`) heredó la categoría `modulos_pagos`
+ * de `motor_recompra`. Comercialmente pertenece a "Clientes y fidelización",
+ * junto a Códigos de descuento. `mover_crecimiento_a_clientes_fidelizacion.sql`
+ * corrige la fila; esto mantiene la respuesta correcta mientras la migración
+ * todavía no se aplicó.
+ */
+function categoriaComercial<T extends { codigo: string; categoriaId: number }>(
+  modulo: T,
+  categorias: Array<{ id: number; codigo: string }>,
+): T {
+  if (modulo.codigo !== 'crecimiento') return modulo
+  const clientes = categorias.find((categoria) => categoria.codigo === 'clientes_fidelizacion')
+  return clientes ? { ...modulo, categoriaId: clientes.id } as T : modulo
+}
+
 const codigoSchema = z.object({
   codigo: z.string().regex(/^[a-z0-9_]+$/, 'Código de módulo inválido').max(100),
 })
@@ -51,11 +72,16 @@ modulosRoute.get('/catalogo', async (c) => {
       .where(eq(ModuloTable.activo, true))
       .orderBy(asc(ModuloTable.orden), asc(ModuloTable.id))
 
+    const modulosVisibles = modulos
+      .filter((modulo) => modulo.codigo !== MODULE_KEYS.PUNTOS_CLIENTES
+        && !MODULOS_RETIRADOS.has(modulo.codigo))
+      .map((modulo) => categoriaComercial(modulo, categorias))
+
     return c.json({
       success: true,
       data: categorias.map((categoria) => ({
         ...categoria,
-        modulos: modulos.filter((modulo) => modulo.categoriaId === categoria.id && modulo.codigo !== MODULE_KEYS.PUNTOS_CLIENTES),
+        modulos: modulosVisibles.filter((modulo) => modulo.categoriaId === categoria.id),
       })),
     })
   } catch (error) {
@@ -78,7 +104,11 @@ modulosRoute.get('/mis-modulos', async (c) => {
       resolverModulosRestaurante(db, restauranteId),
     ])
 
-    const visibles = resueltos.filter((modulo) => modulo.activoCatalogo && modulo.codigo !== MODULE_KEYS.PUNTOS_CLIENTES)
+    const visibles = resueltos
+      .filter((modulo) => modulo.activoCatalogo
+        && modulo.codigo !== MODULE_KEYS.PUNTOS_CLIENTES
+        && !MODULOS_RETIRADOS.has(modulo.codigo))
+      .map((modulo) => categoriaComercial(modulo, categorias))
     return c.json({
       success: true,
       data: categorias.map((categoria) => ({
@@ -97,6 +127,9 @@ modulosRoute.put('/:codigo/activar', zValidator('param', codigoSchema), async (c
   const restauranteId = (c as any).user.id as number
   const { codigo } = c.req.valid('param')
   try {
+    if (MODULOS_RETIRADOS.has(codigo)) {
+      return c.json({ success: false, message: 'Módulo no encontrado' }, 404)
+    }
     if (codigo === MODULE_KEYS.PUNTOS_CLIENTES) {
       return c.json({
         success: false,

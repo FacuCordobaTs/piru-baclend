@@ -2,7 +2,6 @@ import { afterEach, describe, expect, setSystemTime, test } from 'bun:test'
 import { Hono } from 'hono'
 import * as jwt from 'jsonwebtoken'
 import { createDemoPanelRoute } from './demo-panel'
-import { createMarketingDuenioRoute } from './marketing-duenio'
 import { createAuthMiddleware } from '../middleware/auth'
 import { DEMO_SESION_TTL_SEGUNDOS } from '../lib/demo-panel'
 
@@ -222,7 +221,7 @@ describe('la sesión demo en el resto de la API', () => {
     expect((await pedir(verificada, 'GET', '/api/restaurante/profile', sesionDemo())).status).toBe(401)
   })
 
-  test('la marca demo no se combina con un acceso de interno ni de marketer', async () => {
+  test('la marca demo no se combina con un acceso de interno ni con un token retirado', async () => {
     const app = appApi(PROSPECTO)
     for (const extra of [{ altaInterna: true }, { accesoTemporalInterno: true }, { marketerId: 3 }, { demo: 'si' }]) {
       const res = await pedir(app, 'GET', '/api/restaurante/profile', sesionDemo(extra))
@@ -243,54 +242,5 @@ describe('la sesión demo en el resto de la API', () => {
     const res = await pedir(appApi(PROSPECTO), 'GET', '/api/otro', sesionDemo())
     expect(res.status).toBe(200)
     expect(await res.text()).toBe('texto plano')
-  })
-})
-
-describe('la demo dentro de la app de marketing', () => {
-  const auth = (local: Record<string, unknown> | null) => createAuthMiddleware(() => dbDeLocal(local) as never)
-  const rutas = (local: Record<string, unknown> | null) =>
-    new Hono().route(
-      '/api/marketing-duenio',
-      createMarketingDuenioRoute(() => dbDeLocal(local) as never, auth(local)),
-    )
-  const post = (app: Hono, ruta: string, token?: string) =>
-    app.request(`/api/marketing-duenio${ruta}`, {
-      method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-  const paseDe = async (app: Hono, token: string) => {
-    const { data } = await (await post(app, '/entrada', token)).json()
-    return decodeURIComponent(data.url.split('#token=')[1])
-  }
-
-  test('el pase hereda la marca demo y su vencimiento, y la sesión de la app sigue limitada', async () => {
-    const app = rutas(PROSPECTO)
-    const sesionDemo = firmar({ id: 6, scope: 'restaurante', demo: true }, { expiresIn: 600 })
-    const pase = jwt.verify(await paseDe(app, sesionDemo), secreto) as jwt.JwtPayload
-    expect(pase).toMatchObject({ scope: 'entrada-app-marketing', restauranteId: 6, demo: true })
-    expect(pase.hasta).toBe((jwt.decode(sesionDemo) as jwt.JwtPayload).exp)
-
-    const res = await post(app, '/sesion', await paseDe(app, sesionDemo))
-    expect(res.status).toBe(200)
-    const { token } = await res.json()
-    expect(jwt.verify(token, secreto)).toMatchObject({ id: 6, scope: 'restaurante', appMarketing: true, demo: true })
-  })
-
-  test('un pase de la demo no se canjea si la tienda ya fue reclamada', async () => {
-    const sesionDemo = firmar({ id: 6, scope: 'restaurante', demo: true }, { expiresIn: 600 })
-    const pase = await paseDe(rutas(PROSPECTO), sesionDemo)
-    const res = await post(rutas({ ...PROSPECTO, claimedAt: new Date() }), '/sesion', pase)
-    expect(res.status).toBe(401)
-    expect((await res.json()).code).toBe('entrada_vencida')
-  })
-
-  test('el dueño de verdad sigue entrando como antes, sin marca demo', async () => {
-    const app = rutas({ ...PROSPECTO, claimedAt: new Date() })
-    const dueno = firmar({ id: 6 }, { expiresIn: 600 })
-    const pase = jwt.verify(await paseDe(app, dueno), secreto) as jwt.JwtPayload
-    expect(pase.demo).toBeUndefined()
-    const res = await post(app, '/sesion', await paseDe(app, dueno))
-    expect(res.status).toBe(200)
-    expect(jwt.verify((await res.json()).token, secreto)).not.toHaveProperty('demo')
   })
 })
