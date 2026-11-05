@@ -63,22 +63,29 @@ export function generarGuia(datos: DatosGuia): string {
   const extensionesAsset = Object.keys(TIPOS_ASSET).join(', ')
   return `# Página de ${datos.nombre} en Piru — guía para Claude
 
-Sos diseñador web. Entregá \`contenido.ts\`, \`page.tsx\` y \`style.css\` (y, si hace falta, componentes en \`components/\`) para la tienda online de **${datos.nombre}**, que se publica en \`https://${datos.username}.piru.app\`. Usá solo \`@piru/tienda\`, \`react\`, \`motion/react\` y \`lucide-react\`. No reimplementes checkout, pagos, pedidos ni analytics: el checkout es \`<PiruCheckout />\` del runtime y los pagos los hace Piru. Contemplá los estados de la sección 4. Usá HTML semántico, foco visible, buen contraste y respetá \`prefers-reduced-motion\`.
+Sos diseñador web. Trabajás sobre la tienda online de **${datos.nombre}**, que se publica en \`https://${datos.username}.piru.app\`. Usá solo \`@piru/tienda\`, \`react\`, \`motion/react\` y \`lucide-react\`. No reimplementes checkout, pagos, pedidos ni analytics: el checkout es \`<PiruCheckout />\` del runtime y los pagos los hace Piru. Contemplá los estados de la sección 4. Usá HTML semántico, foco visible, buen contraste y respetá \`prefers-reduced-motion\`.
 
-## 1. Qué hay que entregar
+## 1. Cómo está armada la página
 
 \`\`\`
-contenido.ts      ← textos, colores, fotos y contacto de esta página (editable)
-page.tsx          ← obligatorio: export default del componente de la página
-style.css         ← opcional, importado desde page.tsx (import "./style.css")
+contenido.ts      ← la página como datos: marca, colores, letras y la lista CONTENIDO.secciones
+page.tsx          ← obligatorio: export default; dibuja las secciones en orden
+style.css         ← estilos de la página y de cada sección (clases pv-*)
+fuentes.css       ← @font-face de las fuentes propias (lo escribe el editor)
+components/Sitio.tsx           ← tema, Seccion, Texto, BotonAccion, Medio: piezas comunes de las secciones
+components/Pedido.tsx          ← la hoja "Tu pedido" (subtotal y "Pedir")
 components/DetalleProducto.tsx ← el detalle de producto que abre cada plato (editable)
 components/detalle.css         ← sus estilos
 components/Checkout.tsx        ← incluye <PiruCheckout /> y elige su variante y colores (no la lógica)
-components/*.tsx  ← opcional, importados con rutas relativas
+secciones/index.ts             ← qué componente dibuja cada tipo de sección
+secciones/<Tipo>.tsx           ← una sección por archivo (Portada, Carta, Grupo, Historia…)
 assets/*          ← imágenes, fuentes y video que el dueño sube desde el editor
 \`\`\`
 
-- El contenido elegido por el local vive en \`contenido.ts\`, **dentro del código**. Podés leerlo, moverlo a tu diseño o reemplazarlo; no hay una configuración del backend que lo pise.
+- **La página es una lista de secciones** guardada en \`contenido.ts\` (\`CONTENIDO.secciones\`): cada una tiene \`id\`, \`tipo\`, \`visible\` y \`props\` (sólo datos: textos, números, booleanos, listas, URLs). El dueño la edita con el editor visual de Páginas (reordenar, ocultar, sumar, cambiar textos, fotos y colores) y el editor **sólo reescribe ese bloque de datos**: no toca el JSX.
+- Para cambiar textos, fotos, orden o colores, cambiá los datos de \`contenido.ts\`. Para cambiar cómo se ve una sección, editá su archivo en \`secciones/\` o \`style.css\`. Para una sección nueva, creá \`secciones/MiSeccion.tsx\` (con \`Seccion\` de \`components/Sitio\`) y sumala en \`secciones/index.ts\` con un \`tipo\` nuevo.
+- Mantené \`Seccion\` como contenedor de cada sección y \`Texto\` / \`data-piru-prop\` en los textos editables: es lo que permite seleccionarlas y editarlas en el lugar desde el editor visual.
+- Tiene que quedar al menos una forma de pedir (la sección \`carta\` o un \`destacado\`).
 - Código: solo \`.tsx\`, \`.ts\` y \`.css\`. Assets: ${extensionesAsset}.
 - Imports permitidos: rutas relativas del sitio (\`./components/Hero\`, \`./assets/logo.png\`, \`./style.css\`) y los paquetes \`react\`, \`react-dom\`, \`motion/react\`, \`react-router\`, \`@piru/tienda\` y \`lucide-react\`. Cualquier otro (\`lodash\`, \`https://…\`, \`node:*\`) no compila.
 - Un asset importado devuelve su URL: \`import foto from "./assets/portada.jpg"\`.
@@ -99,6 +106,7 @@ Los datos y las reglas (precios, descuentos, horarios, disponibilidad) vienen de
 - \`useHorarios()\` → \`{ abierto, texto, turnos, … }\`. \`texto\` ya viene armado ("Abierto · hasta las 23:45").
 - \`useCampana()\` → la campaña cuando se entra por un link de promo (\`/c/:slug\`), o \`null\`.
 - \`useNavegacionCarta(secciones.length)\` → categoría activa y \`ir(i)\` para un índice de categorías.
+- \`usePedidoGrupal()\` → \`{ disponible, abrir() }\`: "pedir entre varios". \`abrir()\` lleva al armado del pedido en grupo de Piru (el link para compartir); en la vista previa no navega.
 - \`formatPesos(n)\` → "$2.000". \`PiruCanjes\` → bloque opcional de canjes de puntos.
 
 Referencia completa (TypeScript):
@@ -125,6 +133,27 @@ ${TIPOS_SDK.trim()}
 - \`carrito.blockReason\`: \`"empty"\`, \`"closed"\`, \`"paused"\` o \`"unavailable"\` → explicar por qué no se puede pedir.
 - Productos solo de canje (\`useCarta().canjes\`) y puntos (\`usePuntos()\`).
 - Campaña activa (\`useCampana()\`).
+
+## 4.1 Las secciones de la plantilla
+
+| tipo | Qué muestra | props principales |
+| --- | --- | --- |
+| \`aviso\` | Abierto/cerrado, la promo vigente y un texto propio | \`texto\`, \`mostrarHorario\`, \`mostrarCampana\` |
+| \`portada\` | Logo, nombre, frase, bajada, botones, foto o video y plato destacado | \`titulo\`, \`bajada\`, \`medio\` (\`{ url, tipo }\`), \`disposicion\` (auto, fondo, costado), \`alto\`, \`boton\`, \`botonSecundario\`, \`destacadoId\`, \`animacion\` (ninguna, suave, rebote) |
+| \`cinta\` | Frases que pasan de punta a punta | \`items\`, \`velocidad\` |
+| \`destacado\` | Un plato bien grande | \`productoId\`, \`sello\`, \`texto\`, \`boton\`, \`lado\` |
+| \`carta\` | La carta por categorías (una por página) | \`titulo\`, \`bajada\`, \`mostrarCategorias\`, \`estilo\` (plantilla, grilla, lista), \`mostrarDescripciones\` |
+| \`grupo\` | Pedir entre varios: abre el pedido en grupo de Piru (\`usePedidoGrupal()\`) | \`titulo\`, \`texto\`, \`boton\`, \`mostrarPasos\` |
+| \`puntos\` | Canjes del club de puntos (\`PiruCanjes\`) | \`titulo\` |
+| \`historia\` | Nuestra historia, con foto opcional | \`kicker\`, \`titulo\`, \`texto\`, \`foto\` |
+| \`galeria\` | Fotos del local | \`titulo\`, \`fotos\` (URLs), \`estilo\` (grilla, mosaico, carrusel) |
+| \`ubicacion\` | Dirección, mapa, sucursales y horarios | \`titulo\`, \`texto\`, \`mostrarMapa\`, \`mostrarHorarios\`, \`mostrarSucursales\` |
+| \`preguntas\` | Preguntas frecuentes | \`titulo\`, \`items\` (\`{ pregunta, respuesta }\`) |
+| \`llamado\` | Un cierre que invita a pedir | \`titulo\`, \`texto\`, \`boton\` |
+| \`bloque\` | Texto con imagen | \`kicker\`, \`titulo\`, \`texto\`, \`foto\`, \`lado\`, \`boton\` |
+| \`pie\` | Nombre, dirección y redes | \`texto\`, \`mostrarDireccion\`, \`mostrarRedes\`, \`mostrarHorario\` |
+
+Todas aceptan además \`esquema\` (normal, suave, marca, secundario, contraste) y \`espacio\` (compacto, normal, amplio). Un botón es \`{ texto, accion, destino? }\` con \`accion\`: \`carta\`, \`grupo\`, \`whatsapp\`, \`instagram\`, \`seccion\` (destino = id de otra sección), \`enlace\` (destino = https://…) o \`ninguna\`. Nunca un link a pagos.
 
 ## 5. Restricciones de seguridad (CSP)
 
@@ -186,6 +215,32 @@ ${(datos.contenido || PLANTILLA_INICIAL['contenido.ts']).trim()}
 ${PLANTILLA_INICIAL['page.tsx'].trim()}
 \`\`\`
 
+\`components/Sitio.tsx\` (las piezas comunes de las secciones):
+
+\`\`\`tsx
+${PLANTILLA_INICIAL['components/Sitio.tsx'].trim()}
+\`\`\`
+
+\`secciones/index.ts\`:
+
+\`\`\`ts
+${PLANTILLA_INICIAL['secciones/index.ts'].trim()}
+\`\`\`
+
+Dos secciones de ejemplo (las demás siguen el mismo patrón y están en el borrador):
+
+\`secciones/Portada.tsx\`:
+
+\`\`\`tsx
+${PLANTILLA_INICIAL['secciones/Portada.tsx'].trim()}
+\`\`\`
+
+\`secciones/Grupo.tsx\`:
+
+\`\`\`tsx
+${PLANTILLA_INICIAL['secciones/Grupo.tsx'].trim()}
+\`\`\`
+
 \`style.css\`:
 
 \`\`\`css
@@ -222,6 +277,6 @@ ${JSON.stringify({ local, horarios: datos.horarios, productos: datos.productos.m
 
 ## 8. Cómo entregar
 
-Un bloque de código por archivo, con su ruta como título (\`page.tsx\`, \`style.css\`, \`components/DetalleProducto.tsx\`, \`components/Checkout.tsx\`, \`components/Hero.tsx\`), o un \`.zip\` con esa estructura. El dueño lo pega o lo sube en el editor de Páginas, lo prueba en la vista previa y lo publica.
+Un bloque de código por archivo, con su ruta en una línea \`<!-- piru:archivo RUTA -->\` justo antes del bloque (por ejemplo \`<!-- piru:archivo secciones/Portada.tsx -->\`). Entregá sólo los archivos que cambian, completos. Para borrar uno: \`<!-- piru:borrar RUTA -->\`. También sirve un \`.zip\` con la estructura de la sección 1. El dueño lo sube en el editor de Páginas, lo revisa en la vista previa y lo publica.
 `
 }

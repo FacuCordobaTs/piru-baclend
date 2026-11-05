@@ -1,0 +1,28 @@
+import { Seccion, Vacio, propsDe } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+type Props = { items: string[]; velocidad: "lenta" | "normal" | "rapida" }
+
+const DURACION = { lenta: 40, normal: 26, rapida: 14 }
+
+/** Cinta de novedades: frases cortas que pasan de punta a punta. */
+export function Cinta({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  const items = (p.items ?? []).filter((x) => typeof x === "string" && x.trim())
+  if (!items.length) return <Vacio seccion={seccion} texto="Cinta de novedades: sumale frases desde el panel de la derecha." />
+  const duracion = DURACION[p.velocidad ?? "normal"] ?? DURACION.normal
+  return (
+    <Seccion seccion={seccion} etiqueta="Novedades" className="pv-cinta">
+      <ul className="pv-solo-lectores">
+        {items.map((item, i) => (
+          <li key={i}>{item}</li>
+        ))}
+      </ul>
+      <div className="pv-cinta-texto" aria-hidden="true" style={{ animationDuration: `${duracion}s` }}>
+        {[...items, ...items, ...items, ...items].map((item, i) => (
+          <span key={i}>{item}</span>
+        ))}
+      </div>
+    </Seccion>
+  )
+}

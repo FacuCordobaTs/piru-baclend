@@ -31,7 +31,7 @@ import {
 } from '../lib/sitios-reglas'
 import { slugDisponible } from '../lib/sitios-slugs'
 import { corto, normalizarMeta, type MetaSitio } from '../lib/sitios-meta'
-import { archivoContenido, normalizarContenidoSitio, normalizarMarcaSitio, marcaPorDefecto, type ContenidoSitio } from '../lib/sitios-contenido'
+import { archivoContenido, errorMedioDataUrl, normalizarContenidoSitio, normalizarMarcaSitio, marcaPorDefecto, type ContenidoSitio } from '../lib/sitios-contenido'
 import { imagenesTienda } from '../lib/tienda-imagenes-r2'
 import { errorImagenDataUrl } from '../lib/producto-imagenes'
 import { normalizarTienda } from '../lib/tienda-config'
@@ -380,7 +380,7 @@ export function createSitiosRoute(deps: Partial<Dependencias> = {}) {
       .post('/imagenes', async (c) => {
         const body = (await c.req.json().catch(() => null)) as { data?: unknown } | null
         if (typeof body?.data !== 'string') return c.json({ error: 'Falta la imagen' }, 400)
-        const problema = errorImagenDataUrl(body.data)
+        const problema = errorMedioDataUrl(body.data)
         if (problema) return c.json({ error: problema }, 400)
         try {
           const url = await imagenesTienda(usuario(c).id).guardar(body.data)

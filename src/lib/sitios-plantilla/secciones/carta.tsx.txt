@@ -1,0 +1,99 @@
+import { Plus } from "lucide-react"
+import { formatPesos, useCarrito, useCarta, useNavegacionCarta, type Producto } from "@piru/tienda"
+import { Seccion, Texto, propsDe, useSitioPagina } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+type Props = {
+  titulo: string
+  bajada: string
+  mostrarCategorias: boolean
+  /** plantilla: la grilla de cada diseño. grilla: tarjetas con foto. lista: filas compactas. */
+  estilo: "plantilla" | "grilla" | "lista"
+  mostrarDescripciones: boolean
+}
+
+/** La carta completa del local, por categorías. Va una sola por página. */
+export function Carta({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  const { secciones } = useCarta()
+  const carrito = useCarrito()
+  const nav = useNavegacionCarta(secciones.length)
+  const { abrirProducto } = useSitioPagina()
+  const estilo = p.estilo === "grilla" || p.estilo === "lista" ? p.estilo : "plantilla"
+  return (
+    <Seccion seccion={seccion} etiqueta="La carta" className={`pv-carta-bloque pv-carta-${estilo} ${p.mostrarDescripciones === false ? "sin-descripciones" : ""}`}>
+      <span id="carta" className="pv-ancla" aria-hidden="true" />
+      {(p.titulo?.trim() || p.bajada?.trim()) && (
+        <div className="pv-carta-cabeza">
+          <Texto prop="titulo" valor={p.titulo} como="h2" />
+          <Texto prop="bajada" valor={p.bajada} como="p" />
+        </div>
+      )}
+      {p.mostrarCategorias !== false && secciones.length > 1 && (
+        <nav className="pv-categorias" aria-label="Categorías">
+          {secciones.map((categoria, i) => (
+            <button
+              key={categoria.id}
+              type="button"
+              className={nav.activa === i ? "activa" : ""}
+              aria-current={nav.activa === i ? "true" : undefined}
+              onClick={() => nav.ir(i)}
+            >
+              {categoria.nombre}
+            </button>
+          ))}
+        </nav>
+      )}
+      <div className="pv-carta">
+        {secciones.length === 0 && <p className="pv-vacio">Todavía no hay productos en la carta.</p>}
+        {secciones.map((categoria, i) => (
+          <section
+            key={categoria.id}
+            id={nav.id(i)}
+            ref={(el) => {
+              nav.seccionesRef.current[i] = el
+            }}
+            className="pv-seccion"
+            aria-labelledby={`${categoria.id}-titulo`}
+          >
+            <h2 id={`${categoria.id}-titulo`}>{categoria.nombre}</h2>
+            <ul className="pv-grilla">
+              {categoria.productos.map((producto) => (
+                <Tarjeta key={producto.id} producto={producto} cantidad={carrito.quantity(producto.id)} onAbrir={abrirProducto} />
+              ))}
+            </ul>
+          </section>
+        ))}
+      </div>
+    </Seccion>
+  )
+}
+
+function Tarjeta({ producto, cantidad, onAbrir }: { producto: Producto; cantidad: number; onAbrir: (producto: Producto) => void }) {
+  const foto = producto.fotos[0]
+  const agregar = () => (producto.tieneOpciones ? onAbrir(producto) : producto.agregar())
+  return (
+    <li className={`pv-producto ${foto ? "" : "sin-foto"} ${producto.disponible ? "" : "agotado"}`}>
+      <button type="button" className="pv-producto-abrir" onClick={() => onAbrir(producto)} disabled={!producto.disponible}>
+        {foto && <img src={foto} alt="" loading="lazy" />}
+        <span className="pv-producto-texto">
+          <strong>{producto.nombre}</strong>
+          {producto.descripcion && <small>{producto.descripcion}</small>}
+          <span className="pv-precio">
+            {formatPesos(producto.precioFinal)}
+            {producto.descuento > 0 && <s>{formatPesos(producto.precio)}</s>}
+          </span>
+        </span>
+      </button>
+      <button
+        type="button"
+        className="pv-agregar"
+        onClick={agregar}
+        disabled={!producto.disponible}
+        aria-label={producto.disponible ? `Agregar ${producto.nombre}` : `${producto.nombre} no disponible`}
+      >
+        {cantidad > 0 ? cantidad : <Plus size={18} />}
+      </button>
+    </li>
+  )
+}

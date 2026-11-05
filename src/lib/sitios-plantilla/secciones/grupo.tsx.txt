@@ -1,0 +1,46 @@
+import { Link2, ShoppingBag, Users } from "lucide-react"
+import { usePedidoGrupal } from "@piru/tienda"
+import { Seccion, Texto, propsDe } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+type Props = { titulo: string; texto: string; boton: string; mostrarPasos: boolean }
+
+const PASOS = [
+  { Icono: Link2, texto: "Creás el pedido y compartís el link" },
+  { Icono: Users, texto: "Cada uno elige lo suyo desde su celular" },
+  { Icono: ShoppingBag, texto: "Llega todo junto, en un solo pedido" },
+]
+
+/**
+ * Pedir entre varios. El pedido en grupo lo arma Piru: `usePedidoGrupal().abrir()` lleva a crear
+ * el link para compartir (en la vista previa del editor no navega).
+ */
+export function Grupo({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  const grupo = usePedidoGrupal()
+  return (
+    <Seccion seccion={seccion} etiqueta="Pedir entre varios" className="pv-grupo">
+      <div className="pv-grupo-caja">
+        <span className="pv-grupo-icono" aria-hidden="true">
+          <Users size={26} />
+        </span>
+        <Texto prop="titulo" valor={p.titulo?.trim() || "Pedí entre varios"} como="h2" />
+        <Texto prop="texto" valor={p.texto} como="p" className="pv-grupo-texto" />
+        {p.mostrarPasos !== false && (
+          <ol className="pv-grupo-pasos">
+            {PASOS.map(({ Icono, texto }) => (
+              <li key={texto}>
+                <Icono size={18} aria-hidden="true" />
+                <span>{texto}</span>
+              </li>
+            ))}
+          </ol>
+        )}
+        <button type="button" className="pv-boton" onClick={grupo.abrir} disabled={!grupo.disponible}>
+          <Users size={18} aria-hidden="true" />
+          <span data-piru-prop="boton">{p.boton?.trim() || "Armar pedido en grupo"}</span>
+        </button>
+      </div>
+    </Seccion>
+  )
+}

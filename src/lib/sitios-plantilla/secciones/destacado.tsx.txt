@@ -1,0 +1,61 @@
+import { Star } from "lucide-react"
+import { formatPesos, useCarta, type Producto } from "@piru/tienda"
+import { Seccion, Texto, Vacio, propsDe, useSitioPagina } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+type Props = { productoId: number | null; sello: string; texto: string; boton: string; lado: "izquierda" | "derecha" }
+
+/** Un plato bien grande: foto, nombre, precio y el botón que abre su detalle. */
+export function Destacado({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  const { productos, destacado: delLocal } = useCarta()
+  const { abrirProducto } = useSitioPagina()
+  const producto =
+    (p.productoId ? productos.find((x) => x.id === p.productoId) : null) ?? delLocal ?? productos.find((x) => x.fotos[0] && x.disponible) ?? null
+  if (!producto) return <Vacio seccion={seccion} texto="Producto destacado: elegí un plato de la carta." />
+  const foto = producto.fotos[0]
+  return (
+    <Seccion seccion={seccion} etiqueta={producto.nombre} className={`pv-destacado-grande ${p.lado === "derecha" ? "foto-derecha" : ""}`}>
+      <div className="pv-destacado-grande-interior">
+        {foto && <img src={foto} alt="" loading="lazy" />}
+        <div className="pv-destacado-grande-texto">
+          <span className="pv-sello">
+            <Star size={13} aria-hidden="true" /> <span data-piru-prop="sello">{p.sello?.trim() || "Nuestro favorito"}</span>
+          </span>
+          <h2>{producto.nombre}</h2>
+          {p.texto?.trim() ? <Texto prop="texto" valor={p.texto} como="p" /> : producto.descripcion && <p>{producto.descripcion}</p>}
+          <p className="pv-precio">
+            {formatPesos(producto.precioFinal)}
+            {producto.descuento > 0 && <s>{formatPesos(producto.precio)}</s>}
+          </p>
+          <button type="button" className="pv-boton" onClick={() => abrirProducto(producto)} disabled={!producto.disponible}>
+            <span data-piru-prop="boton">{producto.disponible ? p.boton?.trim() || "Agregar al pedido" : "No disponible"}</span>
+          </button>
+        </div>
+      </div>
+    </Seccion>
+  )
+}
+
+/** La tarjeta chica del destacado, la que va dentro de la portada. */
+export function TarjetaDestacada({ producto, onAbrir }: { producto: Producto; onAbrir: (producto: Producto) => void }) {
+  const foto = producto.fotos[0]
+  return (
+    <div className="pv-destacado">
+      {foto && <img src={foto} alt="" loading="lazy" />}
+      <div className="pv-destacado-texto">
+        <span className="pv-sello">
+          <Star size={12} aria-hidden="true" /> Nuestro favorito
+        </span>
+        <strong>{producto.nombre}</strong>
+        {producto.descripcion && <small>{producto.descripcion}</small>}
+        <div className="pv-destacado-pie">
+          <span className="pv-precio">{formatPesos(producto.precioFinal)}</span>
+          <button type="button" className="pv-boton pv-boton-chico" onClick={() => onAbrir(producto)} disabled={!producto.disponible}>
+            {producto.disponible ? "Agregar" : "No disponible"}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}

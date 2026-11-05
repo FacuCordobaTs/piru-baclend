@@ -1,149 +1,40 @@
-import { useEffect, useState, type CSSProperties } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
-import { Clock, Instagram, MapPin, Minus, Plus, ShoppingBag, Star, X } from "lucide-react"
-import {
-  PiruCanjes,
-  formatPesos,
-  logoPara,
-  useCampana,
-  useCarrito,
-  useCarta,
-  useHorarios,
-  useLocal,
-  useNavegacionCarta,
-  type Producto,
-} from "@piru/tienda"
-import { CONTENIDO, type ContenidoSitio } from "./contenido"
+import { ShoppingBag } from "lucide-react"
+import { useCarrito, useCarta, useLocal, useSitio, type Producto } from "@piru/tienda"
+import { CONTENIDO } from "./contenido"
 import "./style.css"
+import "./fuentes.css"
+import { SitioContexto, temaDe, useFuentes, variablesTema } from "./components/Sitio"
+import { SECCIONES } from "./secciones"
+import { Pedido } from "./components/Pedido"
 import { DetalleProducto } from "./components/DetalleProducto"
 import { Checkout } from "./components/Checkout"
 
 /*
- * Tienda de Páginas: el contenido inicial (plantilla, textos, colores, fotos y contacto) vive
- * en `contenido.ts` y es parte del código. No se lee de la configuración del local: podés
- * cambiarlo acá mismo o pedirle a un LLM que rehaga el diseño con estos datos.
+ * Tienda de Páginas armada por secciones.
+ *
+ * La página es la lista `CONTENIDO.secciones` (en `contenido.ts`): cada una tiene un `tipo`, si
+ * está visible y sus propiedades. El editor visual sólo cambia esos datos; el diseño de cada
+ * sección vive en `secciones/<Tipo>.tsx` y se elige en `secciones/index.ts`.
+ *
+ * Lo que no es una sección queda siempre: la barra del pedido, el detalle de producto
+ * (`components/DetalleProducto.tsx`) y el checkout de Piru (`components/Checkout.tsx`).
  */
-
-type Plantilla = "elegante" | "moderna" | "artesanal"
-
-type Tema = {
-  plantilla: Plantilla
-  fondo: string
-  texto: string
-  suave: string
-  superficie: string
-  linea: string
-  primario: string
-  secundario: string
-  sobrePrimario: string
-  titulos: string
-  cuerpo: string
-  peso: number
-}
-
-const BASES: Record<Plantilla, { fondo: string; texto: string; superficie: string; primario: string; secundario: string; titulos: string; cuerpo: string; peso: number; serif: boolean }> = {
-  elegante: { fondo: "#f6f1e8", texto: "#17130f", superficie: "#fdfbf7", primario: "#b34a2a", secundario: "#1f5c4d", titulos: "Bricolage Grotesque", cuerpo: "Bricolage Grotesque", peso: 800, serif: false },
-  moderna: { fondo: "#f5f7fa", texto: "#171d2b", superficie: "#ffffff", primario: "#315cfd", secundario: "#ffc21a", titulos: "Unbounded", cuerpo: "Manrope", peso: 700, serif: false },
-  artesanal: { fondo: "#f4ead8", texto: "#392a20", superficie: "#fffaf1", primario: "#c2410c", secundario: "#3f7d3a", titulos: "Fraunces", cuerpo: "Nunito Sans", peso: 700, serif: true },
-}
-
-const MOTIVOS: Record<string, string> = {
-  empty: "Agregá algo para pedir",
-  closed: "Ahora estamos cerrados",
-  paused: "Cerrado temporalmente",
-  unavailable: "Sacá lo que ya no está disponible",
-}
-
-const luminancia = (hex: string) => {
-  const v = hex.replace("#", "")
-  const x = v.length === 3 ? [...v].map((c) => c + c).join("") : v
-  const [r, g, b] = [0, 2, 4].map((i) => {
-    const c = parseInt(x.slice(i, i + 2), 16) / 255
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
-  })
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b
-}
-
-const mezclar = (a: string, b: string, t: number) => {
-  const n = (h: string) => {
-    const v = h.replace("#", "")
-    const x = v.length === 3 ? [...v].map((c) => c + c).join("") : v
-    return [0, 2, 4].map((i) => parseInt(x.slice(i, i + 2), 16))
-  }
-  const [ca, cb] = [n(a), n(b)]
-  return `#${ca.map((v, i) => Math.round(v + (cb[i] - v) * t).toString(16).padStart(2, "0")).join("")}`
-}
-
-const contraste = (a: string, b: string) => {
-  const [x, y] = [luminancia(a), luminancia(b)].sort((m, n) => n - m)
-  return (x + 0.05) / (y + 0.05)
-}
-
-const tintaSobre = (hex: string) => (luminancia(hex) > 0.36 ? "#17130f" : "#ffffff")
-
-function temaDe(contenido: ContenidoSitio, plantilla: Plantilla): Tema {
-  const base = BASES[plantilla] ?? BASES.artesanal
-  const c = contenido.colores ?? {}
-  const marca = contenido.marca
-  const fondo = c.fondo ?? base.fondo
-  const texto = c.texto && contraste(c.texto, fondo) >= 4.5 ? c.texto : contraste(base.texto, fondo) >= 4.5 ? base.texto : tintaSobre(fondo)
-  const superficie = c.superficie ?? (c.fondo ? mezclar(fondo, "#ffffff", luminancia(fondo) < 0.18 ? 0.06 : 0.5) : base.superficie)
-  const primario = c.acento ?? marca?.colorPrimario ?? base.primario
-  const secundario = marca?.usarColorUnico ? primario : marca?.colorSecundario ?? base.secundario
-  const titulos = contenido.fuentes?.titulos ?? base.titulos
-  const cuerpo = contenido.fuentes?.cuerpo ?? base.cuerpo
-  return {
-    plantilla,
-    fondo,
-    texto,
-    suave: mezclar(texto, fondo, 0.45),
-    superficie,
-    linea: mezclar(texto, fondo, 0.82),
-    primario,
-    secundario,
-    sobrePrimario: tintaSobre(primario),
-    titulos: `"${titulos}", ${base.serif ? "Georgia, serif" : "system-ui, sans-serif"}`,
-    cuerpo: `"${cuerpo}", system-ui, sans-serif`,
-    peso: base.peso,
-  }
-}
-
-/** Carga las letras elegidas en Preferencias. Sin elección, cada plantilla usa la suya. */
-function useFuentes(titulos: string, cuerpo: string) {
-  useEffect(() => {
-    const nombre = (fuente: string) => fuente.match(/"([^"]+)"/)?.[1] ?? fuente.split(",")[0].trim()
-    const familias = [...new Set([nombre(titulos), nombre(cuerpo)])].filter(Boolean)
-    if (!familias.length) return
-    const href = `https://fonts.googleapis.com/css2?${familias
-      .map((f) => `family=${encodeURIComponent(f).replace(/%20/g, "+")}`)
-      .join("&")}&display=swap`
-    const link = document.createElement("link")
-    link.rel = "stylesheet"
-    link.href = href
-    link.dataset.fuente = "piru-tienda"
-    document.head.appendChild(link)
-    return () => link.remove()
-  }, [titulos, cuerpo])
-}
-
 export default function Page() {
-  const { estado, local } = useLocal()
-  const { secciones, productos, destacado: destacadoDelLocal } = useCarta()
-  const contenido = CONTENIDO
-  const horarios = useHorarios()
+  const { estado } = useLocal()
+  const { productos } = useCarta()
+  const { isPreview } = useSitio()
   const carrito = useCarrito()
-  const campana = useCampana()
-  const nav = useNavegacionCarta(secciones.length)
+  const quieto = useReducedMotion()
+  const contenido = CONTENIDO
+  const tema = temaDe(contenido)
+  useFuentes(contenido, tema)
   const [pedidoAbierto, setPedidoAbierto] = useState(false)
   // El detalle de producto es parte del diseño (`components/DetalleProducto.tsx`), no del runtime.
   const [detalle, setDetalle] = useState<Producto | null>(null)
-  const quieto = useReducedMotion()
-  const plantilla: Plantilla = contenido.plantilla ?? "artesanal"
-  const tema = temaDe(contenido, plantilla)
-  useFuentes(tema.titulos, tema.cuerpo)
-  const destacado = (contenido.productoDestacadoId ? productos.find((p) => p.id === contenido.productoDestacadoId) : null) ?? destacadoDelLocal
-  const cinta = contenido.cinta ?? []
-  const galeria = contenido.galeria ?? []
+  const secciones = useMemo(() => (contenido.secciones ?? []).filter((s) => s.visible !== false), [contenido.secciones])
+  const contexto = useMemo(() => ({ contenido, tema, secciones, abrirProducto: setDetalle }), [contenido, tema, secciones])
 
   useEffect(() => {
     if (carrito.count === 0) setPedidoAbierto(false)
@@ -151,242 +42,54 @@ export default function Page() {
 
   if (estado === "cargando") {
     return (
-      <div className="pv-cargando" aria-busy="true" aria-label="Cargando la tienda">
+      <div className="pv-cargando" style={variablesTema(tema)} aria-busy="true" aria-label="Cargando la tienda">
         <span />
       </div>
     )
   }
   if (estado === "error") {
     return (
-      <main className="pv-estado">
+      <main className="pv-estado" style={variablesTema(tema)}>
         <h1>No pudimos cargar la tienda</h1>
         <p>Probá de nuevo en un rato.</p>
       </main>
     )
   }
 
-  const portada = contenido.portadaUrl ?? destacado?.fotos[0] ?? secciones[0]?.productos.find((p) => p.fotos[0])?.fotos[0]
-  // El hero de Moderna es del color primario: el logo se elige según la tinta que lo va a rodear.
-  const sobreOscuro = plantilla === "moderna" && tema.sobrePrimario === "#ffffff"
-  const logo = (sobreOscuro ? contenido.logo : contenido.logoClaro) ?? logoPara(local, sobreOscuro)
-  const instagram = contenido.instagram
-    ? /^https?:\/\//i.test(contenido.instagram)
-      ? contenido.instagram
-      : `https://instagram.com/${contenido.instagram.replace(/^@/, "")}`
-    : local.instagram
-  const whatsapp = contenido.whatsapp
-    ? `https://wa.me/${contenido.whatsapp.replace(/\D/g, "")}`
-    : local.whatsapp
-      ? `https://wa.me/${local.whatsapp.replace(/\D/g, "")}`
-      : null
-  const estilo = {
-    "--pv-fondo": tema.fondo,
-    "--pv-texto": tema.texto,
-    "--pv-suave": tema.suave,
-    "--pv-superficie": tema.superficie,
-    "--pv-linea": tema.linea,
-    "--pv-acento": tema.primario,
-    "--pv-secundario": tema.secundario,
-    "--pv-sobre-acento": tema.sobrePrimario,
-    "--pv-titulos": tema.titulos,
-    "--pv-cuerpo": tema.cuerpo,
-    "--pv-peso": String(tema.peso),
-    "--piru-footer-bg": tema.fondo,
-    "--piru-footer-fg": tema.suave,
-  } as CSSProperties
-
   return (
-    <main className={`pv-sitio pv-${plantilla}`} style={estilo}>
-      <header className="pv-portada">
-        {portada && <img className="pv-portada-foto" src={portada} alt="" />}
-        <div className="pv-portada-velo" aria-hidden="true" />
-        <div className="pv-portada-texto">
-          {logo && <img className="pv-logo" src={logo} alt={local.nombre} />}
-          <p className="pv-local">{local.nombre}</p>
-          <h1>{contenido.frase ?? local.nombre}</h1>
-          {contenido.bajada && <p className="pv-bajada">{contenido.bajada}</p>}
-          <p className={`pv-estado-local ${horarios.abierto && !local.pausado ? "abierto" : ""}`}>
-            <Clock size={15} aria-hidden="true" />
-            {horarios.texto}
-          </p>
-          <div className="pv-portada-acciones">
-            <a className="pv-boton" href="#carta">
-              Ver la carta
-            </a>
-            {whatsapp && (
-              <a className="pv-boton pv-boton-secundario" href={whatsapp} rel="noopener">
-                Escribinos
-              </a>
-            )}
-          </div>
-          {destacado && <Destacado producto={destacado} onAbrir={setDetalle} />}
-        </div>
-      </header>
+    <main className={`pv-sitio pv-${tema.plantilla}`} style={variablesTema(tema)}>
+      <SitioContexto.Provider value={contexto}>
+        {secciones.map((seccion) => {
+          const Componente = SECCIONES[seccion.tipo]
+          if (Componente) return <Componente key={seccion.id} seccion={seccion} />
+          return isPreview ? (
+            <p key={seccion.id} className="pv-vacia-texto" data-piru-seccion={seccion.id}>
+              No hay un componente para la sección «{seccion.tipo}». Agregalo en secciones/index.ts.
+            </p>
+          ) : null
+        })}
 
-      {cinta.length > 0 && (
-        <div className="pv-cinta" aria-hidden="true">
-          <span className="pv-cinta-texto">{[...cinta, ...cinta].join("  ·  ")}</span>
-        </div>
-      )}
-
-      {local.pausado && (
-        <p className="pv-aviso" role="status">
-          La tienda está cerrada temporalmente. Podés ver la carta igual.
-        </p>
-      )}
-      {campana && (
-        <p className="pv-aviso pv-aviso-campana" role="status">
-          {campana.campana.nombre || "Promo"}
-          {campana.campana.descuentoPorcentaje > 0 && ` · ${campana.campana.descuentoPorcentaje}% off`}
-          {campana.producto && ` en ${campana.producto.nombre}`}
-        </p>
-      )}
-
-      {secciones.length > 1 && (
-        <nav className="pv-categorias" aria-label="Categorías">
-          {secciones.map((seccion, i) => (
-            <button
-              key={seccion.id}
+        <AnimatePresence>
+          {carrito.count > 0 && !pedidoAbierto && (
+            <motion.button
               type="button"
-              className={nav.activa === i ? "activa" : ""}
-              aria-current={nav.activa === i ? "true" : undefined}
-              onClick={() => nav.ir(i)}
+              className="pv-barra"
+              onClick={() => setPedidoAbierto(true)}
+              initial={quieto ? false : { y: 80, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 80, opacity: 0 }}
             >
-              {seccion.nombre}
-            </button>
-          ))}
-        </nav>
-      )}
+              <span className="pv-barra-cuenta">
+                <ShoppingBag size={18} aria-hidden="true" /> {carrito.count}
+              </span>
+              <span>Ver pedido</span>
+              <span>{carrito.totalFormatted}</span>
+            </motion.button>
+          )}
+        </AnimatePresence>
 
-      <div id="carta" className="pv-carta">
-        {secciones.length === 0 && <p className="pv-vacio">Todavía no hay productos en la carta.</p>}
-        {secciones.map((seccion, i) => (
-          <section
-            key={seccion.id}
-            id={nav.id(i)}
-            ref={(el) => {
-              nav.seccionesRef.current[i] = el
-            }}
-            className="pv-seccion"
-            aria-labelledby={`${seccion.id}-titulo`}
-          >
-            <h2 id={`${seccion.id}-titulo`}>{seccion.nombre}</h2>
-            <ul className="pv-grilla">
-              {seccion.productos.map((producto) => (
-                <Tarjeta key={producto.id} producto={producto} cantidad={carrito.quantity(producto.id)} onAbrir={setDetalle} />
-              ))}
-            </ul>
-          </section>
-        ))}
-      </div>
+        {pedidoAbierto && <Pedido onCerrar={() => setPedidoAbierto(false)} />}
 
-      {contenido.historia && (
-        <section className="pv-historia" aria-labelledby="pv-historia-titulo">
-          <p className="pv-kicker">Nuestra historia</p>
-          <h2 id="pv-historia-titulo">{contenido.historia.titulo ?? "La casa"}</h2>
-          {contenido.historia.texto?.split("\n").map((parrafo, i) => (
-            <p key={i}>{parrafo}</p>
-          ))}
-        </section>
-      )}
-
-      {galeria.length > 0 && (
-        <section className="pv-galeria" aria-label="Fotos del local">
-          {galeria.map((foto, i) => (
-            <img key={i} src={foto} alt="" loading="lazy" />
-          ))}
-        </section>
-      )}
-
-      <PiruCanjes />
-
-      <footer className="pv-pie">
-        <strong>{local.nombre}</strong>
-        {local.direccion && (
-          <span>
-            <MapPin size={15} aria-hidden="true" /> {local.direccion}
-          </span>
-        )}
-        {instagram && (
-          <a href={instagram} rel="noopener">
-            <Instagram size={15} aria-hidden="true" /> Instagram
-          </a>
-        )}
-        {whatsapp && (
-          <a href={whatsapp} rel="noopener">
-            WhatsApp
-          </a>
-        )}
-      </footer>
-
-      <AnimatePresence>
-        {carrito.count > 0 && !pedidoAbierto && (
-          <motion.button
-            type="button"
-            className="pv-barra"
-            onClick={() => setPedidoAbierto(true)}
-            initial={quieto ? false : { y: 80, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 80, opacity: 0 }}
-          >
-            <span className="pv-barra-cuenta">
-              <ShoppingBag size={18} aria-hidden="true" /> {carrito.count}
-            </span>
-            <span>Ver pedido</span>
-            <span>{carrito.totalFormatted}</span>
-          </motion.button>
-        )}
-      </AnimatePresence>
-
-      {pedidoAbierto && (
-        <div className="pv-velo" onClick={(e) => e.target === e.currentTarget && setPedidoAbierto(false)}>
-          <aside className="pv-pedido" role="dialog" aria-modal="true" aria-label="Tu pedido">
-            <div className="pv-pedido-cabeza">
-              <h2>Tu pedido</h2>
-              <button type="button" className="pv-icono" onClick={() => setPedidoAbierto(false)} aria-label="Cerrar">
-                <X size={20} />
-              </button>
-            </div>
-            <ul className="pv-lineas">
-              {carrito.lines.map((linea) => (
-                <li key={linea.key} className={linea.disponible ? "" : "agotada"}>
-                  <div>
-                    <strong>{linea.nombre}</strong>
-                    {linea.opciones.length > 0 && <small>{linea.opciones.join(" · ")}</small>}
-                    {!linea.disponible && <small>Ya no está disponible</small>}
-                  </div>
-                  <div className="pv-cantidad">
-                    <button type="button" onClick={() => carrito.set(linea.key, linea.cantidad - 1)} aria-label={`Uno menos de ${linea.nombre}`}>
-                      <Minus size={16} />
-                    </button>
-                    <span>{linea.cantidad}</span>
-                    <button type="button" onClick={() => carrito.set(linea.key, linea.cantidad + 1)} aria-label={`Uno más de ${linea.nombre}`}>
-                      <Plus size={16} />
-                    </button>
-                  </div>
-                  <span className="pv-precio">{linea.subtotalFormatted}</span>
-                </li>
-              ))}
-            </ul>
-            <div className="pv-pedido-pie">
-              <p>
-                <span>Subtotal</span>
-                <strong>{carrito.totalFormatted}</strong>
-              </p>
-              <small>El envío, los cupones y los puntos se calculan al finalizar.</small>
-              {carrito.error && (
-                <p className="pv-error" role="alert">
-                  {carrito.error}
-                </p>
-              )}
-              <button type="button" className="pv-boton pv-boton-ancho" disabled={!carrito.canCheckout} onClick={carrito.checkout}>
-                {carrito.submitting ? "Abriendo…" : carrito.blockReason ? MOTIVOS[carrito.blockReason] : `Pedir · ${carrito.totalFormatted}`}
-              </button>
-            </div>
-          </aside>
-        </div>
-      )}
-      {detalle && (
         <DetalleProducto
           producto={detalle}
           estilo={contenido.detalleProducto}
@@ -394,71 +97,20 @@ export default function Page() {
           onNavegar={setDetalle}
           onCerrar={() => setDetalle(null)}
         />
-      )}
 
-      {/* El checkout vive en el runtime: acá sólo se elige cómo se ve y se activa con "Pedir". */}
-      <Checkout
-        variante={contenido.checkout ?? "pasos"}
-        estilo={{
-          acento: tema.primario,
-          texto: tema.texto,
-          superficie: tema.superficie,
-          linea: tema.linea,
-          radio: plantilla === "moderna" ? 22 : 16,
-          fuente: tema.cuerpo,
-        }}
-      />
+        {/* El checkout vive en el runtime: acá sólo se elige cómo se ve y se activa con "Pedir". */}
+        <Checkout
+          variante={contenido.checkout ?? "pasos"}
+          estilo={{
+            acento: tema.primario,
+            texto: tema.texto,
+            superficie: tema.superficie,
+            linea: tema.linea,
+            radio: tema.plantilla === "moderna" ? 22 : tema.plantilla === "elegante" ? 4 : 16,
+            fuente: tema.cuerpo,
+          }}
+        />
+      </SitioContexto.Provider>
     </main>
-  )
-}
-
-function Destacado({ producto, onAbrir }: { producto: Producto; onAbrir: (producto: Producto) => void }) {
-  const foto = producto.fotos[0]
-  return (
-    <div className="pv-destacado">
-      {foto && <img src={foto} alt="" loading="lazy" />}
-      <div className="pv-destacado-texto">
-        <span className="pv-sello">
-          <Star size={12} aria-hidden="true" /> Nuestro favorito
-        </span>
-        <strong>{producto.nombre}</strong>
-        {producto.descripcion && <small>{producto.descripcion}</small>}
-        <div className="pv-destacado-pie">
-          <span className="pv-precio">{formatPesos(producto.precioFinal)}</span>
-          <button type="button" className="pv-boton pv-boton-chico" onClick={() => onAbrir(producto)} disabled={!producto.disponible}>
-            {producto.disponible ? "Agregar" : "No disponible"}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function Tarjeta({ producto, cantidad, onAbrir }: { producto: Producto; cantidad: number; onAbrir: (producto: Producto) => void }) {
-  const foto = producto.fotos[0]
-  const agregar = () => (producto.tieneOpciones ? onAbrir(producto) : producto.agregar())
-  return (
-    <li className={`pv-producto ${foto ? "" : "sin-foto"} ${producto.disponible ? "" : "agotado"}`}>
-      <button type="button" className="pv-producto-abrir" onClick={() => onAbrir(producto)} disabled={!producto.disponible}>
-        {foto && <img src={foto} alt="" loading="lazy" />}
-        <span className="pv-producto-texto">
-          <strong>{producto.nombre}</strong>
-          {producto.descripcion && <small>{producto.descripcion}</small>}
-          <span className="pv-precio">
-            {formatPesos(producto.precioFinal)}
-            {producto.descuento > 0 && <s>{formatPesos(producto.precio)}</s>}
-          </span>
-        </span>
-      </button>
-      <button
-        type="button"
-        className="pv-agregar"
-        onClick={agregar}
-        disabled={!producto.disponible}
-        aria-label={producto.disponible ? `Agregar ${producto.nombre}` : `${producto.nombre} no disponible`}
-      >
-        {cantidad > 0 ? cantidad : <Plus size={18} />}
-      </button>
-    </li>
   )
 }

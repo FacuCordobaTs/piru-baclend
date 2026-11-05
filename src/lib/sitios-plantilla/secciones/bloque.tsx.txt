@@ -1,0 +1,24 @@
+import type { Accion, Medio as MedioContenido } from "../contenido"
+import { BotonAccion, Medio, Seccion, Texto, Vacio, propsDe } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+type Props = { kicker: string; titulo: string; texto: string; foto: MedioContenido | null; lado: "izquierda" | "derecha"; boton: Accion }
+
+/** Texto con imagen: para contar una promo, un evento o lo que haga falta. */
+export function Bloque({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  if (!p.titulo?.trim() && !p.texto?.trim() && !p.foto?.url) return <Vacio seccion={seccion} texto="Texto con imagen: escribí un título o subí una foto." />
+  return (
+    <Seccion seccion={seccion} etiqueta={p.titulo} className={`pv-bloque-texto ${p.foto?.url ? "con-foto" : ""} ${p.lado === "derecha" ? "foto-derecha" : ""}`}>
+      <div className="pv-bloque-interior">
+        <Medio medio={p.foto} className="pv-bloque-foto" />
+        <div className="pv-bloque-cuerpo">
+          <Texto prop="kicker" valor={p.kicker} como="p" className="pv-kicker" />
+          <Texto prop="titulo" valor={p.titulo} como="h2" />
+          <Texto prop="texto" valor={p.texto} parrafos />
+          <BotonAccion accion={p.boton} prop="boton" />
+        </div>
+      </div>
+    </Seccion>
+  )
+}

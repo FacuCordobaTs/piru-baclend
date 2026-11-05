@@ -1,0 +1,19 @@
+import type { Accion } from "../contenido"
+import { BotonAccion, Seccion, Texto, propsDe } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+type Props = { titulo: string; texto: string; boton: Accion }
+
+/** Un cierre que invita a pedir: título grande, una línea y un botón. */
+export function Llamado({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  return (
+    <Seccion seccion={seccion} etiqueta="Llamado" className="pv-llamado">
+      <div className="pv-llamado-interior">
+        <Texto prop="titulo" valor={p.titulo?.trim() || "¿Con hambre?"} como="h2" />
+        <Texto prop="texto" valor={p.texto} como="p" />
+        <BotonAccion accion={p.boton ?? { texto: "Pedí ahora", accion: "carta" }} prop="boton" />
+      </div>
+    </Seccion>
+  )
+}

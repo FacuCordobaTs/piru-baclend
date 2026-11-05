@@ -1,0 +1,28 @@
+import { ChevronDown } from "lucide-react"
+import { Seccion, Texto, Vacio, propsDe } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+type Props = { titulo: string; items: { pregunta?: string; respuesta?: string }[] }
+
+/** Preguntas frecuentes: cada una se abre y se cierra. */
+export function Preguntas({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  const items = (p.items ?? []).filter((i) => i && i.pregunta?.trim())
+  if (!items.length) return <Vacio seccion={seccion} texto="Preguntas frecuentes: sumá preguntas desde el panel de la derecha." />
+  return (
+    <Seccion seccion={seccion} etiqueta="Preguntas frecuentes" className="pv-preguntas">
+      <div className="pv-ancho-texto">
+        <Texto prop="titulo" valor={p.titulo?.trim() || "Preguntas frecuentes"} como="h2" className="pv-titulo-seccion" />
+        {items.map((item, i) => (
+          <details key={i} className="pv-pregunta">
+            <summary>
+              <span>{item.pregunta}</span>
+              <ChevronDown size={18} aria-hidden="true" />
+            </summary>
+            {item.respuesta && <p>{item.respuesta}</p>}
+          </details>
+        ))}
+      </div>
+    </Seccion>
+  )
+}

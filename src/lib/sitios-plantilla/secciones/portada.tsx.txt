@@ -1,0 +1,95 @@
+import { motion, useReducedMotion } from "motion/react"
+import { Clock } from "lucide-react"
+import { logoPara, useCarta, useHorarios, useLocal } from "@piru/tienda"
+import type { Accion, Medio as MedioContenido } from "../contenido"
+import { BotonAccion, Medio, Seccion, Texto, propsDe, useSitioPagina } from "../components/Sitio"
+import { TarjetaDestacada } from "./Destacado"
+import type { PropsSeccion } from "./index"
+
+type Props = {
+  titulo: string
+  bajada: string
+  medio: MedioContenido | null
+  /** auto: de fondo en Elegante, al costado en Moderna y Artesanal. */
+  disposicion: "auto" | "fondo" | "costado"
+  alto: "auto" | "pantalla"
+  mostrarLogo: boolean
+  mostrarNombre: boolean
+  mostrarEstado: boolean
+  boton: Accion
+  botonSecundario: Accion
+  destacadoId: number | null
+  animacion: "ninguna" | "suave" | "rebote"
+}
+
+const ANIMACIONES = {
+  suave: { initial: { opacity: 0, y: 26 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.7, ease: [0.22, 1, 0.36, 1] } },
+  rebote: { initial: { opacity: 0, y: 46, scale: 0.94 }, animate: { opacity: 1, y: 0, scale: 1 }, transition: { type: "spring", bounce: 0.5, duration: 0.9 } },
+} as const
+
+/** La portada: nombre, frase, bajada, botones, foto o video y, si se elige, un plato destacado. */
+export function Portada({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  const { local } = useLocal()
+  const { productos, secciones } = useCarta()
+  const horarios = useHorarios()
+  const { contenido, tema, abrirProducto } = useSitioPagina()
+  const quieto = useReducedMotion()
+  if (!local) return null
+
+  const disposicion = p.disposicion === "fondo" || p.disposicion === "costado" ? p.disposicion : tema.plantilla === "elegante" ? "fondo" : "costado"
+  const destacado = p.destacadoId ? productos.find((x) => x.id === p.destacadoId) ?? null : null
+  // De fondo, sin foto elegida, se usa la del destacado o la primera de la carta (como la tienda estándar).
+  const fotoDeLaCarta = destacado?.fotos[0] ?? secciones[0]?.productos.find((x) => x.fotos[0])?.fotos[0]
+  const medio = p.medio?.url ? p.medio : disposicion === "fondo" && fotoDeLaCarta ? { url: fotoDeLaCarta, tipo: "imagen" as const } : null
+  // El hero de Moderna es del color primario: el logo se elige según la tinta que lo va a rodear.
+  const sobreOscuro = (tema.plantilla === "moderna" && tema.sobrePrimario === "#ffffff") || (disposicion === "fondo" && !!medio)
+  const logo = (sobreOscuro ? contenido.logo : contenido.logoClaro) ?? logoPara(local, sobreOscuro)
+  const animacion = quieto || !p.animacion || p.animacion === "ninguna" ? null : ANIMACIONES[p.animacion] ?? null
+  const abierto = horarios.abierto && !local.pausado
+
+  return (
+    <Seccion
+      seccion={seccion}
+      etiqueta="Portada"
+      className={`pv-portada pv-portada-${disposicion} ${medio ? "con-medio" : "sin-medio"} ${p.alto === "pantalla" ? "pv-portada-alta" : ""}`}
+    >
+      {disposicion === "fondo" && medio && (
+        <>
+          <Medio medio={medio} className="pv-portada-foto" />
+          <div className="pv-portada-velo" aria-hidden="true" />
+        </>
+      )}
+      <div className="pv-portada-interior">
+        <motion.div
+          key={p.animacion ?? "ninguna"}
+          className="pv-portada-texto"
+          initial={animacion ? animacion.initial : false}
+          animate={animacion?.animate}
+          transition={animacion?.transition}
+        >
+          {p.mostrarLogo !== false && logo && <img className="pv-logo" src={logo} alt={local.nombre} />}
+          {p.mostrarNombre !== false && <p className="pv-local">{local.nombre}</p>}
+          <h1 data-piru-prop="titulo">{p.titulo?.trim() || local.nombre}</h1>
+          <Texto prop="bajada" valor={p.bajada} como="p" className="pv-bajada" />
+          {p.mostrarEstado !== false && (
+            <p className={`pv-estado-local ${abierto ? "abierto" : ""}`}>
+              <Clock size={15} aria-hidden="true" />
+              {local.pausado ? "Cerrado temporalmente" : horarios.texto}
+            </p>
+          )}
+          <div className="pv-portada-acciones">
+            <BotonAccion accion={p.boton ?? { texto: "Ver la carta", accion: "carta" }} prop="boton" />
+            <BotonAccion accion={p.botonSecundario} prop="botonSecundario" className="pv-boton pv-boton-secundario" />
+          </div>
+          {destacado && <TarjetaDestacada producto={destacado} onAbrir={abrirProducto} />}
+        </motion.div>
+        {disposicion === "costado" && medio && (
+          <div className="pv-portada-marco">
+            <Medio medio={medio} className="pv-portada-media" />
+          </div>
+        )}
+      </div>
+    </Seccion>
+  )
+}

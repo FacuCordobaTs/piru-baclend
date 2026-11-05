@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { Hono } from 'hono'
 import * as jwt from 'jsonwebtoken'
 import { createAuthMiddleware } from '../middleware/auth'
+import { PLANTILLA_INICIAL } from '../lib/sitios-plantilla'
 import { createSitiosRoute } from './sitios'
 import { sitioTienda } from '../db/schema'
 
@@ -135,15 +136,10 @@ describe('empezar de cero', () => {
     })
     expect(res.status).toBe(200)
     const { borrador, borradorActualizadoAt } = await res.json()
-    expect(Object.keys(borrador).sort()).toEqual([
-      'components/Checkout.tsx',
-      'components/DetalleProducto.tsx',
-      'components/detalle.css',
-      'contenido.ts',
-      'page.tsx',
-      'style.css',
-    ])
+    expect(Object.keys(borrador).sort()).toEqual(Object.keys(PLANTILLA_INICIAL).sort())
     expect(borrador['contenido.ts']).toContain('"plantilla": "moderna"')
+    // Sin secciones elegidas, arranca con las de siempre (incluido el pedido en grupo).
+    expect(borrador['contenido.ts']).toContain('"tipo": "grupo"')
     expect(borrador['contenido.ts']).toContain('#112233')
     // El reemplazo es el borrador: la versión publicada no se toca.
     expect(guardado.borrador).toEqual(borrador)

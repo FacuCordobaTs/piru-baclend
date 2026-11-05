@@ -1,0 +1,22 @@
+import { Seccion, Texto, Vacio, propsDe } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+type Props = { titulo: string; fotos: string[]; estilo: "grilla" | "mosaico" | "carrusel" }
+
+/** Las fotos del local, en grilla, mosaico o carrusel. */
+export function Galeria({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  const fotos = (p.fotos ?? []).filter((f) => typeof f === "string" && /^(https:\/\/|\/(?!\/)|data:|blob:)/i.test(f))
+  if (!fotos.length) return <Vacio seccion={seccion} texto="Galería: subí fotos del local desde el panel de la derecha." />
+  const estilo = p.estilo === "mosaico" || p.estilo === "carrusel" ? p.estilo : "grilla"
+  return (
+    <Seccion seccion={seccion} etiqueta="Fotos del local" className={`pv-galeria-bloque pv-galeria-${estilo}`}>
+      <Texto prop="titulo" valor={p.titulo} como="h2" className="pv-titulo-seccion" />
+      <div className="pv-galeria">
+        {fotos.map((foto, i) => (
+          <img key={`${foto}-${i}`} src={foto} alt="" loading="lazy" />
+        ))}
+      </div>
+    </Seccion>
+  )
+}

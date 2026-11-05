@@ -1,0 +1,329 @@
+import { createContext, useContext, useEffect, type CSSProperties, type ElementType, type ReactNode } from "react"
+import { useReducedMotion } from "motion/react"
+import { useLinks, usePedidoGrupal, useSitio, type Producto } from "@piru/tienda"
+import type { Accion, ContenidoSitio, Medio as MedioContenido, SeccionPagina } from "../contenido"
+
+/*
+ * Piezas compartidas por todas las secciones de la página.
+ *
+ * - `temaDe` arma la paleta y las letras desde `CONTENIDO` (marca, colores y fuentes).
+ * - `Seccion` envuelve cada sección: le da su id, su esquema de color y las marcas que usa el
+ *   editor visual para seleccionarla (`data-piru-seccion`).
+ * - `Texto` muestra una propiedad de texto y la marca para editarla en el lugar (`data-piru-prop`).
+ * - `BotonAccion` resuelve las acciones de los botones (abrir la carta, pedir entre varios,
+ *   WhatsApp, ir a otra sección) sin armar URLs de pagos.
+ */
+
+export type Plantilla = "elegante" | "moderna" | "artesanal"
+
+export type Tema = {
+  plantilla: Plantilla
+  fondo: string
+  texto: string
+  suave: string
+  superficie: string
+  linea: string
+  primario: string
+  secundario: string
+  sobrePrimario: string
+  sobreSecundario: string
+  titulos: string
+  cuerpo: string
+  peso: number
+}
+
+const BASES: Record<Plantilla, { fondo: string; texto: string; superficie: string; primario: string; secundario: string; titulos: string; cuerpo: string; peso: number; serif: boolean }> = {
+  elegante: { fondo: "#f6f1e8", texto: "#17130f", superficie: "#fdfbf7", primario: "#b34a2a", secundario: "#1f5c4d", titulos: "Bricolage Grotesque", cuerpo: "Bricolage Grotesque", peso: 800, serif: false },
+  moderna: { fondo: "#f5f7fa", texto: "#171d2b", superficie: "#ffffff", primario: "#315cfd", secundario: "#ffc21a", titulos: "Unbounded", cuerpo: "Manrope", peso: 700, serif: false },
+  artesanal: { fondo: "#f4ead8", texto: "#392a20", superficie: "#fffaf1", primario: "#c2410c", secundario: "#3f7d3a", titulos: "Fraunces", cuerpo: "Nunito Sans", peso: 700, serif: true },
+}
+
+const hex6 = (hex: string) => {
+  const v = hex.replace("#", "")
+  return v.length === 3 ? [...v].map((c) => c + c).join("") : v
+}
+
+const luminancia = (hex: string) => {
+  const x = hex6(hex)
+  const [r, g, b] = [0, 2, 4].map((i) => {
+    const c = parseInt(x.slice(i, i + 2), 16) / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+export const mezclar = (a: string, b: string, t: number) => {
+  const n = (h: string) => [0, 2, 4].map((i) => parseInt(hex6(h).slice(i, i + 2), 16))
+  const [ca, cb] = [n(a), n(b)]
+  return `#${ca.map((v, i) => Math.round(v + (cb[i] - v) * t).toString(16).padStart(2, "0")).join("")}`
+}
+
+const contraste = (a: string, b: string) => {
+  const [x, y] = [luminancia(a), luminancia(b)].sort((m, n) => n - m)
+  return (x + 0.05) / (y + 0.05)
+}
+
+const tintaSobre = (hex: string) => (luminancia(hex) > 0.36 ? "#17130f" : "#ffffff")
+
+export function temaDe(contenido: ContenidoSitio): Tema {
+  const plantilla: Plantilla = contenido.plantilla === "elegante" || contenido.plantilla === "moderna" ? contenido.plantilla : "artesanal"
+  const base = BASES[plantilla]
+  const c = contenido.colores ?? {}
+  const marca = contenido.marca
+  const fondo = c.fondo ?? base.fondo
+  const texto = c.texto && contraste(c.texto, fondo) >= 4.5 ? c.texto : contraste(base.texto, fondo) >= 4.5 ? base.texto : tintaSobre(fondo)
+  const superficie = c.superficie ?? (c.fondo ? mezclar(fondo, "#ffffff", luminancia(fondo) < 0.18 ? 0.06 : 0.5) : base.superficie)
+  const primario = c.acento ?? marca?.colorPrimario ?? base.primario
+  const secundario = marca?.usarColorUnico ? primario : marca?.colorSecundario ?? base.secundario
+  const titulos = contenido.fuentes?.titulos ?? base.titulos
+  const cuerpo = contenido.fuentes?.cuerpo ?? base.cuerpo
+  return {
+    plantilla,
+    fondo,
+    texto,
+    suave: mezclar(texto, fondo, 0.45),
+    superficie,
+    linea: mezclar(texto, fondo, 0.82),
+    primario,
+    secundario,
+    sobrePrimario: tintaSobre(primario),
+    sobreSecundario: tintaSobre(secundario),
+    titulos: `"${titulos}", ${base.serif ? "Georgia, serif" : "system-ui, sans-serif"}`,
+    cuerpo: `"${cuerpo}", system-ui, sans-serif`,
+    peso: contenido.fuentes?.pesoTitulos ?? base.peso,
+  }
+}
+
+/** Variables CSS del tema. Los esquemas de color de cada sección parten de las `--pv-c-*`. */
+export function variablesTema(tema: Tema): CSSProperties {
+  return {
+    "--pv-c-fondo": tema.fondo,
+    "--pv-c-texto": tema.texto,
+    "--pv-c-superficie": tema.superficie,
+    "--pv-c-acento": tema.primario,
+    "--pv-c-sobre-acento": tema.sobrePrimario,
+    "--pv-c-secundario": tema.secundario,
+    "--pv-c-sobre-secundario": tema.sobreSecundario,
+    "--pv-fondo": tema.fondo,
+    "--pv-texto": tema.texto,
+    "--pv-suave": tema.suave,
+    "--pv-superficie": tema.superficie,
+    "--pv-linea": tema.linea,
+    "--pv-acento": tema.primario,
+    "--pv-secundario": tema.secundario,
+    "--pv-sobre-acento": tema.sobrePrimario,
+    "--pv-sobre-secundario": tema.sobreSecundario,
+    "--pv-titulos": tema.titulos,
+    "--pv-cuerpo": tema.cuerpo,
+    "--pv-peso": String(tema.peso),
+    "--piru-footer-bg": tema.fondo,
+    "--piru-footer-fg": tema.suave,
+  } as CSSProperties
+}
+
+/**
+ * Carga de Google Fonts las letras elegidas (las propias van en `fuentes.css`). Una hoja por
+ * familia: si una no tiene los pesos pedidos, Google rechaza la hoja y se reintenta sin pesos.
+ */
+export function useFuentes(contenido: ContenidoSitio, tema: Tema) {
+  const propias = new Set((contenido.fuentesPropias ?? []).map((f) => f.familia))
+  const nombre = (fuente: string) => fuente.match(/"([^"]+)"/)?.[1] ?? fuente.split(",")[0].trim()
+  const familias = [...new Set([nombre(tema.titulos), nombre(tema.cuerpo)])].filter((f) => f && !propias.has(f))
+  const cssUrl = contenido.fuentes?.cssUrl
+  const clave = cssUrl ?? familias.join("|")
+  useEffect(() => {
+    const hojas = cssUrl ? [{ href: cssUrl, simple: null }] : familias.map((f) => {
+      const familia = `family=${encodeURIComponent(f).replace(/%20/g, "+")}`
+      return { href: `https://fonts.googleapis.com/css2?${familia}:wght@400;500;600;700;800&display=swap`, simple: `https://fonts.googleapis.com/css2?${familia}&display=swap` }
+    })
+    const links = hojas.map(({ href, simple }) => {
+      const link = document.createElement("link")
+      link.rel = "stylesheet"
+      link.href = href
+      link.dataset.fuente = "piru-pagina"
+      if (simple) link.onerror = () => { link.onerror = null; link.href = simple }
+      document.head.appendChild(link)
+      return link
+    })
+    return () => links.forEach((l) => l.remove())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clave])
+}
+
+type ContextoSitio = {
+  contenido: ContenidoSitio
+  tema: Tema
+  secciones: SeccionPagina[]
+  abrirProducto: (producto: Producto) => void
+}
+
+export const SitioContexto = createContext<ContextoSitio | null>(null)
+
+export function useSitioPagina(): ContextoSitio {
+  const contexto = useContext(SitioContexto)
+  if (!contexto) throw new Error("Las secciones van dentro de la página (SitioContexto)")
+  return contexto
+}
+
+/** Las propiedades de una sección, con el tipo que espera su componente. */
+export const propsDe = <T,>(seccion: SeccionPagina) => (seccion.props ?? {}) as Partial<T>
+
+const ESQUEMAS = ["normal", "suave", "marca", "secundario", "contraste"]
+const ESPACIOS = ["compacto", "normal", "amplio"]
+
+/** El contenedor de cada sección. `esquema` y `espacio` son propiedades comunes a todas. */
+export function Seccion({
+  seccion,
+  className = "",
+  etiqueta,
+  children,
+}: {
+  seccion: SeccionPagina
+  className?: string
+  etiqueta?: string
+  children: ReactNode
+}) {
+  const p = propsDe<{ esquema: string; espacio: string }>(seccion)
+  const esquema = ESQUEMAS.includes(p.esquema ?? "") ? p.esquema : "normal"
+  const espacio = ESPACIOS.includes(p.espacio ?? "") ? p.espacio : "normal"
+  return (
+    <section
+      id={`s-${seccion.id}`}
+      data-piru-seccion={seccion.id}
+      data-piru-tipo={seccion.tipo}
+      aria-label={etiqueta}
+      className={`pv-bloque pv-s-${seccion.tipo} pv-esquema-${esquema} pv-espacio-${espacio} ${className}`}
+    >
+      {children}
+    </section>
+  )
+}
+
+/**
+ * Un texto de la sección. Con `prop`, el editor visual lo puede editar en el lugar con doble clic.
+ * Los textos largos se parten en párrafos por cada salto de línea.
+ */
+export function Texto({
+  prop,
+  valor,
+  como: Etiqueta = "span",
+  className,
+  parrafos = false,
+}: {
+  prop?: string
+  valor: string | null | undefined
+  como?: ElementType
+  className?: string
+  parrafos?: boolean
+}) {
+  if (!valor?.trim()) return null
+  if (parrafos)
+    return (
+      <div className={className} data-piru-prop={prop} data-piru-multilinea={prop ? "" : undefined}>
+        {valor.split("\n").filter(Boolean).map((parrafo, i) => (
+          <p key={i}>{parrafo}</p>
+        ))}
+      </div>
+    )
+  return (
+    <Etiqueta className={className} data-piru-prop={prop}>
+      {valor}
+    </Etiqueta>
+  )
+}
+
+/** Desplaza hasta una sección: por id, o la primera de un tipo ("carta", "grupo"). */
+export function irASeccion(secciones: SeccionPagina[], destino: string) {
+  const objetivo = secciones.find((s) => s.id === destino) ?? secciones.find((s) => s.tipo === destino)
+  const el = objetivo ? document.getElementById(`s-${objetivo.id}`) : null
+  el?.scrollIntoView({ behavior: "smooth", block: "start" })
+  return !!el
+}
+
+const enlaceSeguro = (url: string | undefined) => (url && /^https:\/\/[^\s"'<>]+$/i.test(url.trim()) ? url.trim() : null)
+
+/** El destino de WhatsApp e Instagram: lo de `CONTENIDO` o, si falta, lo cargado en el panel. */
+export function useRedes() {
+  const { contenido } = useSitioPagina()
+  const links = useLinks()
+  const instagram = contenido.instagram
+    ? /^https?:\/\//i.test(contenido.instagram)
+      ? enlaceSeguro(contenido.instagram)
+      : `https://instagram.com/${encodeURIComponent(contenido.instagram.replace(/^@/, ""))}`
+    : links.instagram
+  const whatsapp = contenido.whatsapp ? `https://wa.me/${contenido.whatsapp.replace(/\D/g, "")}` : links.whatsapp
+  return { instagram, whatsapp }
+}
+
+/**
+ * Un botón con una acción del editor. `accion: "ninguna"` (o un texto vacío) no dibuja nada; un
+ * WhatsApp o Instagram sin datos tampoco.
+ */
+export function BotonAccion({
+  accion,
+  prop,
+  className = "pv-boton",
+  icono,
+}: {
+  accion: Accion | null | undefined
+  /** La propiedad donde vive el botón, para editar su texto en el lugar (`boton` → `boton.texto`). */
+  prop?: string
+  className?: string
+  icono?: ReactNode
+}) {
+  const { secciones } = useSitioPagina()
+  const redes = useRedes()
+  const grupo = usePedidoGrupal()
+  const texto = accion?.texto?.trim()
+  if (!accion || !texto || accion.accion === "ninguna") return null
+  const contenido = (
+    <>
+      {icono}
+      <span data-piru-prop={prop ? `${prop}.texto` : undefined}>{texto}</span>
+    </>
+  )
+  const href =
+    accion.accion === "whatsapp" ? redes.whatsapp : accion.accion === "instagram" ? redes.instagram : accion.accion === "enlace" ? enlaceSeguro(accion.destino) : null
+  if (accion.accion === "whatsapp" || accion.accion === "instagram" || accion.accion === "enlace") {
+    if (!href) return null
+    return (
+      <a className={className} href={href} target="_blank" rel="noopener noreferrer">
+        {contenido}
+      </a>
+    )
+  }
+  const alTocar = () => {
+    if (accion.accion === "grupo") {
+      if (!irASeccion(secciones, "grupo")) grupo.abrir()
+      return
+    }
+    irASeccion(secciones, accion.accion === "seccion" && accion.destino ? accion.destino : "carta")
+  }
+  return (
+    <button type="button" className={className} onClick={alTocar}>
+      {contenido}
+    </button>
+  )
+}
+
+/** Foto o video. El video se repite sin sonido y queda quieto si se pidió menos movimiento. */
+export function Medio({ medio, className, alt = "" }: { medio: MedioContenido | null | undefined; className?: string; alt?: string }) {
+  const quieto = useReducedMotion()
+  const url = medio?.url && /^(https:\/\/|\/(?!\/)|data:|blob:)/i.test(medio.url) ? medio.url : null
+  if (!url) return null
+  const video = medio?.tipo === "video" || /\.(mp4|webm)(\?|$)/i.test(url)
+  if (video)
+    return <video className={className} src={url} autoPlay={!quieto} muted loop playsInline preload="metadata" aria-hidden={alt ? undefined : true} />
+  return <img className={className} src={url} alt={alt} loading="lazy" />
+}
+
+/** En la vista previa del editor, una sección sin nada para mostrar se ve como un aviso. En la página publicada no se ve. */
+export function Vacio({ seccion, texto }: { seccion: SeccionPagina; texto: string }) {
+  const { isPreview } = useSitio()
+  if (!isPreview) return null
+  return (
+    <Seccion seccion={seccion} className="pv-vacia">
+      <p className="pv-vacia-texto">{texto}</p>
+    </Seccion>
+  )
+}

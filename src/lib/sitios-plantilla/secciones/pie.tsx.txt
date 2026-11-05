@@ -1,0 +1,39 @@
+import { Instagram, MapPin, MessageCircle } from "lucide-react"
+import { useHorarios, useLocal } from "@piru/tienda"
+import { Seccion, Texto, propsDe, useRedes } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+type Props = { texto: string; mostrarDireccion: boolean; mostrarRedes: boolean; mostrarHorario: boolean }
+
+/** El pie del local: nombre, dirección, redes y una línea propia. */
+export function Pie({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  const { local } = useLocal()
+  const horarios = useHorarios()
+  const redes = useRedes()
+  if (!local) return null
+  return (
+    <Seccion seccion={seccion} etiqueta="Pie" className="pv-pie-bloque">
+      <footer className="pv-pie">
+        <strong>{local.nombre}</strong>
+        <Texto prop="texto" valor={p.texto} como="span" />
+        {p.mostrarDireccion !== false && local.direccion && (
+          <span>
+            <MapPin size={15} aria-hidden="true" /> {local.direccion}
+          </span>
+        )}
+        {p.mostrarHorario && <span>{horarios.texto}</span>}
+        {p.mostrarRedes !== false && redes.instagram && (
+          <a href={redes.instagram} target="_blank" rel="noopener noreferrer">
+            <Instagram size={15} aria-hidden="true" /> Instagram
+          </a>
+        )}
+        {p.mostrarRedes !== false && redes.whatsapp && (
+          <a href={redes.whatsapp} target="_blank" rel="noopener noreferrer">
+            <MessageCircle size={15} aria-hidden="true" /> WhatsApp
+          </a>
+        )}
+      </footer>
+    </Seccion>
+  )
+}

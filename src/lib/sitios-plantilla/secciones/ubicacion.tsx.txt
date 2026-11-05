@@ -1,0 +1,54 @@
+import { MapPin } from "lucide-react"
+import { DIAS, SEMANA, turnosDelDia, useLocal } from "@piru/tienda"
+import { Seccion, Texto, Vacio, propsDe } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+type Props = { titulo: string; texto: string; mostrarMapa: boolean; mostrarHorarios: boolean; mostrarSucursales: boolean }
+
+/** Dónde estamos: dirección, mapa de Google, sucursales y horarios de la semana. */
+export function Ubicacion({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  const { local } = useLocal()
+  if (!local) return null
+  const sucursales = p.mostrarSucursales !== false ? local.sucursales.filter((s) => s.direccion) : []
+  const direccion = local.direccion ?? sucursales[0]?.direccion ?? null
+  const horarios = p.mostrarHorarios !== false && local.horarios.length > 0
+  if (!direccion && !horarios) return <Vacio seccion={seccion} texto="Dónde estamos: cargá la dirección y los horarios del local en el panel." />
+  const mapa = p.mostrarMapa !== false && direccion ? `https://www.google.com/maps?q=${encodeURIComponent(direccion)}&output=embed` : null
+  return (
+    <Seccion seccion={seccion} etiqueta="Dónde estamos" className={`pv-ubicacion ${mapa ? "con-mapa" : ""}`}>
+      <div className="pv-ubicacion-interior">
+        <div className="pv-ubicacion-datos">
+          <Texto prop="titulo" valor={p.titulo?.trim() || "Dónde estamos"} como="h2" className="pv-titulo-seccion" />
+          <Texto prop="texto" valor={p.texto} como="p" className="pv-ubicacion-texto" />
+          {direccion && (
+            <p className="pv-ubicacion-direccion">
+              <MapPin size={18} aria-hidden="true" /> {direccion}
+            </p>
+          )}
+          {sucursales.length > 1 && (
+            <ul className="pv-sucursales">
+              {sucursales.map((s) => (
+                <li key={s.id}>
+                  <strong>{s.nombre}</strong>
+                  <span>{s.direccion}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {horarios && (
+            <dl className="pv-horarios">
+              {SEMANA.map((dia) => (
+                <div key={dia}>
+                  <dt>{DIAS[dia]}</dt>
+                  <dd>{turnosDelDia(local.horarios, dia) || "Cerrado"}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </div>
+        {mapa && <iframe className="pv-mapa" src={mapa} title={`Mapa: ${direccion}`} loading="lazy" referrerPolicy="no-referrer-when-downgrade" />}
+      </div>
+    </Seccion>
+  )
+}

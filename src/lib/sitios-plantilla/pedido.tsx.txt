@@ -1,0 +1,73 @@
+import { useEffect } from "react"
+import { Minus, Plus, X } from "lucide-react"
+import { useCarrito } from "@piru/tienda"
+
+const MOTIVOS: Record<string, string> = {
+  empty: "Agregá algo para pedir",
+  closed: "Ahora estamos cerrados",
+  paused: "Cerrado temporalmente",
+  unavailable: "Sacá lo que ya no está disponible",
+}
+
+/**
+ * El pedido armado: líneas, cantidades y el botón "Pedir", que abre el checkout de Piru en la
+ * misma página. Muestra el subtotal: el envío, los cupones y los puntos se calculan al finalizar.
+ */
+export function Pedido({ onCerrar }: { onCerrar: () => void }) {
+  const carrito = useCarrito()
+
+  useEffect(() => {
+    const alApretar = (e: KeyboardEvent) => e.key === "Escape" && onCerrar()
+    window.addEventListener("keydown", alApretar)
+    return () => window.removeEventListener("keydown", alApretar)
+  }, [onCerrar])
+
+  return (
+    <div className="pv-velo" onClick={(e) => e.target === e.currentTarget && onCerrar()}>
+      <aside className="pv-pedido" role="dialog" aria-modal="true" aria-label="Tu pedido">
+        <div className="pv-pedido-cabeza">
+          <h2>Tu pedido</h2>
+          <button type="button" className="pv-icono" onClick={onCerrar} aria-label="Cerrar">
+            <X size={20} />
+          </button>
+        </div>
+        <ul className="pv-lineas">
+          {carrito.lines.map((linea) => (
+            <li key={linea.key} className={linea.disponible ? "" : "agotada"}>
+              <div>
+                <strong>{linea.nombre}</strong>
+                {linea.opciones.length > 0 && <small>{linea.opciones.join(" · ")}</small>}
+                {!linea.disponible && <small>Ya no está disponible</small>}
+              </div>
+              <div className="pv-cantidad">
+                <button type="button" onClick={() => carrito.set(linea.key, linea.cantidad - 1)} aria-label={`Uno menos de ${linea.nombre}`}>
+                  <Minus size={16} />
+                </button>
+                <span>{linea.cantidad}</span>
+                <button type="button" onClick={() => carrito.set(linea.key, linea.cantidad + 1)} aria-label={`Uno más de ${linea.nombre}`}>
+                  <Plus size={16} />
+                </button>
+              </div>
+              <span className="pv-precio">{linea.subtotalFormatted}</span>
+            </li>
+          ))}
+        </ul>
+        <div className="pv-pedido-pie">
+          <p>
+            <span>Subtotal</span>
+            <strong>{carrito.totalFormatted}</strong>
+          </p>
+          <small>El envío, los cupones y los puntos se calculan al finalizar.</small>
+          {carrito.error && (
+            <p className="pv-error" role="alert">
+              {carrito.error}
+            </p>
+          )}
+          <button type="button" className="pv-boton pv-boton-ancho" disabled={!carrito.canCheckout} onClick={carrito.checkout}>
+            {carrito.submitting ? "Abriendo…" : carrito.blockReason ? MOTIVOS[carrito.blockReason] : `Pedir · ${carrito.totalFormatted}`}
+          </button>
+        </div>
+      </aside>
+    </div>
+  )
+}

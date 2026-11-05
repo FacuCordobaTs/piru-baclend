@@ -1,0 +1,39 @@
+import type { ComponentType } from "react"
+import type { SeccionPagina } from "../contenido"
+import { Aviso } from "./Aviso"
+import { Portada } from "./Portada"
+import { Cinta } from "./Cinta"
+import { Destacado } from "./Destacado"
+import { Carta } from "./Carta"
+import { Grupo } from "./Grupo"
+import { Puntos } from "./Puntos"
+import { Historia } from "./Historia"
+import { Galeria } from "./Galeria"
+import { Ubicacion } from "./Ubicacion"
+import { Preguntas } from "./Preguntas"
+import { Llamado } from "./Llamado"
+import { Bloque } from "./Bloque"
+import { Pie } from "./Pie"
+
+export type PropsSeccion = { seccion: SeccionPagina }
+
+/**
+ * Qué componente dibuja cada `tipo` de `CONTENIDO.secciones`. Para una sección nueva: creá
+ * `secciones/MiSeccion.tsx` (con `Seccion` de `components/Sitio`) y sumala acá con su tipo.
+ */
+export const SECCIONES: Record<string, ComponentType<PropsSeccion>> = {
+  aviso: Aviso,
+  portada: Portada,
+  cinta: Cinta,
+  destacado: Destacado,
+  carta: Carta,
+  grupo: Grupo,
+  puntos: Puntos,
+  historia: Historia,
+  galeria: Galeria,
+  ubicacion: Ubicacion,
+  preguntas: Preguntas,
+  llamado: Llamado,
+  bloque: Bloque,
+  pie: Pie,
+}

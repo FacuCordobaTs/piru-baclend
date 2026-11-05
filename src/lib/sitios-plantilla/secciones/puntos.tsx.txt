@@ -1,0 +1,19 @@
+import { PiruCanjes, useCarta, usePuntos } from "@piru/tienda"
+import { Seccion, Vacio, propsDe } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+/** Los canjes del club de puntos del local. No se ve si el local no tiene canjes. */
+export function Puntos({ seccion }: PropsSeccion) {
+  const p = propsDe<{ titulo: string }>(seccion)
+  const puntos = usePuntos()
+  const { canjes } = useCarta()
+  if (!puntos.habilitado || !canjes.length)
+    return <Vacio seccion={seccion} texto="Canjes de puntos: aparece cuando el local tenga productos para canjear con puntos." />
+  return (
+    <Seccion seccion={seccion} etiqueta="Canjes de puntos" className="pv-puntos">
+      <div className="pv-ancho">
+        <PiruCanjes titulo={p.titulo?.trim() || "Canjeá tus puntos"} />
+      </div>
+    </Seccion>
+  )
+}

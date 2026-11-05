@@ -1,0 +1,23 @@
+import type { Medio as MedioContenido } from "../contenido"
+import { Medio, Seccion, Texto, Vacio, propsDe } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+type Props = { kicker: string; titulo: string; texto: string; foto: MedioContenido | null }
+
+/** Nuestra historia: un título, unos párrafos y, si hay, una foto del local. */
+export function Historia({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  if (!p.texto?.trim() && !p.titulo?.trim()) return <Vacio seccion={seccion} texto="Nuestra historia: escribí la historia del local." />
+  return (
+    <Seccion seccion={seccion} etiqueta="Nuestra historia" className={`pv-historia ${p.foto?.url ? "con-foto" : ""}`}>
+      <div className="pv-historia-interior">
+        <div>
+          <Texto prop="kicker" valor={p.kicker} como="p" className="pv-kicker" />
+          <Texto prop="titulo" valor={p.titulo} como="h2" />
+          <Texto prop="texto" valor={p.texto} parrafos className="pv-historia-texto" />
+        </div>
+        <Medio medio={p.foto} className="pv-historia-foto" />
+      </div>
+    </Seccion>
+  )
+}

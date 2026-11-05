@@ -6,8 +6,8 @@ import { validarBorrador, resolverRelativo, pathValido, importPermitido, PAQUETE
 import { slugDisponible, SLUGS_REGISTRADOS } from './sitios-slugs'
 import { esSitioDePaginas, fijarPublicados, paginasApiPath } from './sitios-publicados'
 import { sitiosPuede, puedeSocketAdmin } from './sesiones-app'
-import { CONTENIDO_INICIAL, PLANTILLA_INICIAL, plantillaInicial } from './sitios-plantilla'
-import { marcaPorDefecto, normalizarContenidoSitio } from './sitios-contenido'
+import { CONTENIDO_INICIAL, PLANTILLA_INICIAL, SECCIONES_PLANTILLA, archivoFuentes, plantillaInicial } from './sitios-plantilla'
+import { marcaPorDefecto, normalizarContenidoSitio, normalizarFuentesPropias, normalizarSecciones, seccionesIniciales } from './sitios-contenido'
 import { generarGuia } from './sitios-guia'
 import { urlRetornoPedido } from './marketing-enlaces'
 import { normalizarMeta } from './sitios-meta'
@@ -87,7 +87,8 @@ describe('build', () => {
     const imports = new Set(r.js.match(/from"([^"]+)"/g))
     expect([...imports].every((i) => /react|motion\/react|@piru\/tienda/.test(i))).toBe(true)
     expect(r.js).not.toContain('lucide-react')
-    expect(r.js.length).toBeLessThan(40_000)
+    // Catorce secciones, el detalle de producto y el pedido: un sitio entero sigue debajo de 70 KB.
+    expect(r.js.length).toBeLessThan(70_000)
     expect(r.css).toStartWith('@import url("https://fonts.googleapis.com/')
     expect(r.jsHash).toMatch(/^[a-f0-9]{20}$/)
   }, 20_000)
@@ -102,7 +103,8 @@ describe('build', () => {
       cinta: ['Smash burgers'],
     })
     expect(borrador['contenido.ts']).toContain('/* piru:contenido */')
-    expect(borrador['contenido.ts']).toContain('"frase": "Smash, cheddar y cero vueltas."')
+    // La frase pasa a ser el título de la portada.
+    expect(borrador['contenido.ts']).toContain('"titulo": "Smash, cheddar y cero vueltas."')
     expect(borrador['contenido.ts']).toContain('"colorPrimario": "#E63A1E"')
     expect(borrador['page.tsx']).toContain('CONTENIDO')
     expect(borrador['page.tsx']).not.toContain('useContenido')
@@ -113,7 +115,8 @@ describe('build', () => {
     const css = PLANTILLA_INICIAL['style.css'] ?? ''
     expect(page).toContain('CONTENIDO')
     expect(page).toContain('from "./contenido"')
-    expect(page).toContain('pv-${plantilla}')
+    expect(page).toContain('pv-${tema.plantilla}')
+    expect(page).toContain('SECCIONES[seccion.tipo]')
     for (const plantilla of ['elegante', 'moderna', 'artesanal']) expect(css).toContain(`.pv-${plantilla}`)
   })
 
@@ -259,6 +262,57 @@ describe('permisos de la sesión de Páginas', () => {
       ogImage: 'assets/og.jpg',
     })
   })
+})
+
+describe('secciones de la página', () => {
+  const base = { marca: marcaPorDefecto(), logo: null, logoClaro: null }
+
+  test('una página sin secciones arranca con las de siempre, armadas con su contenido', () => {
+    const c = normalizarContenidoSitio({ frase: 'Hola', cinta: ['Smash'], historia: { texto: 'Desde 1990' }, productoDestacadoId: 4 }, base)
+    const tipos = c.secciones!.map((s) => s.tipo)
+    expect(tipos).toEqual(['aviso', 'portada', 'cinta', 'carta', 'grupo', 'puntos', 'historia', 'galeria', 'ubicacion', 'pie'])
+    const portada = c.secciones!.find((s) => s.tipo === 'portada')!
+    expect(portada.props.titulo).toBe('Hola')
+    expect(portada.props.destacadoId).toBe(4)
+    expect(c.secciones!.find((s) => s.tipo === 'galeria')!.visible).toBe(false)
+    expect(c.secciones!.find((s) => s.tipo === 'historia')!.visible).toBe(true)
+    // Los campos sueltos ya viven en las secciones.
+    expect('frase' in c).toBe(false)
+    expect('cinta' in c).toBe(false)
+  })
+
+  test('las propiedades son sólo datos: sin data URLs, claves raras ni ids repetidos', () => {
+    const secciones = normalizarSecciones([
+      { id: 'portada-1', tipo: 'portada', props: { titulo: 'x', medio: { url: 'data:image/png;base64,AAA' }, 'mal clave': 1, n: Infinity, f: () => 1 } },
+      { id: 'portada-1', tipo: 'portada', props: {} },
+      { id: '../x', tipo: 'portada' },
+      { id: 'grupo-a', tipo: 'grupo', visible: false, nombre: '  Para amigos  ', props: { boton: 'Armar' } },
+    ])!
+    expect(secciones.map((s) => s.id)).toEqual(['portada-1', 'grupo-a'])
+    expect(secciones[0].props).toEqual({ titulo: 'x', medio: {} })
+    expect(secciones[1]).toEqual({ id: 'grupo-a', tipo: 'grupo', visible: false, nombre: 'Para amigos', props: { boton: 'Armar' } })
+    expect(normalizarSecciones('x')).toBeUndefined()
+    expect(() => normalizarSecciones([{ id: 'a', tipo: 'bloque', props: { otros: Array(60).fill('y'.repeat(4000)) } }])).toThrow()
+  })
+
+  test('cada tipo inicial tiene su componente y las fuentes propias van a fuentes.css', () => {
+    const indice = PLANTILLA_INICIAL['secciones/index.ts'] ?? ''
+    for (const [tipo, archivo] of Object.entries(SECCIONES_PLANTILLA)) {
+      expect(PLANTILLA_INICIAL[`secciones/${archivo}.tsx`]).toContain(`export function ${archivo}`)
+      expect(indice).toContain(`${tipo}: ${archivo}`)
+    }
+    for (const s of seccionesIniciales({})) expect(Object.keys(SECCIONES_PLANTILLA)).toContain(s.tipo)
+    const fuentes = normalizarFuentesPropias([{ familia: 'Eastman', archivo: 'assets/eastman.woff2' }, { familia: 'x', archivo: '../a.woff2' }, { familia: '<b>', archivo: 'assets/b.woff2' }])
+    expect(fuentes).toEqual([{ familia: 'Eastman', archivo: 'assets/eastman.woff2' }])
+    expect(archivoFuentes(fuentes)).toContain('src: url("./assets/eastman.woff2") format("woff2")')
+    expect(PLANTILLA_INICIAL['page.tsx']).toContain('import "./fuentes.css"')
+  })
+
+  test('el pedido en grupo es una sección que usa el SDK', async () => {
+    expect(PLANTILLA_INICIAL['secciones/Grupo.tsx']).toContain('usePedidoGrupal')
+    const r = await construirSitio(plantillaInicial({ ...CONTENIDO_INICIAL, plantilla: 'moderna' }), [])
+    expect(r.ok).toBe(true)
+  }, 20_000)
 })
 
 describe('guía para Claude', () => {

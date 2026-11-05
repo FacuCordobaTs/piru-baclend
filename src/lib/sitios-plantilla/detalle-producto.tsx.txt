@@ -8,7 +8,7 @@ import "./detalle.css"
 /*
  * Detalle de producto de esta tienda.
  *
- * Es una pieza del diseño, no del runtime: elegí el estilo en Preferencias
+ * Es una pieza del diseño, no del runtime: elegí el estilo en el editor (Ajustes → Tienda)
  * (`CONTENIDO.detalleProducto`) o cambialo acá. Los tres comparten datos, precios y el alta en el
  * carrito del SDK; cambia cómo se muestra.
  *

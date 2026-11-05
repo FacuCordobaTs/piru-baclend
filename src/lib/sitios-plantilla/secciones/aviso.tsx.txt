@@ -1,0 +1,40 @@
+import { Clock, Tag } from "lucide-react"
+import { useCampana, useHorarios, useLocal } from "@piru/tienda"
+import { Seccion, Texto, Vacio, propsDe } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+type Props = { texto: string; mostrarHorario: boolean; mostrarCampana: boolean }
+
+/** Aviso de horario: si el local está abierto o cerrado, la promo vigente y un texto propio. */
+export function Aviso({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  const { local } = useLocal()
+  const horarios = useHorarios()
+  const campana = useCampana()
+  const abierto = horarios.abierto && !local?.pausado
+  const estado = local?.pausado ? "Cerrado temporalmente: podés mirar la carta igual." : horarios.texto
+  const verHorario = p.mostrarHorario !== false && !!estado
+  const verCampana = p.mostrarCampana !== false && !!campana
+  if (!verHorario && !verCampana && !p.texto?.trim()) return <Vacio seccion={seccion} texto="Aviso de horario: no hay nada para avisar ahora." />
+  return (
+    <Seccion seccion={seccion} className={abierto ? "abierto" : "cerrado"} etiqueta="Aviso">
+      <div className="pv-aviso-fila" role="status">
+        {verHorario && (
+          <p className="pv-aviso-estado">
+            <span className="pv-aviso-punto" aria-hidden="true" />
+            <Clock size={15} aria-hidden="true" /> {estado}
+          </p>
+        )}
+        <Texto prop="texto" valor={p.texto} como="p" className="pv-aviso-texto" />
+        {verCampana && campana && (
+          <p className="pv-aviso-campana">
+            <Tag size={15} aria-hidden="true" />
+            {campana.campana.nombre || "Promo"}
+            {campana.campana.descuentoPorcentaje > 0 && ` · ${campana.campana.descuentoPorcentaje}% off`}
+            {campana.producto && ` en ${campana.producto.nombre}`}
+          </p>
+        )}
+      </div>
+    </Seccion>
+  )
+}
