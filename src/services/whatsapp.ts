@@ -888,7 +888,7 @@ export const sendClientGrowthRecipeWhatsApp = async (
 export interface PaymentLinkData {
     phone: string;    // teléfono del DUEÑO del local (formato internacional, solo dígitos)
     concepto: string; // {{1}} — qué está pagando, ej: "500 avisos por WhatsApp" o "Suscripción Piru"
-    monto: string;    // {{2}} — total formateado, ej: "$35.000"
+    monto: string;    // {{2}} — total formateado, ej: "$52.500"
     token: string;    // sufijo dinámico del botón URL → /pago/:token (la página pública de pago)
 }
 
@@ -918,7 +918,7 @@ export interface PaymentLinkData {
  *
  *     El ORDEN es el contrato (lo respeta el `body.parameters` de abajo):
  *       {{1}} concepto · {{2}} monto
- *     Muestras sugeridas: {{1}}=500 avisos por WhatsApp · {{2}}=$35.000
+ *     Muestras sugeridas: {{1}}=500 avisos por WhatsApp · {{2}}=$52.500
  *   • Botón:         Uno solo, tipo "Visitar sitio web" → URL DINÁMICA.
  *                    Base EXACTA: https://admin.piru.app/pago/    Variable {{1}}: el token (uuid).
  *                    ⚠️ La base tiene que coincidir con ADMIN_URL del backend; en el envío sólo
