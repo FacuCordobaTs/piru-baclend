@@ -23,6 +23,12 @@ metricasRoute.get('/', async (c) => {
   const yearQuery = c.req.query('year')
   const fromQuery = c.req.query('from')
   const toQuery = c.req.query('to')
+  const sucursalIdQuery = c.req.query('sucursalId')
+  const sucursalIdNum = sucursalIdQuery ? parseInt(sucursalIdQuery, 10) : null
+  // Acota todas las series a una sede. Sin parámetro se mantiene el total del local.
+  const sucursalFilter = Number.isInteger(sucursalIdNum) && (sucursalIdNum ?? 0) > 0
+    ? eq(PedidoUnificadoTable.sucursalId, sucursalIdNum!)
+    : undefined
 
   const now = new Date()
   const year = yearQuery ? parseInt(yearQuery, 10) : now.getFullYear()
@@ -55,6 +61,7 @@ metricasRoute.get('/', async (c) => {
     .where(and(
       eq(PedidoUnificadoTable.restauranteId, restauranteId),
       eq(PedidoUnificadoTable.pagado, true),
+      sucursalFilter,
       // Nos aseguramos de contar solo cancelados/archivados/etc si fueron pagados, pero mejor solo excluir cancelados que no se cobraron. eq(pagado, true) asume ingresos reales.
     ))
 
@@ -73,7 +80,7 @@ metricasRoute.get('/', async (c) => {
       pedidosHistoricos: sql`COUNT(${PedidoUnificadoTable.id})`,
     })
     .from(PedidoUnificadoTable)
-    .where(eq(PedidoUnificadoTable.restauranteId, restauranteId))
+    .where(and(eq(PedidoUnificadoTable.restauranteId, restauranteId), sucursalFilter))
 
   const pedidosMensuales = parseInt(pedidosRes[0]?.pedidosMensuales as string || '0', 10)
   const pedidosMensualesPagados = parseInt(pedidosRes[0]?.pedidosMensualesPagados as string || '0', 10)
@@ -91,7 +98,8 @@ metricasRoute.get('/', async (c) => {
     .where(and(
       eq(PedidoUnificadoTable.restauranteId, restauranteId),
       eq(PedidoUnificadoTable.pagado, true),
-      periodFilter
+      periodFilter,
+      sucursalFilter
     ))
     .groupBy(PedidoUnificadoTable.metodoPago)
 
@@ -114,7 +122,8 @@ metricasRoute.get('/', async (c) => {
     .where(and(
       eq(PedidoUnificadoTable.restauranteId, restauranteId),
       eq(PedidoUnificadoTable.pagado, true),
-      periodFilter
+      periodFilter,
+      sucursalFilter
     ))
     .groupBy(ItemPedidoUnificadoTable.productoId, ProductoTable.nombre)
     .orderBy(sql`SUM(${ItemPedidoUnificadoTable.cantidad}) DESC`)
@@ -133,7 +142,8 @@ metricasRoute.get('/', async (c) => {
   const cobradosDelPeriodo = and(
     eq(PedidoUnificadoTable.restauranteId, restauranteId),
     eq(PedidoUnificadoTable.pagado, true),
-    periodFilter
+    periodFilter,
+    sucursalFilter
   )
   const numero = (valor: unknown) => {
     const n = Number(valor ?? 0)
