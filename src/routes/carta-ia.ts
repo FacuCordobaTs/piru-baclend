@@ -36,8 +36,7 @@ cartaIaRoute.get('/instructivo', (c) =>
   c.body(INSTRUCTIVO_CARTA_JSON, 200, {
     'Content-Type': 'text/markdown; charset=utf-8',
     'Content-Disposition': `attachment; filename="${INSTRUCTIVO_CARTA_JSON_ARCHIVO}"`,
-    // El instructivo cambia con cada versión: que el navegador no reutilice una copia vieja.
-    'Cache-Control': 'no-store',
+    'Cache-Control': 'public, max-age=3600',
     'X-Piru-Instructivo-Version': INSTRUCTIVO_CARTA_JSON_VERSION,
   }),
 )
