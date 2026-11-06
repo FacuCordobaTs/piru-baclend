@@ -47,6 +47,19 @@ describe('resolverImagenesProducto', () => {
     expect(r.huerfanas).toEqual([])
   })
 
+  test('acepta URLs propias del tenant ya subidas a R2', async () => {
+    const propia = 'https://cdn.piru.app/productos/7/abc.jpg'
+    const extra = 'https://cdn.piru.app/productos/7/def.jpg'
+    const r = await resolverImagenesProducto(
+      { image: propia, imagenesExtra: [propia, extra, 'https://cdn.piru.app/productos/8/otro.jpg'] },
+      { imagenUrl: null, imagenesExtra: [] },
+      guardar,
+      url => url.startsWith('https://cdn.piru.app/productos/7/'),
+    )
+    expect(r.imagenUrl).toBe(propia)
+    expect(r.imagenesExtra).toEqual([extra])
+  })
+
   test('ignora URLs ajenas y respeta el máximo', async () => {
     const r = await resolverImagenesProducto(
       { image: 'https://evil.example/x.png', imagenesExtra: ['https://evil.example/y.png', ...Array(8).fill(PNG)] },

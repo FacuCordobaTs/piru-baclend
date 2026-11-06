@@ -9,6 +9,8 @@ import { eq, and, inArray, like, notInArray, isNull, sql } from 'drizzle-orm'
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import UUID = require("uuid-js");
 import { errorImagenDataUrl, leerImagenesExtra, MAX_IMAGENES_EXTRA, resolverImagenesProducto } from '../lib/producto-imagenes'
+import { descargarImagenRemota, ImagenRemotaInvalida } from '../lib/imagenes-remotas'
+import { esImagenProductoPropia, guardarImagenProductoImportada } from '../lib/producto-imagenes-r2'
 
 
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
@@ -190,7 +192,7 @@ const createProductSchema = z.object({
   descripcion: z.string().max(255),
   precio: z.number().min(0),
   image: z.string().min(10).optional(),
-  /** Fotos adicionales en orden: data URL (se sube) o URL que el producto ya tenía (se conserva). */
+  /** Fotos adicionales en orden: data URL (se sube), URL que el producto ya tenía o URL propia de R2 (se conserva). */
   imagenesExtra: z.array(z.string().min(10)).max(MAX_IMAGENES_EXTRA + 1).optional(),
   eventoSucursalId: z.number().int().positive().nullable().optional(),
   categoriaId: z.number().nullable().optional(),
@@ -264,6 +266,37 @@ const updateProductSchema = z.object({
 const productoRoute = new Hono()
 
   .use('*', authMiddleware)
+
+  // Copia a R2 las fotos que vienen por URL (carta en JSON armada por un LLM).
+  // Devuelve una entrada por URL, con `imagenUrl` o `error`; el alta decide qué hacer
+  // con las que fallan sin abortar el resto.
+  .post('/imagenes/desde-url', zValidator('json', z.object({
+    urls: z.array(z.url({ protocol: /^https?$/i }).max(2048)).min(1).max(MAX_IMAGENES_EXTRA + 1),
+  })), async (c) => {
+    const restauranteId = (c as any).user.id
+    const { urls } = c.req.valid('json')
+    const imagenes: Array<{ url: string; imagenUrl?: string; error?: string }> = []
+
+    for (const url of urls) {
+      try {
+        if (esImagenProductoPropia(restauranteId, url)) {
+          imagenes.push({ url, imagenUrl: url })
+          continue
+        }
+        const descargada = await descargarImagenRemota(url)
+        const imagenUrl = await guardarImagenProductoImportada(restauranteId, descargada.contenido, descargada.mime)
+        imagenes.push({ url, imagenUrl })
+      } catch (error) {
+        if (!(error instanceof ImagenRemotaInvalida)) console.error('Error importando imagen de producto:', error)
+        imagenes.push({
+          url,
+          error: error instanceof ImagenRemotaInvalida ? error.message : 'No se pudo guardar la imagen',
+        })
+      }
+    }
+
+    return c.json({ success: true, imagenes }, 200)
+  })
 
   // Obtener todos los productos del restaurante
   .get('/', async (c) => {
@@ -407,7 +440,12 @@ const productoRoute = new Hono()
 
     const errorImagen = errorImagenesNuevas(image, imagenesExtra)
     if (errorImagen) return c.json({ success: false, message: errorImagen }, 400)
-    const imagenes = await resolverImagenesProducto({ image, imagenesExtra }, { imagenUrl: null, imagenesExtra: [] }, saveImage)
+    const imagenes = await resolverImagenesProducto(
+      { image, imagenesExtra },
+      { imagenUrl: null, imagenesExtra: [] },
+      saveImage,
+      url => esImagenProductoPropia(restauranteId, url),
+    )
     const newImageUrl = imagenes.imagenUrl ?? undefined
     const imagenesExtraGuardadas = imagenes.imagenesExtra ?? []
 
@@ -621,6 +659,7 @@ const productoRoute = new Hono()
       { image, eliminarImagen, imagenesExtra },
       { imagenUrl: productoActual.imagenUrl, imagenesExtra: leerImagenesExtra(productoActual.imagenesExtra) },
       saveImage,
+      url => esImagenProductoPropia(restauranteId, url),
     )
     huerfanas = imagenes.huerfanas
     const newImageUrl = imagenes.imagenUrl ?? undefined

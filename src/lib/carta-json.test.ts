@@ -65,6 +65,54 @@ describe('carta JSON importada', () => {
     expect(describirErroresCartaJson(secundarias.error!)).toContain('necesita variantes principales')
   })
 
+  test('normaliza la portada y las fotos extra sin duplicarlas', () => {
+    const carta = cartaJsonSchema.parse({
+      categorias: [{
+        nombre: 'Hamburguesas',
+        productos: [{
+          nombre: 'Doble cheddar',
+          precio: 8200,
+          imagenUrl: 'https://cdn.local/doble.jpg',
+          imagenesExtra: ['https://cdn.local/doble.jpg', 'https://cdn.local/doble-2.jpg'],
+        }],
+      }],
+    })
+    const producto = normalizarCartaJson(carta).categorias[0].productos[0] as any
+    expect(producto.imagenUrl).toBe('https://cdn.local/doble.jpg')
+    expect(producto.imagenesExtra).toEqual(['https://cdn.local/doble-2.jpg'])
+  })
+
+  test('si sólo llegan fotos extra, la primera pasa a ser portada', () => {
+    const carta = cartaJsonSchema.parse({
+      categorias: [{
+        nombre: 'Hamburguesas',
+        productos: [{ nombre: 'Doble cheddar', precio: 8200, imagenesExtra: ['https://cdn.local/a.jpg', 'https://cdn.local/b.jpg'] }],
+      }],
+    })
+    const producto = normalizarCartaJson(carta).categorias[0].productos[0] as any
+    expect(producto.imagenUrl).toBe('https://cdn.local/a.jpg')
+    expect(producto.imagenesExtra).toEqual(['https://cdn.local/b.jpg'])
+  })
+
+  test('rechaza URLs de imagen inválidas y más de 5 extras', () => {
+    const invalida = cartaJsonSchema.safeParse({
+      categorias: [{ nombre: 'Hamburguesas', productos: [{ nombre: 'Doble', imagenUrl: 'no-es-una-url' }] }],
+    })
+    expect(invalida.success).toBe(false)
+
+    const muchas = cartaJsonSchema.safeParse({
+      categorias: [{
+        nombre: 'Hamburguesas',
+        productos: [{
+          nombre: 'Doble',
+          imagenUrl: 'https://cdn.local/a.jpg',
+          imagenesExtra: Array.from({ length: 6 }, (_, i) => `https://cdn.local/${i}.jpg`),
+        }],
+      }],
+    })
+    expect(muchas.success).toBe(false)
+  })
+
   test('advierte categorías o productos repetidos y productos sin precio', () => {
     const carta = cartaJsonSchema.parse({
       categorias: [
@@ -81,6 +129,8 @@ describe('carta JSON importada', () => {
   test('el instructivo incluye el contrato y el ejemplo real', () => {
     expect(INSTRUCTIVO_CARTA_JSON).toContain('"categorias"')
     expect(INSTRUCTIVO_CARTA_JSON).toContain('variantesSecundarias')
+    expect(INSTRUCTIVO_CARTA_JSON).toContain('imagenUrl')
+    expect(INSTRUCTIVO_CARTA_JSON).toContain('imagenesExtra')
     expect(INSTRUCTIVO_CARTA_JSON).toContain(JSON.stringify(CARTA_JSON_EJEMPLO, null, 2))
     expect(INSTRUCTIVO_CARTA_JSON).toContain('sin bloques de Markdown')
     expect(INSTRUCTIVO_CARTA_JSON).toContain('Importar un JSON')

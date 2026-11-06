@@ -1,11 +1,12 @@
 import { z } from 'zod'
+import { MAX_IMAGENES_EXTRA } from './producto-imagenes'
 
 // ─── Contrato de la carta en JSON ───────────────────────────────────────────
 // Es el mismo que usa la extracción con IA, pero pensado para que lo genere un
 // LLM (o una persona) y se pueda importar desde el onboarding. El instructivo
 // descargable y la validación viven juntos para que nunca se desincronicen.
 
-export const INSTRUCTIVO_CARTA_JSON_VERSION = '1.0'
+export const INSTRUCTIVO_CARTA_JSON_VERSION = '1.1'
 export const INSTRUCTIVO_CARTA_JSON_ARCHIVO = 'carta-json-piru.md'
 
 const precioImportado = z.union([
@@ -37,6 +38,10 @@ export const productoCartaJsonSchema = z.object({
   tituloExtrasSecundarios: z.string().trim().min(1, 'El título no puede estar vacío').max(120).optional(),
   permiteNota: z.boolean().optional(),
   tituloNota: z.string().trim().min(1, 'El título no puede estar vacío').max(120).optional(),
+  /** Portada del producto: URL directa a una imagen que Piru descarga y copia a R2. */
+  imagenUrl: z.url({ protocol: /^https?$/i }).max(2048).optional(),
+  /** Fotos adicionales, en orden. La portada sigue siendo `imagenUrl`. */
+  imagenesExtra: z.array(z.url({ protocol: /^https?$/i }).max(2048)).max(MAX_IMAGENES_EXTRA).optional(),
 })
 
 export const categoriaCartaJsonSchema = z.object({
@@ -92,22 +97,30 @@ export function normalizarCartaJson(carta: CartaJson) {
     categorias: carta.categorias.map((categoria) => ({
       nombre: categoria.nombre.trim(),
       esBebida: categoria.esBebida === true,
-      productos: categoria.productos.map((producto) => ({
-        nombre: producto.nombre.trim(),
-        descripcion: producto.descripcion?.trim() || null,
-        precio: producto.precio == null ? null : Number(producto.precio),
-        ingredientes: (producto.ingredientes ?? []).map((ingrediente) => ingrediente.trim()).filter(Boolean),
-        variantes: opcionesNormalizadas(producto.variantes),
-        variantesSecundarias: producto.variantes?.length ? opcionesNormalizadas(producto.variantesSecundarias) : [],
-        extras: opcionesNormalizadas(producto.extras),
-        extrasSecundarios: opcionesNormalizadas(producto.extrasSecundarios),
-        tituloVariantesPrimarias: tituloNormalizado(producto.tituloVariantesPrimarias),
-        tituloVariantesSecundarias: tituloNormalizado(producto.tituloVariantesSecundarias),
-        tituloExtrasPrimarios: tituloNormalizado(producto.tituloExtrasPrimarios),
-        tituloExtrasSecundarios: tituloNormalizado(producto.tituloExtrasSecundarios),
-        permiteNota: producto.permiteNota === true,
-        tituloNota: tituloNormalizado(producto.tituloNota),
-      })),
+      productos: categoria.productos.map((producto) => {
+        const extras = [...new Set((producto.imagenesExtra ?? []).map((url) => url.trim()).filter(Boolean))]
+        let imagenUrl = producto.imagenUrl?.trim() || null
+        // Nunca dejamos una galería sin portada: si sólo vinieron extras, la primera es la tapa.
+        if (!imagenUrl && extras.length > 0) imagenUrl = extras.shift()!
+        return {
+          nombre: producto.nombre.trim(),
+          descripcion: producto.descripcion?.trim() || null,
+          precio: producto.precio == null ? null : Number(producto.precio),
+          imagenUrl,
+          imagenesExtra: extras.filter((url) => url !== imagenUrl).slice(0, MAX_IMAGENES_EXTRA),
+          ingredientes: (producto.ingredientes ?? []).map((ingrediente) => ingrediente.trim()).filter(Boolean),
+          variantes: opcionesNormalizadas(producto.variantes),
+          variantesSecundarias: producto.variantes?.length ? opcionesNormalizadas(producto.variantesSecundarias) : [],
+          extras: opcionesNormalizadas(producto.extras),
+          extrasSecundarios: opcionesNormalizadas(producto.extrasSecundarios),
+          tituloVariantesPrimarias: tituloNormalizado(producto.tituloVariantesPrimarias),
+          tituloVariantesSecundarias: tituloNormalizado(producto.tituloVariantesSecundarias),
+          tituloExtrasPrimarios: tituloNormalizado(producto.tituloExtrasPrimarios),
+          tituloExtrasSecundarios: tituloNormalizado(producto.tituloExtrasSecundarios),
+          permiteNota: producto.permiteNota === true,
+          tituloNota: tituloNormalizado(producto.tituloNota),
+        }
+      }),
     })),
   }
 }
@@ -171,6 +184,11 @@ export const CARTA_JSON_EJEMPLO: CartaJson = {
           nombre: 'Doble cheddar',
           descripcion: 'Dos medallones de carne, cheddar, cebolla y pan brioche.',
           ingredientes: ['carne', 'cheddar', 'cebolla', 'pan brioche'],
+          imagenUrl: 'https://images.ejemplo.com/doble-cheddar.jpg',
+          imagenesExtra: [
+            'https://images.ejemplo.com/doble-cheddar-2.jpg',
+            'https://images.ejemplo.com/doble-cheddar-3.jpg',
+          ],
           precio: null,
           variantes: [
             { nombre: 'Simple', precio: 6500 },
@@ -188,6 +206,7 @@ export const CARTA_JSON_EJEMPLO: CartaJson = {
         {
           nombre: 'Papas rústicas',
           descripcion: 'Papas con piel, crocantes y con sal marina.',
+          imagenUrl: 'https://images.ejemplo.com/papas-rusticas.jpg',
           precio: 4200,
           ingredientes: ['papa', 'sal marina'],
           extras: [{ nombre: 'Cheddar fundido', precio: 800 }],
@@ -216,7 +235,9 @@ Versión ${INSTRUCTIVO_CARTA_JSON_VERSION} · Piru
 Este archivo explica cómo convertir la carta de un local en el JSON que Piru
 importa durante el alta. Pegá este instructivo completo junto con la carta
 (fotos, texto, PDF o el menú de otra plataforma) y pedile a la IA que devuelva
-sólo el JSON.
+sólo el JSON. Si la IA puede acceder a las fotos de los productos, también
+puede incluirlas con \`imagenUrl\` e \`imagenesExtra\`; Piru las descarga y las
+guarda al importar.
 
 ## Regla principal
 
@@ -266,6 +287,8 @@ La carta necesita al menos una categoría y al menos un producto.
 | \`tituloExtrasSecundarios\` | texto | No | Título del segundo grupo de extras. |
 | \`permiteNota\` | booleano | No | \`true\` sólo si la carta permite aclaraciones. |
 | \`tituloNota\` | texto | No | Pregunta para la aclaración. |
+| \`imagenUrl\` | texto | No | URL directa de la foto principal. Tiene que empezar con \`http://\` o \`https://\` y apuntar al archivo de la imagen. |
+| \`imagenesExtra\` | lista de textos | No | Hasta 5 URLs directas de fotos adicionales. Si no mandás \`imagenUrl\`, la primera se usa como portada. |
 
 ### Opción (variantes y extras)
 
@@ -277,13 +300,27 @@ Cada elemento de \`variantes\`, \`variantesSecundarias\`, \`extras\` y
 | \`nombre\` | texto | Sí | Nombre de la opción. |
 | \`precio\` | número | Sí | Mayor o igual a 0, en pesos argentinos. |
 
+### Imágenes
+
+- \`imagenUrl\` es la portada del producto: la foto que se ve en la carta, el carrito y el POS.
+- \`imagenesExtra\` son fotos adicionales que se ven al abrir el detalle. Máximo 5.
+- Usá URLs **directas al archivo** de la imagen (por ejemplo terminadas en \`.jpg\`,
+  \`.png\` o \`.webp\`). No pongas la URL de la página del producto ni un enlace
+  que abra una galería.
+- Si no tenés una foto real del producto, omití \`imagenUrl\` y \`imagenesExtra\`.
+  No inventes URLs, no reutilices la foto de otro producto y no uses imágenes
+  genéricas o placeholders.
+- Piru descarga cada URL y la copia a su almacenamiento. Si una imagen falla, el
+  producto se crea igual, sin esa foto.
+
 ## Reglas de contenido
 
 1. **Precios como números.** Escribí \`7200\`, no \`"$ 7.200"\`, \`"7.200"\` ni
    \`"ARS 7.200"\`. Si hay decimales, usá punto: \`7200.50\`.
 2. **No inventes nada.** Extraé sólo productos, precios, descripciones,
-   ingredientes y opciones que estén en la carta. Si un dato no aparece, omitilo
-   o usá \`null\` cuando el campo lo permita.
+   ingredientes, opciones e imágenes que estén en la carta o en el menú de
+   origen. Si un dato no aparece, omitilo o usá \`null\` cuando el campo lo
+   permita.
 3. **Un precio único va en \`precio\`.** No armes una variante para un producto
    que tiene un solo precio.
 4. **Producto con variantes.** Cargá cada versión en \`variantes\` con su precio
@@ -311,9 +348,13 @@ Cada elemento de \`variantes\`, \`variantesSecundarias\`, \`extras\` y
     permite aclaraciones (por ejemplo, "sin cebolla").
 11. **Sin duplicados.** No repitas productos ni categorías. Si un producto
     aparece en dos secciones, elegí la sección principal.
-12. **Texto limpio.** Conservá acentos y mayúsculas. No agregues emojis,
+12. **Imágenes opcionales.** Incluí \`imagenUrl\` sólo si tenés la URL directa de
+    la foto de ese producto. Si el origen tiene varias, poné la principal en
+    \`imagenUrl\` y hasta 5 en \`imagenesExtra\`. Si no hay foto, omití los dos
+    campos: no completes con placeholders.
+13. **Texto limpio.** Conservá acentos y mayúsculas. No agregues emojis,
     viñetas, HTML ni campos que no estén en este instructivo (\`id\`, \`localId\`,
-    \`image\`, \`imagenUrl\`, \`etiquetas\`, etc.).
+    \`image\`, \`etiquetas\`, etc.).
 
 ## Ejemplo válido completo
 
@@ -350,6 +391,8 @@ recargo: 0 si está incluida.
 - [ ] \`variantesSecundarias\` sólo aparece si también hay \`variantes\`.
 - [ ] Las categorías de bebidas tienen \`esBebida: true\`.
 - [ ] No hay productos ni categorías duplicadas.
+- [ ] Si usaste imágenes, las URLs son directas y corresponden a ese producto.
+- [ ] No hay más de 5 \`imagenesExtra\` por producto.
 - [ ] No hay campos extra ni datos inventados.
 
 ## Cómo usar la respuesta en Piru
@@ -358,6 +401,7 @@ recargo: 0 si está incluida.
    (por ejemplo \`carta.json\`).
 2. En Piru, durante el alta, elegí **Cargá tu carta → Importar un JSON**.
 3. Subí el archivo o pegá el contenido y tocá **Importar carta**.
-4. Piru valida el JSON y te muestra los productos detectados en el paso de
-   revisión. Ahí podés editar cada producto antes de crearlo.
+4. Piru valida el JSON, descarga las fotos si incluiste URLs y te muestra los
+   productos detectados en el paso de revisión. Ahí podés editar cada producto
+   antes de crearlo.
 `

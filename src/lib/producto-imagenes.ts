@@ -50,18 +50,21 @@ export interface CambioImagenes {
 }
 
 /**
- * Resuelve lo que manda el admin. Cada entrada es un data URL (se sube) o una URL que el producto
+ * Resuelve lo que manda el admin. Cada entrada es un data URL (se sube), una URL que el producto
  * ya tenía como portada o extra (se conserva; así se puede reordenar o promover una extra a
- * portada). Una URL ajena se ignora: no se puede apuntar el producto a cualquier archivo.
+ * portada) o una URL propia del tenant ya subida a R2 (`esUrlPropia`). Una URL ajena se ignora:
+ * no se puede apuntar el producto a cualquier archivo.
  */
 export async function resolverImagenesProducto(
   entrada: { image?: string; eliminarImagen?: boolean; imagenesExtra?: string[] },
   previas: ImagenesPrevias,
   guardar: (dataUrl: string) => Promise<string>,
+  esUrlPropia: (url: string) => boolean = () => false,
 ): Promise<CambioImagenes> {
   const conocidas = new Set([previas.imagenUrl, ...previas.imagenesExtra].filter((u): u is string => !!u))
   const resolver = async (img: string): Promise<string | null> => {
     if (img.startsWith('data:')) return guardar(img)
+    if (esUrlPropia(img)) return img
     return conocidas.has(img) ? img : null
   }
 
