@@ -19,6 +19,7 @@ const dbFalsa = {
           const filas = tabla === 'restaurante' ? [local]
             : tabla === 'producto' ? [{
               id: 223, restaurante_id: 7, nombre: 'Milanesa', activo: true,
+              orden: 3,
               puntos_necesarios: puntos, puntos_ganados: puntos === null ? null : 12,
               solo_canje_puntos: soloCanjePuntos, soloCanjePuntos,
             }] : []
@@ -58,7 +59,7 @@ test('el perfil del admin conserva el canje configurado en el club y acota sus p
   const respuesta = await app.request('/api/restaurante/profile', { headers: { Authorization: `Bearer ${token}` } })
   expect(respuesta.status).toBe(200)
   const { data } = await respuesta.json()
-  expect(data.productos[0]).toMatchObject({ id: 223, puntosNecesarios: 700, puntosGanados: 12, soloCanjePuntos: true })
+  expect(data.productos[0]).toMatchObject({ id: 223, puntosNecesarios: 700, puntosGanados: 12, soloCanjePuntos: true, orden: 3 })
   expect(joinsPuntos.at(-1)?.sql).toContain('`producto_puntos`.`producto_id` = `producto`.`id`')
   expect(joinsPuntos.at(-1)?.sql).toContain('`producto_puntos`.`restaurante_id` = ?')
   expect(joinsPuntos.at(-1)?.params).toEqual([7])

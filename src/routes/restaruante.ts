@@ -162,6 +162,7 @@ restauranteRoute.get('/profile', async (c) => {
         eventoSucursalId: ProductoTable.eventoSucursalId,
         imagenUrl: ProductoTable.imagenUrl,
         createdAt: ProductoTable.createdAt,
+        orden: ProductoTable.orden,
         categoriaNombre: CategoriaTable.nombre,
         categoriaOrden: CategoriaTable.orden,
         categoriaEsBebida: CategoriaTable.esBebida,
@@ -182,6 +183,9 @@ restauranteRoute.get('/profile', async (c) => {
         eq(ProductoPuntosTable.restauranteId, restauranteId),
       ))
       .where(eq(ProductoTable.restauranteId, restauranteId))
+      // El admin y el POS muestran el catálogo en el orden manual que define el
+      // dueño con drag & drop (producto.orden, menor = primero).
+      .orderBy(ProductoTable.orden, ProductoTable.id)
 
     // Obtener todas las etiquetas del restaurante en una sola query
     const todasEtiquetas = await db
@@ -283,6 +287,7 @@ restauranteRoute.get('/profile', async (c) => {
       activo: p.activo,
       // El admin recarga este perfil después de guardar y lo usa en el POS.
       eventoSucursalId: p.eventoSucursalId,
+      orden: p.orden ?? 0,
       imagenUrl: p.imagenUrl,
       createdAt: p.createdAt,
       categoria: p.categoriaNombre || null,
