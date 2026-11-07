@@ -25,6 +25,7 @@ import {
   cartaJsonSchema,
   describirErroresCartaJson,
   normalizarCartaJson,
+  normalizarNegocioCartaJson,
 } from '../lib/carta-json'
 
 export const cartaIaRoute = new Hono()
@@ -61,6 +62,7 @@ cartaIaRoute.post('/importar', async (c) => {
   return c.json({
     success: true,
     carta,
+    negocio: normalizarNegocioCartaJson(resultado.data.negocio),
     totalProductos,
     avisos: avisosCartaJson(resultado.data),
   }, 200)

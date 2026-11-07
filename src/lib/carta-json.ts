@@ -6,7 +6,7 @@ import { MAX_IMAGENES_EXTRA } from './producto-imagenes'
 // LLM (o una persona) y se pueda importar desde el onboarding. El instructivo
 // descargable y la validación viven juntos para que nunca se desincronicen.
 
-export const INSTRUCTIVO_CARTA_JSON_VERSION = '1.1'
+export const INSTRUCTIVO_CARTA_JSON_VERSION = '1.2'
 export const INSTRUCTIVO_CARTA_JSON_ARCHIVO = 'carta-json-piru.md'
 
 const precioImportado = z.union([
@@ -50,8 +50,35 @@ export const categoriaCartaJsonSchema = z.object({
   productos: z.array(productoCartaJsonSchema).min(1, 'Cada categoría necesita al menos un producto').max(500),
 })
 
+/**
+ * WhatsApp del local en formato internacional argentino (54 + 9 + área + número).
+ * Tolera espacios, guiones, "+", el 0 del área y el 15 del celular más comunes.
+ */
+export function normalizarTelefonoNegocio(valor: string | null | undefined): string | null {
+  let digitos = (valor ?? '').replace(/\D/g, '')
+  if (!digitos) return null
+  if (digitos.startsWith('00')) digitos = digitos.slice(2)
+  if (digitos.startsWith('0')) digitos = digitos.slice(1)
+  if (!digitos.startsWith('54')) digitos = `54${digitos}`
+  if (!/^549/.test(digitos)) digitos = `549${digitos.slice(2)}`
+  return /^\d{12,13}$/.test(digitos) ? digitos : null
+}
+
+/** Datos del local que acompañan a la carta: con ellos el alta se completa sola. */
+export const negocioCartaJsonSchema = z.object({
+  nombre: z.string().trim().min(1).max(255).nullish(),
+  telefono: z.string().trim().max(40).nullish()
+    .refine((tel) => !tel || normalizarTelefonoNegocio(tel) !== null, 'Usá el WhatsApp con código de área (ej: 5493511234567)'),
+  direccion: z.string().trim().min(1).max(255).nullish(),
+  lat: z.number().min(-90).max(90).nullish(),
+  lng: z.number().min(-180).max(180).nullish(),
+  /** URL directa al logo; Piru lo descarga y lo copia a R2 como las fotos de producto. */
+  logoUrl: z.url({ protocol: /^https?$/i }).max(2048).nullish(),
+})
+
 export const cartaJsonSchema = z
   .object({
+    negocio: negocioCartaJsonSchema.optional(),
     categorias: z.array(categoriaCartaJsonSchema).min(1, 'La carta necesita al menos una categoría').max(100),
   })
   .superRefine((carta, ctx) => {
@@ -79,6 +106,21 @@ export const cartaJsonSchema = z
 
 export type CartaJson = z.infer<typeof cartaJsonSchema>
 export type ProductoCartaJson = z.infer<typeof productoCartaJsonSchema>
+
+/** Normaliza los datos del local. Devuelve `null` si no vino ningún dato útil. */
+export function normalizarNegocioCartaJson(negocio: CartaJson['negocio']) {
+  if (!negocio) return null
+  const conCoordenadas = negocio.lat != null && negocio.lng != null
+  const normalizado = {
+    nombre: negocio.nombre?.trim() || null,
+    telefono: normalizarTelefonoNegocio(negocio.telefono),
+    direccion: negocio.direccion?.trim() || null,
+    lat: conCoordenadas ? negocio.lat! : null,
+    lng: conCoordenadas ? negocio.lng! : null,
+    logoUrl: negocio.logoUrl?.trim() || null,
+  }
+  return Object.values(normalizado).some((valor) => valor != null) ? normalizado : null
+}
 
 const clave = (texto: string) => texto.trim().toLowerCase()
 
@@ -175,6 +217,14 @@ export function describirErroresCartaJson(error: z.ZodError): string {
 
 // ─── Ejemplo usado en el instructivo (y validado por los tests) ─────────────
 export const CARTA_JSON_EJEMPLO: CartaJson = {
+  negocio: {
+    nombre: 'Burger Ejemplo',
+    telefono: '5493511234567',
+    direccion: 'Av. Colón 1234, Córdoba',
+    lat: -31.4135,
+    lng: -64.1973,
+    logoUrl: 'https://images.ejemplo.com/logo-burger-ejemplo.png',
+  },
   categorias: [
     {
       nombre: 'Hamburguesas',
@@ -233,19 +283,43 @@ export const INSTRUCTIVO_CARTA_JSON = `# Instructivo para que una IA arme la car
 Versión ${INSTRUCTIVO_CARTA_JSON_VERSION} · Piru
 
 Este archivo explica cómo convertir la carta de un local en el JSON que Piru
-importa durante el alta. Pegá este instructivo completo junto con la carta
-(fotos, texto, PDF o el menú de otra plataforma) y pedile a la IA que devuelva
-sólo el JSON. Si la IA puede acceder a las fotos de los productos, también
-puede incluirlas con \`imagenUrl\` e \`imagenesExtra\`; Piru las descarga y las
-guarda al importar.
+importa durante el alta. Con ese JSON, Piru crea la tienda sola: carga la
+carta con sus fotos, el nombre, el logo, la dirección y el WhatsApp del local.
+
+## Cómo te van a usar (agentes con acceso a archivos y web)
+
+Te van a pasar **este archivo + un link** del local (Google Maps, Instagram,
+PedidosYa, Rappi, su web, una foto de la carta, etc.). Tu trabajo:
+
+1. Abrí el link y todas las fuentes públicas que encuentres del local (su
+   perfil de Google Maps, Instagram, web propia, apps de delivery) para
+   conseguir la carta completa, las fotos, el logo, la dirección y el teléfono.
+2. Armá el JSON siguiendo este instructivo.
+3. **Guardalo como archivo** en la misma carpeta donde está este instructivo,
+   con el nombre \`<nombre-del-local-en-minúsculas-sin-espacios>-carta.json\`
+   (por ejemplo \`burgerejemplo-carta.json\`). Validá que sea JSON válido
+   (por ejemplo con \`python3 -m json.tool archivo.json\`).
+4. En el chat respondé un resumen corto: ruta del archivo, nombre del local,
+   **el teléfono/WhatsApp que encontraste y de dónde lo sacaste** (o que no lo
+   encontraste), dirección, si conseguiste el logo, cantidad de categorías,
+   productos y fotos.
+
+Si no tenés acceso a archivos (por ejemplo, en un chat), devolvé sólo el JSON
+como se explica abajo.
 
 ## Regla principal
 
-Devolvé **un único objeto JSON válido**, sin texto antes ni después, sin
-comentarios y sin bloques de Markdown (\`\`\`json). El objeto tiene que tener
-exactamente esta forma general:
+El contenido del archivo es **un único objeto JSON válido**, sin texto antes ni
+después, sin comentarios y sin bloques de Markdown (\`\`\`json). El objeto tiene
+que tener exactamente esta forma general:
 
 {
+  "negocio": {
+    "nombre": "Burger Ejemplo",
+    "telefono": "5493511234567",
+    "direccion": "Av. Colón 1234, Córdoba",
+    "logoUrl": "https://images.ejemplo.com/logo.png"
+  },
   "categorias": [
     {
       "nombre": "Hamburguesas",
@@ -260,6 +334,29 @@ exactamente esta forma general:
 La carta necesita al menos una categoría y al menos un producto.
 
 ## Estructura completa
+
+### Negocio (opcional, pero muy recomendado)
+
+| Campo | Tipo | Obligatorio | Reglas |
+| --- | --- | --- | --- |
+| \`nombre\` | texto | No | Nombre comercial del local, como lo muestra en su cartel o Instagram. |
+| \`telefono\` | texto | No | WhatsApp para pedidos en formato \`549\` + código de área sin 0 + número sin 15. Ej: \`5493511234567\`. |
+| \`direccion\` | texto | No | Calle, altura y ciudad. Ej: \`"Av. Colón 1234, Córdoba"\`. |
+| \`lat\` / \`lng\` | números | No | Coordenadas del local. Mandá las dos o ninguna. |
+| \`logoUrl\` | texto | No | URL directa al archivo del logo (\`.jpg\`, \`.png\`, \`.webp\`). |
+
+- **Teléfono.** Es el dato más importante: con él Piru crea la tienda sin
+  preguntar nada. Buscalo en el perfil de Google Maps, la bio o los botones
+  de Instagram, links \`wa.me/\` o \`api.whatsapp.com/send?phone=\`, la web del
+  local o la carta. Preferí el número de WhatsApp de pedidos. Si sólo hay un
+  fijo, ponelo igual con su código de área. Si no lo encontrás, omití el campo:
+  nunca inventes un número.
+- **Dirección.** Usá la del local físico (Google Maps es la mejor fuente). Si la
+  URL de Google Maps tiene \`@-31.41,-64.19\`, esos son \`lat\` y \`lng\`. Si el
+  local es sólo delivery y no publica dirección, omitila.
+- **Logo.** Usá la foto de perfil de Instagram o el logo de su web / app de
+  delivery, en la mayor resolución disponible. Tiene que ser la URL del archivo
+  de imagen, no la de la página. Si no encontrás el logo real, omitilo.
 
 ### Categoría
 
@@ -393,6 +490,8 @@ recargo: 0 si está incluida.
 - [ ] No hay productos ni categorías duplicadas.
 - [ ] Si usaste imágenes, las URLs son directas y corresponden a ese producto.
 - [ ] No hay más de 5 \`imagenesExtra\` por producto.
+- [ ] Si encontraste el WhatsApp, está en \`negocio.telefono\` con formato \`549...\`.
+- [ ] El logo y la dirección son del local real (o se omitieron).
 - [ ] No hay campos extra ni datos inventados.
 
 ## Cómo usar la respuesta en Piru
@@ -404,4 +503,8 @@ recargo: 0 si está incluida.
 4. Piru valida el JSON, descarga las fotos si incluiste URLs y te muestra los
    productos detectados en el paso de revisión. Ahí podés editar cada producto
    antes de crearlo.
+
+En el alta interna (**Crear tienda**) alcanza con subir el archivo: si trae
+\`negocio.telefono\`, la tienda se crea con ese WhatsApp y el onboarding arranca
+con el nombre, el logo, la dirección y la carta ya cargados.
 `

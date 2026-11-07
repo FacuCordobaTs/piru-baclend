@@ -13,6 +13,7 @@ import { sembrarDatosEjemplo } from '../lib/datos-ejemplo-db'
 
 import { actualizarTienda, ImagenTiendaInvalida } from '../lib/tienda-config'
 import { imagenesTienda } from '../lib/tienda-imagenes-r2'
+import { esImagenProductoPropia } from '../lib/producto-imagenes-r2'
 
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID
@@ -178,6 +179,16 @@ onboardingRoute.put('/complete', zValidator('json', completeOnboardingSchema), a
     if (data.imageDark && data.imageDark.startsWith('data:image')) {
       if (currentRestaurante[0].imagenUrl) await deleteImage(currentRestaurante[0].imagenUrl)
       updateData.imagenUrl = await saveImage(data.imageDark)
+    }
+
+    // Logo importado desde el JSON de la carta: ya está copiado a R2 bajo este local.
+    if (data.imageLight && esImagenProductoPropia(restauranteId, data.imageLight)
+      && data.imageLight !== currentRestaurante[0].imagenLightUrl) {
+      updateData.imagenLightUrl = data.imageLight
+    }
+    if (data.imageDark && esImagenProductoPropia(restauranteId, data.imageDark)
+      && data.imageDark !== currentRestaurante[0].imagenUrl) {
+      updateData.imagenUrl = data.imageDark
     }
 
     const persistir = async (config?: unknown) => {

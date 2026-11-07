@@ -6,6 +6,8 @@ import {
   cartaJsonSchema,
   describirErroresCartaJson,
   normalizarCartaJson,
+  normalizarNegocioCartaJson,
+  normalizarTelefonoNegocio,
 } from './carta-json'
 
 describe('carta JSON importada', () => {
@@ -134,5 +136,24 @@ describe('carta JSON importada', () => {
     expect(INSTRUCTIVO_CARTA_JSON).toContain(JSON.stringify(CARTA_JSON_EJEMPLO, null, 2))
     expect(INSTRUCTIVO_CARTA_JSON).toContain('sin bloques de Markdown')
     expect(INSTRUCTIVO_CARTA_JSON).toContain('Importar un JSON')
+  })
+
+  test('normaliza los datos del negocio y el WhatsApp', () => {
+    const carta = cartaJsonSchema.parse(CARTA_JSON_EJEMPLO)
+    expect(normalizarNegocioCartaJson(carta.negocio)).toEqual({
+      nombre: 'Burger Ejemplo',
+      telefono: '5493511234567',
+      direccion: 'Av. Colón 1234, Córdoba',
+      lat: -31.4135,
+      lng: -64.1973,
+      logoUrl: 'https://images.ejemplo.com/logo-burger-ejemplo.png',
+    })
+    expect(normalizarTelefonoNegocio('+54 9 351 123-4567')).toBe('5493511234567')
+    expect(normalizarTelefonoNegocio('0351 1234567')).toBe('5493511234567')
+    expect(normalizarTelefonoNegocio('123')).toBeNull()
+    expect(normalizarNegocioCartaJson({ lat: -31 })).toBeNull()
+    expect(cartaJsonSchema.safeParse({ ...CARTA_JSON_EJEMPLO, negocio: { telefono: '12' } }).success).toBe(false)
+    expect(INSTRUCTIVO_CARTA_JSON).toContain('logoUrl')
+    expect(INSTRUCTIVO_CARTA_JSON).toContain('-carta.json')
   })
 })
