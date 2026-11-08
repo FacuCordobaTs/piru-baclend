@@ -12,6 +12,7 @@
     "bcrypt": "^6.0.0",
     "dotenv": "^17.2.1",
     "drizzle-orm": "^0.44.4",
+    "fflate": "^0.8.3",
     "google-auth-library": "^10.2.1",
     "hono": "^4.8.12",
     "jsonwebtoken": "^9.0.3",

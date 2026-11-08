@@ -50,6 +50,7 @@ import { internoRoute } from './routes/interno';
 import { marketingLocalRoute } from './routes/marketing-local';
 import { demoPanelRoute } from './routes/demo-panel';
 import { datosEjemploRoute } from './routes/datos-ejemplo';
+import { prospeccionRoute } from './routes/prospeccion';
 import { demoSigueAbierta } from './lib/demo-panel';
 import { puedeSocketAdmin } from './lib/sesiones-app';
 import { claimRoute } from './routes/claim';
@@ -282,6 +283,7 @@ app.basePath('/api')
   .route('/marketing-local', marketingLocalRoute)
   .route('/demo-panel', demoPanelRoute)
   .route('/datos-ejemplo', datosEjemploRoute)
+  .route('/prospeccion', prospeccionRoute)
 // IMPORTANT: Admin WebSocket endpoint MUST come BEFORE /ws/:qrToken
 // because :qrToken would match "admin" as a token
 app.get(

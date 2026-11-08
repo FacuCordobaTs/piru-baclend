@@ -148,6 +148,9 @@ export const restaurante = mysqlTable("restaurante", {
   // Cómo nació la cuenta. 'self_serve' = registro/onboarding normal (default, no cambia nada del
   // flujo actual). 'outbound' = tienda demo que arma el fundador y el dueño "reclama" por link.
   origen: mysqlEnum("origen", ["self_serve", "outbound"]).default("self_serve").notNull(),
+  // Clave idempotente de las tiendas que crea el servidor de prospección (`/api/prospeccion/*`).
+  // NULL en el resto de los locales. Migración `add_restaurante_prospecto_ref.sql`.
+  prospectoRef: varchar("prospecto_ref", { length: 64 }).unique(),
   // Token único del link de reclamo (admin.piru.app/mi-tienda/{claimToken}). Nullable: sólo las
   // tiendas outbound a las que se les generó link lo tienen. Se limpia (o expira) al reclamarse.
   claimToken: varchar("claim_token", { length: 64 }).unique(),
