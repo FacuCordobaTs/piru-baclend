@@ -7,6 +7,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { pool } from '../db'
 import { categoria, producto, restaurante, sitioAsset, sitioTienda, sitioVersion } from '../db/schema'
 import { esProspectoSinReclamar } from '../lib/demo-panel'
+import { buildClaimUrl, claimTokenVigente, generarClaimLink } from '../lib/claim'
 import { descargarImagenRemota } from '../lib/imagenes-remotas'
 import { normalizarCartaJson, normalizarNegocioCartaJson } from '../lib/carta-json'
 import { guardarImagenProductoImportada } from '../lib/producto-imagenes-r2'
@@ -352,6 +353,24 @@ export const prospeccionRoute = new Hono()
       estado: publicada ? 'publicada' : 'creada',
       url: urlTienda(local.username, publicada),
     })
+  })
+
+  // La misma guía para Claude que descarga el dueño en Páginas.
+  // Link de reclamo para mandarle al dueño cuando acepta la demo. Reutiliza el vigente.
+  .post('/tiendas/:id{[0-9]+}/claim', async (c) => {
+    const local = await tiendaProspecto(idDe(c))
+    if (!local) return c.json({ error: 'Tienda no encontrada o ya reclamada' }, 404)
+    const [fila] = await db()
+      .select({ claimToken: restaurante.claimToken, claimTokenExpira: restaurante.claimTokenExpira })
+      .from(restaurante)
+      .where(eq(restaurante.id, local.id))
+      .limit(1)
+    if (!fila) return c.json({ error: 'Tienda no encontrada' }, 404)
+    if (fila.claimToken && claimTokenVigente(fila)) {
+      return c.json({ url: buildClaimUrl(fila.claimToken), venceEn: fila.claimTokenExpira })
+    }
+    const claim = await generarClaimLink(db(), local.id)
+    return c.json({ url: claim.url, venceEn: claim.expira })
   })
 
   // La misma guía para Claude que descarga el dueño en Páginas.
