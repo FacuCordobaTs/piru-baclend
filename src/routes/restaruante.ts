@@ -45,7 +45,7 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/jpg"]
 
 function moduloRequerido(c: Context, modulo: ModuleKey, message: string) {
-  return c.json({ success: false, moduleRequired: true, module, upgradeRequired: true, message }, 403)
+  return c.json({ success: false, moduleRequired: true, module: modulo, upgradeRequired: true, message }, 403)
 }
 
 async function saveImage(base64String: string): Promise<string> {
@@ -1083,16 +1083,21 @@ restauranteRoute.put('/metodos-pago', zValidator('json', updateMetodosPagoSchema
       return c.json({ message: 'Restaurante no encontrado', success: false }, 404)
     }
 
-    if ((body.mercadopagoCheckout !== undefined || body.mercadopagoBricks !== undefined)
-      && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MERCADOPAGO))) {
-      return moduloRequerido(c, MODULE_KEYS.MERCADOPAGO, 'Activá el módulo Mercado Pago para cambiar sus métodos de cobro')
+    const base = resolveMetodosPagoConfig(current as any)
+
+    // Los gates se aplican sólo al activar un medio. Editar otro dato (el alias
+    // de la transferencia manual, por ejemplo) no debe exigir un módulo ajeno.
+    const activaMercadoPago = (body.mercadopagoCheckout === true && !base.mercadopagoCheckout)
+      || (body.mercadopagoBricks === true && !base.mercadopagoBricks)
+    if (activaMercadoPago && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.MERCADOPAGO))) {
+      return moduloRequerido(c, MODULE_KEYS.MERCADOPAGO, 'Activá el módulo Mercado Pago para cobrar online')
     }
-    if (body.transferenciaAutomatica !== undefined && current.proveedorPago === 'talo'
-      && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.TALO))) {
-      return moduloRequerido(c, MODULE_KEYS.TALO, 'Activá el módulo Talo para cambiar su cobro automático')
+    const activaTalo = body.transferenciaAutomatica === true && !base.transferenciaAutomatica
+      && current.proveedorPago === 'talo'
+    if (activaTalo && !(await tieneModuloActivo(db, restauranteId, MODULE_KEYS.TALO))) {
+      return moduloRequerido(c, MODULE_KEYS.TALO, 'Activá el módulo Talo para usar su cobro automático')
     }
 
-    const base = resolveMetodosPagoConfig(current as any)
     const next: MetodosPagoConfig = { ...base }
     if (body.mercadopagoCheckout !== undefined) next.mercadopagoCheckout = body.mercadopagoCheckout
     if (body.mercadopagoBricks !== undefined) next.mercadopagoBricks = body.mercadopagoBricks
