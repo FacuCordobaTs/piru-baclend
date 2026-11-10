@@ -240,6 +240,9 @@ export const zonaEspecial = mysqlTable("zona_especial", {
   precio: decimal("precio", { precision: 10, scale: 2 }).default("0.00").notNull(),
   horaInicio: varchar("hora_inicio", { length: 5 }).notNull(), // "HH:mm"
   horaFin: varchar("hora_fin", { length: 5 }).notNull(), // "HH:mm"
+  // Días de reparto como "0,3" (0 = domingo). La zona sólo se ofrece esos días y
+  // hora_inicio/hora_fin delimitan cuándo se aceptan pre-pedidos.
+  diasReparto: varchar("dias_reparto", { length: 20 }).default("0,1,2,3,4,5,6").notNull(),
   activa: boolean("activa").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [

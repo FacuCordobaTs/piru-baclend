@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  esDiaDeReparto,
   estadoVentanaZona,
+  parsearDiasReparto,
   horarioValido,
   mensajeLlegadaZona,
   minutosDeHora,
@@ -61,16 +63,37 @@ describe('pre-pedidos de zona especial', () => {
     expect(resultado).toMatchObject({ permitido: true, esPreOrden: false })
   })
 
-  test('fuera de la ventana exige la opción de pre-pedidos', () => {
-    expect(puedePedirZonaEspecial(zona, {
-      ahora: dia(21),
-      pedidosPreOrdenadosHabilitados: false,
-    })).toMatchObject({ permitido: false, motivo: 'fuera_de_ventana' })
-
+  test('fuera de la ventana no se pide, aunque haya pre-pedidos', () => {
     expect(puedePedirZonaEspecial(zona, {
       ahora: dia(21),
       pedidosPreOrdenadosHabilitados: true,
-    })).toMatchObject({ permitido: true, esPreOrden: true })
+    })).toMatchObject({ permitido: false, motivo: 'fuera_de_ventana' })
+  })
+
+  test('sólo se pide en los días de reparto', () => {
+    // 28/10/2026 es miércoles (3).
+    const soloJueves = { ...zona, diasReparto: '4' }
+    expect(esDiaDeReparto(soloJueves, dia(18))).toBe(false)
+    expect(puedePedirZonaEspecial(soloJueves, {
+      ahora: dia(18),
+      pedidosPreOrdenadosHabilitados: true,
+    })).toMatchObject({ permitido: false, motivo: 'fuera_de_ventana' })
+    expect(estadoVentanaZona(soloJueves, dia(18)).ventana.esManana).toBe(true)
+
+    const soloMiercoles = { ...zona, diasReparto: '3' }
+    expect(esDiaDeReparto(soloMiercoles, dia(18))).toBe(true)
+    expect(puedePedirZonaEspecial(soloMiercoles, {
+      ahora: dia(18),
+      pedidosPreOrdenadosHabilitados: false,
+    })).toMatchObject({ permitido: true })
+    // Pasada la ventana del miércoles, la próxima es el miércoles siguiente.
+    expect(estadoVentanaZona(soloMiercoles, dia(21)).ventana.inicio.getDate()).toBe(4)
+  })
+
+  test('parsea los días de reparto', () => {
+    expect(parsearDiasReparto('3,0,3')).toEqual([0, 3])
+    expect(parsearDiasReparto('')).toEqual([0, 1, 2, 3, 4, 5, 6])
+    expect(parsearDiasReparto(null)).toEqual([0, 1, 2, 3, 4, 5, 6])
   })
 
   test('con el local cerrado sólo se pide si hay pre-pedidos', () => {

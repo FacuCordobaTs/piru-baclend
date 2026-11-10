@@ -20,6 +20,8 @@ import {
   horarioValido,
   mensajeLlegadaZona,
   normalizarHora,
+  parsearDiasReparto,
+  serializarDiasReparto,
   telefonoWaMe,
   urlWaMe,
 } from '../lib/zonas-especiales'
@@ -32,12 +34,14 @@ const zonaEspecialRoute = new Hono()
 zonaEspecialRoute.use('*', authMiddleware, requireModulo(MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP))
 
 const horaSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Usá el formato HH:mm')
+const diasRepartoSchema = z.array(z.number().int().min(0).max(6)).min(1, 'Elegí al menos un día de reparto')
 
 const createZonaSchema = z.object({
   nombre: z.string().trim().min(1, 'El nombre es requerido').max(255),
   precio: z.union([z.string(), z.number()]),
   horaInicio: horaSchema,
   horaFin: horaSchema,
+  diasReparto: diasRepartoSchema.optional(),
   activa: z.boolean().optional().default(true),
 })
 
@@ -46,6 +50,7 @@ const updateZonaSchema = z.object({
   precio: z.union([z.string(), z.number()]).optional(),
   horaInicio: horaSchema.optional(),
   horaFin: horaSchema.optional(),
+  diasReparto: diasRepartoSchema.optional(),
   activa: z.boolean().optional(),
 })
 
@@ -168,6 +173,7 @@ zonaEspecialRoute.get('/', async (c) => {
           : null
         return {
           ...zona,
+          diasReparto: parsearDiasReparto(zona.diasReparto),
           enVentana: estado?.enVentana ?? false,
           proximaVentana: estado?.ventana.etiqueta ?? null,
           pedidosPendientes: porZona.get(zona.id)?.size ?? 0,
@@ -251,6 +257,7 @@ zonaEspecialRoute.post('/create', zValidator('json', createZonaSchema), async (c
       precio: precio.toFixed(2),
       horaInicio: normalizarHora(data.horaInicio)!,
       horaFin: normalizarHora(data.horaFin)!,
+      ...(data.diasReparto ? { diasReparto: serializarDiasReparto(data.diasReparto) } : {}),
       activa: data.activa,
     })
     const [zona] = await db
@@ -258,7 +265,7 @@ zonaEspecialRoute.post('/create', zValidator('json', createZonaSchema), async (c
       .from(ZonaEspecialTable)
       .where(eq(ZonaEspecialTable.id, Number(result[0].insertId)))
       .limit(1)
-    return c.json({ success: true, data: zona, message: 'Zona especial creada' }, 201)
+    return c.json({ success: true, data: { ...zona, diasReparto: parsearDiasReparto(zona?.diasReparto) }, message: 'Zona especial creada' }, 201)
   } catch (error) {
     console.error('Error creando zona especial:', error)
     return c.json({ success: false, message: 'No se pudo crear la zona especial' }, 500)
@@ -292,6 +299,7 @@ zonaEspecialRoute.put('/:id', zValidator('json', updateZonaSchema), async (c) =>
   }
   if (data.horaInicio !== undefined) update.horaInicio = normalizarHora(data.horaInicio)!
   if (data.horaFin !== undefined) update.horaFin = normalizarHora(data.horaFin)!
+  if (data.diasReparto !== undefined) update.diasReparto = serializarDiasReparto(data.diasReparto)
   if (data.activa !== undefined) update.activa = data.activa
 
   const horaInicioFinal = (update.horaInicio as string | undefined) ?? existente.horaInicio
@@ -307,7 +315,7 @@ zonaEspecialRoute.put('/:id', zValidator('json', updateZonaSchema), async (c) =>
   try {
     await db.update(ZonaEspecialTable).set(update).where(eq(ZonaEspecialTable.id, zonaId))
     const [zona] = await db.select().from(ZonaEspecialTable).where(eq(ZonaEspecialTable.id, zonaId)).limit(1)
-    return c.json({ success: true, data: zona, message: 'Zona especial actualizada' }, 200)
+    return c.json({ success: true, data: { ...zona, diasReparto: parsearDiasReparto(zona?.diasReparto) }, message: 'Zona especial actualizada' }, 200)
   } catch (error) {
     console.error('Error actualizando zona especial:', error)
     return c.json({ success: false, message: 'No se pudo actualizar la zona especial' }, 500)

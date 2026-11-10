@@ -38,7 +38,7 @@ import { resolverBonusPuntosPedido } from '../lib/puntos-beneficios-pedido'
 import { salirDeColaPorPedido } from '../lib/motor-recompra'
 import { atribuirPedidoMarketingBestEffort } from '../lib/marketing-atribucion'
 import { aplicarOfertaProducto, ofertaProductoEstaVigente, type OfertaProductoCampana } from '../lib/campana-oferta'
-import { estadoVentanaZona, horarioValido, puedePedirZonaEspecial } from '../lib/zonas-especiales'
+import { esDiaDeReparto, estadoVentanaZona, horarioValido, puedePedirZonaEspecial } from '../lib/zonas-especiales'
 import { crearLimitador } from '../lib/carrito-publico'
 import { geocodificarDireccion } from '../services/geocoding'
 
@@ -586,7 +586,11 @@ const obtenerRestaurantePublico = async (c: Context) => {
                         eq(ZonaEspecialTable.activa, true),
                     ))
                     .orderBy(ZonaEspecialTable.nombre, ZonaEspecialTable.id)
-                zonasEspeciales = zonasRaw.filter(horarioValido).map((zona) => {
+                // Fuera de sus días de reparto la zona no se ofrece: la opción
+                // country sólo aparece los días que el local reparte.
+                zonasEspeciales = zonasRaw
+                    .filter((zona) => horarioValido(zona) && esDiaDeReparto(zona, ahoraZonasEspeciales))
+                    .map((zona) => {
                     const estado = estadoVentanaZona(zona, ahoraZonasEspeciales)
                     return {
                         id: zona.id,
@@ -1006,8 +1010,10 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
             if (!decision.permitido) {
                 return c.json({
                     message: decision.motivo === 'fuera_de_ventana'
-                        ? 'La zona especial no está en su horario de entrega. El local todavía no habilitó los pre-pedidos.'
-                        : 'La zona especial no está disponible en este momento.',
+                        ? `Los pre-pedidos para este country se toman ${decision.ventana?.etiqueta.replace(/^(\S)/, (l) => l.toLowerCase()) ?? 'en su día de reparto'}.`
+                        : decision.motivo === 'local_cerrado'
+                            ? 'El local está cerrado y todavía no habilitó los pre-pedidos.'
+                            : 'La zona especial no está disponible en este momento.',
                     success: false,
                 }, 400)
             }
@@ -1160,9 +1166,9 @@ publicRoute.post('/delivery/create', zValidator('json', createDeliverySchema), a
         const direccionEntrega = zonaEspecialSeleccionada
             ? `Country · ${zonaEspecialSeleccionada.nombre}`.slice(0, 255)
             : direccion!.trim()
-        const horarioEntregaFinal = zonaEspecialSeleccionada
-            ? `${zonaEspecialSeleccionada.horaInicio}-${zonaEspecialSeleccionada.horaFin}`
-            : horarioProgramado
+        // En countries el horario de la zona es para pre-pedir, no de entrega: la
+        // entrega se avisa por WhatsApp cuando el pedido está en camino.
+        const horarioEntregaFinal = zonaEspecialSeleccionada ? null : horarioProgramado
 
         if (zonaEspecialSeleccionada) {
             deliveryFeeAplicado = parseFloat(zonaEspecialSeleccionada.precio)
