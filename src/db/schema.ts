@@ -12,6 +12,7 @@ import {
   datetime,
   boolean,
   decimal,
+  date,
   mysqlEnum,
   json,
   index,
@@ -224,8 +225,26 @@ export const repartidor = mysqlTable("repartidor", {
   restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
   nombre: varchar("nombre", { length: 255 }).notNull(),
   estado: mysqlEnum("estado", ["activo", "inactivo"]).default("activo").notNull(),
+  // Liquidación del cadete: importe por envío asignado y fijo por día trabajado.
+  // Un feriado tiene prioridad sobre fin de semana. Ver lib/repartidor-pagos.ts.
+  precioEnvio: decimal("precio_envio", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  pagoDiaHabil: decimal("pago_dia_habil", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  pagoFinDeSemana: decimal("pago_fin_de_semana", { precision: 10, scale: 2 }).default("0.00").notNull(),
+  pagoFeriado: decimal("pago_feriado", { precision: 10, scale: 2 }).default("0.00").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// Feriados propios del local (puentes turísticos, feriados locales). Los
+// nacionales se calculan por ley en lib/feriados-ar.ts y no se duplican acá.
+export const feriado = mysqlTable("feriado", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id, { onDelete: "cascade" }).notNull(),
+  fecha: date("fecha", { mode: "string" }).notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_feriado_restaurante_fecha").on(table.restauranteId, table.fecha),
+]);
 
 // Zonas especiales: countries, barrios cerrados o puntos de entrega con una
 // ventana horaria fija (por ejemplo 17:00–20:00). No son polígonos: el cliente
