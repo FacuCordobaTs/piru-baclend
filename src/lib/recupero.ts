@@ -857,7 +857,7 @@ export async function prepararMensajeRecupero(
       ...(puntosDisponibles && puedeBonusPuntos ? [{
         modalidad: 'puntos' as ModalidadLink,
         titulo: 'Volver sumando puntos',
-        descripcion: 'Abre su pedido y le suma puntos extra al cobrarse. No lleva descuento: cuida el margen.',
+        descripcion: 'Abre su pedido y le suma puntos extra al despacharse. No lleva descuento: cuida el margen.',
         esActual: link === 'puntos',
       }] : []),
     ],

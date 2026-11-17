@@ -317,7 +317,7 @@ export function recomendarPuntosParaRecompra(solicitud: SolicitudSugerenciaPunto
 export function lineaBonusPuntos(puntos: number, compraMinima = 0): string {
   const cantidad = Math.max(0, Math.trunc(puntos))
   const desde = compraMinima > 0 ? ` en un pedido desde ${formatearPesos(compraMinima)}` : ''
-  return `Sumás ${cantidad} puntos extra${desde}. Se acreditan al cobrarse el pedido.`
+  return `Sumás ${cantidad} puntos extra${desde}. Se acreditan al despacharse el pedido.`
 }
 
 /** Para el cliente que todavía no tiene saldo: una invitación concreta a entrar al club. */

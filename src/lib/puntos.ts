@@ -244,8 +244,31 @@ export async function registrarTransaccionPuntos(
 }
 
 /**
- * Acredita de manera idempotente los puntos ganados por un pedido cuyo pago fue confirmado,
+ * Estados en los que el pedido ya salió del local. Los puntos se suman recién ahí:
+ * "Despachar" deja el pedido en `archived`; `dispatched` y `delivered` los escriben la
+ * integración de cadetes (Rapiboy) y los flujos de entrega.
+ */
+export const ESTADOS_PEDIDO_DESPACHADO = ['dispatched', 'delivered', 'archived'] as const
+
+export function esEstadoPedidoDespachado(estado?: string | null): boolean {
+  return !!estado && (ESTADOS_PEDIDO_DESPACHADO as readonly string[]).includes(estado)
+}
+
+/**
+ * Regla del club: un pedido suma puntos recién cuando fue despachado. El cobro no es la
+ * condición: el local opera con el botón "Despachar" y puede cobrar en efectivo al entregar.
+ * Antes de despacharse no corresponde acreditar nada.
+ */
+export function correspondeAcreditarPuntos(pedido: { estado?: string | null }): boolean {
+  return esEstadoPedidoDespachado(pedido.estado)
+}
+
+/**
+ * Acredita de manera idempotente los puntos ganados por un pedido ya despachado,
  * más el bonus de puntos que el alta del pedido resolvió (campaña o link personal).
+ *
+ * Los cobros (webhook, POS, QR) pueden invocarla antes del despacho: en ese momento no
+ * acredita nada; la acreditación ocurre cuando el pedido pasa a un estado de despacho.
  *
  * El bonus se registra con `claveIdempotencia = pedido-bonus:<id>`: un webhook repetido o un
  * reintento del POS nunca lo duplica, y el pedido puede acreditar la compra y el bonus en dos
@@ -258,6 +281,7 @@ export async function acreditarPuntosPedidoAprobado(db: any, pedidoId: number): 
         id: PedidoUnificadoTable.id,
         restauranteId: PedidoUnificadoTable.restauranteId,
         clienteId: PedidoUnificadoTable.clienteId,
+        estado: PedidoUnificadoTable.estado,
         puntosGanados: PedidoUnificadoTable.puntosGanados,
         puntosBonus: PedidoUnificadoTable.puntosBonus,
         puntosBonusClave: PedidoUnificadoTable.puntosBonusClave,
@@ -268,6 +292,7 @@ export async function acreditarPuntosPedidoAprobado(db: any, pedidoId: number): 
       .limit(1)
 
     if (!pedido || !pedido.clienteId) return false
+    if (!correspondeAcreditarPuntos(pedido)) return false
     const puntosCompra = Math.max(0, Number(pedido.puntosGanados) || 0)
     const puntosBonus = Math.max(0, Number(pedido.puntosBonus) || 0)
     if (puntosCompra <= 0 && puntosBonus <= 0) return false
@@ -599,7 +624,7 @@ export interface ResumenPuntosData {
   canjesDescuento: number
   puntosOtorgados30Dias: number
   canjes30Dias: number
-  /** Puntos extra de campañas/links, acreditados al cobrarse el pedido. */
+  /** Puntos extra de campañas/links, acreditados al despacharse el pedido. */
   puntosPromocionales: number
   otorgamientosPromocionales: number
   puntosPromocionales30Dias: number

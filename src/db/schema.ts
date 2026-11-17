@@ -760,7 +760,7 @@ export const marketingCampana = mysqlTable("marketing_campana", {
   // Oferta simple de producto. Es independiente de codigo_descuento porque el
   // beneficio se aplica únicamente al producto de la campaña, no al carrito.
   descuentoProductoPorcentaje: int("descuento_producto_porcentaje").default(0).notNull(),
-  // Beneficio del link: descuento (oferta de producto) o puntos extra acreditados al cobrar.
+  // Beneficio del link: descuento (oferta de producto) o puntos extra acreditados al despachar.
   // Son excluyentes: un link nunca promete las dos cosas.
   beneficioTipo: mysqlEnum("beneficio_tipo", ["descuento", "puntos"]).default("descuento").notNull(),
   puntosBeneficio: int("puntos_beneficio").default(0).notNull(),

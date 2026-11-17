@@ -48,7 +48,7 @@ import {
 import { requirePosEnSucursal, requirePosDelPedido } from '../middleware/pos-evento'
 import { requireModulo } from '../middleware/modulo'
 import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
-import { acreditarPuntosPedidoAprobado, revertirPuntosPedidoCancelado } from '../lib/puntos'
+import { acreditarPuntosPedidoAprobado, esEstadoPedidoDespachado, revertirPuntosPedidoCancelado } from '../lib/puntos'
 import { consumirMensaje, estadoEnvioUtility, avisarSaldoBajoSiCorresponde } from '../lib/mensajes-wallet'
 import { asegurarOwnerStaff } from '../lib/staff'
 import { asegurarTurnoAbierto, cerrarTurnoActual, listarTurnos, obtenerTurno, TurnoCajaDesactualizadoError } from '../lib/turnos-caja'
@@ -1187,6 +1187,14 @@ const pedidoUnificadoRoute = new Hono()
     if (estado === 'cancelled') {
       void revertirPuntosPedidoCancelado(db, pedidoId).catch((err) =>
         console.error('Error revirtiendo puntos en cancelación de pedido:', err)
+      )
+    }
+
+    // El club suma recién cuando el pedido sale del local: éste es el único momento
+    // en que se acreditan los puntos (y el bonus) del pedido.
+    if (esEstadoPedidoDespachado(estado)) {
+      void acreditarPuntosPedidoAprobado(db, pedidoId).catch((err) =>
+        console.error('Error acreditando puntos al despachar el pedido:', err)
       )
     }
 

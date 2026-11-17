@@ -19,7 +19,7 @@ import { consultarPagoTalo } from '../services/talo'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { procesarMensajeIA, notificarPagoConfirmadoWhatsApp } from '../services/whatsapp-ia'
 import { procesarComandoOptOut } from '../lib/proteccion-base'
-import { acreditarPuntosPedidoAprobado } from '../lib/puntos'
+import { acreditarPuntosPedidoAprobado, esEstadoPedidoDespachado } from '../lib/puntos'
 import { crearRespuestaAlfajor, RESTAURANTE_ALFAJOR, restauranteDeAtencionWhatsApp } from '../services/whatsapp-alfajor'
 
 const webhookRoute = new Hono()
@@ -610,6 +610,14 @@ webhookRoute.post('/rapiboy', async (c) => {
 
         if (changedSomething && pedido.restauranteId !== null) {
             await db.update(PedidoUnificadoTable).set(updateData).where(eq(PedidoUnificadoTable.id, pedidoId));
+
+            // El club suma recién cuando el pedido ya salió del local: este cambio
+            // de estado es el que habilita la acreditación de puntos y bonus.
+            if (esEstadoPedidoDespachado(nuevoEstadoInterno)) {
+                void acreditarPuntosPedidoAprobado(db, pedidoId).catch((err) =>
+                    console.error('Error acreditando puntos al despachar por Rapiboy:', err)
+                )
+            }
 
             // Actualizar a los administradores
             await emitirEventoPedido(db, {

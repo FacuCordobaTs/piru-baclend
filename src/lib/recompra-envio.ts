@@ -79,7 +79,7 @@ export interface EntradaEnvioRecompra {
 /**
  * Resuelve el envío. El descuento a mano gana sobre el propuesto, y `lo-mismo` lo apaga: ese link
  * abre el drawer de un toque, sin banner ni cupón, así que un `%` ahí sería un descuento anunciado
- * que nadie cobra. Un envío con puntos tampoco lleva `%`: el bonus se acredita al cobrar el pedido.
+ * que nadie cobra. Un envío con puntos tampoco lleva `%`: el bonus se acredita al despachar el pedido.
  */
 export function resolverEnvioRecompra(e: EntradaEnvioRecompra): DecisionEnvioRecompra {
   const beneficioBase = resolverBeneficioRecompra(e.escalon, e.receta, e.esRecetaRecomendada)

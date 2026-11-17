@@ -5,7 +5,7 @@
 //
 // El cliente no decide cuántos puntos recibe: el monto viaja firmado dentro del token del link
 // (AES-GCM) o sale de la campaña en la base. El navegador sólo puede decir "entré por este link".
-// El bonus se acredita recién cuando `acreditarPuntosPedidoAprobado` ve el pedido pagado.
+// El bonus se acredita recién cuando `acreditarPuntosPedidoAprobado` ve el pedido despachado.
 
 import { and, eq, gte, gt, ne, sql } from 'drizzle-orm'
 import {
