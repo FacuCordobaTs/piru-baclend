@@ -258,19 +258,25 @@ async function armarTienda(id: number, username: string, t: TiendaProspecto, avi
   return { sitioId: Number(creado.json?.id) }
 }
 
+/** Despublica el sitio y borra sus versiones y assets. Deja la fila del sitio para que la borre o reinicie quien llama. */
+async function limpiarSitio(sitio: typeof sitioTienda.$inferSelect) {
+  try {
+    await almacenCloudflare.borrarManifiesto(sitio.slug)
+    marcarDespublicado(sitio.slug)
+    await almacenCloudflare.purgar(sitio.slug)
+  } catch (e) {
+    console.error('[prospeccion] No se pudo despublicar el sitio', sitio.slug, e)
+  }
+  await db().update(sitioTienda).set({ versionPublicadaId: null }).where(eq(sitioTienda.id, sitio.id))
+  await db().delete(sitioAsset).where(eq(sitioAsset.sitioId, sitio.id))
+  await db().delete(sitioVersion).where(eq(sitioVersion.sitioId, sitio.id))
+}
+
 /** Borra una tienda de este canal: sitio publicado, filas del sitio y el local con todo lo suyo. */
 async function borrarTienda(id: number) {
   const sitio = await sitioDe(id)
   if (sitio) {
-    try {
-      await almacenCloudflare.borrarManifiesto(sitio.slug)
-      marcarDespublicado(sitio.slug)
-      await almacenCloudflare.purgar(sitio.slug)
-    } catch (e) {
-      console.error('[prospeccion] No se pudo despublicar el sitio', sitio.slug, e)
-    }
-    await db().delete(sitioAsset).where(eq(sitioAsset.sitioId, sitio.id))
-    await db().delete(sitioVersion).where(eq(sitioVersion.sitioId, sitio.id))
+    await limpiarSitio(sitio)
     await db().delete(sitioTienda).where(eq(sitioTienda.id, sitio.id))
   }
   const secreto = process.env.INTERNO_JWT_SECRET
@@ -418,6 +424,20 @@ export const prospeccionRoute = new Hono()
       const pub = await llamar(token, 'POST', `/api/sitios/${sitio.id}/publicar`)
       if (!pub.ok) throw new PasoFallido(mensajesDe(pub, 'Compilación'))
       return c.json({ ok: true, url: urlTienda(local.username, true), numero: pub.json?.numero, advertencias: pub.json?.advertencias ?? [], ignorados: diseno.ignorados })
+    } catch (e) {
+      return falla(c, e)
+    }
+  })
+
+  // Borra sólo el diseño: despublica la página y vuelve el borrador a la plantilla. El local, los productos y las fotos quedan.
+  .delete('/tiendas/:id{[0-9]+}/diseno', async (c) => {
+    const local = await tiendaProspecto(idDe(c))
+    const sitio = local && (await sitioDe(local.id))
+    if (!local || !sitio) return c.json({ error: 'Tienda no encontrada' }, 404)
+    try {
+      await limpiarSitio(sitio)
+      await exigir('Reinicio', await llamar(sesionLocal(local.id, { appSitios: true }), 'POST', `/api/sitios/${sitio.id}/reiniciar`, {}))
+      return c.json({ ok: true, url: urlTienda(local.username, false) })
     } catch (e) {
       return falla(c, e)
     }
