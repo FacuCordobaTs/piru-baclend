@@ -110,24 +110,19 @@ describe('esquema pendiente', () => {
 describe('primeros pasos', () => {
   const base: DatosPasos = {
     productos: 0, whatsapp: null, horarios: 0, zonas: 0, deliveryEnabled: false, takeawayEnabled: true,
-    direccion: null, mpConnected: false, transferenciaAlias: null, tieneSitio: false, disenoEnPlan: false,
+    direccion: null, mpConnected: false, transferenciaAlias: null,
   }
   test('una tienda recién creada sólo tiene hecho "Crear tienda"', () => {
     const pasos = calcularPasos(base)
     expect(pasos.filter((p) => p.hecho).map((p) => p.id)).toEqual(['crear_tienda'])
     expect(resumenPasos(pasos)).toEqual({ completados: 1, total: 6, terminado: false })
+    expect(pasos.map((p) => p.id)).not.toContain('diseno')
   })
-  test('en Inicial el diseño es opcional y no frena terminar', () => {
+  test('con productos, WhatsApp, horarios, retiro y alias la tienda queda lista', () => {
     const pasos = calcularPasos({
       ...base, productos: 3, whatsapp: '5493511234567', horarios: 7, direccion: 'Calle 1', transferenciaAlias: 'mi.alias',
     })
-    expect(resumenPasos(pasos).terminado).toBe(true)
-    expect(pasos.find((p) => p.id === 'diseno')).toEqual({ id: 'diseno', hecho: false, opcional: true })
-  })
-  test('con Esencial el diseño cuenta y se completa al crear la página', () => {
-    const conPlan = { ...base, disenoEnPlan: true }
-    expect(calcularPasos(conPlan).find((p) => p.id === 'diseno')).toEqual({ id: 'diseno', hecho: false, opcional: false })
-    expect(calcularPasos({ ...conPlan, tieneSitio: true }).find((p) => p.id === 'diseno')?.hecho).toBe(true)
+    expect(resumenPasos(pasos)).toEqual({ completados: 6, total: 6, terminado: true })
   })
   test('entregas: delivery necesita zonas; retiro necesita la dirección', () => {
     expect(calcularPasos({ ...base, deliveryEnabled: true, takeawayEnabled: false, zonas: 0 }).find((p) => p.id === 'entregas')?.hecho).toBe(false)

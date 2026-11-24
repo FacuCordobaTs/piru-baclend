@@ -9,22 +9,26 @@ import {
   horarioRestaurante as HorarioTable,
   producto as ProductoTable,
   restaurante as RestauranteTable,
-  sitioTienda as SitioTiendaTable,
   zonaDelivery as ZonaDeliveryTable,
 } from '../db/schema'
 
 type Db = MySql2Database<Record<string, never>>
 
-export type PasoId = 'crear_tienda' | 'productos' | 'whatsapp' | 'horarios' | 'entregas' | 'pagos' | 'diseno'
+/**
+ * El diseño no es un paso: no hace falta para vender. La pantalla lo ofrece aparte, con un acceso
+ * directo a Páginas (o a los planes, en Inicial).
+ */
+export type PasoId = 'crear_tienda' | 'productos' | 'whatsapp' | 'horarios' | 'entregas' | 'pagos'
 
 export interface Paso {
   id: PasoId
   hecho: boolean
-  /** Un paso opcional no cuenta para terminar (por ejemplo, el diseño en el plan Inicial). */
+  /** Un paso opcional no cuenta para terminar. */
   opcional: boolean
 }
 
 export interface DatosPasos {
+  /** Productos propios: los de ejemplo no cuentan como carta cargada. */
   productos: number
   whatsapp: string | null
   horarios: number
@@ -34,8 +38,6 @@ export interface DatosPasos {
   direccion: string | null
   mpConnected: boolean
   transferenciaAlias: string | null
-  tieneSitio: boolean
-  disenoEnPlan: boolean
 }
 
 /** Política pura de cada paso. */
@@ -54,7 +56,6 @@ export function calcularPasos(d: DatosPasos): Paso[] {
       opcional: false,
     },
     { id: 'pagos', hecho: d.mpConnected || texto(d.transferenciaAlias), opcional: false },
-    { id: 'diseno', hecho: d.disenoEnPlan && d.tieneSitio, opcional: !d.disenoEnPlan },
   ]
 }
 
@@ -64,7 +65,7 @@ export function resumenPasos(pasos: Paso[]) {
   return { completados, total: obligatorios.length, terminado: completados === obligatorios.length }
 }
 
-export async function leerDatosPasos(db: Db, restauranteId: number, disenoEnPlan: boolean): Promise<DatosPasos | null> {
+export async function leerDatosPasos(db: Db, restauranteId: number): Promise<DatosPasos | null> {
   const [local] = await db
     .select({
       telefono: RestauranteTable.telefono,
@@ -80,12 +81,15 @@ export async function leerDatosPasos(db: Db, restauranteId: number, disenoEnPlan
     .limit(1)
   if (!local) return null
 
-  const [[productos], [horarios], [zonas], [sitio]] = await Promise.all([
+  const [[productos], [horarios], [zonas]] = await Promise.all([
     db.select({ n: count() }).from(ProductoTable)
-      .where(and(eq(ProductoTable.restauranteId, restauranteId), isNull(ProductoTable.eventoSucursalId))),
+      .where(and(
+        eq(ProductoTable.restauranteId, restauranteId),
+        isNull(ProductoTable.eventoSucursalId),
+        eq(ProductoTable.esEjemplo, false),
+      )),
     db.select({ n: count() }).from(HorarioTable).where(eq(HorarioTable.restauranteId, restauranteId)),
     db.select({ n: count() }).from(ZonaDeliveryTable).where(eq(ZonaDeliveryTable.restauranteId, restauranteId)),
-    db.select({ id: SitioTiendaTable.id }).from(SitioTiendaTable).where(eq(SitioTiendaTable.restauranteId, restauranteId)).limit(1),
   ])
 
   return {
@@ -98,7 +102,5 @@ export async function leerDatosPasos(db: Db, restauranteId: number, disenoEnPlan
     direccion: local.direccion,
     mpConnected: Boolean(local.mpConnected),
     transferenciaAlias: local.transferenciaAlias,
-    tieneSitio: Boolean(sitio),
-    disenoEnPlan,
   }
 }

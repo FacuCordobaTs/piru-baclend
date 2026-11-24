@@ -148,6 +148,10 @@ export const restaurante = mysqlTable("restaurante", {
   // los que arma interno conservan la suscripción y los módulos de siempre, sin restricciones. Sólo
   // el registro self-serve crea locales en 'inicial'. Ver lib/planes-tienda.ts y docs/PLANES_TIENDA.md.
   planTienda: varchar("plan_tienda", { length: 32 }).default("evolucion").notNull(),
+  // Rubro que el dueño eligió al configurar su tienda self-serve (cafeteria, rotiseria,
+  // hamburgueseria, pizzeria, otro). NULL = todavía no respondió las preguntas iniciales.
+  // Ver lib/productos-ejemplo.ts y migración `add_productos_ejemplo.sql`.
+  rubro: varchar("rubro", { length: 30 }),
 
   // ── Claim flow (onboarding outbound) — ver docs/AUTH_AND_ONBOARDING.md ──
   // Cómo nació la cuenta. 'self_serve' = registro/onboarding normal (default, no cambia nada del
@@ -520,6 +524,9 @@ export const producto = mysqlTable("producto", {
   tituloNota: varchar("titulo_nota", { length: 120 }).default("¿Querés aclarar algo?").notNull(),
   // Orden manual de aparición dentro de su categoría (menor = primero). Configurable por el restaurante (drag & drop).
   orden: int("orden").default(0).notNull(),
+  // Producto de ejemplo sembrado al configurar la tienda (lib/productos-ejemplo.ts): el panel lo
+  // marca y no cuenta como carta propia; el dueño los quita todos juntos.
+  esEjemplo: boolean("es_ejemplo").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   // Permite que las entidades Growth referencien producto junto con su tenant.
@@ -548,6 +555,8 @@ export const categoria = mysqlTable("categoria", {
   esBebida: boolean("es_bebida").default(false).notNull(),
   // Orden manual de aparición en la carta (menor = primero).
   orden: int("orden").default(0).notNull(),
+  // Categoría creada junto con los productos de ejemplo: se borra con ellos si quedó vacía.
+  esEjemplo: boolean("es_ejemplo").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("idx_categoria_restaurante_orden").on(table.restauranteId, table.orden, table.id),

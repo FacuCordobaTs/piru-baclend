@@ -1,11 +1,15 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
+import { eq } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
+import { restaurante as RestauranteTable } from '../db/schema'
 import { authMiddleware } from '../middleware/auth'
-import { ESTADOS_SUSCRIPCION_CON_ACCESO, planIncluyeModuloDe } from '../lib/modulos'
+import { ESTADOS_SUSCRIPCION_CON_ACCESO } from '../lib/modulos'
 import { calcularPasos, leerDatosPasos, resumenPasos } from '../lib/primeros-pasos'
+import { RUBROS } from '../lib/productos-ejemplo'
+import { configurarTiendaInicial, contarProductosEjemplo } from '../lib/productos-ejemplo-db'
 import {
   esPlanPago,
   PLAN_CODIGOS,
@@ -70,15 +74,56 @@ export const planesTiendaRoute = new Hono()
     const restauranteId = (c as any).user.id as number
     try {
       const { plan } = await estadoDelLocal(restauranteId)
-      const datos = await leerDatosPasos(db() as any, restauranteId, planIncluyeModuloDe(plan, 'diseno_personalizado'))
-      if (!datos) return c.json({ success: false, message: 'Local no encontrado' }, 404)
+      const [datos, [local], productosEjemplo] = await Promise.all([
+        leerDatosPasos(db() as any, restauranteId),
+        db().select({ rubro: RestauranteTable.rubro }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1),
+        contarProductosEjemplo(db() as any, restauranteId),
+      ])
+      if (!datos || !local) return c.json({ success: false, message: 'Local no encontrado' }, 404)
       const pasos = calcularPasos(datos)
-      return c.json({ success: true, data: { visible: !plan.esLegado, pasos, ...resumenPasos(pasos) } })
+      return c.json({
+        success: true,
+        data: {
+          visible: !plan.esLegado,
+          pasos,
+          ...resumenPasos(pasos),
+          // Sin rubro, el dueño todavía no respondió las preguntas iniciales (`/configurar-tienda`).
+          configurada: local.rubro != null,
+          productosEjemplo,
+        },
+      })
     } catch (error) {
       console.error('[planes-tienda] Error calculando primeros pasos:', error)
       return c.json({ success: false, message: 'No se pudieron calcular los pasos' }, 500)
     }
   })
+
+  /**
+   * Preguntas iniciales de la tienda self-serve (rubro y formas de entrega). Guarda las respuestas y,
+   * con la carta vacía, la arranca con productos de ejemplo del rubro (`lib/productos-ejemplo.ts`).
+   */
+  .post(
+    '/configuracion-inicial',
+    zValidator(
+      'json',
+      z
+        .object({ rubro: z.enum(RUBROS), delivery: z.boolean(), takeaway: z.boolean() })
+        .refine((d) => d.delivery || d.takeaway, { message: 'Elegí al menos una forma de entrega' }),
+    ),
+    async (c) => {
+      const restauranteId = (c as any).user.id as number
+      if ((c as any).user.demo) return c.json({ success: false, code: 'demo_sin_permiso', message: 'En la demo no se configura la tienda' }, 403)
+      try {
+        const { plan } = await estadoDelLocal(restauranteId)
+        if (plan.esLegado) return c.json({ success: false, code: 'plan_legado', message: 'Tu tienda ya está configurada.' }, 409)
+        const data = await configurarTiendaInicial(db() as any, restauranteId, c.req.valid('json'))
+        return c.json({ success: true, data })
+      } catch (error) {
+        console.error('[planes-tienda] Error en la configuración inicial:', error)
+        return c.json({ success: false, message: 'No se pudo configurar la tienda' }, 500)
+      }
+    },
+  )
 
   /**
    * Elegir un plan. Pago: crea la factura y devuelve el link de Mercado Pago (el plan cambia recién

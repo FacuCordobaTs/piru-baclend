@@ -11,6 +11,7 @@ import UUID = require("uuid-js");
 import { errorImagenDataUrl, leerImagenesExtra, MAX_IMAGENES_EXTRA, resolverImagenesProducto } from '../lib/producto-imagenes'
 import { descargarImagenRemota, ImagenRemotaInvalida } from '../lib/imagenes-remotas'
 import { esImagenProductoPropia, guardarImagenProductoImportada } from '../lib/producto-imagenes-r2'
+import { quitarProductosEjemplo } from '../lib/productos-ejemplo-db'
 
 
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
@@ -325,6 +326,7 @@ const productoRoute = new Hono()
         permiteNota: ProductoTable.permiteNota,
         tituloNota: ProductoTable.tituloNota,
         orden: ProductoTable.orden,
+        esEjemplo: ProductoTable.esEjemplo,
         createdAt: ProductoTable.createdAt,
         categoria: {
           id: CategoriaTable.id,
@@ -1265,6 +1267,15 @@ const productoRoute = new Hono()
       eliminados: aEliminar.length,
       bloqueados: bloqueados.map(p => p.nombre),
     }, 200)
+  })
+
+  // Quitar los productos de ejemplo de la tienda nueva (lib/productos-ejemplo-db.ts). Los que ya
+  // se usaron en un pedido quedan desactivados, como en el borrado normal.
+  .delete('/ejemplos', async (c) => {
+    const restauranteId = (c as any).user.id
+    const resultado = await quitarProductosEjemplo(drizzle(pool) as any, restauranteId)
+    await Promise.all(resultado.imagenes.map(deleteImage))
+    return c.json({ success: true, borrados: resultado.borrados, desactivados: resultado.desactivados }, 200)
   })
 
   .delete('/delete/:id', async (c) => {

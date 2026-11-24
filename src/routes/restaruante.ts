@@ -163,6 +163,7 @@ restauranteRoute.get('/profile', async (c) => {
         imagenUrl: ProductoTable.imagenUrl,
         createdAt: ProductoTable.createdAt,
         orden: ProductoTable.orden,
+        esEjemplo: ProductoTable.esEjemplo,
         categoriaNombre: CategoriaTable.nombre,
         categoriaOrden: CategoriaTable.orden,
         categoriaEsBebida: CategoriaTable.esBebida,
