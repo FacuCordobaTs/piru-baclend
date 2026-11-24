@@ -453,6 +453,41 @@ export function crearRecompraTandasRoute() {
     return c.json({ success: true, data: await leerTanda(db, restauranteId, tandaId) }, 201)
   })
 
+  // Cancelar una tanda la borra entera: sus mensajes, y los cupones y links de los que no se
+  // mandaron. Los clientes vuelven a quedar disponibles para otra tanda (no cuentan como contactados).
+  // Los mensajes ya enviados conservan su cupón y su link, porque el cliente ya los tiene.
+  route.delete('/:id', zValidator('param', z.object({ id: z.coerce.number().int().positive() })), async (c: any) => {
+    const restauranteId = c.user.id as number
+    const id = Number(c.req.valid('param').id)
+    const [tanda] = await db.select({ id: TandaTable.id }).from(TandaTable)
+      .where(and(eq(TandaTable.restauranteId, restauranteId), eq(TandaTable.id, id))).limit(1)
+    if (!tanda) return c.json({ success: false, message: 'Tanda no encontrada' }, 404)
+    const mensajes = await db.select({
+      estado: MensajeTable.estado, enlaceId: MensajeTable.enlaceId, codigoDescuentoId: MensajeTable.codigoDescuentoId,
+    }).from(MensajeTable).where(and(eq(MensajeTable.restauranteId, restauranteId), eq(MensajeTable.tandaId, id)))
+    const sinMandar = mensajes.filter((m) => m.estado !== 'enviado')
+    const enlaces = sinMandar.flatMap((m) => (m.enlaceId ? [m.enlaceId] : []))
+    const cupones = sinMandar.flatMap((m) => (m.codigoDescuentoId ? [m.codigoDescuentoId] : []))
+    await db.transaction(async (tx) => {
+      await tx.delete(MensajeTable).where(and(eq(MensajeTable.restauranteId, restauranteId), eq(MensajeTable.tandaId, id)))
+      if (enlaces.length) {
+        await tx.delete(MarketingEnlaceTable).where(and(eq(MarketingEnlaceTable.restauranteId, restauranteId), inArray(MarketingEnlaceTable.id, enlaces)))
+      }
+      if (cupones.length) {
+        // Un cupón sin usar se borra; si alguien llegó a usarlo, se apaga para no romper el pedido.
+        await tx.update(CodigoDescuentoTable).set({ activo: false })
+          .where(and(eq(CodigoDescuentoTable.restauranteId, restauranteId), inArray(CodigoDescuentoTable.id, cupones)))
+        await tx.delete(CodigoDescuentoTable).where(and(
+          eq(CodigoDescuentoTable.restauranteId, restauranteId),
+          inArray(CodigoDescuentoTable.id, cupones),
+          eq(CodigoDescuentoTable.usosActuales, 0),
+        )).catch(() => undefined)
+      }
+      await tx.delete(TandaTable).where(and(eq(TandaTable.restauranteId, restauranteId), eq(TandaTable.id, id)))
+    })
+    return c.json({ success: true })
+  })
+
   route.get('/:id', zValidator('param', z.object({ id: z.coerce.number().int().positive() })), async (c: any) => {
     const tanda = await leerTanda(db, c.user.id, Number(c.req.valid('param').id))
     if (!tanda) return c.json({ success: false, message: 'Tanda no encontrada' }, 404)
