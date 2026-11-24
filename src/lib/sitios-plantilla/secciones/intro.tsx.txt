@@ -9,14 +9,16 @@ type Props = {
   frase: string
   mostrarLogo: boolean
   duracion: "corta" | "normal" | "larga"
+  /** siempre: cada vez que se abre la página. sesion: una vez por visita. */
+  repetir: "siempre" | "sesion"
 }
 
 const DURACION = { corta: 1900, normal: 2900, larga: 3900 }
 const SUAVE = [0.22, 1, 0.36, 1] as const
 
 /**
- * La intro: una pantalla que se abre sobre toda la página cada vez que se entra (logo, nombre letra
- * por letra y una frase) y se levanta como un telón. Cada tema la viste con sus reglas
+ * La intro: una pantalla que se abre sobre toda la página al entrar (cada vez o una vez por visita;
+ * logo, nombre letra por letra y una frase) y se levanta como un telón. Cada tema la viste con sus reglas
  * `.pv-<tema> .pv-intro-*`. Se saltea con un toque y no aparece si el visitante pidió menos movimiento.
  * En el editor se ve igual que publicada: al cargar, al cambiar sus propiedades y con «Ver la intro»,
  * desde una franja angosta que marca dónde está la sección.
@@ -26,7 +28,16 @@ export function Intro({ seccion }: PropsSeccion) {
   const { local } = useLocal()
   const { isPreview } = useSitio()
   const quieto = useReducedMotion()
-  const [abierta, setAbierta] = useState(!quieto)
+  const clave = `piru-intro:${local?.nombre ?? ""}`
+  const [abierta, setAbierta] = useState(() => {
+    if (quieto) return false
+    if (isPreview || p.repetir !== "sesion") return true
+    try {
+      return !sessionStorage.getItem(clave)
+    } catch {
+      return true
+    }
+  })
   const ms = DURACION[p.duracion ?? "normal"] ?? DURACION.normal
   const firma = JSON.stringify(seccion.props ?? {})
 
@@ -37,6 +48,13 @@ export function Intro({ seccion }: PropsSeccion) {
 
   useEffect(() => {
     if (!abierta) return
+    if (!isPreview) {
+      try {
+        sessionStorage.setItem(clave, "1")
+      } catch {
+        /* sin almacenamiento: se ve igual */
+      }
+    }
     const previo = document.documentElement.style.overflow
     document.documentElement.style.overflow = "hidden"
     const t = window.setTimeout(() => setAbierta(false), ms)
@@ -44,7 +62,7 @@ export function Intro({ seccion }: PropsSeccion) {
       window.clearTimeout(t)
       document.documentElement.style.overflow = previo
     }
-  }, [abierta, ms, firma])
+  }, [abierta, ms, firma, clave, isPreview])
 
   if (!local) return null
 
