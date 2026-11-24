@@ -18,10 +18,10 @@ const db: any = {
   insert: () => ({ values: async () => {} }),
 }
 
-function app() {
+function app(conPlan = true) {
   const auth = createAuthMiddleware(() => db)
   const a = new Hono()
-    .route('/api/sitios', createSitiosRoute({ getDb: () => db, auth, capacidad: async () => true }))
+    .route('/api/sitios', createSitiosRoute({ getDb: () => db, auth, capacidad: async () => conPlan }))
     .use('/api/restaurante/*', auth)
     .get('/api/restaurante/profile', (c) => c.json({ ok: true }))
   return (path: string, method = 'GET', token?: string) =>
@@ -72,6 +72,20 @@ describe('entrada a Páginas desde el panel', () => {
     expect((await pedir('/api/sitios', 'GET', firmar({ id: 42, scope: 'restaurante', demo: true }))).status).toBe(403)
     // Un token de Páginas con marcas mezcladas es inválido.
     expect((await pedir('/api/sitios', 'GET', firmar({ id: 42, scope: 'restaurante', appSitios: true, demo: true }))).status).toBe(401)
+  })
+})
+
+describe('plan Inicial: Páginas sólo para mirar', () => {
+  test('entra desde el panel y lee, pero no crea, guarda, cambia de tema ni publica', async () => {
+    const pedir = app(false)
+    const token = firmar({ id: 42 })
+    expect((await pedir('/api/sitios/entrada', 'POST', token)).status).toBe(200)
+    expect((await pedir('/api/sitios/base', 'GET', token)).status).not.toBe(403)
+    for (const [ruta, metodo] of [['/api/sitios', 'POST'], ['/api/sitios/7/borrador', 'PUT'], ['/api/sitios/7/reiniciar', 'POST'], ['/api/sitios/7/publicar', 'POST'], ['/api/sitios/imagenes', 'POST']] as const) {
+      const res = await pedir(ruta, metodo, token)
+      expect(res.status).toBe(403)
+      expect((await res.json()).code).toBe('plan_requerido')
+    }
   })
 })
 

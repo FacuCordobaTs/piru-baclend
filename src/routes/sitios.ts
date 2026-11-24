@@ -310,10 +310,11 @@ export function createSitiosRoute(deps: Partial<Dependencias> = {}) {
         return c.json({ token, expira: new Date(vence * 1000).toISOString(), restauranteId: local.id })
       })
       .use('*', auth)
-      // Páginas es el diseño personalizado: desde el plan Esencial. El estado (`GET /`) queda abierto
-      // para que el panel pueda mostrar qué tiene el local y ofrecer el plan.
+      // Páginas es el diseño personalizado: desde el plan Esencial. Sin el plan (Inicial) se entra
+      // sólo a mirar: las lecturas y la entrada desde el panel quedan abiertas; crear, guardar,
+      // cambiar de tema, subir y publicar piden el plan. `GET /` dice si puede editar (`puedeEditar`).
       .use('*', async (c, next) => {
-        if (c.req.method === 'GET' && /\/sitios\/?$/.test(c.req.path)) return next()
+        if (c.req.method === 'GET' || (c.req.method === 'POST' && /\/sitios\/entrada\/?$/.test(c.req.path))) return next()
         if (!(await capacidad(usuario(c).id, 'diseno_personalizado'))) return c.json(PLAN_REQUERIDO.diseno_personalizado, 403)
         return next()
       })
@@ -359,6 +360,7 @@ export function createSitiosRoute(deps: Partial<Dependencias> = {}) {
         }
         return c.json({
           local: local ?? null,
+          puedeEditar: await capacidad(restauranteId, 'diseno_personalizado'),
           sitio: sitio
             ? {
                 id: sitio.id,
