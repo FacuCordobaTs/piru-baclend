@@ -9,42 +9,34 @@ type Props = {
   frase: string
   mostrarLogo: boolean
   duracion: "corta" | "normal" | "larga"
-  /** sesion: una vez por visita. siempre: cada vez que se abre la página. */
-  repetir: "sesion" | "siempre"
 }
 
 const DURACION = { corta: 1900, normal: 2900, larga: 3900 }
 const SUAVE = [0.22, 1, 0.36, 1] as const
 
 /**
- * La intro: una pantalla que se abre sobre la página al entrar (logo, nombre letra por letra y una
- * frase) y se levanta como un telón. Cada tema la viste con sus reglas `.pv-<tema> .pv-intro-*`. Se saltea con un toque y no aparece si el visitante pidió menos
- * movimiento. En el editor se ve dentro de la página, con un botón para repetirla.
+ * La intro: una pantalla que se abre sobre toda la página cada vez que se entra (logo, nombre letra
+ * por letra y una frase) y se levanta como un telón. Cada tema la viste con sus reglas
+ * `.pv-<tema> .pv-intro-*`. Se saltea con un toque y no aparece si el visitante pidió menos movimiento.
+ * En el editor se ve igual que publicada: al cargar, al cambiar sus propiedades y con «Ver la intro»,
+ * desde una franja angosta que marca dónde está la sección.
  */
 export function Intro({ seccion }: PropsSeccion) {
   const p = propsDe<Props>(seccion)
   const { local } = useLocal()
   const { isPreview } = useSitio()
   const quieto = useReducedMotion()
-  const clave = `piru-intro:${local?.nombre ?? ""}`
-  const [abierta, setAbierta] = useState(() => {
-    if (isPreview || quieto) return false
-    try {
-      return p.repetir === "siempre" || !sessionStorage.getItem(clave)
-    } catch {
-      return true
-    }
-  })
-  const [vuelta, setVuelta] = useState(0)
+  const [abierta, setAbierta] = useState(!quieto)
   const ms = DURACION[p.duracion ?? "normal"] ?? DURACION.normal
+  const firma = JSON.stringify(seccion.props ?? {})
+
+  // En el editor, cambiar una propiedad la vuelve a mostrar con el cambio.
+  useEffect(() => {
+    if (isPreview && !quieto) setAbierta(true)
+  }, [firma, isPreview, quieto])
 
   useEffect(() => {
     if (!abierta) return
-    try {
-      sessionStorage.setItem(clave, "1")
-    } catch {
-      /* sin almacenamiento: se ve igual */
-    }
     const previo = document.documentElement.style.overflow
     document.documentElement.style.overflow = "hidden"
     const t = window.setTimeout(() => setAbierta(false), ms)
@@ -52,24 +44,15 @@ export function Intro({ seccion }: PropsSeccion) {
       window.clearTimeout(t)
       document.documentElement.style.overflow = previo
     }
-  }, [abierta, clave, ms])
+  }, [abierta, ms, firma])
 
   if (!local) return null
 
-  if (isPreview)
-    return (
-      <Seccion seccion={seccion} etiqueta="Intro" className="pv-intro-muestra">
-        <Escena key={vuelta} p={p} ms={ms} />
-        <button type="button" className="pv-intro-repetir" onClick={() => setVuelta((v) => v + 1)}>
-          Ver la intro de nuevo
-        </button>
-      </Seccion>
-    )
-
-  return (
+  const pantalla = (
     <AnimatePresence>
       {abierta && (
         <motion.div
+          key={firma}
           className="pv-intro"
           role="presentation"
           onClick={() => setAbierta(false)}
@@ -82,6 +65,17 @@ export function Intro({ seccion }: PropsSeccion) {
         </motion.div>
       )}
     </AnimatePresence>
+  )
+
+  if (!isPreview) return pantalla
+  return (
+    <Seccion seccion={seccion} etiqueta="Intro" className="pv-intro-franja">
+      <span>Intro · se ve al entrar a la página</span>
+      <button type="button" onClick={() => setAbierta(true)}>
+        Ver la intro
+      </button>
+      {pantalla}
+    </Seccion>
   )
 }
 
