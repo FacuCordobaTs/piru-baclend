@@ -25,7 +25,8 @@ import {
 } from '../lib/metodos-pago'
 import { emitirEventoPedido } from '../lib/pedidos-activos'
 import { contarPedidosPagadosFranja } from '../lib/franjas'
-import { MODULE_KEYS, tieneModuloActivo } from '../lib/modulos'
+import { MODULE_KEYS, leerSuscripcionYPlan, tieneModuloActivo } from '../lib/modulos'
+import { tiendaParaPlan } from '../lib/tienda-config'
 import { leerImagenesExtra } from '../lib/producto-imagenes'
 import {
   obtenerConfiguracionPuntos,
@@ -378,8 +379,10 @@ const obtenerRestaurantePublico = async (c: Context) => {
         } = r0
         // La misma activación de Cupones gobierna el panel, el input y su validación.
         // El nombre del DTO se conserva para las tiendas; el flag histórico de DB no participa.
+        const { plan } = await leerSuscripcionYPlan(db, restauranteId)
         const restauranteSeguro = {
             ...restaurantePublicoBase,
+            tienda: tiendaParaPlan(restaurantePublicoBase.tienda, plan.efectivo),
             codigoDescuentoEnabled: descuentosActivos,
             sistemaPuntos: sistemaPuntosHabilitado,
             configuracionPuntos: sistemaPuntosHabilitado ? configPuntos : null,

@@ -2,7 +2,8 @@
 import { errorImagenDataUrl } from './producto-imagenes'
 
 export interface TiendaConfig {
-  plantilla?: 'elegante' | 'moderna' | 'artesanal'
+  /** `sencilla` no se guarda: la impone `tiendaParaPlan` al plan Inicial. */
+  plantilla?: 'elegante' | 'moderna' | 'artesanal' | 'sencilla'
   colores?: { fondo?: string; texto?: string; acento?: string; superficie?: string }
   fuentes?: { titulos?: string; cuerpo?: string; cssUrl?: string; pesoTitulos?: number }
   productoDestacadoId?: number
@@ -106,4 +107,11 @@ export async function actualizarTienda(
   const enUso = new Set(fotos(config))
   await borrar([...new Set(fotos(normalizarTienda(previa)))].filter(u => !enUso.has(u)))
   return config
+}
+
+/** El plan Inicial (también un plan pago vencido) usa siempre la plantilla Sencilla, sin importar
+ * lo guardado; el resto de la configuración se conserva por si el local vuelve a un plan pago. */
+export function tiendaParaPlan(raw: unknown, planEfectivo: string): unknown {
+  if (planEfectivo !== 'inicial') return raw
+  return { ...objetoTienda(raw), plantilla: 'sencilla' }
 }

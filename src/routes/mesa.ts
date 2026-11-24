@@ -10,6 +10,8 @@ import UUID = require("uuid-js");
 import { authMiddleware } from '../middleware/auth'
 import { and, desc, eq, ne, inArray } from 'drizzle-orm'
 import { wsManager } from '../websocket/manager'
+import { leerSuscripcionYPlan } from '../lib/modulos'
+import { tiendaParaPlan } from '../lib/tienda-config'
 
 const createMesaSchema = z.object({
   nombre: z.string().max(255),
@@ -303,7 +305,13 @@ const mesaRoute = new Hono()
         },
         productos: productosConIngredientes,
         // Glassmorphism discontinuado: la carta siempre usa el diseño sólido (no-glass).
-        restaurante: restaurante[0] ? { ...restaurante[0], disenoAlternativo: true } : null
+        restaurante: restaurante[0]
+          ? {
+              ...restaurante[0],
+              tienda: tiendaParaPlan(restaurante[0].tienda, (await leerSuscripcionYPlan(db, restaurante[0].id)).plan.efectivo),
+              disenoAlternativo: true,
+            }
+          : null
       }
     }, 200)
   })
