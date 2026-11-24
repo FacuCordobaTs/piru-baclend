@@ -289,6 +289,8 @@ restauranteRoute.get('/profile', async (c) => {
       // El admin recarga este perfil después de guardar y lo usa en el POS.
       eventoSucursalId: p.eventoSucursalId,
       orden: p.orden ?? 0,
+      // Producto de ejemplo de la tienda nueva: la carta lo marca (admin/src/components/ProductosEjemplo.tsx).
+      esEjemplo: p.esEjemplo,
       imagenUrl: p.imagenUrl,
       createdAt: p.createdAt,
       categoria: p.categoriaNombre || null,
