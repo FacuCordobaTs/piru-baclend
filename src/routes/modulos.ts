@@ -14,7 +14,8 @@ import {
   suscripcion as SuscripcionTable,
 } from '../db/schema'
 import { authMiddleware } from '../middleware/auth'
-import { moduloEstaActivoAhora, resolverModulosRestaurante } from '../lib/modulos'
+import { leerSuscripcionYPlan, moduloEstaActivoAhora, resolverModulosRestaurante, type SuscripcionYPlan } from '../lib/modulos'
+import { CATEGORIA_CAPACIDADES_PLAN, type PlanRestauranteResuelto } from '../lib/planes-tienda'
 import { crearFacturaSuscripcionPendiente } from '../lib/facturacion-suscripcion'
 import { crearPreferenciaSuscripcionMP, pagosSuscripcionDisponibles } from '../lib/mp-suscripcion'
 import { sendPaymentLinkWhatsApp } from '../services/whatsapp'
@@ -48,6 +49,32 @@ const codigoSchema = z.object({
 })
 const modulosRoute = new Hono().use('*', authMiddleware)
 
+/**
+ * Plan de tienda del local. Con un plan nuevo (no Evolución) los módulos no se compran sueltos:
+ * lo incluido se activa gratis y lo demás pide cambiar de plan.
+ */
+async function planDelLocal(db: Parameters<typeof leerSuscripcionYPlan>[0], restauranteId: number): Promise<SuscripcionYPlan> {
+  return leerSuscripcionYPlan(db, restauranteId)
+}
+
+/** Respuesta de un módulo que el plan no incluye (o que ya viene en el plan y no se paga aparte). */
+function respuestaPlan(c: any, plan: PlanRestauranteResuelto, codigo: string, incluido: boolean, planMinimo: string | null) {
+  if (incluido) {
+    return c.json({ success: false, code: 'incluido_en_plan', message: 'Este módulo ya viene en tu plan: activalo sin costo.' }, 409)
+  }
+  const nombre = plan.catalogo.find((p) => p.codigo === planMinimo)?.nombre
+  return c.json({
+    success: false,
+    code: 'plan_requerido',
+    module: codigo,
+    planMinimo,
+    message: nombre ? `Disponible desde el plan ${nombre}.` : 'Tu plan no incluye este módulo.',
+  }, 403)
+}
+
+/** La categoría de capacidades del plan no es un catálogo de módulos: se muestra en Planes. */
+const esCategoriaVisible = (categoria: { codigo: string }) => categoria.codigo !== CATEGORIA_CAPACIDADES_PLAN
+
 async function buscarModuloActivo(db: ReturnType<typeof drizzle>, codigo: string) {
   const [modulo] = await db
     .select()
@@ -78,7 +105,7 @@ modulosRoute.get('/catalogo', async (c) => {
 
     return c.json({
       success: true,
-      data: categorias.map((categoria) => ({
+      data: categorias.filter(esCategoriaVisible).map((categoria) => ({
         ...categoria,
         modulos: modulosVisibles.filter((modulo) => modulo.categoriaId === categoria.id),
       })),
@@ -109,7 +136,7 @@ modulosRoute.get('/mis-modulos', async (c) => {
       .map((modulo) => categoriaComercial(modulo, categorias))
     return c.json({
       success: true,
-      data: categorias.map((categoria) => ({
+      data: categorias.filter(esCategoriaVisible).map((categoria) => ({
         ...categoria,
         modulos: visibles.filter((modulo) => modulo.categoriaId === categoria.id),
       })),
@@ -133,7 +160,17 @@ modulosRoute.put('/:codigo/activar', zValidator('param', codigoSchema), async (c
     if (!modulo) return c.json({ success: false, message: 'Módulo no encontrado' }, 404)
     if (!modulo.activable) return c.json({ success: false, message: 'Este módulo todavía no se puede activar' }, 409)
 
-    if (modulo.tipo === 'pago') {
+    // Con un plan nuevo: lo que incluye el plan se activa gratis (aunque sea un módulo pago) y lo
+    // que no incluye pide cambiar de plan. El vencimiento del plan ya lo resuelve el plan efectivo.
+    // La misma lectura trae la suscripción que la política de siempre necesita más abajo.
+    const { plan, estadoSuscripcion } = await planDelLocal(db, restauranteId)
+    if (!plan.esLegado) {
+      const resuelto = (await resolverModulosRestaurante(db, restauranteId)).find((item) => item.codigo === codigo)
+      if (!resuelto?.incluidoEnPlan) return respuestaPlan(c, plan, codigo, false, resuelto?.planMinimo ?? null)
+      if (resuelto.estado === 'activo' && resuelto.activoAhora) {
+        return c.json({ success: true, idempotent: true, data: resuelto })
+      }
+    } else if (modulo.tipo === 'pago') {
       // T07/T08 crearán checkout y sólo el webhook podrá activar la fila. No
       // dejamos una activación local que eluda el cobro.
       return c.json({
@@ -146,17 +183,13 @@ modulosRoute.put('/:codigo/activar', zValidator('param', codigoSchema), async (c
 
     // La misma política que aplica el gate debe permitir el resultado de la activación.
     // Guardar una fila activa no alcanza si la suscripción está suspendida/cancelada.
-    const [sub] = await db.select({ estado: SuscripcionTable.estado })
-      .from(SuscripcionTable)
-      .where(eq(SuscripcionTable.restauranteId, restauranteId))
-      .limit(1)
-    if (!moduloEstaActivoAhora({
+    if (plan.esLegado && !moduloEstaActivoAhora({
       tipo: 'incluido',
       estado: 'activo',
       origen: 'usuario',
       precioMensualCongelado: null,
       vigenteHasta: null,
-      estadoSuscripcion: sub?.estado ?? null,
+      estadoSuscripcion,
     })) {
       return c.json({
         success: false,
@@ -214,7 +247,9 @@ modulosRoute.put('/:codigo/desactivar', zValidator('param', codigoSchema), async
   try {
     const modulo = await buscarModuloActivo(db, codigo)
     if (!modulo) return c.json({ success: false, message: 'Módulo no encontrado' }, 404)
-    if (modulo.tipo === 'pago') {
+    // Con un plan nuevo nada se paga por módulo: la baja es inmediata, como la de un incluido.
+    const { plan } = await planDelLocal(db, restauranteId)
+    if (modulo.tipo === 'pago' && plan.esLegado) {
       const [actual, sub] = await Promise.all([
         db.select().from(RestauranteModuloTable)
           .where(and(eq(RestauranteModuloTable.restauranteId, restauranteId), eq(RestauranteModuloTable.moduloId, modulo.id))).limit(1)
@@ -294,6 +329,11 @@ modulosRoute.post('/:codigo/reactivar', zValidator('param', codigoSchema), async
     if (!modulo) return c.json({ success: false, message: 'Módulo no encontrado' }, 404)
     if (!modulo.activable) return c.json({ success: false, message: 'Este módulo ya no admite nuevas activaciones' }, 409)
     if (modulo.tipo !== 'pago') return c.json({ success: false, message: 'Este módulo está incluido en tu suscripción' }, 409)
+    const { plan } = await planDelLocal(db, restauranteId)
+    if (!plan.esLegado) {
+      const resuelto = (await resolverModulosRestaurante(db, restauranteId)).find((item) => item.codigo === codigo)
+      return respuestaPlan(c, plan, codigo, Boolean(resuelto?.incluidoEnPlan), resuelto?.planMinimo ?? null)
+    }
     if (!pagosSuscripcionDisponibles()) return c.json({ success: false, message: 'Pagos no disponibles temporalmente' }, 503)
     const [actual] = await db.select().from(RestauranteModuloTable)
       .where(and(eq(RestauranteModuloTable.restauranteId, restauranteId), eq(RestauranteModuloTable.moduloId, modulo.id))).limit(1)
@@ -343,6 +383,11 @@ modulosRoute.post('/:codigo/checkout', zValidator('param', codigoSchema), zValid
     if (!modulo) return c.json({ success: false, message: 'Módulo no encontrado' }, 404)
     if (!modulo.activable) return c.json({ success: false, message: 'Este módulo ya no admite nuevas activaciones' }, 409)
     if (modulo.tipo !== 'pago') return c.json({ success: false, message: 'Este módulo está incluido en tu suscripción' }, 409)
+    const { plan } = await planDelLocal(db, restauranteId)
+    if (!plan.esLegado) {
+      const resuelto = (await resolverModulosRestaurante(db, restauranteId)).find((item) => item.codigo === codigo)
+      return respuestaPlan(c, plan, codigo, Boolean(resuelto?.incluidoEnPlan), resuelto?.planMinimo ?? null)
+    }
     const [actual] = await db.select({ estado: RestauranteModuloTable.estado })
       .from(RestauranteModuloTable)
       .where(and(eq(RestauranteModuloTable.restauranteId, restauranteId), eq(RestauranteModuloTable.moduloId, modulo.id)))
@@ -385,6 +430,11 @@ modulosRoute.post('/:codigo/pago-link-whatsapp', zValidator('param', codigoSchem
     if (!modulo) return c.json({ success: false, message: 'Módulo no encontrado' }, 404)
     if (!modulo.activable) return c.json({ success: false, message: 'Este módulo ya no admite nuevas activaciones' }, 409)
     if (modulo.tipo !== 'pago') return c.json({ success: false, message: 'Este módulo está incluido en tu suscripción' }, 409)
+    const { plan } = await planDelLocal(db, restauranteId)
+    if (!plan.esLegado) {
+      const resuelto = (await resolverModulosRestaurante(db, restauranteId)).find((item) => item.codigo === codigo)
+      return respuestaPlan(c, plan, codigo, Boolean(resuelto?.incluidoEnPlan), resuelto?.planMinimo ?? null)
+    }
 
     const [actual, restaurante] = await Promise.all([
       db.select({ estado: RestauranteModuloTable.estado }).from(RestauranteModuloTable)

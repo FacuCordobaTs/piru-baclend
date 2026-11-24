@@ -11,6 +11,20 @@ import { z } from 'zod'
 import * as bcrypt from 'bcrypt'
 import { authMiddleware } from '../middleware/auth'
 import { sendVerificationCodeWhatsApp } from '../services/whatsapp'
+import { crearTiendaSchema, crearTiendaSelfServe, RegistroTiendaError } from '../lib/registro-tienda'
+
+// Altas self-serve por IP: sin esto, un script llenaría la base de tiendas vacías.
+const altasPorIp = new Map<string, { cantidad: number; hasta: number }>()
+function altaLimitada(ip: string, max = 5, ventanaMs = 60 * 60 * 1000) {
+  const ahora = Date.now()
+  if (altasPorIp.size > 10000) for (const [k, v] of Array.from(altasPorIp)) if (v.hasta <= ahora) altasPorIp.delete(k)
+  let actual = altasPorIp.get(ip)
+  if (!actual || actual.hasta <= ahora) {
+    actual = { cantidad: 0, hasta: ahora + ventanaMs }
+    altasPorIp.set(ip, actual)
+  }
+  return ++actual.cantidad > max
+}
 
 // ---- Registro por WhatsApp (self-serve) ----
 const OTP_EXPIRACION_MS = 10 * 60 * 1000 // el código vive 10 minutos
@@ -140,7 +154,34 @@ authRoute.post('/register-telefono/resend', zValidator('json', resendTelefonoSch
   }
 })
 
-// Las altas sólo se hacen con la identidad de interno. No quedan puertas públicas.
+/**
+ * "Crear tienda gratis" (self-serve, desde info.piru.app → admin.piru.app/crear-tienda): mail,
+ * nombre de la marca y contraseña. El local nace en el plan Inicial y entra directo al panel, donde
+ * la tab "Primeros pasos" guía lo que falta. Ver lib/registro-tienda.ts y docs/PLANES_TIENDA.md.
+ */
+authRoute.post('/crear-tienda', async (c) => {
+  // No confiar en X-Forwarded-For del cliente; Cloudflare sobrescribe CF-Connecting-IP.
+  const ip = c.req.header('cf-connecting-ip') || 'directo'
+  if (altaLimitada(ip)) {
+    return c.json({ success: false, code: 'demasiados_intentos', message: 'Demasiadas tiendas creadas desde esta conexión. Probá más tarde.' }, 429)
+  }
+  const parsed = crearTiendaSchema.safeParse(await c.req.json().catch(() => null))
+  if (!parsed.success) {
+    return c.json({ success: false, code: 'datos_invalidos', message: parsed.error.issues[0]?.message ?? 'Revisá los datos' }, 400)
+  }
+  try {
+    const fila = await crearTiendaSelfServe(drizzle(pool) as any, parsed.data)
+    const token = await createAccessToken({ id: fila.id })
+    const { password: _password, ...restaurante } = fila
+    return c.json({ success: true, message: 'Tienda creada', token, restaurante }, 201)
+  } catch (error) {
+    if (error instanceof RegistroTiendaError) return c.json({ success: false, code: error.code, message: error.message }, error.status)
+    console.error('[auth] Error creando tienda self-serve:', error)
+    return c.json({ success: false, message: 'No se pudo crear la tienda' }, 500)
+  }
+})
+
+// El alta asistida de interno sigue por su lado. Las altas viejas por teléfono quedan cerradas.
 for (const ruta of ['/register-restaurante', '/register-telefono/start', '/register-telefono/verify']) {
   authRoute.post(ruta, (c) => c.json({ success: false, message: 'Las cuentas las crea el equipo de Piru' }, 403))
 }

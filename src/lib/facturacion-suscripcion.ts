@@ -17,6 +17,7 @@ import {
   suscripcion as SuscripcionTable,
 } from '../db/schema'
 import { SUSCRIPCION_UNICA_CODIGO } from './suscripcion'
+import { esPlanPago, PREFIJO_ITEM_PLAN, resolverPlanRestaurante, type PlanCodigo } from './planes-tienda'
 
 type Db = MySql2Database<Record<string, never>>
 export type CicloFactura = 'mensual' | 'anual'
@@ -107,8 +108,21 @@ export function importeProrrateado(
 export async function crearFacturaSuscripcionPendiente(
   db: Db,
   restauranteId: number,
-  opts: { ciclo: CicloFactura; soloModuloCodigo?: string; soloBase?: boolean; packId?: number; token?: string; tokenExpiraEn?: Date },
+  opts: {
+    ciclo: CicloFactura
+    soloModuloCodigo?: string
+    soloBase?: boolean
+    packId?: number
+    token?: string
+    tokenExpiraEn?: Date
+    /** Plan de tienda a pagar (cambio de plan). Sin él, un local con plan renueva el que tiene. */
+    planTiendaCodigo?: PlanCodigo
+  },
 ): Promise<{ pagoId: number; recargaMensajesId: number | null; montoBase: number; montoModulos: number; montoRecarga: number; montoTotal: number; items: ItemFacturaCalculado[] }> {
+  const planTienda = await resolverPlanRestaurante(db, restauranteId, true)
+  if (!planTienda.esLegado || opts.planTiendaCodigo) {
+    return crearFacturaPlanTiendaPendiente(db, restauranteId, planTienda, opts)
+  }
   const [configuracion, suscripcionActual, planCompatible] = await Promise.all([
     db.select().from(ConfiguracionSuscripcionTable).where(eq(ConfiguracionSuscripcionTable.codigo, SUSCRIPCION_UNICA_CODIGO)).limit(1).then((r) => r[0]),
     db.select().from(SuscripcionTable).where(eq(SuscripcionTable.restauranteId, restauranteId)).limit(1).then((r) => r[0] ?? null),
@@ -202,5 +216,59 @@ export async function crearFacturaSuscripcionPendiente(
       desde: item.desde, hasta: item.hasta,
     })))
     return { pagoId, recargaMensajesId, montoBase, montoModulos, montoRecarga, montoTotal, items }
+  })
+}
+
+/**
+ * Factura de un plan de tienda: un solo ítem base con el precio del plan (`plan_tienda:<codigo>`),
+ * sin módulos (los incluye el plan) ni packs. Renovar el mismo plan extiende el período vigente;
+ * cambiar de plan arranca un período nuevo desde el pago, sin prorrata. Al aprobarse,
+ * `confirmarFacturaCompuesta` deja el plan contratado y la suscripción activa.
+ */
+async function crearFacturaPlanTiendaPendiente(
+  db: Db,
+  restauranteId: number,
+  planTienda: Awaited<ReturnType<typeof resolverPlanRestaurante>>,
+  opts: { ciclo: CicloFactura; soloModuloCodigo?: string; packId?: number; token?: string; tokenExpiraEn?: Date; planTiendaCodigo?: PlanCodigo },
+) {
+  if (opts.soloModuloCodigo) throw new Error('Con un plan de tienda los módulos no se pagan por separado')
+  if (opts.packId != null) throw new Error('Los packs de avisos se compran desde Mensajes')
+  const codigo = opts.planTiendaCodigo ?? planTienda.contratado
+  const plan = planTienda.catalogo.find((p) => p.codigo === codigo)
+  if (!plan || !esPlanPago(plan)) throw new Error('Ese plan no se paga desde el panel')
+
+  const [configuracion, suscripcionActual, planCompatible] = await Promise.all([
+    db.select().from(ConfiguracionSuscripcionTable).where(eq(ConfiguracionSuscripcionTable.codigo, SUSCRIPCION_UNICA_CODIGO)).limit(1).then((r) => r[0]),
+    db.select().from(SuscripcionTable).where(eq(SuscripcionTable.restauranteId, restauranteId)).limit(1).then((r) => r[0] ?? null),
+    db.select({ id: PlanTable.id }).from(PlanTable).where(and(eq(PlanTable.codigo, 'basico'), eq(PlanTable.activo, true))).limit(1).then((r) => r[0]),
+  ])
+  if (!configuracion) throw new Error('La suscripción Piru no está disponible')
+  if (!planCompatible) throw new Error('Falta el plan compatible requerido durante la transición')
+
+  const ciclo = opts.ciclo
+  const ahora = new Date()
+  const mismoPlan = codigo === planTienda.contratado
+  const periodoDesde = mismoPlan ? inicioPeriodoFactura(ahora, suscripcionActual) : ahora
+  const periodoHasta = sumarMesesCalendario(periodoDesde, mesesDelCiclo(ciclo))
+  const precio = plan.precioMensual!
+  const item: ItemFacturaCalculado = {
+    tipo: 'base', moduloId: null, codigo: `${PREFIJO_ITEM_PLAN}${plan.codigo}`, descripcion: `Plan ${plan.nombre}`,
+    precioUnitario: precio, monto: importePorCiclo(precio, ciclo, plan.descuentoAnual), desde: periodoDesde, hasta: periodoHasta,
+  }
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Db
+    const insert = await txDb.insert(PagoSuscripcionTable).values({
+      restauranteId, planId: planCompatible.id, configuracionSuscripcionId: configuracion.id, ciclo,
+      monto: item.monto.toFixed(2), montoBase: item.monto.toFixed(2), montoModulos: '0.00',
+      montoRecarga: '0.00', recargaMensajesId: null, montoTotal: item.monto.toFixed(2),
+      token: opts.token ?? null, tokenExpiraEn: opts.tokenExpiraEn ?? null, estado: 'pending',
+    })
+    const pagoId = Number((insert as any)[0].insertId)
+    await txDb.insert(PagoSuscripcionItemTable).values({
+      pagoSuscripcionId: pagoId, tipo: item.tipo, moduloId: null, codigo: item.codigo,
+      descripcion: item.descripcion, cantidad: 1, precioUnitario: item.precioUnitario.toFixed(2), monto: item.monto.toFixed(2),
+      desde: item.desde, hasta: item.hasta,
+    })
+    return { pagoId, recargaMensajesId: null, montoBase: item.monto, montoModulos: 0, montoRecarga: 0, montoTotal: item.monto, items: [item] }
   })
 }

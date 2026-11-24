@@ -1,5 +1,6 @@
 import { normalizarTienda, objetoTienda, type TiendaConfig } from './tienda-config'
 import { errorImagenDataUrl } from './producto-imagenes'
+import { esPlantillaSitio, PLANTILLA_POR_DEFECTO, PLANTILLAS_SITIO, type PlantillaSitio } from './sitios-plantillas'
 
 /** Los colores de marca que quedan escritos en el código del sitio. */
 export type MarcaSitio = { colorPrimario: string; colorSecundario: string; usarColorUnico: boolean }
@@ -18,8 +19,9 @@ export type CheckoutSitio = (typeof CHECKOUTS_SITIO)[number]
  * Incluye dos decisiones propias de Páginas que no viajan a `tienda_config`: `detalleProducto` y
  * `checkout`.
  */
-export type ContenidoSitio = TiendaConfig & {
-  plantilla: NonNullable<TiendaConfig['plantilla']>
+export type ContenidoSitio = Omit<TiendaConfig, 'plantilla'> & {
+  /** Una de `PLANTILLAS_SITIO`; puede no ser una de la tienda estándar. */
+  plantilla: PlantillaSitio
   /** Cómo se muestra el detalle de producto. Sólo de Páginas: no viaja a `tienda_config`. */
   detalleProducto?: DetalleProducto
   /** Cómo se abre el checkout. Sólo de Páginas: no viaja a `tienda_config`. */
@@ -200,7 +202,7 @@ export function normalizarContenidoSitio(entrada: unknown, base: { marca: MarcaS
   const esquemas = normalizarEsquemas(t.esquemas)
   return {
     ...resto,
-    plantilla: tienda.plantilla ?? 'artesanal',
+    plantilla: esPlantillaSitio(t.plantilla) ? t.plantilla : PLANTILLA_POR_DEFECTO,
     detalleProducto: DETALLES_PRODUCTO.includes(t.detalleProducto as DetalleProducto)
       ? (t.detalleProducto as DetalleProducto)
       : 'pasos',
@@ -262,7 +264,7 @@ export type EsquemaSeccion = {
 }
 
 export type ContenidoSitio = {
-  plantilla?: "elegante" | "moderna" | "artesanal"
+  plantilla?: ${Object.keys(PLANTILLAS_SITIO).map((id) => JSON.stringify(id)).join(' | ')}
   detalleProducto?: "pasos" | "dialogo" | "hoja"
   checkout?: "pasos" | "hoja" | "pagina"
   marca: { colorPrimario: string; colorSecundario: string; usarColorUnico: boolean }

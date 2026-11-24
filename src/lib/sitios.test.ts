@@ -9,6 +9,7 @@ import { sitiosPuede, puedeSocketAdmin } from './sesiones-app'
 import { CONTENIDO_INICIAL, PLANTILLA_INICIAL, SECCIONES_PLANTILLA, archivoFuentes, plantillaInicial } from './sitios-plantilla'
 import { marcaPorDefecto, normalizarContenidoSitio, normalizarFuentesPropias, normalizarSecciones, seccionesIniciales } from './sitios-contenido'
 import { REGLAS_EDITOR, generarGuia } from './sitios-guia'
+import { PLANTILLA_POR_DEFECTO, PLANTILLAS_SITIO } from './sitios-plantillas'
 import { urlRetornoPedido } from './marketing-enlaces'
 import { normalizarMeta } from './sitios-meta'
 
@@ -117,7 +118,35 @@ describe('build', () => {
     expect(page).toContain('from "./contenido"')
     expect(page).toContain('pv-${tema.plantilla}')
     expect(page).toContain('SECCIONES[seccion.tipo]')
-    for (const plantilla of ['elegante', 'moderna', 'artesanal']) expect(css).toContain(`.pv-${plantilla}`)
+    for (const plantilla of Object.keys(PLANTILLAS_SITIO)) expect(css).toContain(`.pv-${plantilla}`)
+  })
+
+  test('Sitio.tsx lleva escrito el registro de plantillas', () => {
+    const sitio = PLANTILLA_INICIAL['components/Sitio.tsx'] ?? ''
+    expect(sitio).not.toContain('/* piru:')
+    expect(sitio).toContain(JSON.stringify(PLANTILLAS_SITIO, null, 2))
+    expect(sitio).toContain(`: ${JSON.stringify(PLANTILLA_POR_DEFECTO)}) as Plantilla`)
+    const contenido = plantillaInicial({ ...CONTENIDO_INICIAL, plantilla: 'elegante' })['contenido.ts'] ?? ''
+    expect(contenido).toContain('plantilla?: "elegante" | "moderna" | "artesanal"')
+    expect(contenido).toContain('"plantilla": "elegante"')
+  })
+
+  test('el contenido acepta sólo plantillas del registro', () => {
+    const base = { marca: { colorPrimario: '#FF7A00', colorSecundario: '#FFFFFF', usarColorUnico: false }, logo: null, logoClaro: null }
+    for (const plantilla of Object.keys(PLANTILLAS_SITIO)) expect(normalizarContenidoSitio({ plantilla }, base).plantilla).toBe(plantilla as never)
+    expect(normalizarContenidoSitio({ plantilla: 'inexistente' }, base).plantilla).toBe(PLANTILLA_POR_DEFECTO)
+  })
+
+  test('el registro de plantillas del editor coincide con el del backend', async () => {
+    const editor = new URL('../../../sitios/src/lib/plantillas.ts', import.meta.url)
+    if (!existsSync(editor)) return
+    const { PLANTILLAS, PLANTILLA_POR_DEFECTO: porDefecto } = await import(editor.href)
+    expect(porDefecto).toBe(PLANTILLA_POR_DEFECTO)
+    expect(PLANTILLAS.map((p: { id: string }) => p.id).sort()).toEqual(Object.keys(PLANTILLAS_SITIO).sort())
+    for (const { id, fondo, texto, superficie, titulos, cuerpo, peso, serif } of PLANTILLAS) {
+      const b = PLANTILLAS_SITIO[id as keyof typeof PLANTILLAS_SITIO]
+      expect({ fondo, texto, superficie, titulos, cuerpo, peso, serif }).toEqual({ fondo: b.fondo, texto: b.texto, superficie: b.superficie, titulos: b.titulos, cuerpo: b.cuerpo, peso: b.peso, serif: b.serif })
+    }
   })
 
   test('el detalle de producto es un componente del diseño y el estilo elegido queda en contenido.ts', async () => {

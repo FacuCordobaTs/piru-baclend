@@ -16,12 +16,14 @@ import {
   restauranteModulo as RestauranteModuloTable,
   suscripcion as SuscripcionTable,
   pagoSuscripcion as PagoSuscripcionTable,
+  restaurante as RestauranteTable,
 } from '../db/schema'
 import { SUSCRIPCION_ESTADOS } from './planes'
 import { acreditarCupoPlan, acreditarCuposPorModulos, confirmarRecarga, type CategoriaMensaje } from './mensajes-wallet'
 import { SUSCRIPCION_UNICA_CODIGO } from './suscripcion'
 export { resolverEstadoPorTiempo, type EstadoSuscripcionTemporal } from './suscripcion-estado'
 import { resolverEstadoPorTiempo, type EstadoSuscripcionTemporal } from './suscripcion-estado'
+import { normalizarPlanCodigo, PLAN_LEGADO, PREFIJO_ITEM_PLAN, resolverPlanRestaurante, esEsquemaPendiente } from './planes-tienda'
 
 type Db = MySql2Database<Record<string, never>>
 
@@ -308,6 +310,19 @@ async function confirmarFacturaCompuesta(
       acreditoBase: false,
       modulosActivados: [],
       recargaAcreditada: false,
+    }
+  }
+
+  // Una factura de plan de tienda deja ese plan contratado. El código del ítem base es
+  // `plan_tienda:<codigo>` (lo arma `crearFacturaSuscripcionPendiente`).
+  if (itemBase?.codigo?.startsWith(PREFIJO_ITEM_PLAN)) {
+    const codigoPlan = normalizarPlanCodigo(itemBase.codigo.slice(PREFIJO_ITEM_PLAN.length))
+    if (codigoPlan !== PLAN_LEGADO) {
+      try {
+        await db.update(RestauranteTable).set({ planTienda: codigoPlan }).where(eq(RestauranteTable.id, pago.restauranteId))
+      } catch (error) {
+        if (!esEsquemaPendiente(error)) throw error
+      }
     }
   }
 
@@ -634,6 +649,10 @@ export async function resolverEstadoVigente(db: Db, restauranteId: number) {
  * esas siguen operando con normalidad. Resuelve el estado lazy antes de decidir (sin cron).
  */
 export async function estaPausadoPorSuscripcion(db: Db, restauranteId: number): Promise<boolean> {
+  // Con un plan de tienda nunca se pausa: al vencer un plan pago el local sigue vendiendo en
+  // Inicial (ver lib/planes-tienda.ts). Evolución conserva la degradación de siempre.
+  const plan = await resolverPlanRestaurante(db, restauranteId, false)
+  if (!plan.esLegado) return false
   const vigente = await resolverEstadoVigente(db, restauranteId)
   if (!vigente) return false
   return (

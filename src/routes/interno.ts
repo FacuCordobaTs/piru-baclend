@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { drizzle } from 'drizzle-orm/mysql2'
+import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2'
 import { pool } from '../db'
 import { and, asc, eq } from 'drizzle-orm'
 import { zValidator } from '@hono/zod-validator'
@@ -24,6 +24,13 @@ import {
 } from '../lib/suscripciones'
 import { obtenerConfiguracionSuscripcion, resolverSuscripcionUnica } from '../lib/suscripcion'
 import { resolverImporteMensual, resolverModulosRestaurante } from '../lib/modulos'
+import {
+  PLAN_CODIGOS,
+  cambioPlanInterno,
+  esEsquemaPendiente,
+  normalizarPlanCodigo,
+  type PlanCodigo,
+} from '../lib/planes-tienda'
 import {
   generarClaimLink,
   buildClaimUrl,
@@ -174,6 +181,25 @@ internoRoute.post('/locales/:id/acceso-temporal', async (c) => {
  * antes de leer (para reflejar vencimientos sin cron). Es lo que permite cerrar clientes
  * por outreach antes de tener el billing 100% automatizado.
  */
+/** Plan de tienda de cada local, aparte del listado para que una migración pendiente no lo rompa. */
+async function planesTiendaPorLocal(db: MySql2Database<Record<string, never>>) {
+  try {
+    const filas = await db
+      .select({
+        id: RestauranteTable.id,
+        planTienda: RestauranteTable.planTienda,
+        requiereSuscripcion: RestauranteTable.requiereSuscripcion,
+      })
+      .from(RestauranteTable)
+    return new Map<number, { planTienda: PlanCodigo; requiereSuscripcion: boolean }>(
+      filas.map((f) => [f.id, { planTienda: normalizarPlanCodigo(f.planTienda), requiereSuscripcion: f.requiereSuscripcion }]),
+    )
+  } catch (error) {
+    if (esEsquemaPendiente(error)) return null
+    throw error
+  }
+}
+
 internoRoute.get('/locales', async (c) => {
   const db = drizzle(pool)
   try {
@@ -200,6 +226,7 @@ internoRoute.get('/locales', async (c) => {
 
     // Cuándo abrió cada prospecto el panel de la demo (vacío si nunca, o sin la tabla todavía).
     const entradasAlPanelDemo = await entradasDemo(db, restaurantes.map((r) => r.id))
+    const planesTienda = await planesTiendaPorLocal(db)
     const data = await Promise.all(
       restaurantes.map(async (r) => {
         // Transición lazy de estado antes de leer (vencido → gracia → suspendida). Devuelve la
@@ -232,6 +259,9 @@ internoRoute.get('/locales', async (c) => {
           planNombre: sus.planNombre,
           estado: sus.estado,
           sinSuscripcion: sus.sinSuscripcion,
+          // Plan de tienda (aditivo). null = la migración de planes todavía no se aplicó.
+          planTienda: planesTienda ? (planesTienda.get(r.id)?.planTienda ?? null) : null,
+          requiereSuscripcion: planesTienda?.get(r.id)?.requiereSuscripcion ?? null,
           suscripcion: {
             configuracion: sus.configuracion,
             ciclo: sus.ciclo,
@@ -741,6 +771,61 @@ internoRoute.put(
     } catch (error) {
       console.error('Error cambiando verificación de teléfono (interno):', error)
       return c.json({ success: false, message: 'Error al actualizar el número' }, 500)
+    }
+  },
+)
+
+/**
+ * Cambia el plan de tienda de un local (sobre todo, pasar un local self-serve a Evolución con
+ * precio a medida). Sólo escribe `plan_tienda` y el paywall de ese plan (`cambioPlanInterno`):
+ * la suscripción y los módulos quedan como estaban.
+ */
+const planTiendaSchema = z.object({ codigo: z.enum(PLAN_CODIGOS) })
+
+internoRoute.put(
+  '/locales/:id/plan-tienda',
+  zValidator('json', planTiendaSchema),
+  async (c) => {
+    const db = drizzle(pool)
+    const restauranteId = Number(c.req.param('id'))
+    if (!Number.isInteger(restauranteId) || restauranteId <= 0) {
+      return c.json({ success: false, message: 'Local inválido' }, 400)
+    }
+
+    const { codigo } = c.req.valid('json')
+
+    try {
+      const [rest] = await db
+        .select({
+          id: RestauranteTable.id,
+          planTienda: RestauranteTable.planTienda,
+          requiereSuscripcion: RestauranteTable.requiereSuscripcion,
+        })
+        .from(RestauranteTable)
+        .where(eq(RestauranteTable.id, restauranteId))
+        .limit(1)
+      if (!rest) {
+        return c.json({ success: false, message: 'Local no encontrado' }, 404)
+      }
+
+      const cambio = cambioPlanInterno(rest.planTienda, codigo)
+      if (cambio) {
+        await db
+          .update(RestauranteTable)
+          .set(cambio)
+          .where(eq(RestauranteTable.id, restauranteId))
+      }
+
+      return c.json({
+        success: true,
+        data: cambio ?? { planTienda: codigo, requiereSuscripcion: rest.requiereSuscripcion },
+      }, 200)
+    } catch (error) {
+      if (esEsquemaPendiente(error)) {
+        return c.json({ success: false, message: 'Falta aplicar la migración de planes (add_planes_tienda.sql)' }, 409)
+      }
+      console.error('Error cambiando el plan de tienda (interno):', error)
+      return c.json({ success: false, message: 'Error al cambiar el plan' }, 500)
     }
   },
 )

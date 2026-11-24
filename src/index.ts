@@ -43,11 +43,13 @@ import { cartaIaRoute } from './routes/carta-ia';
 import { planesRoute, suscripcionRoute } from './routes/planes';
 import { mensajesRoute } from './routes/mensajes';
 import { modulosRoute } from './routes/modulos';
+import { planesTiendaRoute } from './routes/planes-tienda';
 import { stockRoute } from './routes/stock';
 import { puntosRoute } from './routes/puntos';
 import { pagoRoute } from './routes/pago';
 import { internoRoute } from './routes/interno';
 import { marketingLocalRoute } from './routes/marketing-local';
+import { recompraTandasRoute } from './routes/recompra-tandas';
 import { demoPanelRoute } from './routes/demo-panel';
 import { datosEjemploRoute } from './routes/datos-ejemplo';
 import { prospeccionRoute } from './routes/prospeccion';
@@ -59,7 +61,6 @@ import { mozosRoute } from './routes/mozos';
 import { marketingCampanasRoute, marketingPublicRoute } from './routes/marketing';
 import { resolverSesionStaff } from './lib/staff';
 import { MODULE_KEYS, tieneModuloActivo } from './lib/modulos';
-import { tickMotorRecompra } from './lib/motor-recompra';
 import { serveStatic } from 'hono/bun';
 import { readFileSync } from 'node:fs';
 import { publicStoreApiPath, publicStoreOrigin, storeSlugFromHostname } from './lib/public-store-origin';
@@ -272,6 +273,7 @@ app.basePath('/api')
   .route('/suscripcion', suscripcionRoute)
   .route('/planes', planesRoute)
   .route('/modulos', modulosRoute)
+  .route('/planes-tienda', planesTiendaRoute)
   .route('/stock', stockRoute)
   .route('/puntos', puntosRoute)
   .route('/staff', staffLoginRoute)
@@ -281,6 +283,7 @@ app.basePath('/api')
   .route('/pago', pagoRoute)
   .route('/interno', internoRoute)
   .route('/marketing-local', marketingLocalRoute)
+  .route('/recompra-tandas', recompraTandasRoute)
   .route('/demo-panel', demoPanelRoute)
   .route('/datos-ejemplo', datosEjemploRoute)
   .route('/prospeccion', prospeccionRoute)
@@ -839,20 +842,14 @@ app.get(
   })
 )
 
-// ── Motor de Recompra · scheduler del goteo programado ──────────────────────
-// La agenda continua incorpora clientes nuevos y reconcilia sus siguientes toques cada 15 minutos.
-const MOTOR_TICK_MS = 15 * 60 * 1000
 // Páginas: qué subdominios son sitios publicados (CORS) y limpieza de carritos de handoff vencidos.
 iniciarCacheSitios(() => drizzle(pool));
 setInterval(() => {
   limpiarCarritosVencidos(drizzle(pool)).catch(() => console.error('[carritos] No se pudo limpiar'));
 }, 15 * 60_000);
 
-setInterval(() => {
-  tickMotorRecompra(drizzle(pool)).catch((err) => {
-    console.error('❌ [Motor Recompra] tick del scheduler falló:', err)
-  })
-}, MOTOR_TICK_MS)
+// Recompra trabaja por tandas que arma el dueño (routes/recompra-tandas.ts): ya no hay una agenda
+// que se recalcule sola ni envíos automáticos sin confirmar, así que el tick del motor no corre.
 
 export default {
   port: process.env.PORT || 3000,

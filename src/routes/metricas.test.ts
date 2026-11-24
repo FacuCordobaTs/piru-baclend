@@ -41,9 +41,15 @@ beforeEach(() => {
   cola = []
 })
 
+const LOGIN = [{ id: 6, email: null, nombre: 'Brasa', origen: null, claimedAt: null, telefonoVerificado: false, rapiboyToken: null }]
+const MODULO_AVANZADAS = { id: 90, codigo: 'estadisticas_avanzadas', tipo: 'incluido', precioMensual: '0.00', activoCatalogo: true, estado: null, origen: null, vigenteHasta: null }
+
 function cargarRespuestas(extra: unknown[][] = []) {
   cola = [
-    [{ id: 6, email: null, nombre: 'Brasa', origen: null, claimedAt: null, telefonoVerificado: false, rapiboyToken: null }],
+    LOGIN,
+    // suscripción + plan (sin `planTienda` = Evolución) y módulos: las avanzadas, como siempre
+    [{ estado: 'activa' }],
+    [MODULO_AVANZADAS],
     // ingresos y pedidos
     [{ totalMensual: '20250.00', totalHistorico: '40000.00', totalMensualManual: '6750.00', totalMensualWeb: '13500.00' }],
     [{ pedidosMensuales: '4', pedidosMensualesPagados: '3', pedidosMensualesManual: '1', pedidosMensualesWeb: '3', pedidosHistoricos: '9' }],
@@ -113,5 +119,17 @@ describe('GET /metricas', () => {
     expect(data.porDia).toEqual([])
     expect(data.porCategoria).toEqual([])
     expect(data.productosVendidos).toEqual([])
+  })
+})
+
+describe('GET /metricas con un plan sin estadísticas avanzadas', () => {
+  const PLAN_INICIAL = [{ estado: null, planTienda: 'inicial' }]
+  const CATALOGO = [{ id: 1, codigo: 'inicial', nombre: 'Inicial', descripcion: null, precioMensual: '0.00', descuentoAnual: 0, orden: 1, destacado: false, modulos: ['mercadopago'], beneficios: [], activo: true }]
+
+  test('un rango de fechas pide el plan Escala', async () => {
+    cola = [LOGIN, PLAN_INICIAL, CATALOGO, [MODULO_AVANZADAS]]
+    const res = await pedir('?from=2026-01-01&to=2026-01-31')
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({ code: 'plan_requerido', module: 'estadisticas_avanzadas', planMinimo: 'escala' })
   })
 })

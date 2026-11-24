@@ -21,6 +21,7 @@ import { procesarMensajeIA, notificarPagoConfirmadoWhatsApp } from '../services/
 import { procesarComandoOptOut } from '../lib/proteccion-base'
 import { acreditarPuntosPedidoAprobado, esEstadoPedidoDespachado } from '../lib/puntos'
 import { crearRespuestaAlfajor, RESTAURANTE_ALFAJOR, restauranteDeAtencionWhatsApp } from '../services/whatsapp-alfajor'
+import { registrarMensajeChat, textoEntrante } from '../lib/whatsapp-chats'
 
 const webhookRoute = new Hono()
 const responderConsultaAlfajor = crearRespuestaAlfajor(pool, sendWhatsAppText)
@@ -732,6 +733,17 @@ async function processIncomingWhatsApp(c: any, body: any) {
         });
 
         if (restaurante.id === RESTAURANTE_ALFAJOR) {
+          // Los chats de sólo lectura de la tab Mensajes: lo que escribió el cliente queda guardado
+          // antes de responder, aunque la respuesta automática no salga.
+          await registrarMensajeChat(db, {
+            restauranteId: restaurante.id,
+            telefono: fromPhone,
+            direccion: 'entrante',
+            origen: 'cliente',
+            texto: textoEntrante(message),
+            waMessageId: message.id ?? null,
+            createdAt: Number(message.timestamp) > 0 ? new Date(Number(message.timestamp) * 1000) : undefined,
+          }).catch((error) => console.error('[WhatsApp Alfajor] No se pudo registrar el mensaje del chat', { code: error?.cause?.code ?? error?.code }))
           // Preservar BAJA/ALTA sin sumar otra respuesta fuera del límite.
           if (message.type === 'text' && messageText) {
             await procesarComandoOptOut(db, restaurante.id, fromPhone, messageText);

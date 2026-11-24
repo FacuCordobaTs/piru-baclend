@@ -21,7 +21,7 @@ const db: any = {
 function app() {
   const auth = createAuthMiddleware(() => db)
   const a = new Hono()
-    .route('/api/sitios', createSitiosRoute({ getDb: () => db, auth }))
+    .route('/api/sitios', createSitiosRoute({ getDb: () => db, auth, capacidad: async () => true }))
     .use('/api/restaurante/*', auth)
     .get('/api/restaurante/profile', (c) => c.json({ ok: true }))
   return (path: string, method = 'GET', token?: string) =>
@@ -123,7 +123,7 @@ describe('empezar de cero', () => {
     const db = dbReinicio((valores) => {
       guardado = valores
     })
-    const a = new Hono().route('/api/sitios', createSitiosRoute({ getDb: () => db, auth: createAuthMiddleware(() => db) }))
+    const a = new Hono().route('/api/sitios', createSitiosRoute({ getDb: () => db, auth: createAuthMiddleware(() => db), capacidad: async () => true }))
     const res = await a.request('/api/sitios/7/reiniciar', {
       method: 'POST',
       headers: {
@@ -160,7 +160,7 @@ describe('empezar de cero', () => {
       q.limit = async () => (q.tabla === sitioTienda ? [] : [{ id: 42, email: null, nombre: 'Bronx', origen: null, claimedAt: null, telefonoVerificado: true, rapiboyToken: null }])
       return q
     }
-    const a = new Hono().route('/api/sitios', createSitiosRoute({ getDb: () => db, auth: createAuthMiddleware(() => db) }))
+    const a = new Hono().route('/api/sitios', createSitiosRoute({ getDb: () => db, auth: createAuthMiddleware(() => db), capacidad: async () => true }))
     const res = await a.request('/api/sitios/9/reiniciar', {
       method: 'POST',
       headers: { Authorization: `Bearer ${firmar({ id: 42, scope: 'restaurante', appSitios: true })}` },

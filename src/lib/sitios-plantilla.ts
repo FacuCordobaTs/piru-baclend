@@ -1,11 +1,18 @@
 import { readFileSync } from 'node:fs'
 import type { Borrador } from './sitios-reglas'
 import { archivoContenido, seccionesIniciales, type ContenidoSitio, type FuentePropia } from './sitios-contenido'
+import { PLANTILLA_POR_DEFECTO, PLANTILLAS_SITIO } from './sitios-plantillas'
 
 const leer = (archivo: string) => readFileSync(new URL(`./sitios-plantilla/${archivo}`, import.meta.url), 'utf8')
 
+/** `components/Sitio.tsx` con el registro de plantillas escrito adentro. */
+const archivoSitio = () =>
+  leer('sitio.tsx.txt')
+    .replace('/* piru:plantillas */', () => JSON.stringify(PLANTILLAS_SITIO, null, 2))
+    .replace('/* piru:plantilla-por-defecto */', () => JSON.stringify(PLANTILLA_POR_DEFECTO))
+
 export const CONTENIDO_INICIAL: ContenidoSitio = {
-  plantilla: 'artesanal',
+  plantilla: PLANTILLA_POR_DEFECTO,
   detalleProducto: 'pasos',
   checkout: 'pasos',
   marca: { colorPrimario: '#FF7A00', colorSecundario: '#FFFFFF', usarColorUnico: false },
@@ -58,7 +65,7 @@ export function plantillaInicial(contenido: ContenidoSitio = CONTENIDO_INICIAL):
     'style.css': leer('style.css.txt'),
     'fuentes.css': archivoFuentes(conSecciones.fuentesPropias),
     'contenido.ts': archivoContenido(conSecciones),
-    'components/Sitio.tsx': leer('sitio.tsx.txt'),
+    'components/Sitio.tsx': archivoSitio(),
     'components/Pedido.tsx': leer('pedido.tsx.txt'),
     'components/DetalleProducto.tsx': leer('detalle-producto.tsx.txt'),
     'components/detalle.css': leer('detalle.css.txt'),

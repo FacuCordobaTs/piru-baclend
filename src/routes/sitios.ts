@@ -36,6 +36,7 @@ import { imagenesTienda } from '../lib/tienda-imagenes-r2'
 import { errorImagenDataUrl } from '../lib/producto-imagenes'
 import { normalizarTienda } from '../lib/tienda-config'
 import { publicRoute } from './public'
+import { tieneModuloActivo } from '../lib/modulos'
 
 /**
  * Páginas: el editor de sitios propios (`pages.piru.app`). Ver docs/PAGINAS_PROPIAS.md, §11–14.
@@ -62,7 +63,39 @@ type Dependencias = {
   auth: typeof authMiddleware
   construir: typeof construirSitio
   datosTienda: (restauranteId: number) => Promise<Record<string, unknown> | null>
+  /** ¿El plan del local incluye esta capacidad? (`requireModulo` sobre los módulos del plan). */
+  capacidad: (restauranteId: number, codigo: 'diseno_personalizado' | 'codigo_fuente') => Promise<boolean>
 }
+
+/**
+ * Archivos que escribe el editor visual. Cambiar cualquier otro es editar código, que pide el
+ * plan Impulso (`codigo_fuente`). El editor visual pide Esencial (`diseno_personalizado`).
+ */
+export const ARCHIVOS_EDITOR_VISUAL = new Set(['contenido.ts', 'fuentes.css'])
+
+export function cambiaCodigo(anterior: Borrador, nuevo: Borrador): boolean {
+  const rutas = new Set([...Object.keys(anterior), ...Object.keys(nuevo)])
+  for (const ruta of rutas) {
+    if (ARCHIVOS_EDITOR_VISUAL.has(ruta)) continue
+    if (anterior[ruta] !== nuevo[ruta]) return true
+  }
+  return false
+}
+
+const PLAN_REQUERIDO = {
+  diseno_personalizado: {
+    error: 'Personalizar el diseño de tu tienda está disponible desde el plan Esencial.',
+    code: 'plan_requerido',
+    module: 'diseno_personalizado',
+    planMinimo: 'esencial',
+  },
+  codigo_fuente: {
+    error: 'Editar el código de tu página está disponible desde el plan Impulso.',
+    code: 'plan_requerido',
+    module: 'codigo_fuente',
+    planMinimo: 'impulso',
+  },
+} as const
 
 const usuario = (c: Context) => (c as unknown as AuthenticatedContext).user
 
@@ -85,12 +118,13 @@ async function datosTiendaPublica(restauranteId: number) {
 }
 
 export function createSitiosRoute(deps: Partial<Dependencias> = {}) {
-  const { getDb, almacen, auth, construir, datosTienda }: Dependencias = {
+  const { getDb, almacen, auth, construir, datosTienda, capacidad }: Dependencias = {
     getDb: () => drizzle(pool),
     almacen: almacenCloudflare,
     auth: authMiddleware,
     construir: construirSitio,
     datosTienda: datosTiendaPublica,
+    capacidad: (restauranteId, codigo) => tieneModuloActivo(drizzle(pool), restauranteId, codigo),
     ...deps,
   }
 
@@ -276,6 +310,13 @@ export function createSitiosRoute(deps: Partial<Dependencias> = {}) {
         return c.json({ token, expira: new Date(vence * 1000).toISOString(), restauranteId: local.id })
       })
       .use('*', auth)
+      // Páginas es el diseño personalizado: desde el plan Esencial. El estado (`GET /`) queda abierto
+      // para que el panel pueda mostrar qué tiene el local y ofrecer el plan.
+      .use('*', async (c, next) => {
+        if (c.req.method === 'GET' && /\/sitios\/?$/.test(c.req.path)) return next()
+        if (!(await capacidad(usuario(c).id, 'diseno_personalizado'))) return c.json(PLAN_REQUERIDO.diseno_personalizado, 403)
+        return next()
+      })
       .post('/entrada', (c) => {
         const user = usuario(c)
         // La demo no llega acá (no está en su lista); la sesión de Páginas tampoco.
@@ -408,6 +449,8 @@ export function createSitiosRoute(deps: Partial<Dependencias> = {}) {
           borradorActualizadoAt: sitio.borradorActualizadoAt.toISOString(),
           versionPublicadaId: sitio.versionPublicadaId,
           assets: assets.map((a) => ({ id: a.id, path: a.path, sha: a.sha, contentType: a.contentType, size: a.size, url: urlAsset(a) })),
+          // Editar el código es del plan Impulso; el editor visual lo usa para ofrecerlo.
+          puedeEditarCodigo: await capacidad(usuario(c).id, 'codigo_fuente'),
         })
       })
       .patch('/:id{[0-9]+}', async (c) => {
@@ -457,6 +500,8 @@ export function createSitiosRoute(deps: Partial<Dependencias> = {}) {
           )
         const { borrador, problemas } = validarBorrador(body.archivos)
         if (problemas.length) return c.json({ error: 'El borrador no es válido', problemas }, 400)
+        if (cambiaCodigo(leerJson<Borrador>(sitio.borrador, {}), borrador) && !(await capacidad(usuario(c).id, 'codigo_fuente')))
+          return c.json(PLAN_REQUERIDO.codigo_fuente, 403)
         const ahora = new Date()
         await getDb()
           .update(sitioTienda)
@@ -710,6 +755,8 @@ export function createSitiosRoute(deps: Partial<Dependencias> = {}) {
       .get('/:id{[0-9]+}/guia.md', async (c) => {
         const sitio = await sitioPropio(c, idParam(c) ?? 0)
         if (!sitio) return c.json({ error: 'Sitio no encontrado' }, 404)
+        // La guía es para editar el código con una IA: va con el código fuente.
+        if (!(await capacidad(usuario(c).id, 'codigo_fuente'))) return c.json(PLAN_REQUERIDO.codigo_fuente, 403)
         const datos = (await datosTienda(sitio.restauranteId)) ?? {}
         const assets = await assetsDe(sitio.id)
         const borrador = leerJson<Borrador>(sitio.borrador, {})

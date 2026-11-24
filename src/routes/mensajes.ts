@@ -20,6 +20,7 @@ import { crearPreferenciaRecargaMP } from '../lib/mp-recarga'
 import { restaurante as RestauranteTable } from '../db/schema'
 import { eq } from 'drizzle-orm'
 import { sendPaymentLinkWhatsApp } from '../services/whatsapp'
+import { leerChat, listarChats } from '../lib/whatsapp-chats'
 
 // Pago de recargas: van a la cuenta de la PLATAFORMA (Piru), no a la del restaurante,
 // por eso se usa el access token de plataforma y sin marketplace_fee.
@@ -112,6 +113,20 @@ async function crearRecargaConToken(
 }
 
 /** Saldo / wallet de mensajes del restaurante autenticado (para el widget de saldo + recarga). */
+// Chats de sólo lectura: lo que los clientes le escriben al número del local por la API de Meta.
+// El panel no responde por acá; para contestar, el dueño abre el chat en su WhatsApp.
+mensajesRoute.get('/chats', async (c) => {
+  const restauranteId = (c as any).user.id as number
+  return c.json({ success: true, data: await listarChats(drizzle(pool), restauranteId) })
+})
+
+mensajesRoute.get('/chats/:clave', zValidator('param', z.object({ clave: z.string().regex(/^\d{8,10}$/) })), async (c) => {
+  const restauranteId = (c as any).user.id as number
+  const chat = await leerChat(drizzle(pool), restauranteId, c.req.valid('param').clave)
+  if (!chat) return c.json({ success: false, message: 'Chat no encontrado' }, 404)
+  return c.json({ success: true, data: chat })
+})
+
 mensajesRoute.get('/saldo', async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id

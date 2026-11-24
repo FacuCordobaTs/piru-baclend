@@ -106,7 +106,7 @@ export default function Page() {
             texto: tema.texto,
             superficie: tema.superficie,
             linea: tema.linea,
-            radio: tema.plantilla === "moderna" ? 22 : tema.plantilla === "elegante" ? 4 : 16,
+            radio: tema.radio,
             fuente: tema.cuerpo,
           }}
         />

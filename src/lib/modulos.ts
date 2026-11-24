@@ -10,9 +10,20 @@ import { type MySql2Database } from 'drizzle-orm/mysql2'
 import {
   configuracionSuscripcion as ConfiguracionSuscripcionTable,
   modulo as ModuloTable,
+  restaurante as RestauranteTable,
   restauranteModulo as RestauranteModuloTable,
   suscripcion as SuscripcionTable,
 } from '../db/schema'
+import {
+  esCapacidadPlan,
+  moduloActivoEnPlan,
+  planIncluyeModulo,
+  planMinimoParaModulo,
+  esEsquemaPendiente,
+  planDesdeValor,
+  type PlanRestauranteResuelto,
+} from './planes-tienda'
+import { resolverEstadoPorTiempo, type EstadoSuscripcionTemporal } from './suscripcion-estado'
 
 type Db = MySql2Database<Record<string, never>>
 
@@ -34,6 +45,11 @@ export const MODULE_KEYS = {
   CRECIMIENTO: 'crecimiento',
   DIAS_FLOJOS: 'dias_flojos',
   CIERRE_TURNO_MANUAL: 'cierre_turno_manual',
+  // Capacidades que sólo da un plan de tienda (ver lib/planes-tienda.ts).
+  DISENO_PERSONALIZADO: 'diseno_personalizado',
+  CODIGO_FUENTE: 'codigo_fuente',
+  ESTADISTICAS_AVANZADAS: 'estadisticas_avanzadas',
+  REPOSITORIO_PROPIO: 'repositorio_propio',
 } as const
 
 export type ModuleKey = (typeof MODULE_KEYS)[keyof typeof MODULE_KEYS]
@@ -110,6 +126,10 @@ export interface ModuloResuelto {
   precioMensualCongelado: string | null
   vigenteHasta: Date | null
   activoAhora: boolean
+  /** Lo incluye el plan efectivo del local. En Evolución, siempre true. */
+  incluidoEnPlan: boolean
+  /** El plan más barato que lo incluye (para "Disponible desde el plan X"). */
+  planMinimo: string | null
 }
 
 type ModuloConCodigoYEstado = Pick<ModuloResuelto, 'codigo' | 'activoAhora'>
@@ -123,17 +143,77 @@ export function listadoHabilitaModulo(
   return modulos.some((item) => item.activoAhora && codigosAceptados.includes(item.codigo as ModuleKey))
 }
 
+export interface SuscripcionYPlan {
+  /** Estado guardado de la suscripción (null = sin fila), el que usa la política de siempre. */
+  estadoSuscripcion: EstadoSuscripcion
+  plan: PlanRestauranteResuelto
+}
+
+/**
+ * Suscripción y plan del local en UNA consulta (local ⟕ suscripción): Evolución no suma consultas
+ * respecto de antes de los planes. Con la migración sin aplicar, cae a la consulta anterior y el
+ * local queda en Evolución.
+ */
+export async function leerSuscripcionYPlan(db: Db, restauranteId: number, ahora = new Date()): Promise<SuscripcionYPlan> {
+  type Fila = { estado: string | null; fechaProximoCobro: Date | null; graciaHasta: Date | null; fechaCancelacion: Date | null; planTienda?: string | null }
+  let fila: Fila | undefined
+  try {
+    ;[fila] = await db
+      .select({
+        estado: SuscripcionTable.estado,
+        fechaProximoCobro: SuscripcionTable.fechaProximoCobro,
+        graciaHasta: SuscripcionTable.graciaHasta,
+        fechaCancelacion: SuscripcionTable.fechaCancelacion,
+        planTienda: RestauranteTable.planTienda,
+      })
+      .from(RestauranteTable)
+      .leftJoin(SuscripcionTable, eq(SuscripcionTable.restauranteId, RestauranteTable.id))
+      .where(eq(RestauranteTable.id, restauranteId))
+      .limit(1)
+  } catch (error) {
+    if (!esEsquemaPendiente(error)) throw error
+    ;[fila] = await db
+      .select({
+        estado: SuscripcionTable.estado,
+        fechaProximoCobro: SuscripcionTable.fechaProximoCobro,
+        graciaHasta: SuscripcionTable.graciaHasta,
+        fechaCancelacion: SuscripcionTable.fechaCancelacion,
+      })
+      .from(SuscripcionTable)
+      .where(eq(SuscripcionTable.restauranteId, restauranteId))
+      .limit(1)
+  }
+  const estadoSuscripcion = (fila?.estado ?? null) as EstadoSuscripcion
+  // El plan pago vence por fecha aunque nadie haya persistido todavía el cambio de estado.
+  const estadoParaPlan = fila?.estado
+    ? resolverEstadoPorTiempo({
+        estado: fila.estado as EstadoSuscripcionTemporal,
+        fechaProximoCobro: fila.fechaProximoCobro,
+        graciaHasta: fila.graciaHasta,
+        fechaCancelacion: fila.fechaCancelacion,
+      }, ahora).estado
+    : null
+  const conAcceso = estadoParaPlan !== null
+    && ESTADOS_SUSCRIPCION_CON_ACCESO.includes(estadoParaPlan as (typeof ESTADOS_SUSCRIPCION_CON_ACCESO)[number])
+  return { estadoSuscripcion, plan: await planDesdeValor(db, fila?.planTienda, conAcceso) }
+}
+
 /** Devuelve el catálogo completo enriquecido con el entitlement del restaurante. */
 export async function resolverModulosRestaurante(
   db: Db,
   restauranteId: number,
   ahora = new Date(),
 ): Promise<ModuloResuelto[]> {
-  const [sub] = await db
-    .select({ estado: SuscripcionTable.estado })
-    .from(SuscripcionTable)
-    .where(eq(SuscripcionTable.restauranteId, restauranteId))
-    .limit(1)
+  return (await resolverModulosYPlan(db, restauranteId, ahora)).modulos
+}
+
+/** Igual que `resolverModulosRestaurante`, con el plan y la suscripción que usó para resolver. */
+export async function resolverModulosYPlan(
+  db: Db,
+  restauranteId: number,
+  ahora = new Date(),
+): Promise<SuscripcionYPlan & { modulos: ModuloResuelto[] }> {
+  const { estadoSuscripcion, plan } = await leerSuscripcionYPlan(db, restauranteId, ahora)
 
   const rows = await db
     .select({
@@ -170,6 +250,7 @@ export async function resolverModulosRestaurante(
     const origen = (row.origen ?? null) as OrigenModulo
     const precioMensualCongelado = row.precioMensualCongelado?.toString() ?? null
     const vigenteHasta = row.vigenteHasta ?? null
+    const incluidoEnPlan = planIncluyeModulo(plan.efectivo, plan.catalogo, row.codigo)
     return {
       ...row,
       tipo: row.tipo as TipoModulo,
@@ -178,13 +259,19 @@ export async function resolverModulosRestaurante(
       origen,
       precioMensualCongelado,
       vigenteHasta,
-      activoAhora: Boolean(row.activoCatalogo) && moduloEstaActivoAhora({
-        tipo: row.tipo as TipoModulo,
-        estado,
-        origen,
-        precioMensualCongelado,
-        vigenteHasta,
-        estadoSuscripcion: (sub?.estado ?? null) as EstadoSuscripcion,
+      incluidoEnPlan,
+      planMinimo: planMinimoParaModulo(plan.catalogo, row.codigo),
+      activoAhora: Boolean(row.activoCatalogo) && moduloActivoParaPlan(plan, {
+        codigo: row.codigo,
+        incluidoEnPlan,
+        politica: {
+          tipo: row.tipo as TipoModulo,
+          estado,
+          origen,
+          precioMensualCongelado,
+          vigenteHasta,
+          estadoSuscripcion,
+        },
       }, ahora),
     }
   })
@@ -192,7 +279,31 @@ export async function resolverModulosRestaurante(
   // Puntos y Días flojos tienen su propio entitlement: ya no se derivan del
   // motor de recompra. `resolverModulosRestaurante` devuelve cada fila tal como
   // quedó en la base.
-  return resueltos
+  return { estadoSuscripcion, plan, modulos: resueltos }
+}
+
+/**
+ * Evolución (los locales de siempre) resuelve cada módulo con la política anterior, intacta; las
+ * capacidades del plan las tiene todas, así nada que antes estaba abierto queda detrás de un plan.
+ * Un local con plan nuevo tiene sólo lo que su plan incluye, sin cobro por módulo.
+ */
+export function moduloActivoParaPlan(
+  plan: Pick<PlanRestauranteResuelto, 'esLegado'>,
+  modulo: { codigo: string; incluidoEnPlan: boolean; politica: PoliticaModuloInput },
+  ahora = new Date(),
+): boolean {
+  if (plan.esLegado) return esCapacidadPlan(modulo.codigo) || moduloEstaActivoAhora(modulo.politica, ahora)
+  return moduloActivoEnPlan({
+    codigo: modulo.codigo,
+    incluidoEnPlan: modulo.incluidoEnPlan,
+    estadoFila: modulo.politica.estado,
+    vigenteHasta: modulo.politica.vigenteHasta,
+  }, ahora)
+}
+
+/** ¿El plan efectivo incluye este módulo? Evolución, todo. */
+export function planIncluyeModuloDe(plan: PlanRestauranteResuelto, codigo: string): boolean {
+  return planIncluyeModulo(plan.efectivo, plan.catalogo, codigo)
 }
 
 export async function tieneModuloActivo(
@@ -274,7 +385,14 @@ export async function resolverImporteMensual(
     .where(eq(ConfiguracionSuscripcionTable.codigo, 'piru'))
     .limit(1)
 
-  const modulos = await resolverModulosRestaurante(db, restauranteId)
+  const { plan, modulos } = await resolverModulosYPlan(db, restauranteId)
+  // Con un plan de tienda la cuota es el precio del plan contratado: lo que incluye no se cobra
+  // aparte. Evolución sigue con base + módulos pagos, como siempre.
+  if (!plan.esLegado) {
+    const precioPlan = plan.catalogo.find((p) => p.codigo === plan.contratado)?.precioMensual ?? 0
+    return { montoBaseMensual: precioPlan, montoModulosMensual: 0, montoTotalMensual: precioPlan, modulosFacturables: [] }
+  }
+
   // Un módulo activo se factura en la próxima cuota aunque el restaurante no
   // tenga todavía una suscripción activa. Así, el primer checkout incluye los
   // módulos migrados ya normalizados por la migración de separación comercial.

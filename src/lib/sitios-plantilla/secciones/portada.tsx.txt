@@ -37,7 +37,7 @@ export function Portada({ seccion }: PropsSeccion) {
   const quieto = useReducedMotion()
   if (!local) return null
 
-  const disposicion = p.disposicion === "fondo" || p.disposicion === "costado" ? p.disposicion : tema.plantilla === "elegante" ? "fondo" : "costado"
+  const disposicion = p.disposicion === "fondo" || p.disposicion === "costado" ? p.disposicion : tema.portada
   const destacado = p.destacadoId ? productos.find((x) => x.id === p.destacadoId) ?? null : null
   // De fondo, sin foto elegida, se usa la del destacado o la primera de la carta (como la tienda estándar).
   const fotoDeLaCarta = destacado?.fotos[0] ?? secciones[0]?.productos.find((x) => x.fotos[0])?.fotos[0]

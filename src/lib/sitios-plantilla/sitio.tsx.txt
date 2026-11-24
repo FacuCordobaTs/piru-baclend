@@ -14,7 +14,10 @@ import type { Accion, ContenidoSitio, Medio as MedioContenido, SeccionPagina } f
  *   WhatsApp, ir a otra sección) sin armar URLs de pagos.
  */
 
-export type Plantilla = "elegante" | "moderna" | "artesanal"
+/** Las plantillas: la base de cada una y lo poco que cambia de una a otra. Piru las escribe al crear la página. */
+const BASES = /* piru:plantillas */ satisfies Record<string, { fondo: string; texto: string; superficie: string; primario: string; secundario: string; titulos: string; cuerpo: string; peso: number; serif: boolean; radio: number; portada: "fondo" | "costado" }>
+
+export type Plantilla = keyof typeof BASES
 
 export type Tema = {
   plantilla: Plantilla
@@ -30,12 +33,10 @@ export type Tema = {
   titulos: string
   cuerpo: string
   peso: number
-}
-
-const BASES: Record<Plantilla, { fondo: string; texto: string; superficie: string; primario: string; secundario: string; titulos: string; cuerpo: string; peso: number; serif: boolean }> = {
-  elegante: { fondo: "#f6f1e8", texto: "#17130f", superficie: "#fdfbf7", primario: "#b34a2a", secundario: "#1f5c4d", titulos: "Bricolage Grotesque", cuerpo: "Bricolage Grotesque", peso: 800, serif: false },
-  moderna: { fondo: "#f5f7fa", texto: "#171d2b", superficie: "#ffffff", primario: "#315cfd", secundario: "#ffc21a", titulos: "Unbounded", cuerpo: "Manrope", peso: 700, serif: false },
-  artesanal: { fondo: "#f4ead8", texto: "#392a20", superficie: "#fffaf1", primario: "#c2410c", secundario: "#3f7d3a", titulos: "Fraunces", cuerpo: "Nunito Sans", peso: 700, serif: true },
+  /** Radio de bordes del checkout. */
+  radio: number
+  /** Disposición de la portada cuando la sección no elige una. */
+  portada: "fondo" | "costado"
 }
 
 const hex6 = (hex: string) => {
@@ -66,7 +67,7 @@ const contraste = (a: string, b: string) => {
 const tintaSobre = (hex: string) => (luminancia(hex) > 0.36 ? "#17130f" : "#ffffff")
 
 export function temaDe(contenido: ContenidoSitio): Tema {
-  const plantilla: Plantilla = contenido.plantilla === "elegante" || contenido.plantilla === "moderna" ? contenido.plantilla : "artesanal"
+  const plantilla = (contenido.plantilla && contenido.plantilla in BASES ? contenido.plantilla : /* piru:plantilla-por-defecto */) as Plantilla
   const base = BASES[plantilla]
   const c = contenido.colores ?? {}
   const marca = contenido.marca
@@ -91,6 +92,8 @@ export function temaDe(contenido: ContenidoSitio): Tema {
     titulos: `"${titulos}", ${base.serif ? "Georgia, serif" : "system-ui, sans-serif"}`,
     cuerpo: `"${cuerpo}", system-ui, sans-serif`,
     peso: contenido.fuentes?.pesoTitulos ?? base.peso,
+    radio: base.radio,
+    portada: base.portada,
   }
 }
 

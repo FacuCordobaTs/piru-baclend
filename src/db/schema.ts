@@ -144,6 +144,10 @@ export const restaurante = mysqlTable("restaurante", {
   // default=false conserva grandfathered a las cuentas anteriores. Ver lib/suscripcion.ts
   // (tieneAccesoAlPanelSuscripcion) y el gate del admin (ProtectedLayout → /suscribir).
   requiereSuscripcion: boolean("requiere_suscripcion").default(false).notNull(),
+  // Plan de tienda contratado (`plan_tienda.codigo`). DEFAULT 'evolucion': los locales existentes y
+  // los que arma interno conservan la suscripción y los módulos de siempre, sin restricciones. Sólo
+  // el registro self-serve crea locales en 'inicial'. Ver lib/planes-tienda.ts y docs/PLANES_TIENDA.md.
+  planTienda: varchar("plan_tienda", { length: 32 }).default("evolucion").notNull(),
 
   // ── Claim flow (onboarding outbound) — ver docs/AUTH_AND_ONBOARDING.md ──
   // Cómo nació la cuenta. 'self_serve' = registro/onboarding normal (default, no cambia nada del
@@ -1451,6 +1455,27 @@ export const modulo = mysqlTable("modulo", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [index("idx_modulo_categoria_orden").on(table.categoriaId, table.orden)]);
 
+/**
+ * Catálogo de planes de tienda (Inicial, Esencial, Impulso, Escala, Evolución). Un plan es un
+ * paquete de códigos de `modulo`; los gates siguen siendo `requireModulo`. Migración
+ * `add_planes_tienda.sql`. `precioMensual` NULL = a medida (Evolución).
+ */
+export const planTienda = mysqlTable("plan_tienda", {
+  id: int("id").primaryKey().autoincrement(),
+  codigo: varchar("codigo", { length: 32 }).unique().notNull(),
+  nombre: varchar("nombre", { length: 100 }).notNull(),
+  descripcion: varchar("descripcion", { length: 500 }),
+  precioMensual: decimal("precio_mensual", { precision: 10, scale: 2 }),
+  descuentoAnual: int("descuento_anual").default(20).notNull(),
+  orden: int("orden").default(0).notNull(),
+  destacado: boolean("destacado").default(false).notNull(),
+  modulos: json("modulos").$type<string[]>().notNull(),
+  beneficios: json("beneficios").$type<string[]>().notNull(),
+  activo: boolean("activo").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const restauranteModulo = mysqlTable(
   "restaurante_modulo",
   {
@@ -2431,4 +2456,90 @@ export const carritoPublico = mysqlTable("carrito_publico", {
   createdAt: datetime("created_at").notNull(),
 }, (t) => [
   index("idx_carrito_publico_expira").on(t.expiraAt),
+]);
+
+// Recompra por tandas: el dueño entra cuando quiere, elige a cuántos clientes escribirles y cuánto
+// invertir en beneficios, y el sistema arma una tanda de mensajes personalizados para mandar ahora.
+// Modelo y reglas: docs/CUSTOMERS_AND_GROWTH.md ("Recompra por tandas").
+export const recompraTanda = mysqlTable("recompra_tanda", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  // `manual`: cada mensaje se abre en el WhatsApp del local. `api`: sale por la plantilla de Meta.
+  canal: mysqlEnum("canal", ["manual", "api"]).default("manual").notNull(),
+  cantidadPedida: int("cantidad_pedida").notNull(),
+  // Lo que el dueño quiso invertir y lo que el reparto usó: el tope si todos usan su beneficio.
+  presupuesto: decimal("presupuesto", { precision: 12, scale: 2 }).default("0.00").notNull(),
+  presupuestoAsignado: decimal("presupuesto_asignado", { precision: 12, scale: 2 }).default("0.00").notNull(),
+  conPuntos: boolean("con_puntos").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_recompra_tanda_rest_id").on(table.restauranteId, table.id),
+  index("idx_recompra_tanda_rest_fecha").on(table.restauranteId, table.createdAt),
+]);
+
+export const recompraTandaMensaje = mysqlTable("recompra_tanda_mensaje", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  tandaId: int("tanda_id").notNull(),
+  clienteId: int("cliente_id").notNull(),
+  orden: int("orden").notNull(),
+  clienteNombre: varchar("cliente_nombre", { length: 255 }).notNull(),
+  telefono: varchar("telefono", { length: 20 }).notNull(),
+  segmento: varchar("segmento", { length: 32 }).notNull(),
+  angulo: varchar("angulo", { length: 32 }).notNull(),
+  // El texto completo del modo manual (con el link al final) y la parte personal de la plantilla.
+  texto: text("texto").notNull(),
+  textoPlantilla: varchar("texto_plantilla", { length: 900 }).notNull(),
+  // Por qué se le escribe y por qué este beneficio, en frases cortas para el dueño.
+  motivos: json("motivos").notNull(),
+  datos: json("datos").notNull(),
+  beneficioTipo: mysqlEnum("beneficio_tipo", ["ninguno", "porcentaje", "monto_fijo", "envio_gratis", "puntos"]).default("ninguno").notNull(),
+  beneficioValor: decimal("beneficio_valor", { precision: 12, scale: 2 }).default("0.00").notNull(),
+  beneficioEtiqueta: varchar("beneficio_etiqueta", { length: 120 }),
+  costoMaximo: decimal("costo_maximo", { precision: 12, scale: 2 }).default("0.00").notNull(),
+  vigenciaHoras: int("vigencia_horas"),
+  link: varchar("link", { length: 1024 }).notNull(),
+  codigoDescuentoId: int("codigo_descuento_id"),
+  enlaceId: int("enlace_id"),
+  imagenUrl: varchar("imagen_url", { length: 512 }),
+  estado: mysqlEnum("estado", ["pendiente", "enviado", "descartado"]).default("pendiente").notNull(),
+  canalEnvio: mysqlEnum("canal_envio", ["wa_me", "api"]),
+  enviadoAt: timestamp("enviado_at"),
+  proveedorMessageId: varchar("proveedor_message_id", { length: 255 }),
+  errorEnvio: varchar("error_envio", { length: 255 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_recompra_tanda_mensaje_cliente").on(table.tandaId, table.clienteId),
+  index("idx_recompra_tanda_mensaje_tanda").on(table.restauranteId, table.tandaId, table.orden),
+  index("idx_recompra_tanda_mensaje_cliente").on(table.restauranteId, table.clienteId, table.enviadoAt),
+  foreignKey({
+    name: "fk_recompra_tanda_mensaje_tanda",
+    columns: [table.restauranteId, table.tandaId],
+    foreignColumns: [recompraTanda.restauranteId, recompraTanda.id],
+  }),
+  foreignKey({
+    name: "fk_recompra_tanda_mensaje_cliente",
+    columns: [table.restauranteId, table.clienteId],
+    foreignColumns: [cliente.restauranteId, cliente.id],
+  }),
+]);
+
+// Chats de WhatsApp de sólo lectura (tab Mensajes): lo que escribe el cliente al número del local,
+// la respuesta automática y los mensajes de las tandas enviados por Meta. El panel no responde.
+export const whatsappChatMensaje = mysqlTable("whatsapp_chat_mensaje", {
+  id: int("id").primaryKey().autoincrement(),
+  restauranteId: int("restaurante_id").references(() => restaurante.id).notNull(),
+  telefono: varchar("telefono", { length: 20 }).notNull(),
+  // Últimos 10 dígitos: junta "549341…" (lo que manda Meta) con "54341…" (lo que guardó el local).
+  clave: varchar("clave", { length: 10 }).notNull(),
+  direccion: mysqlEnum("direccion", ["entrante", "saliente"]).notNull(),
+  origen: mysqlEnum("origen", ["cliente", "bot", "tanda"]).notNull(),
+  texto: text("texto").notNull(),
+  imagenUrl: varchar("imagen_url", { length: 512 }),
+  waMessageId: varchar("wa_message_id", { length: 255 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_whatsapp_chat_mensaje_wa").on(table.restauranteId, table.waMessageId),
+  index("idx_whatsapp_chat_mensaje_clave").on(table.restauranteId, table.clave, table.createdAt),
+  index("idx_whatsapp_chat_mensaje_fecha").on(table.restauranteId, table.createdAt),
 ]);

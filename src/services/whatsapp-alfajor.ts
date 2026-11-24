@@ -25,7 +25,7 @@ interface Consulta {
   timestamp?: string
 }
 
-type Enviar = (token: string, phoneId: string, data: { phone: string; text: string }) => Promise<{ success: boolean }>
+type Enviar = (token: string, phoneId: string, data: { phone: string; text: string }) => Promise<{ success: boolean; messageId?: string }>
 
 /** Una respuesta por cliente cada 24 h, durable en las conversaciones existentes. */
 export function crearRespuestaAlfajor(pool: Pick<Pool, 'getConnection'>, enviar: Enviar) {
@@ -70,6 +70,12 @@ export function crearRespuestaAlfajor(pool: Pick<Pool, 'getConnection'>, enviar:
       `, [RESTAURANTE_ALFAJOR, consulta.telefono, JSON.stringify([
         { role: 'assistant', content: RESPUESTA_ALFAJOR, tipo: TIPO_RESPUESTA },
       ])])
+      // El chat de sólo lectura del panel muestra también la respuesta automática.
+      await conexion.query(`
+        INSERT IGNORE INTO whatsapp_chat_mensaje (restaurante_id, telefono, clave, direccion, origen, texto, wa_message_id)
+        VALUES (?, ?, ?, 'saliente', 'bot', ?, ?)
+      `, [RESTAURANTE_ALFAJOR, consulta.telefono.replace(/\D/g, '').slice(0, 20), consulta.telefono.replace(/\D/g, '').slice(-10),
+        RESPUESTA_ALFAJOR, resultado.messageId ?? null]).catch(() => {})
     } finally {
       try {
         if (bloqueado) await conexion.query('SELECT RELEASE_LOCK(?)', [lock])

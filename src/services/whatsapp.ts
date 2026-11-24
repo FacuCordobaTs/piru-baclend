@@ -1135,3 +1135,60 @@ export const sendWhatsAppText = async (
     return { success: false, error };
   }
 };
+
+/** Plantillas de las tandas de Recompra. Ver docs/PLANTILLAS_TANDAS.md. */
+export const PLANTILLA_TANDA = 'recompra_tanda_v1'
+export const PLANTILLA_TANDA_FOTO = 'recompra_tanda_foto_v1'
+/** El texto fijo de las plantillas, para la vista previa del panel y el registro del chat. */
+export const cuerpoPlantillaTanda = (nombre: string, texto: string) =>
+  `Hola ${nombre} 👋\n\n${texto}\n\nTocá el botón y pedí en segundos 👇`
+export const BOTON_PLANTILLA_TANDA = 'Pedir ahora'
+
+export interface TandaWhatsAppData {
+  phone: string
+  /** {{1}}: el nombre del cliente. */
+  nombre: string
+  /** {{2}}: la parte personal del mensaje, en una sola línea. */
+  texto: string
+  /** Lo que sigue a la base embebida en el botón: la tienda pública del local. */
+  pathBoton: string
+  /** Con foto se usa la plantilla con encabezado de imagen. */
+  imagenUrl?: string | null
+}
+
+/**
+ * Un mensaje de una tanda de Recompra por la Cloud API (MARKETING, `es_AR`). El botón URL trae
+ * embebida la base pública de la tienda del local (para Alfajor, `https://alfajorconpapas.com/`),
+ * así que sólo viaja el path del link personal.
+ */
+export const sendTandaWhatsApp = async (
+  data: TandaWhatsAppData,
+  creds?: WaCredentials,
+): Promise<{ success: boolean; id?: string; error?: unknown }> => {
+  const phoneId = creds?.phoneId ?? process.env.WHATSAPP_PHONE_ID
+  const token = creds?.token ?? process.env.WHATSAPP_API_TOKEN
+  if (!phoneId || !token) return { success: false, error: 'credenciales_whatsapp_incompletas' }
+  const components: any[] = []
+  if (data.imagenUrl) components.push({ type: 'header', parameters: [{ type: 'image', image: { link: data.imagenUrl } }] })
+  components.push({ type: 'body', parameters: [{ type: 'text', text: data.nombre }, { type: 'text', text: data.texto }] })
+  components.push({ type: 'button', sub_type: 'url', index: 0, parameters: [{ type: 'text', text: data.pathBoton }] })
+  try {
+    const response = await fetch(`https://graph.facebook.com/v22.0/${phoneId}/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp', recipient_type: 'individual', to: data.phone, type: 'template',
+        template: { name: data.imagenUrl ? PLANTILLA_TANDA_FOTO : PLANTILLA_TANDA, language: { code: 'es_AR' }, components },
+      }),
+    })
+    const result = await response.json() as any
+    if (!response.ok) {
+      console.error('❌ Error WhatsApp API (tanda):', JSON.stringify(result, null, 2))
+      return { success: false, error: result }
+    }
+    return { success: true, id: result.messages?.[0]?.id }
+  } catch (error) {
+    console.error('❌ Error de red enviando tanda:', error)
+    return { success: false, error }
+  }
+}

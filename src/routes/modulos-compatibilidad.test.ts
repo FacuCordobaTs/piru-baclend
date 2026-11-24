@@ -140,7 +140,8 @@ test('reactivar Cupones ya activo es idempotente y no modifica flags históricos
 })
 
 test('una herramienta paga nunca se activa por el endpoint gratuito', async () => {
-  cola = [[local], [{ ...modulo, tipo: 'pago' }]]
+  // La tercera lectura es suscripción + plan: sin `planTienda`, el local es Evolución (lo de siempre).
+  cola = [[local], [{ ...modulo, tipo: 'pago' }], [{ estado: 'activa' }]]
   const res = await pedir('/modulos/codigos_descuento/activar', 'PUT')
   expect(res.status).toBe(409)
   expect(await res.json()).toMatchObject({ success: false, paymentRequired: true })

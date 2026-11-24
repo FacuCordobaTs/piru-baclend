@@ -9,6 +9,7 @@ import {
 import { drizzle } from 'drizzle-orm/mysql2'
 import { authMiddleware } from '../middleware/auth'
 import { eq, and, sql } from 'drizzle-orm'
+import { tieneModuloActivo } from '../lib/modulos'
 
 const metricasRoute = new Hono().use('*', authMiddleware)
 
@@ -35,6 +36,20 @@ metricasRoute.get('/', async (c) => {
   const month = monthQuery ? parseInt(monthQuery, 10) : now.getMonth() + 1 // 1-12
 
   const hasRangeFilter = Boolean(fromQuery && toQuery)
+
+  // Estadísticas básicas (mes, medios de pago, origen y más pedidos) para todos los planes. Las
+  // avanzadas —rangos de fechas libres, series por hora/día/categoría y el ranking completo— vienen
+  // con el plan Escala (`estadisticas_avanzadas`). Evolución las tiene todas, como siempre.
+  const avanzadas = await tieneModuloActivo(db, restauranteId, 'estadisticas_avanzadas')
+  if (hasRangeFilter && !avanzadas) {
+    return c.json({
+      success: false,
+      code: 'plan_requerido',
+      module: 'estadisticas_avanzadas',
+      planMinimo: 'escala',
+      message: 'Los rangos de fechas son parte de las estadísticas avanzadas (plan Escala).',
+    }, 403)
+  }
   const hasValidMonth = Number.isInteger(month) && month >= 1 && month <= 12
   const hasValidYear = Number.isInteger(year) && year >= 2000 && year <= 3000
 
@@ -213,6 +228,7 @@ metricasRoute.get('/', async (c) => {
   return c.json({
     success: true,
     data: {
+      avanzadas,
       ingresos: {
         mensual: totalMensual,
         historico: totalHistorico,
@@ -228,23 +244,23 @@ metricasRoute.get('/', async (c) => {
       },
       desgloseMetodoPago: desglosePagoFormat,
       topProductos,
-      porHora: porHoraRes.map(r => ({
+      porHora: !avanzadas ? [] : porHoraRes.map(r => ({
         hora: numero(r.hora),
         pedidos: numero(r.pedidos),
         total: numero(r.total),
       })),
-      porDia: porDiaRes.map(r => ({
+      porDia: !avanzadas ? [] : porDiaRes.map(r => ({
         fecha: String(r.fecha).slice(0, 10),
         pedidos: numero(r.pedidos),
         total: numero(r.total),
       })),
-      porCategoria: porCategoriaRes.map(r => ({
+      porCategoria: !avanzadas ? [] : porCategoriaRes.map(r => ({
         categoriaId: r.categoriaId ?? null,
         nombre: r.nombre ?? 'Sin categoría',
         cantidad: numero(r.cantidad),
         totalVendido: numero(r.totalVendido),
       })),
-      productosVendidos: productosVendidosRes.map(r => ({
+      productosVendidos: !avanzadas ? [] : productosVendidosRes.map(r => ({
         productoId: r.productoId,
         nombre: r.nombre || 'Producto eliminado',
         categoria: r.categoria ?? null,
