@@ -57,6 +57,9 @@ export function Carta({ seccion }: PropsSeccion) {
             aria-labelledby={`${categoria.id}-titulo`}
           >
             <h2 id={`${categoria.id}-titulo`}>{categoria.nombre}</h2>
+            <p className="pv-seccion-cuenta">
+              {categoria.productos.length} {categoria.productos.length === 1 ? "opción" : "opciones"}
+            </p>
             <ul className="pv-grilla">
               {categoria.productos.map((producto) => (
                 <Tarjeta key={producto.id} producto={producto} cantidad={carrito.quantity(producto.id)} onAbrir={abrirProducto} />

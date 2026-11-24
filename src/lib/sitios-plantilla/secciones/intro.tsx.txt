@@ -1,0 +1,136 @@
+import { useEffect, useState, type CSSProperties } from "react"
+import { AnimatePresence, motion, useReducedMotion } from "motion/react"
+import { logoPara, useLocal, useSitio } from "@piru/tienda"
+import { Seccion, esOscuro, propsDe, useSitioPagina } from "../components/Sitio"
+import type { PropsSeccion } from "./index"
+
+type Props = {
+  antetitulo: string
+  frase: string
+  mostrarLogo: boolean
+  duracion: "corta" | "normal" | "larga"
+  /** sesion: una vez por visita. siempre: cada vez que se abre la página. */
+  repetir: "sesion" | "siempre"
+}
+
+const DURACION = { corta: 1900, normal: 2900, larga: 3900 }
+const SUAVE = [0.22, 1, 0.36, 1] as const
+
+/**
+ * La intro: una pantalla que se abre sobre la página al entrar (logo, nombre letra por letra y una
+ * frase) y se levanta como un telón. Cada tema la viste con sus reglas `.pv-<tema> .pv-intro-*`. Se saltea con un toque y no aparece si el visitante pidió menos
+ * movimiento. En el editor se ve dentro de la página, con un botón para repetirla.
+ */
+export function Intro({ seccion }: PropsSeccion) {
+  const p = propsDe<Props>(seccion)
+  const { local } = useLocal()
+  const { isPreview } = useSitio()
+  const quieto = useReducedMotion()
+  const clave = `piru-intro:${local?.nombre ?? ""}`
+  const [abierta, setAbierta] = useState(() => {
+    if (isPreview || quieto) return false
+    try {
+      return p.repetir === "siempre" || !sessionStorage.getItem(clave)
+    } catch {
+      return true
+    }
+  })
+  const [vuelta, setVuelta] = useState(0)
+  const ms = DURACION[p.duracion ?? "normal"] ?? DURACION.normal
+
+  useEffect(() => {
+    if (!abierta) return
+    try {
+      sessionStorage.setItem(clave, "1")
+    } catch {
+      /* sin almacenamiento: se ve igual */
+    }
+    const previo = document.documentElement.style.overflow
+    document.documentElement.style.overflow = "hidden"
+    const t = window.setTimeout(() => setAbierta(false), ms)
+    return () => {
+      window.clearTimeout(t)
+      document.documentElement.style.overflow = previo
+    }
+  }, [abierta, clave, ms])
+
+  if (!local) return null
+
+  if (isPreview)
+    return (
+      <Seccion seccion={seccion} etiqueta="Intro" className="pv-intro-muestra">
+        <Escena key={vuelta} p={p} ms={ms} />
+        <button type="button" className="pv-intro-repetir" onClick={() => setVuelta((v) => v + 1)}>
+          Ver la intro de nuevo
+        </button>
+      </Seccion>
+    )
+
+  return (
+    <AnimatePresence>
+      {abierta && (
+        <motion.div
+          className="pv-intro"
+          role="presentation"
+          onClick={() => setAbierta(false)}
+          initial={{ clipPath: "inset(0 0 0% 0)" }}
+          exit={{ clipPath: "inset(0 0 100% 0)" }}
+          transition={{ duration: 0.85, ease: [0.76, 0, 0.24, 1] }}
+        >
+          <Escena p={p} ms={ms} />
+          <span className="pv-intro-saltar">Tocá para entrar</span>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  )
+}
+
+function Escena({ p, ms }: { p: Partial<Props>; ms: number }) {
+  const { local } = useLocal()
+  const { contenido, tema } = useSitioPagina()
+  if (!local) return null
+  const oscuro = esOscuro(tema.fondo)
+  const logo = p.mostrarLogo !== false ? (oscuro ? contenido.logo : contenido.logoClaro) ?? logoPara(local, oscuro) : null
+  const palabras = local.nombre.split(/\s+/).filter(Boolean)
+  let indice = 0
+  return (
+    <div className="pv-intro-escena" style={{ "--pv-intro-ms": `${ms}ms` } as CSSProperties}>
+      <div className="pv-intro-brillo" aria-hidden="true" />
+      {logo && (
+        <motion.img
+          className="pv-intro-logo"
+          src={logo}
+          alt=""
+          initial={{ opacity: 0, scale: 0.8, filter: "blur(10px)" }}
+          animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+          transition={{ duration: 0.9, ease: SUAVE }}
+        />
+      )}
+      {p.antetitulo?.trim() && (
+        <motion.p className="pv-intro-antetitulo" data-piru-prop="antetitulo" initial={{ opacity: 0, letterSpacing: "0.6em" }} animate={{ opacity: 1, letterSpacing: "0.32em" }} transition={{ duration: 1.1, delay: 0.2, ease: SUAVE }}>
+          {p.antetitulo}
+        </motion.p>
+      )}
+      <h2 className="pv-intro-nombre" aria-label={local.nombre}>
+        {palabras.map((palabra, w) => (
+          <span key={w} className="pv-intro-palabra" aria-hidden="true">
+            {[...palabra].map((letra) => {
+              const i = indice++
+              return (
+                <motion.span key={i} initial={{ y: "105%", opacity: 0 }} animate={{ y: "0%", opacity: 1 }} transition={{ duration: 0.7, delay: 0.35 + i * 0.045, ease: SUAVE }}>
+                  {letra}
+                </motion.span>
+              )
+            })}
+          </span>
+        ))}
+      </h2>
+      <motion.span className="pv-intro-linea" aria-hidden="true" initial={{ scaleX: 0 }} animate={{ scaleX: 1 }} transition={{ duration: 1, delay: 0.7, ease: SUAVE }} />
+      {p.frase?.trim() && (
+        <motion.p className="pv-intro-frase" data-piru-prop="frase" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8, delay: 1, ease: SUAVE }}>
+          {p.frase}
+        </motion.p>
+      )}
+    </div>
+  )
+}

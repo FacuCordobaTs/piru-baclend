@@ -22,6 +22,7 @@ export const CONTENIDO_INICIAL: ContenidoSitio = {
 
 /** Las secciones de la plantilla: `tipo` → archivo en `secciones/`. El editor visual tiene su catálogo. */
 export const SECCIONES_PLANTILLA = {
+  intro: 'Intro',
   aviso: 'Aviso',
   portada: 'Portada',
   cinta: 'Cinta',

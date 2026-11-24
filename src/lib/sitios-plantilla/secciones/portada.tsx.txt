@@ -2,7 +2,7 @@ import { motion, useReducedMotion } from "motion/react"
 import { Clock } from "lucide-react"
 import { logoPara, useCarta, useHorarios, useLocal } from "@piru/tienda"
 import type { Accion, Medio as MedioContenido } from "../contenido"
-import { BotonAccion, Medio, Seccion, Texto, propsDe, useSitioPagina } from "../components/Sitio"
+import { BotonAccion, Medio, Seccion, Texto, esOscuro, propsDe, useSitioPagina } from "../components/Sitio"
 import { TarjetaDestacada } from "./Destacado"
 import type { PropsSeccion } from "./index"
 
@@ -43,10 +43,13 @@ export function Portada({ seccion }: PropsSeccion) {
   const fotoDeLaCarta = destacado?.fotos[0] ?? secciones[0]?.productos.find((x) => x.fotos[0])?.fotos[0]
   const medio = p.medio?.url ? p.medio : disposicion === "fondo" && fotoDeLaCarta ? { url: fotoDeLaCarta, tipo: "imagen" as const } : null
   // El hero de Moderna es del color primario: el logo se elige según la tinta que lo va a rodear.
-  const sobreOscuro = (tema.plantilla === "moderna" && tema.sobrePrimario === "#ffffff") || (disposicion === "fondo" && !!medio)
+  const sobreOscuro = (tema.plantilla === "moderna" && tema.sobrePrimario === "#ffffff") || (disposicion === "fondo" && !!medio) || (tema.plantilla !== "moderna" && esOscuro(tema.fondo))
   const logo = (sobreOscuro ? contenido.logo : contenido.logoClaro) ?? logoPara(local, sobreOscuro)
   const animacion = quieto || !p.animacion || p.animacion === "ninguna" ? null : ANIMACIONES[p.animacion] ?? null
   const abierto = horarios.abierto && !local.pausado
+  // Sin título propio el título ya es el nombre: no se repite arriba.
+  const titulo = p.titulo?.trim() || local.nombre
+  const verNombre = p.mostrarNombre !== false && titulo !== local.nombre
 
   return (
     <Seccion
@@ -69,11 +72,12 @@ export function Portada({ seccion }: PropsSeccion) {
           transition={animacion?.transition}
         >
           {p.mostrarLogo !== false && logo && <img className="pv-logo" src={logo} alt={local.nombre} />}
-          {p.mostrarNombre !== false && <p className="pv-local">{local.nombre}</p>}
-          <h1 data-piru-prop="titulo">{p.titulo?.trim() || local.nombre}</h1>
+          {verNombre && <p className="pv-local">{local.nombre}</p>}
+          <h1 data-piru-prop="titulo">{titulo}</h1>
           <Texto prop="bajada" valor={p.bajada} como="p" className="pv-bajada" />
           {p.mostrarEstado !== false && (
             <p className={`pv-estado-local ${abierto ? "abierto" : ""}`}>
+              <span className="pv-estado-punto" aria-hidden="true" />
               <Clock size={15} aria-hidden="true" />
               {local.pausado ? "Cerrado temporalmente" : horarios.texto}
             </p>
@@ -84,6 +88,7 @@ export function Portada({ seccion }: PropsSeccion) {
           </div>
           {destacado && <TarjetaDestacada producto={destacado} onAbrir={abrirProducto} />}
         </motion.div>
+        {disposicion === "fondo" && medio && <span className="pv-portada-bajar" aria-hidden="true" />}
         {disposicion === "costado" && medio && (
           <div className="pv-portada-marco">
             <Medio medio={medio} className="pv-portada-media" />

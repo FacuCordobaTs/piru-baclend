@@ -64,6 +64,9 @@ const contraste = (a: string, b: string) => {
   return (x + 0.05) / (y + 0.05)
 }
 
+/** Si un fondo es oscuro: decide qué logo y qué tinta van encima. */
+export const esOscuro = (hex: string) => luminancia(hex) < 0.18
+
 const tintaSobre = (hex: string) => (luminancia(hex) > 0.36 ? "#17130f" : "#ffffff")
 
 export function temaDe(contenido: ContenidoSitio): Tema {

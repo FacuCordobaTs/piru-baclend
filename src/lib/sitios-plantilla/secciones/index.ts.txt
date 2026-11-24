@@ -1,5 +1,6 @@
 import type { ComponentType } from "react"
 import type { SeccionPagina } from "../contenido"
+import { Intro } from "./Intro"
 import { Aviso } from "./Aviso"
 import { Portada } from "./Portada"
 import { Cinta } from "./Cinta"
@@ -22,6 +23,7 @@ export type PropsSeccion = { seccion: SeccionPagina }
  * `secciones/MiSeccion.tsx` (con `Seccion` de `components/Sitio`) y sumala acá con su tipo.
  */
 export const SECCIONES: Record<string, ComponentType<PropsSeccion>> = {
+  intro: Intro,
   aviso: Aviso,
   portada: Portada,
   cinta: Cinta,
