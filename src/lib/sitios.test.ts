@@ -127,7 +127,7 @@ describe('build', () => {
     expect(sitio).toContain(JSON.stringify(PLANTILLAS_SITIO, null, 2))
     expect(sitio).toContain(`: ${JSON.stringify(PLANTILLA_POR_DEFECTO)}) as Plantilla`)
     const contenido = plantillaInicial({ ...CONTENIDO_INICIAL, plantilla: 'elegante' })['contenido.ts'] ?? ''
-    expect(contenido).toContain('plantilla?: "elegante" | "moderna" | "artesanal"')
+    expect(contenido).toContain(`plantilla?: ${Object.keys(PLANTILLAS_SITIO).map((id) => JSON.stringify(id)).join(' | ')}`)
     expect(contenido).toContain('"plantilla": "elegante"')
   })
 

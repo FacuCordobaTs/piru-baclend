@@ -24,6 +24,7 @@ export type BasePlantilla = {
 }
 
 export const PLANTILLAS_SITIO = {
+  sencilla: { fondo: '#ffffff', texto: '#1d1d1f', superficie: '#f5f5f7', primario: '#1d1d1f', secundario: '#6e6e73', titulos: 'Inter', cuerpo: 'Inter', peso: 600, serif: false, radio: 12, portada: 'costado' },
   elegante: { fondo: '#f6f1e8', texto: '#17130f', superficie: '#fdfbf7', primario: '#b34a2a', secundario: '#1f5c4d', titulos: 'Bricolage Grotesque', cuerpo: 'Bricolage Grotesque', peso: 800, serif: false, radio: 4, portada: 'fondo' },
   moderna: { fondo: '#f5f7fa', texto: '#171d2b', superficie: '#ffffff', primario: '#315cfd', secundario: '#ffc21a', titulos: 'Unbounded', cuerpo: 'Manrope', peso: 700, serif: false, radio: 22, portada: 'costado' },
   artesanal: { fondo: '#f4ead8', texto: '#392a20', superficie: '#fffaf1', primario: '#c2410c', secundario: '#3f7d3a', titulos: 'Fraunces', cuerpo: 'Nunito Sans', peso: 700, serif: true, radio: 16, portada: 'costado' },

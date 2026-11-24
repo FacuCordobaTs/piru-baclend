@@ -276,6 +276,35 @@ a { color: inherit; }
 .pv-pedido-pie small { color: var(--pv-suave); }
 .pv-error { color: #b42318; font-size: 14px !important; }
 
+
+/* Sencilla: blanco y negro, filetes finos y la carta en lista con la foto a la derecha. */
+.pv-sencilla .pv-portada { min-height: auto; border-bottom: 1px solid var(--pv-linea); }
+.pv-sencilla .pv-portada-fondo.con-medio { min-height: min(70dvh, 560px); }
+.pv-sencilla .pv-portada-interior { padding: 40px 20px 36px; }
+.pv-sencilla .pv-logo { border-radius: 14px; background: var(--pv-superficie); }
+.pv-sencilla .pv-local { letter-spacing: 0.08em; font-weight: 600; opacity: 0.6; }
+.pv-sencilla .pv-portada h1 { font-size: clamp(38px, 7vw, 72px); letter-spacing: -0.035em; line-height: 1; }
+.pv-sencilla .pv-bajada { font-size: 17px; }
+.pv-sencilla .pv-boton { font-weight: 600; min-height: 48px; }
+.pv-sencilla .pv-portada-media, .pv-sencilla .pv-historia-foto, .pv-sencilla .pv-bloque-foto { border-radius: 18px; box-shadow: none; }
+.pv-sencilla .pv-destacado { box-shadow: none; border: 1px solid var(--pv-linea); }
+.pv-sencilla .pv-cinta.pv-esquema-normal { background: var(--pv-superficie); color: var(--pv-texto); border-block: 0; }
+.pv-sencilla .pv-cinta-texto { font-family: var(--pv-cuerpo); font-weight: 600; font-size: 13px; letter-spacing: 0.04em; text-transform: none; }
+.pv-sencilla .pv-cinta-texto span::after { content: "·"; }
+.pv-sencilla .pv-kicker { color: var(--pv-suave); letter-spacing: 0.08em; font-weight: 600; }
+.pv-sencilla .pv-bloque h2, .pv-sencilla .pv-titulo-seccion { letter-spacing: -0.03em; }
+.pv-sencilla .pv-categorias button { border: 0; background: var(--pv-superficie); font-weight: 600; }
+.pv-sencilla .pv-carta-plantilla .pv-grilla { grid-template-columns: 1fr; gap: 0; }
+.pv-sencilla .pv-carta-plantilla .pv-producto { border: 0; border-bottom: 1px solid var(--pv-linea); border-radius: 0; background: transparent; }
+.pv-sencilla .pv-carta-plantilla .pv-producto-abrir { display: grid; grid-template-columns: 1fr 96px; gap: 16px; align-items: center; padding: 16px 0; }
+.pv-sencilla .pv-carta-plantilla .pv-producto-abrir img { order: 2; width: 96px; height: 96px; aspect-ratio: auto; border-radius: 12px; }
+.pv-sencilla .pv-carta-plantilla .pv-producto.sin-foto .pv-producto-abrir { grid-template-columns: 1fr; min-height: 0; }
+.pv-sencilla .pv-carta-plantilla .pv-producto-texto { padding: 0 52px 0 0; }
+.pv-sencilla .pv-carta-plantilla .pv-producto:not(.sin-foto) .pv-agregar { right: 6px; bottom: 22px; width: 34px; height: 34px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); }
+.pv-sencilla .pv-producto-texto strong { font-weight: 600; }
+.pv-sencilla .pv-grupo-caja { border-width: 1px; box-shadow: none; }
+.pv-sencilla .pv-galeria img { border-radius: 12px; }
+
 /* ── Moderna: un afiche ── */
 .pv-moderna .pv-portada.pv-esquema-normal { background: var(--pv-acento); color: var(--pv-sobre-acento); }
 .pv-moderna .pv-portada { min-height: auto; }
