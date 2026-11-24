@@ -45,6 +45,9 @@ import { chequearProteccionMarketing, VENTANA_TOPE_DIAS } from '../lib/proteccio
 import {
   compensarReservaCreditoMarketing,
   confirmarReservaCreditoMarketing,
+  getOrCreateSaldo,
+  listarPacks,
+  marketingDisponible,
   reservarCreditoMarketing,
 } from '../lib/mensajes-wallet'
 import {
@@ -349,6 +352,23 @@ export function crearRecompraTandasRoute() {
         conPuntos: ctx.localTanda.puntos != null,
         localNombre: ctx.local.nombre,
         tieneTienda: anclajePublico(ctx.local) != null,
+      },
+    })
+  })
+
+  // Envío automático: cuántos mensajes de marketing quedan y los packs para comprar más. Cada
+  // mensaje de una tanda por Meta usa uno; sin saldo no sale ninguno.
+  route.get('/mensajes', async (c: any) => {
+    const restauranteId = c.user.id as number
+    const [saldo, packs] = await Promise.all([
+      getOrCreateSaldo(db as any, restauranteId),
+      listarPacks(db as any, 'marketing'),
+    ])
+    return c.json({
+      success: true,
+      data: {
+        disponibles: marketingDisponible(saldo),
+        packs: packs.slice(0, 3).map((p: any) => ({ id: p.id, nombre: p.nombre, cantidad: p.cantidad, precio: Number(p.precio) })),
       },
     })
   })

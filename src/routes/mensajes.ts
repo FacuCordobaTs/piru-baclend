@@ -46,6 +46,8 @@ async function iniciarCheckoutRecarga(
   restauranteId: number,
   pack: PackRow,
   origen: 'manual' | 'auto',
+  /** Pantalla del panel a la que vuelve Mercado Pago (por ejemplo, la tanda que espera el saldo). */
+  volver = '/dashboard/mensajes',
 ): Promise<
   | { ok: true; data: { recargaId: number; url_pago: string; preference_id: string; cantidad: number; monto: string } }
   | { ok: false; status: 502; message: string }
@@ -61,7 +63,7 @@ async function iniciarCheckoutRecarga(
     origen,
   })
 
-  const backUrl = `${ADMIN_URL}/dashboard/mensajes?recarga=success`
+  const backUrl = `${ADMIN_URL}${volver}${volver.includes('?') ? '&' : '?'}recarga=success`
   const pref = await crearPreferenciaRecargaMP({
     recargaId,
     titulo: `${pack.nombre} · ${pack.cantidad} mensajes`,
@@ -214,12 +216,14 @@ mensajesRoute.get('/packs', async (c) => {
 const checkoutSchema = z.object({
   packId: z.number().int().positive(),
   telefonoDestino: z.string().trim().max(30).optional(),
+  // Sólo rutas del propio panel: nunca un dominio ajeno.
+  volver: z.string().max(200).regex(/^\/dashboard\/[\w\-/]*(\?[\w\-=&]*)?$/).optional(),
 })
 
 mensajesRoute.post('/recarga/checkout', zValidator('json', checkoutSchema), async (c) => {
   const db = drizzle(pool)
   const restauranteId = (c as any).user.id
-  const { packId } = c.req.valid('json')
+  const { packId, volver } = c.req.valid('json')
 
   if (!MP_PLATFORM_ACCESS_TOKEN) {
     console.error('❌ [Recarga] Falta MP_ACCESS_TOKEN para cobrar recargas')
@@ -232,7 +236,7 @@ mensajesRoute.post('/recarga/checkout', zValidator('json', checkoutSchema), asyn
       return c.json({ message: 'Pack no encontrado', success: false }, 404)
     }
 
-    const res = await iniciarCheckoutRecarga(db, restauranteId, pack, 'manual')
+    const res = await iniciarCheckoutRecarga(db, restauranteId, pack, 'manual', volver)
     if (!res.ok) return c.json({ message: res.message, success: false }, res.status)
     return c.json({ success: true, data: res.data }, 200)
   } catch (error) {
