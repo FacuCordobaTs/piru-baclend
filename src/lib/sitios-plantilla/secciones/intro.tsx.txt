@@ -16,6 +16,12 @@ type Props = {
 const DURACION = { corta: 1900, normal: 2900, larga: 3900 }
 const SUAVE = [0.22, 1, 0.36, 1] as const
 
+/** La salida de la intro según el tema: `--hueco` es el radio del círculo que se abre (ver `.pv-moderna .pv-intro`). */
+const SALIDAS = {
+  telon: { inicial: { clipPath: "inset(0 0 0% 0)" }, salida: { clipPath: "inset(0 0 100% 0)" }, duracion: 0.85 },
+  moderna: { inicial: { "--hueco": "0vmax" }, salida: { "--hueco": "150vmax" }, duracion: 1 },
+} as const
+
 /**
  * La intro: una pantalla que se abre sobre toda la página al entrar (cada vez o una vez por visita;
  * logo, nombre letra por letra y una frase) y se levanta como un telón. Cada tema la viste con sus reglas
@@ -27,7 +33,10 @@ export function Intro({ seccion }: PropsSeccion) {
   const p = propsDe<Props>(seccion)
   const { local } = useLocal()
   const { isPreview } = useSitio()
+  const { tema } = useSitioPagina()
   const quieto = useReducedMotion()
+  // Cómo se va: un telón que sube o, en los temas con círculo, un agujero que se abre desde el centro.
+  const salida = SALIDAS[tema.plantilla as keyof typeof SALIDAS] ?? SALIDAS.telon
   const clave = `piru-intro:${local?.nombre ?? ""}`
   const [abierta, setAbierta] = useState(() => {
     if (quieto) return false
@@ -74,9 +83,9 @@ export function Intro({ seccion }: PropsSeccion) {
           className="pv-intro"
           role="presentation"
           onClick={() => setAbierta(false)}
-          initial={{ clipPath: "inset(0 0 0% 0)" }}
-          exit={{ clipPath: "inset(0 0 100% 0)" }}
-          transition={{ duration: 0.85, ease: [0.76, 0, 0.24, 1] }}
+          initial={salida.inicial}
+          exit={salida.salida}
+          transition={{ duration: salida.duracion, ease: [0.76, 0, 0.24, 1] }}
         >
           <Escena p={p} ms={ms} />
           <span className="pv-intro-saltar">Tocá para entrar</span>
@@ -101,6 +110,7 @@ function Escena({ p, ms }: { p: Partial<Props>; ms: number }) {
   const { local } = useLocal()
   const { contenido, tema } = useSitioPagina()
   if (!local) return null
+  const salta = tema.plantilla === "moderna"
   const oscuro = esOscuro(tema.fondo)
   const logo = p.mostrarLogo !== false ? (oscuro ? contenido.logo : contenido.logoClaro) ?? logoPara(local, oscuro) : null
   const palabras = local.nombre.split(/\s+/).filter(Boolean)
@@ -129,7 +139,12 @@ function Escena({ p, ms }: { p: Partial<Props>; ms: number }) {
             {[...palabra].map((letra) => {
               const i = indice++
               return (
-                <motion.span key={i} initial={{ y: "105%", opacity: 0 }} animate={{ y: "0%", opacity: 1 }} transition={{ duration: 0.7, delay: 0.35 + i * 0.045, ease: SUAVE }}>
+                <motion.span
+                  key={i}
+                  initial={salta ? { y: "120%", rotate: -14, scale: 0.6, opacity: 0 } : { y: "105%", opacity: 0 }}
+                  animate={{ y: "0%", rotate: 0, scale: 1, opacity: 1 }}
+                  transition={salta ? { type: "spring", bounce: 0.6, duration: 0.8, delay: 0.3 + i * 0.06 } : { duration: 0.7, delay: 0.35 + i * 0.045, ease: SUAVE }}
+                >
                   {letra}
                 </motion.span>
               )

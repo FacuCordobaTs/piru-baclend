@@ -27,7 +27,8 @@ export const PLANTILLAS_SITIO = {
   sencilla: { fondo: '#ffffff', texto: '#1d1d1f', superficie: '#f5f5f7', primario: '#1d1d1f', secundario: '#6e6e73', titulos: 'Inter', cuerpo: 'Inter', peso: 600, serif: false, radio: 12, portada: 'costado' },
   // «Brasa» en la galería: conserva la id `elegante` porque las páginas ya creadas la guardan.
   elegante: { fondo: '#0f0c0a', texto: '#f3eadb', superficie: '#1b1612', primario: '#e2a04a', secundario: '#b8391f', titulos: 'Playfair Display', cuerpo: 'Jost', peso: 600, serif: true, radio: 2, portada: 'fondo' },
-  moderna: { fondo: '#f5f7fa', texto: '#171d2b', superficie: '#ffffff', primario: '#315cfd', secundario: '#ffc21a', titulos: 'Unbounded', cuerpo: 'Manrope', peso: 700, serif: false, radio: 22, portada: 'costado' },
+  // «Mordisco» en la galería: conserva la id `moderna` porque las páginas ya creadas la guardan.
+  moderna: { fondo: '#fff4e4', texto: '#1b1530', superficie: '#ffffff', primario: '#ff5a36', secundario: '#ffc83d', titulos: 'Bricolage Grotesque', cuerpo: 'DM Sans', peso: 800, serif: false, radio: 22, portada: 'costado' },
   artesanal: { fondo: '#f4ead8', texto: '#392a20', superficie: '#fffaf1', primario: '#c2410c', secundario: '#3f7d3a', titulos: 'Fraunces', cuerpo: 'Nunito Sans', peso: 700, serif: true, radio: 16, portada: 'costado' },
 } satisfies Record<string, BasePlantilla>
 

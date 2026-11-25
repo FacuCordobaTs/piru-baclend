@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700;800&family=Nunito+Sans:wght@400;600;700;800&family=Unbounded:wght@400;500;700&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Jost:wght@300;400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700;800&family=Nunito+Sans:wght@400;600;700;800&family=Unbounded:wght@400;500;700&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Jost:wght@300;400;500;600&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap");
 
 /*
  * Estilos de la página. Los colores salen del tema (`components/Sitio.tsx`) como variables:
@@ -95,7 +95,7 @@ a { color: inherit; }
 @keyframes pv-aparecer { from { opacity: 0; } to { opacity: 1; } }
 
 /* Piezas que dibuja la plantilla y sólo muestra algún tema. */
-.pv-seccion-cuenta, .pv-portada-bajar { display: none; }
+.pv-seccion-cuenta, .pv-portada-bajar, .pv-portada-forma, .pv-portada-sello { display: none; }
 
 /* ── Aviso de horario ── */
 .pv-s-aviso { padding: 10px 20px; border-bottom: 1px solid var(--pv-linea); font-size: 14px; }
@@ -326,31 +326,209 @@ a { color: inherit; }
 .pv-sencilla .pv-grupo-caja { border-width: 1px; box-shadow: none; }
 .pv-sencilla .pv-galeria img { border-radius: 12px; }
 
-/* ── Moderna: un afiche ── */
-.pv-moderna .pv-portada.pv-esquema-normal { background: var(--pv-acento); color: var(--pv-sobre-acento); }
-.pv-moderna .pv-portada { min-height: auto; }
-.pv-moderna .pv-portada-fondo.con-medio { min-height: min(80dvh, 660px); }
-.pv-moderna .pv-portada-interior { padding: 34px 20px 48px; }
-.pv-moderna .pv-logo { background: color-mix(in srgb, var(--pv-sobre-acento) 16%, transparent); }
-.pv-moderna .pv-local { opacity: 0.85; }
-.pv-moderna .pv-portada h1 { font-size: clamp(48px, 10vw, 108px); text-transform: uppercase; letter-spacing: -0.05em; line-height: 0.86; max-width: 13ch; }
-.pv-moderna .pv-portada.pv-esquema-normal .pv-bajada { color: color-mix(in srgb, var(--pv-sobre-acento) 82%, transparent); }
-.pv-moderna .pv-portada.pv-esquema-normal .pv-estado-local { background: color-mix(in srgb, var(--pv-sobre-acento) 14%, transparent); border-color: color-mix(in srgb, var(--pv-sobre-acento) 24%, transparent); color: inherit; }
-.pv-moderna .pv-portada.pv-esquema-normal .pv-boton { background: var(--pv-sobre-acento); color: var(--pv-acento); }
-.pv-moderna .pv-portada.pv-esquema-normal .pv-boton-secundario { background: transparent; color: var(--pv-sobre-acento); border-color: currentColor; }
-.pv-moderna .pv-portada-media { border-radius: 28px; transform: rotate(2deg); border: 6px solid color-mix(in srgb, var(--pv-sobre-acento) 90%, transparent); }
-.pv-moderna .pv-destacado { background: var(--pv-superficie); color: var(--pv-texto); transform: rotate(1.2deg); box-shadow: 0 22px 50px rgba(0, 0, 0, 0.24); }
-.pv-moderna .pv-cinta-texto { font-size: 17px; }
-.pv-moderna .pv-categorias button.activa { background: var(--pv-acento); border-color: var(--pv-acento); color: var(--pv-sobre-acento); }
-.pv-moderna .pv-bloque h2 { text-transform: uppercase; letter-spacing: -0.04em; }
-.pv-moderna .pv-seccion h2 { font-size: clamp(24px, 3.6vw, 34px); }
-.pv-moderna .pv-carta-plantilla .pv-grilla { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.pv-moderna .pv-producto { border-radius: 20px; }
-.pv-moderna .pv-producto-texto { padding: 12px 54px 14px 14px; }
-.pv-moderna .pv-producto-texto strong { font-family: var(--pv-titulos); font-weight: var(--pv-peso); font-size: 16px; line-height: 1.1; }
-.pv-moderna .pv-agregar { width: 40px; height: 40px; right: 10px; bottom: 10px; }
-.pv-moderna .pv-grupo-caja { border-radius: 30px; border-width: 2px; border-color: var(--pv-texto); box-shadow: 8px 8px 0 var(--pv-texto); }
-.pv-moderna .pv-llamado h2 { font-size: clamp(40px, 9vw, 92px); }
+/* ── Mordisco (id `moderna`): pop, juguetón y con rebote ──
+ * Crema con puntitos, tinta violeta, tomate y mostaza. Bordes de tinta gruesos con sombra dura
+ * (los botones se hunden al tocarlos), letras que saltan, la foto de la portada recortada en un
+ * círculo con un sello que gira, ondas como separadores y tarjetas que se inclinan al pasar.
+ */
+.pv-moderna {
+  --pv-tinta: var(--pv-c-texto);
+  --pv-borde: 2.5px solid var(--pv-tinta);
+  --pv-sombra: 5px 5px 0 var(--pv-tinta);
+  --pv-rebote: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --pv-onda: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 12'%3E%3Cpath d='M0 6c5 0 5-5 10-5s5 5 10 5 5 5 10 5 5-5 10-5' fill='none' stroke='%23000' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-image: radial-gradient(color-mix(in srgb, var(--pv-c-texto) 11%, transparent) 1.2px, transparent 1.6px);
+  background-size: 22px 22px;
+}
+.pv-moderna .pv-bloque:not(.pv-esquema-normal) { background-image: none; }
+.pv-moderna .pv-kicker { display: inline-block; padding: 6px 12px; border: var(--pv-borde); border-radius: 999px; background: var(--pv-c-secundario); color: var(--pv-tinta); font-size: 12px; letter-spacing: 0.08em; transform: rotate(-3deg); box-shadow: 3px 3px 0 var(--pv-tinta); }
+.pv-moderna .pv-bloque h2, .pv-moderna .pv-titulo-seccion { font-size: clamp(36px, 6.4vw, 68px); line-height: 0.95; letter-spacing: -0.035em; }
+
+/* Separador: una onda de tinta que se mueve, antes de cada sección de contenido. */
+.pv-moderna :is(.pv-s-historia, .pv-s-galeria, .pv-s-ubicacion, .pv-s-preguntas, .pv-s-grupo, .pv-s-puntos, .pv-s-bloque, .pv-s-destacado)::before {
+  content: ""; display: block; width: min(200px, 50vw); height: 14px; margin: calc(var(--pv-espacio) * 0.5) auto 0;
+  background: var(--pv-acento); -webkit-mask: var(--pv-onda) 0 50% / 40px 12px repeat-x; mask: var(--pv-onda) 0 50% / 40px 12px repeat-x; animation: pv-onda 1.4s linear infinite;
+}
+@keyframes pv-onda { to { -webkit-mask-position: 40px 50%; mask-position: 40px 50%; } }
+
+/* Botones de tinta: sombra dura y se hunden al tocarlos. */
+.pv-moderna .pv-boton { min-height: 56px; padding: 0 28px; border: var(--pv-borde); border-radius: 999px; background: var(--pv-acento); color: var(--pv-sobre-acento); font-weight: 700; font-size: 17px; box-shadow: var(--pv-sombra); transition: transform 0.18s var(--pv-rebote), box-shadow 0.18s ease; }
+.pv-moderna .pv-boton:hover { transform: translate(-2px, -2px) rotate(-1.5deg); box-shadow: 7px 7px 0 var(--pv-tinta); }
+.pv-moderna .pv-boton:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--pv-tinta); }
+.pv-moderna .pv-boton-secundario { background: var(--pv-superficie); color: var(--pv-tinta); }
+.pv-moderna .pv-esquema-marca .pv-boton, .pv-moderna .pv-esquema-secundario .pv-boton, .pv-moderna .pv-esquema-contraste .pv-boton { background: var(--pv-c-secundario); color: var(--pv-tinta); }
+
+/* Aviso: una franja mostaza, con el punto que late. */
+.pv-moderna .pv-s-aviso { padding: 10px 20px; border-bottom: var(--pv-borde); background: var(--pv-c-secundario); color: var(--pv-tinta); font-weight: 700; }
+.pv-moderna .pv-aviso-punto { width: 10px; height: 10px; border: 2px solid var(--pv-tinta); }
+.pv-moderna .pv-s-aviso.abierto .pv-aviso-punto { background: #2bd46b; box-shadow: none; animation: pv-latido 1.2s ease-in-out infinite; }
+.pv-moderna .pv-aviso-campana { border: 2px solid var(--pv-tinta); background: var(--pv-acento); color: var(--pv-sobre-acento); transform: rotate(-2deg); }
+@keyframes pv-latido { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.35); } }
+
+/* Portada: título gigante que salta letra por letra y la foto en un círculo con sello. */
+.pv-moderna .pv-portada { min-height: auto; overflow: visible; }
+.pv-moderna .pv-portada.pv-esquema-normal { background: transparent; }
+.pv-moderna .pv-portada-interior { padding: 36px 20px 64px; gap: 40px; }
+.pv-moderna .pv-portada-costado.con-medio .pv-portada-interior { grid-template-columns: 1fr; }
+.pv-moderna .pv-portada-costado.con-medio .pv-portada-marco { order: -1; }
+.pv-moderna .pv-logo { width: 72px; height: 72px; padding: 6px; border: var(--pv-borde); border-radius: 50%; background: var(--pv-superficie); box-shadow: 3px 3px 0 var(--pv-tinta); animation: pv-balanceo 3s ease-in-out infinite; }
+@keyframes pv-balanceo { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg); } }
+.pv-moderna .pv-local { display: inline-block; margin-bottom: 14px; padding: 5px 12px; border-radius: 999px; background: var(--pv-tinta); color: var(--pv-fondo); font-size: 12px; letter-spacing: 0.12em; opacity: 1; transform: rotate(-2deg); }
+.pv-moderna .pv-portada h1 { max-width: 11ch; font-size: clamp(58px, 15vw, 150px); line-height: 0.86; letter-spacing: -0.05em; text-transform: none; }
+.pv-moderna .pv-palabra { display: inline-block; white-space: nowrap; }
+.pv-moderna .pv-letra { display: inline-block; animation: pv-letra 0.75s var(--pv-rebote) both; animation-delay: calc(0.15s + var(--n) * 45ms); }
+.pv-moderna .pv-portada h1:hover .pv-letra { animation: pv-meneo 0.5s ease-in-out; animation-delay: calc(var(--n) * 30ms); }
+.pv-moderna .pv-letra:nth-child(3n + 2) { color: var(--pv-acento); }
+@keyframes pv-letra { from { opacity: 0; transform: translateY(70%) rotate(-14deg) scale(0.5); } to { opacity: 1; transform: none; } }
+@keyframes pv-meneo { 0%, 100% { transform: none; } 30% { transform: translateY(-14%) rotate(-6deg); } 60% { transform: translateY(4%) rotate(4deg); } }
+.pv-moderna .pv-portada h1::after { content: ""; display: block; width: min(300px, 70%); height: 16px; margin-top: 14px; background: var(--pv-c-secundario); -webkit-mask: var(--pv-onda) 0 50% / 40px 12px repeat-x; mask: var(--pv-onda) 0 50% / 40px 12px repeat-x; animation: pv-onda 1.1s linear infinite; }
+.pv-moderna .pv-bajada { max-width: 34ch; font-size: 19px; font-weight: 500; color: color-mix(in srgb, var(--pv-texto) 78%, transparent); }
+.pv-moderna .pv-estado-local { margin-top: 20px; padding: 8px 14px 8px 12px; border: var(--pv-borde); background: var(--pv-superficie); color: var(--pv-tinta); box-shadow: 3px 3px 0 var(--pv-tinta); transform: rotate(-1.5deg); }
+.pv-moderna .pv-estado-local svg { display: none; }
+.pv-moderna .pv-estado-local .pv-estado-punto { display: block; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--pv-tinta); background: #ff4d4d; }
+.pv-moderna .pv-estado-local.abierto { color: var(--pv-tinta); }
+.pv-moderna .pv-estado-local.abierto .pv-estado-punto { background: #2bd46b; animation: pv-latido 1.2s ease-in-out infinite; }
+.pv-moderna .pv-portada-acciones { gap: 14px; margin-top: 28px; }
+.pv-moderna .pv-portada-marco { position: relative; width: min(100%, 460px); margin: 8px auto 0; aspect-ratio: 1; }
+.pv-moderna .pv-portada-forma { display: block; position: absolute; inset: -4% -6% -8% -2%; border: var(--pv-borde); border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%; background: var(--pv-c-secundario); animation: pv-masa 9s ease-in-out infinite; }
+@keyframes pv-masa { 0%, 100% { border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%; transform: rotate(0deg); } 50% { border-radius: 61% 39% 41% 59% / 55% 62% 38% 45%; transform: rotate(8deg); } }
+.pv-moderna .pv-portada-media { position: relative; width: 100%; height: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 50%; border: var(--pv-borde); box-shadow: 8px 8px 0 var(--pv-tinta); transform: none; animation: pv-entrar-foto 0.9s var(--pv-rebote) 0.2s both; }
+@keyframes pv-entrar-foto { from { opacity: 0; transform: scale(0.6) rotate(-20deg); } to { opacity: 1; transform: none; } }
+.pv-moderna .pv-portada-sello { display: block; position: absolute; right: -2%; top: -4%; width: 34%; min-width: 104px; overflow: visible; animation: pv-girar 14s linear infinite; }
+.pv-moderna .pv-portada-sello circle { fill: var(--pv-acento); stroke: var(--pv-tinta); stroke-width: 2.5; }
+.pv-moderna .pv-portada-sello text { fill: var(--pv-sobre-acento); font-family: var(--pv-titulos); font-weight: 800; font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; }
+.pv-moderna .pv-portada-sello .pv-sello-estrella { fill: var(--pv-c-secundario); stroke: var(--pv-tinta); stroke-width: 2; stroke-linejoin: round; }
+/* Con la foto de fondo: el velo es del color de la marca, no gris. */
+.pv-moderna .pv-portada-fondo.con-medio { min-height: min(86dvh, 720px); }
+.pv-moderna .pv-portada-fondo.con-medio .pv-portada-velo { background: linear-gradient(180deg, transparent 20%, color-mix(in srgb, var(--pv-tinta) 85%, transparent)); }
+.pv-moderna .pv-portada-fondo.con-medio .pv-letra:nth-child(3n + 2) { color: var(--pv-c-secundario); }
+
+/* Destacado de la portada: una figurita pegada torcida. */
+.pv-moderna .pv-destacado { margin-top: 30px; border: var(--pv-borde); border-radius: 22px; background: var(--pv-superficie); color: var(--pv-tinta); box-shadow: var(--pv-sombra); transform: rotate(-2deg); transition: transform 0.3s var(--pv-rebote); }
+.pv-moderna .pv-destacado:hover { transform: rotate(1deg) scale(1.02); }
+.pv-moderna .pv-destacado img { border-radius: 50%; border: 2px solid var(--pv-tinta); }
+.pv-moderna .pv-sello { color: var(--pv-acento); }
+.pv-moderna .pv-destacado-grande-interior img { border-radius: 50%; border: var(--pv-borde); box-shadow: 10px 10px 0 var(--pv-tinta); }
+
+/* Cinta: una franja mostaza torcida, con bordes de tinta. */
+.pv-moderna .pv-cinta { position: relative; z-index: 2; margin: 10px -12px; transform: rotate(-2deg); border-block: var(--pv-borde); }
+.pv-moderna .pv-cinta.pv-esquema-normal { background: var(--pv-c-secundario); color: var(--pv-tinta); }
+.pv-moderna .pv-cinta-texto { padding: 14px 0; font-size: clamp(18px, 3vw, 26px); font-weight: 800; letter-spacing: -0.01em; text-transform: none; }
+.pv-moderna .pv-cinta-texto span::after { content: "●"; margin-left: 30px; font-size: 0.5em; vertical-align: middle; color: var(--pv-c-acento); opacity: 1; }
+
+/* Carta: categorías en burbujas, tarjetas verticales con la foto entera y el precio como etiqueta. */
+.pv-moderna .pv-carta-bloque { counter-reset: pv-categoria; }
+.pv-moderna .pv-carta-cabeza { padding-top: calc(var(--pv-espacio) + 8px); }
+.pv-moderna .pv-carta-cabeza p { font-weight: 500; }
+.pv-moderna .pv-categorias { gap: 10px; padding: 14px 20px; border-bottom: var(--pv-borde); background: color-mix(in srgb, var(--pv-fondo) 94%, transparent); }
+.pv-moderna .pv-categorias button { min-height: 42px; padding: 0 18px; border: var(--pv-borde); background: var(--pv-superficie); font-weight: 700; box-shadow: 3px 3px 0 var(--pv-tinta); transition: transform 0.2s var(--pv-rebote), box-shadow 0.2s ease, background 0.2s ease; }
+.pv-moderna .pv-categorias button:hover { transform: translateY(-2px) rotate(-2deg); }
+.pv-moderna .pv-categorias button.activa { background: var(--pv-acento); border-color: var(--pv-tinta); color: var(--pv-sobre-acento); transform: rotate(-2deg); box-shadow: 1px 1px 0 var(--pv-tinta); }
+.pv-moderna .pv-seccion { padding-top: 56px; }
+.pv-moderna .pv-seccion h2 { counter-increment: pv-categoria; display: flex; align-items: center; gap: 14px; margin-bottom: 6px; font-size: clamp(32px, 5vw, 48px); letter-spacing: -0.04em; text-transform: none; }
+.pv-moderna .pv-seccion h2::before { content: counter(pv-categoria); display: grid; place-items: center; flex: none; width: 46px; height: 46px; border: var(--pv-borde); border-radius: 50%; background: var(--pv-c-secundario); color: var(--pv-tinta); font-size: 20px; box-shadow: 3px 3px 0 var(--pv-tinta); transform: rotate(-8deg); }
+.pv-moderna .pv-seccion-cuenta { display: block; margin: 0 0 22px 60px; font-weight: 600; color: var(--pv-suave); }
+.pv-moderna .pv-carta-plantilla .pv-grilla { grid-template-columns: 1fr; gap: 22px; }
+.pv-moderna .pv-carta-plantilla .pv-producto { border: var(--pv-borde); border-radius: 26px; background: var(--pv-superficie); box-shadow: var(--pv-sombra); transition: transform 0.35s var(--pv-rebote), box-shadow 0.35s ease; }
+.pv-moderna .pv-carta-plantilla .pv-producto:hover { transform: translate(-3px, -4px) rotate(-1.2deg); box-shadow: 9px 10px 0 var(--pv-tinta); }
+.pv-moderna .pv-carta-plantilla .pv-producto:nth-child(even):hover { transform: translate(-3px, -4px) rotate(1.2deg); }
+.pv-moderna .pv-carta-plantilla .pv-producto-abrir { overflow: hidden; border-radius: 24px 24px 0 0; }
+.pv-moderna .pv-carta-plantilla .pv-producto-abrir img { width: 100%; aspect-ratio: 5 / 4; object-fit: cover; border-bottom: var(--pv-borde); transition: transform 0.6s var(--pv-rebote); }
+.pv-moderna .pv-carta-plantilla .pv-producto:hover .pv-producto-abrir img { transform: scale(1.07) rotate(1deg); }
+.pv-moderna .pv-carta-plantilla .pv-producto-texto { gap: 6px; padding: 18px 76px 20px 20px; }
+.pv-moderna .pv-producto-texto strong { font-family: var(--pv-titulos); font-weight: var(--pv-peso); font-size: 23px; line-height: 1.05; letter-spacing: -0.02em; }
+.pv-moderna .pv-producto-texto small { font-size: 15px; }
+/* El precio, como etiqueta torcida sobre la foto. */
+.pv-moderna .pv-carta-plantilla .pv-producto:not(.sin-foto) .pv-precio { position: absolute; top: 14px; left: 14px; padding: 6px 12px; border: var(--pv-borde); border-radius: 999px; background: var(--pv-c-secundario); color: var(--pv-tinta); font-size: 17px; box-shadow: 3px 3px 0 var(--pv-tinta); transform: rotate(-5deg); transition: transform 0.3s var(--pv-rebote); }
+.pv-moderna .pv-carta-plantilla .pv-producto:hover .pv-precio { transform: rotate(3deg) scale(1.08); }
+.pv-moderna .pv-carta-plantilla .pv-producto.sin-foto .pv-precio { color: var(--pv-acento); font-size: 19px; }
+.pv-moderna .pv-carta-plantilla .pv-producto.sin-foto { border-top-width: 10px; border-top-color: var(--pv-acento); }
+.pv-moderna .pv-agregar { border: var(--pv-borde); background: var(--pv-acento); color: var(--pv-sobre-acento); box-shadow: 3px 3px 0 var(--pv-tinta); transition: transform 0.25s var(--pv-rebote), box-shadow 0.2s ease; }
+.pv-moderna .pv-carta-plantilla .pv-agregar { right: 16px; bottom: 18px; width: 52px; height: 52px; font-size: 18px; }
+.pv-moderna .pv-agregar:hover { transform: rotate(90deg) scale(1.1); }
+.pv-moderna .pv-agregar:active { transform: scale(0.85); box-shadow: 0 0 0 var(--pv-tinta); }
+.pv-moderna .pv-producto.agotado { opacity: 0.55; filter: grayscale(1); }
+
+/* Historia: la foto en una mancha que se mueve, el texto grande. */
+.pv-moderna .pv-historia-interior { gap: 40px; }
+.pv-moderna .pv-historia h2 { margin: 18px 0 18px; }
+.pv-moderna .pv-historia-texto p { font-size: 19px; line-height: 1.6; font-weight: 500; }
+.pv-moderna .pv-historia-foto, .pv-moderna .pv-bloque-foto { border: var(--pv-borde); border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%; box-shadow: 10px 10px 0 var(--pv-c-acento); animation: pv-masa-foto 10s ease-in-out infinite; }
+@keyframes pv-masa-foto { 0%, 100% { border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%; } 50% { border-radius: 58% 42% 38% 62% / 52% 60% 40% 48%; } }
+
+/* Galería: fotos con borde de tinta, torcidas, que se enderezan y crecen al pasar. */
+.pv-moderna .pv-galeria-bloque .pv-titulo-seccion { text-align: center; margin: 24px auto 30px; }
+.pv-moderna .pv-galeria { gap: 16px; }
+.pv-moderna .pv-galeria img { border: var(--pv-borde); border-radius: 22px; box-shadow: 5px 5px 0 var(--pv-tinta); transition: transform 0.35s var(--pv-rebote); }
+.pv-moderna .pv-galeria img:nth-child(odd) { transform: rotate(-2deg); }
+.pv-moderna .pv-galeria img:nth-child(even) { transform: rotate(2deg); }
+.pv-moderna .pv-galeria img:hover { transform: rotate(0deg) scale(1.04); z-index: 1; position: relative; }
+.pv-moderna .pv-galeria img:nth-child(4n + 1) { border-radius: 50% 50% 22px 22px; }
+@media (max-width: 767px) { .pv-moderna .pv-galeria-grilla .pv-galeria img:last-child:nth-child(odd) { grid-column: 1 / -1; aspect-ratio: 2 / 1; border-radius: 22px; } }
+
+/* Pedir entre varios, preguntas, ubicación. */
+.pv-moderna .pv-grupo-caja { border: var(--pv-borde); border-radius: 32px; background: var(--pv-superficie); box-shadow: 10px 10px 0 var(--pv-tinta); }
+.pv-moderna .pv-grupo-icono { border: var(--pv-borde); border-radius: 50%; transform: rotate(-8deg); box-shadow: 3px 3px 0 var(--pv-tinta); }
+.pv-moderna .pv-grupo-pasos li { border: 2px solid var(--pv-tinta); border-radius: 16px; background: var(--pv-c-secundario); color: var(--pv-tinta); }
+.pv-moderna .pv-grupo-pasos li:nth-child(2) { transform: rotate(1deg); }
+.pv-moderna .pv-grupo-pasos svg { color: var(--pv-tinta); }
+.pv-moderna .pv-pregunta { margin-bottom: 12px; padding: 0 18px; border: var(--pv-borde); border-radius: 18px; background: var(--pv-superficie); box-shadow: 3px 3px 0 var(--pv-tinta); }
+.pv-moderna .pv-pregunta[open] { background: var(--pv-c-secundario); color: var(--pv-tinta); }
+.pv-moderna .pv-pregunta[open] p { color: var(--pv-tinta); }
+.pv-moderna .pv-ubicacion-direccion svg { color: var(--pv-acento); }
+.pv-moderna .pv-sucursales li { border: 2px solid var(--pv-tinta); border-radius: 16px; }
+.pv-moderna .pv-mapa { border: var(--pv-borde); border-radius: 26px; box-shadow: var(--pv-sombra); }
+
+/* Llamado: tomate de punta a punta, con borde ondulado y el título que se menea. */
+.pv-moderna .pv-llamado { margin-top: 30px; }
+.pv-moderna .pv-llamado.pv-esquema-marca::before { content: ""; position: absolute; left: 0; right: 0; top: -15px; height: 16px; background: var(--pv-c-acento); -webkit-mask: radial-gradient(circle at 12px 0, transparent 12px, #000 12.5px) 0 0 / 24px 16px repeat-x; mask: radial-gradient(circle at 12px 0, transparent 12px, #000 12.5px) 0 0 / 24px 16px repeat-x; transform: scaleY(-1); }
+.pv-moderna .pv-llamado h2 { font-size: clamp(50px, 11vw, 120px); letter-spacing: -0.05em; animation: pv-meneo-titulo 3s ease-in-out infinite; }
+@keyframes pv-meneo-titulo { 0%, 100% { transform: rotate(-2deg); } 50% { transform: rotate(2deg) scale(1.03); } }
+.pv-moderna .pv-llamado p { font-size: 20px; font-weight: 600; }
+
+/* Pie: el nombre gigante. */
+.pv-moderna .pv-pie { justify-content: center; padding: 34px 20px 28px; border-top: var(--pv-borde); font-weight: 600; text-align: center; }
+.pv-moderna .pv-pie strong { flex-basis: 100%; font-family: var(--pv-titulos); font-weight: var(--pv-peso); font-size: clamp(40px, 9vw, 88px); line-height: 0.9; letter-spacing: -0.05em; }
+.pv-moderna .pv-pie a { padding: 6px 14px; border: 2px solid var(--pv-tinta); border-radius: 999px; background: var(--pv-superficie); color: var(--pv-tinta); }
+.pv-moderna .pv-pie a:hover { background: var(--pv-c-secundario); color: var(--pv-tinta); }
+
+/* Barra del pedido: entra rebotando y se hunde al tocarla. */
+.pv-moderna .pv-barra { border: var(--pv-borde); background: var(--pv-acento); box-shadow: 6px 6px 0 var(--pv-tinta); }
+.pv-moderna .pv-barra:active { transform: translateX(-50%) translate(4px, 4px); box-shadow: 0 0 0 var(--pv-tinta); }
+.pv-moderna .pv-barra-cuenta { padding: 4px 10px; border-radius: 999px; background: var(--pv-c-secundario); color: var(--pv-tinta); }
+.pv-moderna .pv-pedido { border-left: var(--pv-borde); }
+
+/* Intro: tomate, un círculo mostaza que crece detrás del nombre y, al irse, un agujero que se abre. */
+.pv-moderna .pv-intro { --hueco: 0vmax; background: var(--pv-c-acento); color: var(--pv-c-sobre-acento); -webkit-mask: radial-gradient(circle at 50% 50%, transparent var(--hueco), #000 calc(var(--hueco) + 0.5px)); mask: radial-gradient(circle at 50% 50%, transparent var(--hueco), #000 calc(var(--hueco) + 0.5px)); }
+.pv-moderna .pv-intro-brillo { left: 50%; top: 50%; bottom: auto; width: min(78vmin, 520px); height: min(78vmin, 520px); border: 3px solid var(--pv-c-texto); border-radius: 50%; background: var(--pv-c-secundario); transform: translate(-50%, -50%) scale(0); animation: pv-circulo 0.9s var(--pv-rebote) 0.1s forwards; }
+@keyframes pv-circulo { to { transform: translate(-50%, -50%) scale(1); } }
+.pv-moderna .pv-intro-nombre { color: var(--pv-c-texto); font-size: clamp(54px, 14vw, 140px); letter-spacing: -0.05em; line-height: 0.9; }
+.pv-moderna .pv-intro-antetitulo { padding: 5px 12px; border: 2px solid var(--pv-c-texto); border-radius: 999px; background: var(--pv-c-superficie); color: var(--pv-c-texto); font-weight: 700; letter-spacing: 0.12em; transform: rotate(-4deg); }
+.pv-moderna .pv-intro-linea { height: 14px; width: min(220px, 50vw); background: var(--pv-c-acento); -webkit-mask: var(--pv-onda) 0 50% / 40px 12px repeat-x; mask: var(--pv-onda) 0 50% / 40px 12px repeat-x; }
+.pv-moderna .pv-intro-frase { max-width: min(58vmin, 380px); color: var(--pv-c-texto); font-weight: 700; font-size: 16px; line-height: 1.3; letter-spacing: 0; }
+.pv-moderna .pv-intro-nombre { max-width: min(70vmin, 470px); }
+.pv-moderna .pv-intro-logo { width: 84px; height: 84px; padding: 8px; border: 3px solid var(--pv-c-texto); border-radius: 50%; background: var(--pv-c-superficie); }
+.pv-moderna .pv-intro-saltar { color: var(--pv-c-sobre-acento); font-weight: 700; }
+
+/* Aparición al bajar: las tarjetas saltan a su lugar. */
+@supports (animation-timeline: view()) {
+  .pv-moderna :is(.pv-producto, .pv-galeria img, .pv-grupo-caja, .pv-historia-interior, .pv-pregunta) {
+    animation: pv-saltar linear both; animation-timeline: view(); animation-range: entry 0% entry 45%;
+  }
+}
+@keyframes pv-saltar { 0% { opacity: 0; scale: 0.8; translate: 0 50px; rotate: -4deg; } 70% { scale: 1.03; rotate: 1deg; } 100% { opacity: 1; scale: 1; translate: 0 0; rotate: 0deg; } }
+
+@media (min-width: 620px) {
+  .pv-moderna .pv-carta-plantilla .pv-grilla { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px; }
+}
+@media (min-width: 900px) {
+  .pv-moderna .pv-portada-costado.con-medio .pv-portada-interior { grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr); padding-top: 64px; padding-bottom: 96px; }
+  .pv-moderna .pv-portada-costado.con-medio .pv-portada-marco { order: 0; }
+  .pv-moderna .pv-carta-plantilla .pv-grilla { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pv-moderna *, .pv-moderna *::before, .pv-moderna *::after { animation: none !important; }
+}
 
 /* ── Artesanal: almacén de barrio ── */
 .pv-artesanal .pv-portada { display: block; padding-top: 30px; }
@@ -603,13 +781,7 @@ a { color: inherit; }
   .pv-destacado-grande.foto-derecha img, .pv-bloque-texto.foto-derecha .pv-bloque-foto { order: 2; }
   .pv-ubicacion.con-mapa .pv-ubicacion-interior { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); }
   .pv-galeria { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .pv-moderna .pv-carta-plantilla .pv-grilla { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
   .pv-carta-grilla .pv-grilla { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)) !important; }
-}
-
-@media (max-width: 520px) {
-  .pv-moderna .pv-carta-plantilla .pv-grilla { grid-template-columns: 1fr 1fr; }
-  .pv-moderna .pv-carta-plantilla .pv-producto-texto { padding-right: 14px; padding-bottom: 54px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
