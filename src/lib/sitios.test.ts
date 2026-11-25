@@ -96,7 +96,7 @@ describe('build', () => {
 
   test('el contenido elegido queda escrito en contenido.ts y el diseño lo importa', () => {
     const borrador = plantillaInicial({
-      plantilla: 'moderna',
+      plantilla: 'tarascon',
       marca: { colorPrimario: '#E63A1E', colorSecundario: '#FFC21A', usarColorUnico: false },
       logo: 'https://images.piru.app/tiendas/1/logo.png',
       logoClaro: null,
@@ -339,7 +339,7 @@ describe('secciones de la página', () => {
 
   test('el pedido en grupo es una sección que usa el SDK', async () => {
     expect(PLANTILLA_INICIAL['secciones/Grupo.tsx']).toContain('usePedidoGrupal')
-    const r = await construirSitio(plantillaInicial({ ...CONTENIDO_INICIAL, plantilla: 'moderna' }), [])
+    const r = await construirSitio(plantillaInicial({ ...CONTENIDO_INICIAL, plantilla: 'tarascon' }), [])
     expect(r.ok).toBe(true)
   }, 20_000)
 })

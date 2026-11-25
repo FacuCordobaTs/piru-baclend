@@ -411,6 +411,9 @@ export const pedidoUnificado = mysqlTable("pedido_unificado", {
 
   // ─── NUEVO: Notificar a whatsapp ─────────
   notificarWhatsapp: boolean("notificar_whatsapp").default(false),
+  // Cuándo llegó el mensaje "Pedido #N" al WhatsApp vinculado del local (wa-vinculado). NULL = no
+  // llegó, o el local no tiene el WhatsApp vinculado.
+  whatsappConfirmadoAt: timestamp("whatsapp_confirmado_at"),
 
   // Demora informada al cliente por el admin (modo confirmación manual)
   demoraMinutos: int("demora_minutos"),
@@ -2480,6 +2483,15 @@ export const recompraTanda = mysqlTable("recompra_tanda", {
   presupuesto: decimal("presupuesto", { precision: 12, scale: 2 }).default("0.00").notNull(),
   presupuestoAsignado: decimal("presupuesto_asignado", { precision: 12, scale: 2 }).default("0.00").notNull(),
   conPuntos: boolean("con_puntos").default(false).notNull(),
+  // Desde qué número sale la tanda. `sucursal`: sólo clientes que pidieron en esa sucursal y se
+  // manda desde su WhatsApp; `local`: los pedidos sin sucursal; `todo` (o NULL en tandas viejas):
+  // el local sin sucursales con número propio, toda la base. `numero_envio` queda como se mostró.
+  alcance: mysqlEnum("alcance", ["todo", "local", "sucursal"]),
+  sucursalId: int("sucursal_id").references(() => sucursal.id, { onDelete: "set null" }),
+  numeroEnvio: varchar("numero_envio", { length: 50 }),
+  // El dueño pidió que la tanda salga sola por el WhatsApp vinculado. El envío sigue cada día,
+  // respetando el tope diario, hasta que no queden pendientes. NULL = se manda a mano.
+  envioVinculadoAt: timestamp("envio_vinculado_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("uq_recompra_tanda_rest_id").on(table.restauranteId, table.id),
@@ -2512,7 +2524,8 @@ export const recompraTandaMensaje = mysqlTable("recompra_tanda_mensaje", {
   enlaceId: int("enlace_id"),
   imagenUrl: varchar("imagen_url", { length: 512 }),
   estado: mysqlEnum("estado", ["pendiente", "enviado", "descartado"]).default("pendiente").notNull(),
-  canalEnvio: mysqlEnum("canal_envio", ["wa_me", "api"]),
+  // `vinculado`: salió solo desde el WhatsApp del local vinculado como dispositivo (wa-vinculado).
+  canalEnvio: mysqlEnum("canal_envio", ["wa_me", "api", "vinculado"]),
   enviadoAt: timestamp("enviado_at"),
   proveedorMessageId: varchar("proveedor_message_id", { length: 255 }),
   errorEnvio: varchar("error_envio", { length: 255 }),
@@ -2552,3 +2565,12 @@ export const whatsappChatMensaje = mysqlTable("whatsapp_chat_mensaje", {
   index("idx_whatsapp_chat_mensaje_clave").on(table.restauranteId, table.clave, table.createdAt),
   index("idx_whatsapp_chat_mensaje_fecha").on(table.restauranteId, table.createdAt),
 ]);
+
+// WhatsApp del local vinculado como dispositivo (servicio `wa-vinculado/`, whatsmeow). Lo escribe el
+// servicio por `/api/whatsapp-vinculado/evento`; el backend lo lee sin llamarlo (tienda pública).
+export const whatsappVinculado = mysqlTable("whatsapp_vinculado", {
+  restauranteId: int("restaurante_id").primaryKey().references(() => restaurante.id),
+  conectado: boolean("conectado").default(false).notNull(),
+  telefono: varchar("telefono", { length: 32 }),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});

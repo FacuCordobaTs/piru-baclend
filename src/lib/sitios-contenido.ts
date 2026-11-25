@@ -134,7 +134,7 @@ export function normalizarEsquemas(entrada: unknown): Record<string, Record<stri
  * galería y destacado). Es lo que recibe una página nueva sin secciones y la migración de una
  * página anterior al editor visual. El editor (`sitios/src/editor/documento.ts`) arma la misma.
  */
-export function seccionesIniciales(c: Partial<ContenidoSitio>): SeccionSitio[] {
+export function seccionesIniciales(c: Partial<Omit<ContenidoSitio, 'plantilla'>>): SeccionSitio[] {
   const s = (tipo: string, props: Record<string, unknown> = {}, visible = true): SeccionSitio => ({ id: `${tipo}-1`, tipo, visible, props })
   return [
     s('aviso', { mostrarCampana: true }),

@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { drizzle } from 'drizzle-orm/mysql2'
-import { and, asc, desc, eq, gte, inArray, ne } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, inArray, isNotNull, ne, sql } from 'drizzle-orm'
 import { pool } from '../db'
 import { authMiddleware } from '../middleware/auth'
 import { requireModulo } from '../middleware/modulo'
@@ -67,6 +67,15 @@ import {
   sendTandaWhatsApp,
 } from '../services/whatsapp'
 import { registrarMensajeChat } from '../lib/whatsapp-chats'
+import {
+  inicioDelDiaAr,
+  LIMITE_DIARIO_VINCULADO,
+  llamarServicio,
+  mismaLinea,
+  PAUSA_ENVIO_MS,
+  vinculadoActivo,
+} from '../lib/whatsapp-vinculado'
+import { whatsappVinculado as VinculadoTable } from '../db/schema'
 import { asegurarCampanasMaestras } from './marketing'
 
 const MS_HORA = 60 * 60 * 1000
@@ -375,7 +384,35 @@ async function crearLink(tx: any, params: {
 const crearSchema = z.object({
   cantidad: z.number().int().min(1).max(TANDA_MAXIMO),
   presupuesto: z.number().min(0).max(100_000_000),
+  // Desde qué número sale: obligatorio cuando el local tiene más de un punto de envío.
+  alcance: z.enum(['todo', 'local', 'sucursal']).optional().nullable(),
+  sucursalId: z.number().int().positive().optional().nullable(),
 })
+
+/** El punto tal como lo ve el panel, con la preparación de su audiencia. */
+function puntoApi(punto: PuntoEnvio, prep?: ReturnType<typeof preparar>) {
+  return {
+    clave: clavePunto(punto),
+    alcance: punto.alcance,
+    sucursalId: punto.sucursalId,
+    nombre: punto.nombre,
+    numero: punto.numero,
+    canal: punto.canal,
+    motivo: punto.motivo,
+    preparacion: prep ?? null,
+  }
+}
+
+/** Datos de envío de una tanda guardada: desde qué número sale, con el nombre actual de la sucursal. */
+async function envioDeTandas(db: Db, restauranteId: number, tandas: { alcance: AlcanceEnvio | null; sucursalId: number | null; numeroEnvio: string | null }[]) {
+  const [local, sucursales] = await Promise.all([cargarLocal(db, restauranteId), cargarSucursales(db, restauranteId)])
+  const porId = new Map(sucursales.map((s) => [s.id, s]))
+  return (t: typeof tandas[number]) => puntoDeLaTanda(
+    t,
+    { nombre: local?.nombre ?? 'el local', whatsappNumber: local?.whatsappNumber ?? null },
+    t.sucursalId != null ? porId.get(t.sucursalId) : undefined,
+  )
+}
 const idsSchema = z.object({ id: z.coerce.number().int().positive(), mid: z.coerce.number().int().positive() })
 
 export function crearRecompraTandasRoute() {
@@ -386,12 +423,13 @@ export function crearRecompraTandasRoute() {
   route.get('/preparacion', async (c: any) => {
     const ctx = await contexto(db, c.user.id)
     if (!ctx) return c.json({ success: false, message: 'Local no encontrado' }, 404)
-    const prep = preparar(ctx.elegibles)
+    // Cada punto trae su propia audiencia: con sucursales, la primera pregunta es desde qué número.
+    const puntos = ctx.puntos.map((p) => puntoApi(p, p.motivo == null ? preparar(ctx.elegiblesDe(p)) : undefined))
     return c.json({
       success: true,
       data: {
-        ...prep,
-        canal: ctx.canal,
+        puntos,
+        requiereSeleccion: puntos.filter((p) => p.motivo == null).length > 1,
         conPuntos: ctx.localTanda.puntos != null,
         localNombre: ctx.local.nombre,
         tieneTienda: anclajePublico(ctx.local) != null,
@@ -426,6 +464,7 @@ export function crearRecompraTandasRoute() {
       estado: MensajeTable.estado, enviadoAt: MensajeTable.enviadoAt,
     }).from(MensajeTable).where(and(eq(MensajeTable.restauranteId, restauranteId), inArray(MensajeTable.tandaId, tandas.map((t) => t.id))))
     const vueltas = await resultados(db, restauranteId, mensajes)
+    const envioDe = await envioDeTandas(db, restauranteId, tandas)
     return c.json({
       success: true,
       data: tandas.map((t) => {
@@ -434,6 +473,7 @@ export function crearRecompraTandasRoute() {
         return {
           id: t.id,
           canal: t.canal,
+          envio: envioDe(t),
           createdAt: new Date(t.createdAt).toISOString(),
           presupuesto: numero(t.presupuesto),
           presupuestoAsignado: numero(t.presupuestoAsignado),
@@ -451,12 +491,19 @@ export function crearRecompraTandasRoute() {
 
   route.post('/', zValidator('json', crearSchema), async (c: any) => {
     const restauranteId = c.user.id as number
-    const { cantidad, presupuesto } = c.req.valid('json') as z.infer<typeof crearSchema>
+    const { cantidad, presupuesto, alcance, sucursalId } = c.req.valid('json') as z.infer<typeof crearSchema>
     const ctx = await contexto(db, restauranteId)
     if (!ctx) return c.json({ success: false, message: 'Local no encontrado' }, 404)
     const anclaje = anclajePublico(ctx.local)
     if (!anclaje) return c.json({ success: false, code: 'sin_tienda', message: 'Tu tienda todavía no tiene dirección: configurala para poder mandar links.' }, 422)
-    if (!ctx.elegibles.perfiles.length) {
+    const resuelto = resolverPunto(ctx.puntos, { alcance, sucursalId })
+    if ('error' in resuelto) {
+      const { status, code, message } = resuelto.error
+      return c.json({ success: false, code, message }, status)
+    }
+    const punto = resuelto.punto
+    const candidatos = ctx.elegiblesDe(punto)
+    if (!candidatos.perfiles.length) {
       return c.json({ success: false, code: 'sin_clientes', message: 'Ahora no hay clientes a los que convenga escribirles. Probá en unos días.' }, 409)
     }
     await asegurarCampanasMaestras(db, restauranteId)
@@ -465,14 +512,17 @@ export function crearRecompraTandasRoute() {
     const tandaId = await db.transaction(async (tx) => {
       const [insert] = await tx.insert(TandaTable).values({
         restauranteId,
-        canal: ctx.canal,
+        canal: punto.canal,
         cantidadPedida: cantidad,
         presupuesto: presupuesto.toFixed(2),
         conPuntos: ctx.localTanda.puntos != null,
+        alcance: punto.alcance,
+        sucursalId: punto.sucursalId,
+        numeroEnvio: punto.numero,
       })
       const id = Number(insert.insertId)
       const plan = planificarTanda({
-        elegibles: ctx.elegibles.perfiles,
+        elegibles: candidatos.perfiles,
         cantidad,
         presupuesto,
         local: ctx.localTanda,
@@ -576,7 +626,7 @@ export function crearRecompraTandasRoute() {
     const { id, mid } = c.req.valid('param')
     const m = await buscarMensaje(db, c.user.id, id, mid)
     if (!m) return c.json({ success: false, message: 'Mensaje no encontrado' }, 404)
-    if (m.canalEnvio === 'api') return c.json({ success: false, message: 'Este mensaje ya salió por WhatsApp y no se puede deshacer.' }, 409)
+    if (m.canalEnvio === 'api' || m.canalEnvio === 'vinculado') return c.json({ success: false, message: 'Este mensaje ya salió por WhatsApp y no se puede deshacer.' }, 409)
     await db.update(MensajeTable).set({ estado: 'pendiente', canalEnvio: null, enviadoAt: null })
       .where(and(eq(MensajeTable.restauranteId, c.user.id), eq(MensajeTable.id, mid)))
     await activarBeneficio(db, c.user.id, m, true)
@@ -594,6 +644,29 @@ export function crearRecompraTandasRoute() {
     return c.json({ success: true, data: await mensajeActual(db, c.user.id, id, mid) })
   })
 
+  // WhatsApp vinculado: el dueño lo pide una vez y la tanda sale sola, con tope diario.
+  route.post('/:id/enviar-vinculado', zValidator('param', z.object({ id: z.coerce.number().int().positive() })), async (c: any) => {
+    const restauranteId = c.user.id as number
+    const id = Number(c.req.valid('param').id)
+    const [tanda] = await db.select().from(TandaTable).where(and(eq(TandaTable.restauranteId, restauranteId), eq(TandaTable.id, id))).limit(1)
+    if (!tanda) return c.json({ success: false, message: 'Tanda no encontrada' }, 404)
+    const estado = tanda.canal === 'manual' ? await estadoVinculadoTanda(db, restauranteId, tanda) : null
+    if (!estado) return c.json({ success: false, code: 'sin_vinculado', message: 'Vinculá el WhatsApp del local en Ajustes para que la tanda salga sola.' }, 409)
+    if (!estado.disponible) return c.json({ success: false, code: 'otro_numero', message: 'Esta tanda sale desde otro número que el vinculado. Mandala a mano.' }, 409)
+    await db.update(TandaTable).set({ envioVinculadoAt: new Date() }).where(and(eq(TandaTable.restauranteId, restauranteId), eq(TandaTable.id, id)))
+    void procesarEnviosVinculados(restauranteId)
+    return c.json({ success: true, data: await leerTanda(db, restauranteId, id) })
+  })
+
+  route.post('/:id/pausar-vinculado', zValidator('param', z.object({ id: z.coerce.number().int().positive() })), async (c: any) => {
+    const restauranteId = c.user.id as number
+    const id = Number(c.req.valid('param').id)
+    await db.update(TandaTable).set({ envioVinculadoAt: null }).where(and(eq(TandaTable.restauranteId, restauranteId), eq(TandaTable.id, id)))
+    const tanda = await leerTanda(db, restauranteId, id)
+    if (!tanda) return c.json({ success: false, message: 'Tanda no encontrada' }, 404)
+    return c.json({ success: true, data: tanda })
+  })
+
   // API de Meta: un mensaje por vez, y sólo cuando el dueño aprieta "Enviar".
   route.post('/:id/mensajes/:mid/enviar', zValidator('param', idsSchema), async (c: any) => {
     const restauranteId = c.user.id as number
@@ -604,7 +677,11 @@ export function crearRecompraTandasRoute() {
     if (m.estado === 'enviado') return c.json({ success: true, data: await mensajeActual(db, restauranteId, id, mid) })
     if (m.estado !== 'pendiente') return c.json({ success: false, message: 'Este mensaje fue descartado.' }, 409)
     const local = await cargarLocal(db, restauranteId)
-    if (!local || tanda.canal !== 'api' || await canalDe(db, restauranteId, local) !== 'api') {
+    // Sale por Meta sólo si el número de la tanda sigue siendo el conectado: una sucursal con
+    // otro número nunca manda desde el del local.
+    const numeroTanda = tanda.numeroEnvio ?? local?.whatsappNumber ?? null
+    if (!local || tanda.canal !== 'api'
+      || canalDelNumero(numeroTanda, local, await moduloAvisosAutomaticos(db, restauranteId)) !== 'api') {
       return c.json({ success: false, code: 'sin_api', message: 'Este local no tiene el envío automático por WhatsApp. Mandalo desde tu WhatsApp.' }, 409)
     }
     // El botón de la plantilla trae embebida la raíz de la tienda pública; viaja lo que sigue.
@@ -731,16 +808,154 @@ async function leerTanda(db: Db, restauranteId: number, tandaId: number) {
     .where(and(eq(MensajeTable.restauranteId, restauranteId), eq(MensajeTable.tandaId, tandaId)))
     .orderBy(MensajeTable.orden)
   const vueltas = await resultados(db, restauranteId, mensajes)
+  const envioDe = await envioDeTandas(db, restauranteId, [tanda])
   return {
     id: tanda.id,
     canal: tanda.canal,
+    envio: envioDe(tanda),
     createdAt: new Date(tanda.createdAt).toISOString(),
     cantidadPedida: tanda.cantidadPedida,
     presupuesto: numero(tanda.presupuesto),
     presupuestoAsignado: numero(tanda.presupuestoAsignado),
     conPuntos: tanda.conPuntos,
+    vinculado: tanda.canal === 'manual' ? await estadoVinculadoTanda(db, restauranteId, tanda) : null,
     mensajes: mensajes.map((m) => aMensajeApi(m, tanda.canal, vueltas.get(m.id))),
   }
+}
+
+// ─── Envío automático por el WhatsApp vinculado (wa-vinculado) ──────────────────────────────────
+//
+// Sólo para tandas manuales de locales sin avisos automáticos y con el WhatsApp vinculado. El dueño
+// lo pide una vez; los mensajes salen de a uno, con pausas, y como mucho LIMITE_DIARIO_VINCULADO por
+// día entre todas las tandas. Lo que no entra hoy sale mañana (tick en index.ts).
+
+async function enviadosHoyVinculado(db: Db, restauranteId: number) {
+  const [fila] = await db.select({ n: sql<number>`COUNT(*)` }).from(MensajeTable).where(and(
+    eq(MensajeTable.restauranteId, restauranteId),
+    eq(MensajeTable.canalEnvio, 'vinculado'),
+    gte(MensajeTable.enviadoAt, inicioDelDiaAr()),
+  ))
+  return Number(fila?.n ?? 0)
+}
+
+/** La tanda sólo puede salir sola si su número es el que está vinculado (nunca desde otro). */
+async function estadoVinculadoTanda(db: Db, restauranteId: number, tanda: { numeroEnvio: string | null; envioVinculadoAt: Date | null }) {
+  if (!(await vinculadoActivo(db, restauranteId))) return null
+  const [vinc] = await db.select({ telefono: VinculadoTable.telefono }).from(VinculadoTable)
+    .where(eq(VinculadoTable.restauranteId, restauranteId)).limit(1)
+  const local = await cargarLocal(db, restauranteId)
+  const numeroTanda = tanda.numeroEnvio ?? local?.whatsappNumber ?? null
+  const mismoNumero = !numeroTanda || mismaLinea(numeroTanda, vinc?.telefono)
+  return {
+    disponible: mismoNumero,
+    telefono: vinc?.telefono ?? null,
+    automatico: Boolean(tanda.envioVinculadoAt),
+    enviadosHoy: await enviadosHoyVinculado(db, restauranteId),
+    limiteDiario: LIMITE_DIARIO_VINCULADO,
+  }
+}
+
+const enviandoVinculado = new Set<number>()
+const esperar = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** Manda lo pendiente de las tandas marcadas del local hasta el tope de hoy. Una corrida por local. */
+export async function procesarEnviosVinculados(restauranteId: number) {
+  if (enviandoVinculado.has(restauranteId)) return
+  enviandoVinculado.add(restauranteId)
+  const db = drizzle(pool)
+  try {
+    const tandas = await db.select().from(TandaTable).where(and(
+      eq(TandaTable.restauranteId, restauranteId), isNotNull(TandaTable.envioVinculadoAt),
+    )).orderBy(asc(TandaTable.envioVinculadoAt))
+    for (const tanda of tandas) {
+      const estado = await estadoVinculadoTanda(db, restauranteId, tanda)
+      if (!estado) return
+      if (!estado.disponible) {
+        await db.update(TandaTable).set({ envioVinculadoAt: null }).where(eq(TandaTable.id, tanda.id))
+        continue
+      }
+      const pendientes = await db.select().from(MensajeTable).where(and(
+        eq(MensajeTable.restauranteId, restauranteId), eq(MensajeTable.tandaId, tanda.id), eq(MensajeTable.estado, 'pendiente'),
+      )).orderBy(MensajeTable.orden)
+      for (const m of pendientes) {
+        if (!(await vinculadoActivo(db, restauranteId))) return
+        if (await enviadosHoyVinculado(db, restauranteId) >= LIMITE_DIARIO_VINCULADO) return
+        const [sigue] = await db.select({ at: TandaTable.envioVinculadoAt }).from(TandaTable).where(eq(TandaTable.id, tanda.id)).limit(1)
+        if (!sigue?.at) break
+        const resultado = await enviarUnoVinculado(db, restauranteId, m)
+        if (resultado === 'cortar') return
+        if (resultado === 'enviado') await esperar(PAUSA_ENVIO_MS[0] + Math.random() * (PAUSA_ENVIO_MS[1] - PAUSA_ENVIO_MS[0]))
+      }
+      const [{ n }] = await db.select({ n: sql<number>`COUNT(*)` }).from(MensajeTable).where(and(
+        eq(MensajeTable.tandaId, tanda.id), eq(MensajeTable.estado, 'pendiente'),
+      ))
+      if (Number(n) === 0) await db.update(TandaTable).set({ envioVinculadoAt: null }).where(eq(TandaTable.id, tanda.id))
+    }
+  } catch (error: any) {
+    console.error('[tandas] Error en el envío por WhatsApp vinculado', { restauranteId, code: error?.code })
+  } finally {
+    enviandoVinculado.delete(restauranteId)
+  }
+}
+
+/** Retoma las tandas marcadas de todos los locales (al arrancar y periódicamente). */
+export async function reanudarEnviosVinculados() {
+  const db = drizzle(pool)
+  const filas = await db.selectDistinct({ restauranteId: TandaTable.restauranteId }).from(TandaTable)
+    .where(isNotNull(TandaTable.envioVinculadoAt))
+  for (const { restauranteId } of filas) void procesarEnviosVinculados(restauranteId)
+}
+
+async function enviarUnoVinculado(db: Db, restauranteId: number, m: typeof MensajeTable.$inferSelect): Promise<'enviado' | 'salteado' | 'cortar'> {
+  const [cliente] = await db.select({ optOut: ClienteTable.marketingOptOut }).from(ClienteTable)
+    .where(and(eq(ClienteTable.restauranteId, restauranteId), eq(ClienteTable.id, m.clienteId))).limit(1)
+  const desde = new Date(Date.now() - VENTANA_TOPE_DIAS * MS_DIA)
+  const [toquesTanda, toquesRecupero] = await Promise.all([
+    db.select({ createdAt: MensajeTable.enviadoAt }).from(MensajeTable).where(and(
+      eq(MensajeTable.restauranteId, restauranteId), eq(MensajeTable.clienteId, m.clienteId),
+      eq(MensajeTable.estado, 'enviado'), gte(MensajeTable.enviadoAt, desde),
+    )),
+    db.select({ createdAt: RecuperoClienteTable.createdAt }).from(RecuperoClienteTable).where(and(
+      eq(RecuperoClienteTable.restauranteId, restauranteId), eq(RecuperoClienteTable.clienteId, m.clienteId),
+      gte(RecuperoClienteTable.createdAt, desde),
+    )),
+  ])
+  const proteccion = chequearProteccionMarketing({
+    optOut: Boolean(cliente?.optOut),
+    toques: [...toquesTanda, ...toquesRecupero].filter((t) => t.createdAt).map((t) => ({ createdAt: new Date(t.createdAt!) })),
+  })
+  if (!proteccion.permitido) {
+    await db.update(MensajeTable).set({ estado: 'descartado', errorEnvio: proteccion.mensaje?.slice(0, 255) ?? null })
+      .where(and(eq(MensajeTable.restauranteId, restauranteId), eq(MensajeTable.id, m.id)))
+    await activarBeneficio(db, restauranteId, m, false)
+    return 'salteado'
+  }
+
+  // Se reclama el mensaje antes de mandarlo: si el dueño lo abrió a mano mientras tanto, no sale dos veces.
+  const ahora = new Date()
+  const [reclamo] = await db.update(MensajeTable).set({ estado: 'enviado', canalEnvio: 'vinculado', enviadoAt: ahora, errorEnvio: null })
+    .where(and(eq(MensajeTable.restauranteId, restauranteId), eq(MensajeTable.id, m.id), eq(MensajeTable.estado, 'pendiente'))) as any
+  if (!reclamo?.affectedRows) return 'salteado'
+
+  const envio = await llamarServicio<{ id?: string; error?: string }>(restauranteId, 'enviar', {
+    telefono: m.telefono, texto: m.texto, imagenUrl: m.imagenUrl || undefined,
+  })
+  if (!envio.ok || !envio.data.id) {
+    const sinWhatsapp = envio.status === 422
+    await db.update(MensajeTable).set(sinWhatsapp
+      ? { estado: 'descartado', canalEnvio: null, enviadoAt: null, errorEnvio: 'Ese número no tiene WhatsApp' }
+      : { estado: 'pendiente', canalEnvio: null, enviadoAt: null, errorEnvio: 'WhatsApp vinculado no disponible' })
+      .where(and(eq(MensajeTable.restauranteId, restauranteId), eq(MensajeTable.id, m.id)))
+    if (sinWhatsapp) {
+      await activarBeneficio(db, restauranteId, m, false)
+      return 'salteado'
+    }
+    return 'cortar'
+  }
+  await db.update(MensajeTable).set({ proveedorMessageId: envio.data.id })
+    .where(and(eq(MensajeTable.restauranteId, restauranteId), eq(MensajeTable.id, m.id)))
+  await arrancarBeneficio(db, restauranteId, m, ahora)
+  return 'enviado'
 }
 
 export const recompraTandasRoute = crearRecompraTandasRoute()

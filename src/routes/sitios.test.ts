@@ -145,13 +145,13 @@ describe('empezar de cero', () => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        contenido: { plantilla: 'moderna', marca: { colorPrimario: '#112233', colorSecundario: '#ffffff', usarColorUnico: true } },
+        contenido: { plantilla: 'tarascon', marca: { colorPrimario: '#112233', colorSecundario: '#ffffff', usarColorUnico: true } },
       }),
     })
     expect(res.status).toBe(200)
     const { borrador, borradorActualizadoAt } = await res.json()
     expect(Object.keys(borrador).sort()).toEqual(Object.keys(PLANTILLA_INICIAL).sort())
-    expect(borrador['contenido.ts']).toContain('"plantilla": "moderna"')
+    expect(borrador['contenido.ts']).toContain('"plantilla": "tarascon"')
     // Sin secciones elegidas, arranca con las de siempre (incluido el pedido en grupo).
     expect(borrador['contenido.ts']).toContain('"tipo": "grupo"')
     expect(borrador['contenido.ts']).toContain('#112233')

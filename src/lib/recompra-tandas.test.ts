@@ -114,3 +114,27 @@ describe('tandas de recompra', () => {
     expect(carritoRep([])).toBeNull()
   })
 })
+
+describe('tanda por sucursal', () => {
+  const enSucursal = (c: ClienteTanda, sucursalId: number | null): ClienteTanda =>
+    ({ ...c, pedidos: c.pedidos.map((p) => ({ ...p, sucursalId })) })
+  const conSucursales = [enSucursal(base[1], 1), enSucursal(base[2], 2), enSucursal(base[3], null)]
+
+  test('sólo entran los clientes que pidieron en esa sucursal', () => {
+    const ids = (punto: Parameters<typeof elegibles>[4]) =>
+      elegibles(conSucursales, productos, populares, AHORA, punto).perfiles.map((p) => p.cliente.id)
+    expect(ids({ alcance: 'sucursal', sucursalId: 1 })).toEqual([2])
+    expect(ids({ alcance: 'sucursal', sucursalId: 2 })).toEqual([3])
+    expect(ids({ alcance: 'local', sucursalId: null })).toEqual([4])
+    expect(ids({ alcance: 'todo', sucursalId: null }).sort()).toEqual([2, 3, 4])
+  })
+
+  test('no se le escribe desde una sucursal si pidió hace poco en otra', () => {
+    const c = base[1]
+    const mixto: ClienteTanda = {
+      ...c,
+      pedidos: [...c.pedidos.map((p) => ({ ...p, sucursalId: 1 })), { ...c.pedidos[0], fecha: AHORA - DIA, sucursalId: 2 }],
+    }
+    expect(elegibles([mixto], productos, populares, AHORA, { alcance: 'sucursal', sucursalId: 1 }).perfiles).toHaveLength(0)
+  })
+})

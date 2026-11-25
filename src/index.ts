@@ -49,7 +49,8 @@ import { puntosRoute } from './routes/puntos';
 import { pagoRoute } from './routes/pago';
 import { internoRoute } from './routes/interno';
 import { marketingLocalRoute } from './routes/marketing-local';
-import { recompraTandasRoute } from './routes/recompra-tandas';
+import { recompraTandasRoute, reanudarEnviosVinculados } from './routes/recompra-tandas';
+import { whatsappVinculadoRoute } from './routes/whatsapp-vinculado';
 import { demoPanelRoute } from './routes/demo-panel';
 import { datosEjemploRoute } from './routes/datos-ejemplo';
 import { prospeccionRoute } from './routes/prospeccion';
@@ -284,6 +285,7 @@ app.basePath('/api')
   .route('/interno', internoRoute)
   .route('/marketing-local', marketingLocalRoute)
   .route('/recompra-tandas', recompraTandasRoute)
+  .route('/whatsapp-vinculado', whatsappVinculadoRoute)
   .route('/demo-panel', demoPanelRoute)
   .route('/datos-ejemplo', datosEjemploRoute)
   .route('/prospeccion', prospeccionRoute)
@@ -850,6 +852,12 @@ setInterval(() => {
 
 // Recompra trabaja por tandas que arma el dueño (routes/recompra-tandas.ts): ya no hay una agenda
 // que se recalcule sola ni envíos automáticos sin confirmar, así que el tick del motor no corre.
+// La excepción es una tanda que el dueño pidió mandar sola por el WhatsApp vinculado: sigue cada
+// día, con tope diario, hasta terminarse.
+setTimeout(() => { reanudarEnviosVinculados().catch(() => console.error('[tandas] No se pudo reanudar el envío vinculado')) }, 30_000);
+setInterval(() => {
+  reanudarEnviosVinculados().catch(() => console.error('[tandas] No se pudo reanudar el envío vinculado'));
+}, 20 * 60_000);
 
 export default {
   port: process.env.PORT || 3000,

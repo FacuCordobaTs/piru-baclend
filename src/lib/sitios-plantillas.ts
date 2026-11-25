@@ -27,10 +27,6 @@ export const PLANTILLAS_SITIO = {
   sencilla: { fondo: '#ffffff', texto: '#1d1d1f', superficie: '#f5f5f7', primario: '#1d1d1f', secundario: '#6e6e73', titulos: 'Inter', cuerpo: 'Inter', peso: 600, serif: false, radio: 12, portada: 'costado' },
   // «Brasa» en la galería: conserva la id `elegante` porque las páginas ya creadas la guardan.
   elegante: { fondo: '#0f0c0a', texto: '#f3eadb', superficie: '#1b1612', primario: '#e2a04a', secundario: '#b8391f', titulos: 'Playfair Display', cuerpo: 'Jost', peso: 600, serif: true, radio: 2, portada: 'fondo' },
-  // «Mordisco» en la galería: conserva la id `moderna` porque las páginas ya creadas la guardan.
-  moderna: { fondo: '#fff4e4', texto: '#1b1530', superficie: '#ffffff', primario: '#ff5a36', secundario: '#ffc83d', titulos: 'Bricolage Grotesque', cuerpo: 'DM Sans', peso: 800, serif: false, radio: 22, portada: 'costado' },
-  // «Hornito» en la galería: conserva la id `artesanal` porque las páginas ya creadas la guardan.
-  artesanal: { fondo: '#efe3cf', texto: '#2b1d14', superficie: '#fbf5ea', primario: '#b5452b', secundario: '#3d5a3a', titulos: 'Young Serif', cuerpo: 'Karla', peso: 400, serif: true, radio: 12, portada: 'costado' },
   // «Umami» en la galería: editorial japonés, el nombre gigante entre crema y tinta, marco laca.
   umami: { fondo: '#120c0b', texto: '#f4ecdc', superficie: '#1d1514', primario: '#a3100f', secundario: '#f4ecdc', titulos: 'Dela Gothic One', cuerpo: 'Archivo', peso: 400, serif: false, radio: 0, portada: 'costado' },
   // «Sobremesa» en la galería: alta cocina sobre lino, la página como una tablet sobre la mesa y los platos en pedestales.
@@ -53,9 +49,23 @@ export const PLANTILLAS_SITIO = {
   porcion: { fondo: '#ecebe7', texto: '#1d1d1b', superficie: '#ffffff', primario: '#e8662a', secundario: '#1f1e1c', titulos: 'Pathway Gothic One', cuerpo: 'Roboto Condensed', peso: 400, serif: false, radio: 18, portada: 'fondo' },
   // «Tazón» en la galería: ramen bar sobre bordó, el tazón servido sobre un círculo mostaza de pincel con salpicaduras, el titular blanco gastado con la última palabra en firma amarilla y los palillos que bajan.
   tazon: { fondo: '#6d0b19', texto: '#fff5ea', superficie: '#560713', primario: '#eea21b', secundario: '#2b0409', titulos: 'Rubik Dirt', cuerpo: 'Poppins', peso: 400, serif: false, radio: 6, portada: 'costado' },
+  // «Hanko» en la galería: sushi de autor entre tinta y papel washi, el titular serif fino, kanji en vertical, el sello rojo y montañas de tinta que se pintan al bajar.
+  hanko: { fondo: '#efe9df', texto: '#151311', superficie: '#f8f4ed', primario: '#a3201f', secundario: '#0e0d0c', titulos: 'Cormorant Garamond', cuerpo: 'Jost', peso: 500, serif: true, radio: 2, portada: 'fondo' },
+  // «Sumi» en la galería: sushi lounge de tinta, negro con el titular en mayúsculas y la palabra roja, kanjis de pincel de fondo, el nigiri con su reflejo, la franja roja con palillos y el pie blanco con el sol rojo.
+  // «Fideo» en la galería: noodle bar de revista sobre papel hueso, el nombre gigante en negro de cartel, la foto a lo ancho, la carta en grilla de tres con la regla fina, el botón píldora negro y el rosa del sello.
+  fideo: { fondo: '#efeee9', texto: '#111111', superficie: '#e3e1da', primario: '#f2a7c3', secundario: '#111111', titulos: 'Archivo Black', cuerpo: 'Archivo', peso: 400, serif: false, radio: 14, portada: 'costado' },
+  sumi: { fondo: '#060606', texto: '#f3f1ee', superficie: '#141414', primario: '#e3121b', secundario: '#f6f3ee', titulos: 'Open Sans', cuerpo: 'Open Sans', peso: 800, serif: false, radio: 0, portada: 'costado' },
+  // «Kuro» en la galería: sushi bar de noche, negro piedra, rojo laca y blanco arroz, el nombre en versalitas con la inicial roja, la portada a sangre sobre la pizarra y la carta en platos con el botón laca.
+  kuro: { fondo: '#0c0c0c', texto: '#f3efe8', superficie: '#1a1a1a', primario: '#8c1c22', secundario: '#262626', titulos: 'Inter', cuerpo: 'Inter', peso: 600, serif: false, radio: 8, portada: 'fondo' },
+  // «Damero» en la galería: hamburguesería de cielo azul, el titular condensado blanco con la última palabra en amarillo, la firma en cursiva, el damero azul y blanco, el sello «Pedí ya» y la carta en tickets con código de barras.
+  damero: { fondo: '#2338c4', texto: '#ffffff', superficie: '#1a2ba3', primario: '#ffd21f', secundario: '#0a0a0a', titulos: 'Anton', cuerpo: 'Archivo', peso: 400, serif: false, radio: 18, portada: 'costado' },
+  // «Mordisco» en la galería: hamburguesería de afiche, crema con curvas de nivel, el titular gigante en marrón tostado, la burger en un arco amarillo, cintas cruzadas de «¡a morder!», el sello verde que gira e ingredientes en tarjetas sticker.
+  mordisco: { fondo: '#fbf0d6', texto: '#2a1408', superficie: '#fffaf0', primario: '#f9c80e', secundario: '#2a1408', titulos: 'Bowlby One', cuerpo: 'Plus Jakarta Sans', peso: 400, serif: false, radio: 18, portada: 'costado' },
+  // «Miga» en la galería: panadería de vidriera, rosa harina y paneles blancos redondeados, el titular gordo que baila letra por letra, stickers violeta y naranja y la etiqueta amarilla del precio.
+  miga: { fondo: '#f3e5dd', texto: '#2b1610', superficie: '#ffffff', primario: '#ec9757', secundario: '#ffdf3e', titulos: 'Titan One', cuerpo: 'Figtree', peso: 400, serif: false, radio: 22, portada: 'costado' },
 } satisfies Record<string, BasePlantilla>
 
 export type PlantillaSitio = keyof typeof PLANTILLAS_SITIO
-export const PLANTILLA_POR_DEFECTO: PlantillaSitio = 'artesanal'
+export const PLANTILLA_POR_DEFECTO: PlantillaSitio = 'sencilla'
 
 export const esPlantillaSitio = (v: unknown): v is PlantillaSitio => typeof v === 'string' && Object.hasOwn(PLANTILLAS_SITIO, v)

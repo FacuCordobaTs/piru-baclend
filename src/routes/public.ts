@@ -1,4 +1,5 @@
 import { calcularBeneficioCupon } from '../lib/cupones'
+import { vinculadoActivo } from '../lib/whatsapp-vinculado'
 import { sucursalPublica } from '../lib/sucursales-operacion'
 import { Hono, type Context } from 'hono'
 import { pool } from '../db'
@@ -630,6 +631,8 @@ const obtenerRestaurantePublico = async (c: Context) => {
                     transferenciaAlias: transferenciaAliasCliente,
                     metodosPago: metodosPagoPublicos,
                     avisosWhatsappClienteEnabled,
+                    // Sin avisos y con el WhatsApp del local vinculado, el número sale del mensaje del pedido.
+                    whatsappVinculadoPedidos: !avisosWhatsappClienteEnabled && await vinculadoActivo(db, restauranteId).catch(() => false),
                     // Aditivo: los storefronts viejos lo ignoran. Sólo tiene efecto
                     // si además hay zonas especiales activas.
                     permitirPrePedidosZonasEspeciales: zonasEspecialesHabilitadas
@@ -787,7 +790,11 @@ publicRoute.get('/sala/join/:token', async (c) => {
                     restauranteId: sala[0].restauranteId,
                 },
                 productos,
-                restaurante: { ...restaurante[0], avisosWhatsappClienteEnabled },
+                restaurante: {
+                    ...restaurante[0],
+                    avisosWhatsappClienteEnabled,
+                    whatsappVinculadoPedidos: !avisosWhatsappClienteEnabled && await vinculadoActivo(db, sala[0].restauranteId!).catch(() => false),
+                },
             }
         }, 200)
     } catch (error) {

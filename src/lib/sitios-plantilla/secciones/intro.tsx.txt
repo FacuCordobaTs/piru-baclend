@@ -16,11 +16,9 @@ type Props = {
 const DURACION = { corta: 1900, normal: 2900, larga: 3900 }
 const SUAVE = [0.22, 1, 0.36, 1] as const
 
-/** La salida de la intro según el tema: `--hueco` es el radio del círculo que se abre (ver `.pv-moderna .pv-intro`). */
+/** La salida de la intro según el tema: `--hueco` es el radio del círculo que se abre. */
 const SALIDAS = {
   telon: { inicial: { clipPath: "inset(0 0 0% 0)" }, salida: { clipPath: "inset(0 0 100% 0)" }, duracion: 0.85 },
-  moderna: { inicial: { "--hueco": "0vmax" }, salida: { "--hueco": "150vmax" }, duracion: 1 },
-  artesanal: { inicial: { y: "0%" }, salida: { y: "-108%" }, duracion: 0.9 },
   umami: { inicial: { clipPath: "inset(0% 0 0% 0)" }, salida: { clipPath: "inset(50% 0 50% 0)" }, duracion: 0.9 },
   sobremesa: { inicial: { clipPath: "inset(0% 0% 0% 0% round 0px)", opacity: 1 }, salida: { clipPath: "inset(47% 12% 47% 12% round 999px)", opacity: 0 }, duracion: 1.1 },
   // Tarascón: la pantalla sube y el borde de abajo se redondea como la tapa de un pan.
@@ -41,6 +39,20 @@ const SALIDAS = {
   porcion: { inicial: { clipPath: "polygon(50% 50%, -60% -60%, 160% -60%, 160% 160%, -60% 160%, -60% -60%)" }, salida: { clipPath: "polygon(50% 50%, 50% 50%, 50% 50%, 50% 50%, 50% 50%, 50% 50%)" }, duracion: 1 },
   // Tazón: la pantalla se va absorbida por el tazón, un círculo de pincel que se cierra sobre el plato de la derecha.
   tazon: { inicial: { clipPath: "circle(150% at 72% 50%)", rotate: 0 }, salida: { clipPath: "circle(0% at 72% 50%)", rotate: 8 }, duracion: 1.05 },
+  // Kuro: la pantalla se corre hacia la derecha como una puerta de papel, apenas inclinada.
+  kuro: { inicial: { clipPath: "inset(0% 0% 0% 0%)", skewX: 0 }, salida: { clipPath: "inset(0% 0% 0% 100%)", skewX: -4 }, duracion: 1 },
+  // Hanko: la pantalla se corre hacia la izquierda como un shoji, con el borde en una línea de tinta.
+  hanko: { inicial: { clipPath: "inset(0% 0% 0% 0%)", x: "0%" }, salida: { clipPath: "inset(0% 100% 0% 0%)", x: "-6%" }, duracion: 1.1 },
+  // Damero: la pantalla baja como la tapa de la caja de hamburguesa, con el borde de arriba redondeado.
+  damero: { inicial: { clipPath: "inset(0% 0% 0% 0% round 0% 0% 0% 0%)", y: "0%" }, salida: { clipPath: "inset(100% 0% 0% 0% round 50% 50% 0% 0%)", y: "4%" }, duracion: 0.95 },
+  // Sumi: la pantalla se va como una pincelada de tinta que la barre en diagonal hacia arriba.
+  sumi: { inicial: { clipPath: "polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%)", rotate: 0 }, salida: { clipPath: "polygon(0% 0%, 100% 0%, 100% 0%, 0% 0%)", rotate: -3 }, duracion: 0.95 },
+  // Fideo: la pantalla se encoge hasta el marco de la foto de portada y se va hacia arriba, como un plato que se sirve.
+  fideo: { inicial: { clipPath: "inset(0% 0% 0% 0% round 0px)", y: "0%" }, salida: { clipPath: "inset(34% 6% 30% 6% round 28px)", y: "-110%" }, duracion: 1.15 },
+  // Mordisco: la pantalla se va de un mordisco, tres bocados redondos que se comen el borde de abajo hacia arriba.
+  mordisco: { inicial: { clipPath: "circle(160% at 50% 130%)", y: "0%" }, salida: { clipPath: "circle(0% at 50% -20%)", y: "-4%" }, duracion: 1 },
+  // Miga: la pantalla se mete en la galletita que rodó hasta abajo, un círculo que se cierra girando.
+  miga: { inicial: { clipPath: "circle(150% at 50% 78%)", rotate: 0 }, salida: { clipPath: "circle(0% at 50% 78%)", rotate: 6 }, duracion: 0.95 },
 } as const
 
 /**
@@ -131,9 +143,6 @@ function Escena({ p, ms }: { p: Partial<Props>; ms: number }) {
   const { local } = useLocal()
   const { contenido, tema } = useSitioPagina()
   if (!local) return null
-  const salta = tema.plantilla === "moderna"
-  // En Hornito el nombre no entra letra por letra: cae de una como un sello (ver `.pv-artesanal .pv-intro-nombre`).
-  const sello = tema.plantilla === "artesanal"
   // En Tarascón cada letra sube estirada y rebota, como un mordisco (ver `.pv-tarascon .pv-intro-nombre`).
   const muerde = tema.plantilla === "tarascon"
   // En Ñam cada letra cae desde arriba como una figurita que se pega torcida (ver `.pv-nam .pv-intro-nombre`).
@@ -152,6 +161,18 @@ function Escena({ p, ms }: { p: Partial<Props>; ms: number }) {
   const rueda = tema.plantilla === "porcion"
   // En Tazón cada letra se pinta de izquierda a derecha como un trazo de pincel seco (ver `.pv-tazon .pv-intro-nombre`).
   const trazo = tema.plantilla === "tazon"
+  // En Kuro cada letra se asienta como tinta: grande y desenfocada, se achica a su lugar (ver `.pv-kuro .pv-intro-nombre`).
+  const asienta = tema.plantilla === "kuro"
+  // En Hanko cada letra se estampa como un sello: llega grande y desenfocada y se asienta en el papel (ver `.pv-hanko .pv-intro-nombre`).
+  const sello = tema.plantilla === "hanko"
+  // En Sumi cada letra aparece como tinta que se asienta en el papel: baja desenfocada y se aclara (ver `.pv-sumi .pv-intro-nombre`).
+  const tinta = tema.plantilla === "sumi"
+  // En Miga cada letra leva como masa: nace chiquita, se infla con un rebote y queda bailando torcida (ver `.pv-miga .pv-intro-nombre`).
+  const leva = tema.plantilla === "miga"
+  // En Mordisco cada letra cae de golpe desde arriba, gigante y torcida, y se estampa como un afiche pegado a las apuradas (ver `.pv-mordisco .pv-intro-nombre`).
+  const golpe = tema.plantilla === "mordisco"
+  // En Damero cada letra sube de golpe desde abajo, estirada y torcida, y rebota como un cartel que se clava (ver `.pv-damero .pv-intro-nombre`).
+  const clava = tema.plantilla === "damero"
   const oscuro = esOscuro(tema.fondo)
   const logo = p.mostrarLogo !== false ? (oscuro ? contenido.logo : contenido.logoClaro) ?? logoPara(local, oscuro) : null
   const palabras = local.nombre.split(/\s+/).filter(Boolean)
@@ -183,9 +204,9 @@ function Escena({ p, ms }: { p: Partial<Props>; ms: number }) {
                 <motion.span
                   key={i}
                   style={{ "--n": i } as CSSProperties}
-                  initial={sello ? false : trazo ? { x: "-60%", skewX: -25, scaleX: 1.6, opacity: 0, filter: "blur(8px)" } : rueda ? { y: "60%", x: "-40%", rotate: -70, opacity: 0, filter: "blur(6px)" } : pisa ? { y: "-130%", scaleY: 1.9, opacity: 0 } : pega ? { scale: 2.6, rotate: i % 2 ? 24 : -24, opacity: 0, filter: "blur(8px)" } : girasol ? { y: "90%", rotate: i % 2 ? 20 : -20, scale: 0.5, opacity: 0, filter: "blur(12px)" } : sorbo ? { y: "-140%", scaleY: 2.2, opacity: 0 } : chispa ? { y: "70%", scale: 0.2, rotate: i % 2 ? 12 : -12, opacity: 0 } : cae ? { y: "-160%", rotate: i % 2 ? 18 : -18, opacity: 0 } : salta ? { y: "120%", rotate: -14, scale: 0.6, opacity: 0 } : muerde ? { y: "110%", scaleY: 1.8, opacity: 0 } : { y: "105%", opacity: 0 }}
-                  animate={{ y: "0%", ...(rueda ? { x: "0%", filter: "blur(0px)" } : {}), ...(trazo ? { x: "0%", skewX: 0, scaleX: 1, filter: "blur(0px)" } : {}), rotate: cae ? (i % 2 ? 3 : -3) : pega ? ((i % 3) - 1) * 5 : 0, scale: 1, scaleY: 1, opacity: 1, ...(girasol || pega ? { filter: "blur(0px)" } : {}) }}
-                  transition={trazo ? { type: "spring", bounce: 0.3, duration: 0.75, delay: 0.8 + i * 0.055 } : rueda ? { type: "spring", bounce: 0.35, duration: 0.8, delay: 0.9 + i * 0.06 } : pisa ? { type: "spring", bounce: 0.4, duration: 0.7, delay: 0.6 + i * 0.05 } : pega ? { type: "spring", bounce: 0.35, duration: 0.5, delay: 0.7 + i * 0.08 } : girasol ? { type: "spring", bounce: 0.45, duration: 0.9, delay: 0.75 + i * 0.065 } : sorbo ? { type: "spring", bounce: 0.55, duration: 0.8, delay: 0.55 + i * 0.07 } : chispa ? { type: "spring", bounce: 0.5, duration: 0.65, delay: 0.95 + i * 0.055 } : cae ? { type: "spring", bounce: 0.55, duration: 0.75, delay: 0.5 + i * 0.06 } : muerde ? { type: "spring", bounce: 0.45, duration: 0.7, delay: 0.45 + i * 0.07 } : salta ? { type: "spring", bounce: 0.6, duration: 0.8, delay: 0.3 + i * 0.06 } : { duration: 0.7, delay: 0.35 + i * 0.045, ease: SUAVE }}
+                  initial={leva ? { y: "45%", scale: 0.15, rotate: i % 2 ? 16 : -16, opacity: 0 } : golpe ? { y: "-80%", scale: 2.4, rotate: i % 2 ? 16 : -16, opacity: 0 } : clava ? { y: "130%", scaleY: 1.7, rotate: i % 2 ? 7 : -7, opacity: 0 } : asienta ? { scale: 1.6, y: "-12%", opacity: 0, filter: "blur(14px)" } : sello ? { y: "18%", scale: 1.25, opacity: 0, filter: "blur(14px)" } : tinta ? { y: "-40%", scale: 1.4, opacity: 0, filter: "blur(14px)" } : trazo ? { x: "-60%", skewX: -25, scaleX: 1.6, opacity: 0, filter: "blur(8px)" } : rueda ? { y: "60%", x: "-40%", rotate: -70, opacity: 0, filter: "blur(6px)" } : pisa ? { y: "-130%", scaleY: 1.9, opacity: 0 } : pega ? { scale: 2.6, rotate: i % 2 ? 24 : -24, opacity: 0, filter: "blur(8px)" } : girasol ? { y: "90%", rotate: i % 2 ? 20 : -20, scale: 0.5, opacity: 0, filter: "blur(12px)" } : sorbo ? { y: "-140%", scaleY: 2.2, opacity: 0 } : chispa ? { y: "70%", scale: 0.2, rotate: i % 2 ? 12 : -12, opacity: 0 } : cae ? { y: "-160%", rotate: i % 2 ? 18 : -18, opacity: 0 } : muerde ? { y: "110%", scaleY: 1.8, opacity: 0 } : { y: "105%", opacity: 0 }}
+                  animate={{ y: "0%", ...(clava ? { rotate: leva ? (i % 2 ? 4 : -4) : 0 } : {}), ...(rueda ? { x: "0%", filter: "blur(0px)" } : {}), ...(trazo ? { x: "0%", skewX: 0, scaleX: 1, filter: "blur(0px)" } : {}), ...(tinta || sello || asienta ? { filter: "blur(0px)" } : {}), rotate: golpe ? (i % 3) - 1 : cae ? (i % 2 ? 3 : -3) : pega ? ((i % 3) - 1) * 5 : 0, scale: 1, scaleY: 1, opacity: 1, ...(girasol || pega ? { filter: "blur(0px)" } : {}) }}
+                  transition={leva ? { type: "spring", bounce: 0.6, duration: 0.8, delay: 1.05 + i * 0.06 } : golpe ? { type: "spring", bounce: 0.5, duration: 0.6, delay: 0.75 + i * 0.07 } : clava ? { type: "spring", bounce: 0.5, duration: 0.7, delay: 0.95 + i * 0.05 } : asienta ? { duration: 1, delay: 0.85 + i * 0.07, ease: SUAVE } : sello ? { duration: 1.3, delay: 0.9 + i * 0.08, ease: SUAVE } : tinta ? { duration: 0.9, delay: 1.1 + i * 0.06, ease: SUAVE } : trazo ? { type: "spring", bounce: 0.3, duration: 0.75, delay: 0.8 + i * 0.055 } : rueda ? { type: "spring", bounce: 0.35, duration: 0.8, delay: 0.9 + i * 0.06 } : pisa ? { type: "spring", bounce: 0.4, duration: 0.7, delay: 0.6 + i * 0.05 } : pega ? { type: "spring", bounce: 0.35, duration: 0.5, delay: 0.7 + i * 0.08 } : girasol ? { type: "spring", bounce: 0.45, duration: 0.9, delay: 0.75 + i * 0.065 } : sorbo ? { type: "spring", bounce: 0.55, duration: 0.8, delay: 0.55 + i * 0.07 } : chispa ? { type: "spring", bounce: 0.5, duration: 0.65, delay: 0.95 + i * 0.055 } : cae ? { type: "spring", bounce: 0.55, duration: 0.75, delay: 0.5 + i * 0.06 } : muerde ? { type: "spring", bounce: 0.45, duration: 0.7, delay: 0.45 + i * 0.07 } : { duration: 0.7, delay: 0.35 + i * 0.045, ease: SUAVE }}
                 >
                   {letra}
                 </motion.span>
