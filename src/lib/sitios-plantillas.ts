@@ -29,7 +29,8 @@ export const PLANTILLAS_SITIO = {
   elegante: { fondo: '#0f0c0a', texto: '#f3eadb', superficie: '#1b1612', primario: '#e2a04a', secundario: '#b8391f', titulos: 'Playfair Display', cuerpo: 'Jost', peso: 600, serif: true, radio: 2, portada: 'fondo' },
   // «Mordisco» en la galería: conserva la id `moderna` porque las páginas ya creadas la guardan.
   moderna: { fondo: '#fff4e4', texto: '#1b1530', superficie: '#ffffff', primario: '#ff5a36', secundario: '#ffc83d', titulos: 'Bricolage Grotesque', cuerpo: 'DM Sans', peso: 800, serif: false, radio: 22, portada: 'costado' },
-  artesanal: { fondo: '#f4ead8', texto: '#392a20', superficie: '#fffaf1', primario: '#c2410c', secundario: '#3f7d3a', titulos: 'Fraunces', cuerpo: 'Nunito Sans', peso: 700, serif: true, radio: 16, portada: 'costado' },
+  // «Hornito» en la galería: conserva la id `artesanal` porque las páginas ya creadas la guardan.
+  artesanal: { fondo: '#efe3cf', texto: '#2b1d14', superficie: '#fbf5ea', primario: '#b5452b', secundario: '#3d5a3a', titulos: 'Young Serif', cuerpo: 'Karla', peso: 400, serif: true, radio: 12, portada: 'costado' },
 } satisfies Record<string, BasePlantilla>
 
 export type PlantillaSitio = keyof typeof PLANTILLAS_SITIO

@@ -20,6 +20,8 @@ type Props = {
   boton: Accion
   botonSecundario: Accion
   destacadoId: number | null
+  /** Una nota escrita a mano junto a la foto, con una flecha (la muestran los temas que la usan). */
+  nota: string
   animacion: "ninguna" | "suave" | "rebote"
 }
 
@@ -95,6 +97,14 @@ export function Portada({ seccion }: PropsSeccion) {
             <span className="pv-portada-forma" aria-hidden="true" />
             <Medio medio={medio} className="pv-portada-media" />
             <Sello texto={`${local.nombre} ✦ pedí online ✦ `} />
+            {p.nota?.trim() && (
+              <p className="pv-portada-nota">
+                <span data-piru-prop="nota">{p.nota}</span>
+                <svg viewBox="0 0 80 60" aria-hidden="true">
+                  <path d="M6 6c18 4 40 14 52 38M58 44l-12-4M58 44l2-13" />
+                </svg>
+              </p>
+            )}
           </div>
         )}
       </div>
