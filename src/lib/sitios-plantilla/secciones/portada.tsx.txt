@@ -76,7 +76,7 @@ export function Portada({ seccion }: PropsSeccion) {
         >
           {p.mostrarLogo !== false && logo && <img className="pv-logo" src={logo} alt={local.nombre} />}
           {verNombre && <p className="pv-local">{local.nombre}</p>}
-          <h1 data-piru-prop="titulo" style={{ "--pv-letras": Math.max(...titulo.split(/\s+/).map((w) => w.length)) } as CSSProperties}>{tema.plantilla === "moderna" || tema.plantilla === "sorbo" ? <Letras texto={titulo} /> : titulo}</h1>
+          <h1 data-piru-prop="titulo" style={{ "--pv-letras": Math.max(...titulo.split(/\s+/).map((w) => w.length)) } as CSSProperties}>{tema.plantilla === "moderna" || tema.plantilla === "sorbo" || tema.plantilla === "baobab" || tema.plantilla === "porcion" || tema.plantilla === "tazon" ? <Letras texto={titulo} /> : titulo}</h1>
           <Texto prop="bajada" valor={p.bajada} como="p" className="pv-bajada" />
           {p.mostrarEstado !== false && (
             <p className={`pv-estado-local ${abierto ? "abierto" : ""}`}>

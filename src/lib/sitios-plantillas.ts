@@ -43,6 +43,16 @@ export const PLANTILLAS_SITIO = {
   chispa: { fondo: '#fdf6ec', texto: '#15232d', superficie: '#fdebd3', primario: '#f7931e', secundario: '#15232d', titulos: 'Archivo Black', cuerpo: 'Poppins', peso: 400, serif: false, radio: 18, portada: 'costado' },
   // «Sorbo» en la galería: noodle bar de cartel, crema y naranja, el nombre gigante en escalera, cintas de «¡promos!» y la carta en tarjetas con la franja naranja.
   sorbo: { fondo: '#fdf3e1', texto: '#3a1707', superficie: '#fbe4c4', primario: '#ff5a0f', secundario: '#3a1707', titulos: 'Big Shoulders Display', cuerpo: 'Manrope', peso: 800, serif: false, radio: 6, portada: 'costado' },
+  // «Girasol» en la galería: comida de mediodía al sol, crema, amarillo girasol y rojo tomate, título serif crema sobre la mesa y los platos sobre rayos de sol.
+  girasol: { fondo: '#fdf1dc', texto: '#3a2416', superficie: '#f6deb2', primario: '#d9452b', secundario: '#f7c52e', titulos: 'Fraunces', cuerpo: 'Space Mono', peso: 600, serif: true, radio: 18, portada: 'fondo' },
+  // «Calcomanía» en la galería: taquería-hamburguesería de stickers, verde botella y crema, el nombre en letra de bloque pegado sobre la foto y stickers que se despegan.
+  calcomania: { fondo: '#1f5138', texto: '#f6e9c8', superficie: '#2a6646', primario: '#f4b42c', secundario: '#7a4bb3', titulos: 'Bungee', cuerpo: 'Rubik', peso: 400, serif: false, radio: 16, portada: 'fondo' },
+  // «Baobab» en la galería: cocina africana de fiesta, rojo achiote y amarillo maíz, la foto de la mesa que gotea sobre el rojo, el titular condensado en mayúsculas y la carta en marcos de tela estampada.
+  baobab: { fondo: '#b3170f', texto: '#fff3dc', superficie: '#8e110b', primario: '#f7c325', secundario: '#1f5fae', titulos: 'Oswald', cuerpo: 'Outfit', peso: 700, serif: false, radio: 14, portada: 'fondo' },
+  // «Porción» en la galería: pizzería de barrio sobre cemento claro, la pizza entera asomando en semicírculo con el arco de sabores que gira, letra condensada, naranja horno y la franja negra con polaroids.
+  porcion: { fondo: '#ecebe7', texto: '#1d1d1b', superficie: '#ffffff', primario: '#e8662a', secundario: '#1f1e1c', titulos: 'Pathway Gothic One', cuerpo: 'Roboto Condensed', peso: 400, serif: false, radio: 18, portada: 'fondo' },
+  // «Tazón» en la galería: ramen bar sobre bordó, el tazón servido sobre un círculo mostaza de pincel con salpicaduras, el titular blanco gastado con la última palabra en firma amarilla y los palillos que bajan.
+  tazon: { fondo: '#6d0b19', texto: '#fff5ea', superficie: '#560713', primario: '#eea21b', secundario: '#2b0409', titulos: 'Rubik Dirt', cuerpo: 'Poppins', peso: 400, serif: false, radio: 6, portada: 'costado' },
 } satisfies Record<string, BasePlantilla>
 
 export type PlantillaSitio = keyof typeof PLANTILLAS_SITIO
