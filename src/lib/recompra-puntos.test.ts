@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { canalDelNumero, mismoNumero, puntosEnvio, resolverPunto, type DatosPuntosEnvio } from './recompra-puntos'
+import { canalDelNumero, mismoNumero, numeroDelLocal, puntosEnvio, resolverPunto, type DatosPuntosEnvio } from './recompra-puntos'
 
 const sucursal = (id: number, numero: string | null, extra: Partial<DatosPuntosEnvio['sucursales'][number]> = {}) => ({
   id, nombre: `Sede ${id}`, activo: true, soloPos: false, whatsappEnabled: numero != null, whatsappNumber: numero, ...extra,
@@ -25,9 +25,52 @@ describe('puntos de envío', () => {
     expect(resolverPunto(puntos, { sucursalId: 99 })).toMatchObject({ error: { status: 404 } })
   })
 
+  test('Alfajor: número sólo en comprobantes, Meta conectada y avisos → punto local automático', () => {
+    const numero = numeroDelLocal({ whatsappNumber: null, comprobantesWhatsapp: '543426319272', telefono: null })
+    const puntos = puntosEnvio(base({ whatsappNumber: numero, whatsappPhoneId: '1271223376070494' }), true)
+    expect(puntos).toHaveLength(1)
+    expect(puntos[0]).toMatchObject({ alcance: 'todo', numero: '543426319272', canal: 'api', motivo: null })
+    expect(resolverPunto(puntos)).toEqual({ punto: puntos[0] })
+  })
+
+  test('sin número cargado, el local igual puede mandar a mano', () => {
+    const puntos = puntosEnvio(base({ whatsappNumber: null }), false)
+    expect(puntos).toHaveLength(1)
+    expect(puntos[0]).toMatchObject({ alcance: 'todo', numero: null, canal: 'manual', motivo: null })
+    expect(resolverPunto(puntos)).toEqual({ punto: puntos[0] })
+  })
+
+  test('el número del local sale de la primera columna legacy con algo (caso Alfajor)', () => {
+    // Alfajor tiene whatsapp_number y telefono en NULL y el número en comprobantes_whatsapp.
+    expect(numeroDelLocal({ whatsappNumber: null, comprobantesWhatsapp: '543426319272', telefono: null }))
+      .toBe('543426319272')
+    expect(numeroDelLocal({ whatsappNumber: '  ', comprobantesWhatsapp: '543426319272', telefono: null }))
+      .toBe('543426319272')
+    expect(numeroDelLocal({ whatsappNumber: null, comprobantesWhatsapp: null, telefono: '+54 9 342 631 9272' }))
+      .toBe('+54 9 342 631 9272')
+    expect(numeroDelLocal({ whatsappNumber: null, comprobantesWhatsapp: null, telefono: null })).toBeNull()
+  })
+
+  test('sin número el punto del local sale manual aunque tenga Meta conectada', () => {
+    // El envío por Meta vuelve a chequear el número de la tanda contra el del local; sin
+    // número no hay forma de mandarlo automático, pero la tanda se arma igual.
+    const puntos = puntosEnvio(base({ whatsappNumber: null, whatsappPhoneId: 'pid' }), true)
+    expect(puntos[0]).toMatchObject({ numero: null, canal: 'manual', motivo: null })
+  })
+
   test('el local suma como punto sólo si quedaron pedidos sin sucursal', () => {
     const puntos = puntosEnvio(base({ sucursales: [sucursal(1, '3415551111')], pedidosSinSucursal: 3 }), false)
     expect(puntos.map((p) => p.alcance)).toEqual(['sucursal', 'local'])
+  })
+
+  test('el punto del local no exige número cuando hay sucursales con número', () => {
+    const puntos = puntosEnvio(base({
+      whatsappNumber: null,
+      sucursales: [sucursal(1, '3415551111')],
+      pedidosSinSucursal: 3,
+    }), false)
+    expect(puntos.map((p) => p.alcance)).toEqual(['sucursal', 'local'])
+    expect(puntos[1]).toMatchObject({ numero: null, motivo: null, canal: 'manual' })
   })
 
   test('sucursal inactiva o sin número se devuelve marcada y no se puede elegir', () => {

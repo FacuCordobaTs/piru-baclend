@@ -41,6 +41,7 @@ import {
 import {
   canalDelNumero,
   clavePunto,
+  numeroDelLocal,
   puntoDeLaTanda,
   puntosEnvio,
   resolverPunto,
@@ -96,10 +97,16 @@ async function cargarLocal(db: Db, restauranteId: number) {
     deliveryEnabled: RestauranteTable.deliveryEnabled,
     deliveryFee: RestauranteTable.deliveryFee,
     whatsappNumber: RestauranteTable.whatsappNumber,
+    comprobantesWhatsapp: RestauranteTable.comprobantesWhatsapp,
+    telefono: RestauranteTable.telefono,
     whatsappPhoneId: RestauranteTable.whatsappPhoneId,
     whatsappAccessToken: RestauranteTable.whatsappAccessToken,
   }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
-  return local ?? null
+  if (!local) return null
+  // De cara al dueño el número es uno solo, aunque en la DB viva en tres columnas legacy
+  // (telefono / whatsapp_number / comprobantes_whatsapp). Un local puede tener cargado sólo
+  // el de comprobantes: sin este fallback la tanda no encontraba el número del local.
+  return { ...local, whatsappNumber: numeroDelLocal(local) }
 }
 
 function cargarSucursales(db: Db, restauranteId: number) {

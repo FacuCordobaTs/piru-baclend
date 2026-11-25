@@ -83,6 +83,19 @@ export const clavePunto = (punto: { alcance: string; sucursalId: number | null }
   `${punto.alcance}:${punto.sucursalId ?? 'local'}`
 
 /**
+ * El número del local tal como lo ve el dueño. En la DB vive en tres columnas legacy
+ * (`telefono`, `whatsapp_number` y `comprobantes_whatsapp`) y cualquier local pudo haber
+ * cargado sólo una: la primera con algo es el número unificado.
+ */
+export function numeroDelLocal(local: {
+  whatsappNumber?: string | null
+  comprobantesWhatsapp?: string | null
+  telefono?: string | null
+}): string | null {
+  return local.whatsappNumber?.trim() || local.comprobantesWhatsapp?.trim() || local.telefono?.trim() || null
+}
+
+/**
  * Los números desde los que el local puede mandar una tanda.
  *
  * - Con sucursales que tienen su WhatsApp, cada una es un punto y su audiencia son sus pedidos.
@@ -100,8 +113,9 @@ export function puntosEnvio(datos: DatosPuntosEnvio, avisosAutomaticos: boolean)
   )
 
   if (!conNumero.length) {
+    // El número del local es informativo: sin él el envío manual igual funciona (el link abre
+    // el WhatsApp del dispositivo). Nunca se bloquea la tanda por no tener número cargado.
     const numero = datos.whatsappNumber?.trim() || null
-    if (telefonoWaMe(numero) == null) return []
     return [{
       alcance: 'todo',
       sucursalId: null,
@@ -127,16 +141,14 @@ export function puntosEnvio(datos: DatosPuntosEnvio, avisosAutomaticos: boolean)
 
   if (datos.pedidosSinSucursal > 0) {
     const numero = datos.whatsappNumber?.trim() || null
-    if (telefonoWaMe(numero) != null) {
-      puntos.push({
-        alcance: 'local',
-        sucursalId: null,
-        nombre: datos.nombreLocal,
-        numero,
-        canal: canal(numero),
-        motivo: null,
-      })
-    }
+    puntos.push({
+      alcance: 'local',
+      sucursalId: null,
+      nombre: datos.nombreLocal,
+      numero,
+      canal: canal(numero),
+      motivo: null,
+    })
   }
 
   return puntos
