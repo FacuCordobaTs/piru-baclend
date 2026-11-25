@@ -45,6 +45,20 @@ export interface PedidoTanda {
   total: number
   delivery: boolean
   items: ItemPedidoTanda[]
+  /** Sucursal donde se hizo el pedido; null (o ausente) = el local, sin sucursal. */
+  sucursalId?: number | null
+}
+
+/**
+ * A qué pedidos mira una tanda. Con sucursales, cada número es un punto de envío distinto y la
+ * tanda se arma sólo con los clientes que pidieron ahí: `sucursal` es una sede puntual, `local`
+ * los pedidos sin sucursal y `todo` la base completa (local sin sucursales o respaldo).
+ */
+export type AlcanceTanda = 'todo' | 'local' | 'sucursal'
+
+export interface PuntoTanda {
+  alcance: AlcanceTanda
+  sucursalId: number | null
 }
 
 export interface ClienteTanda {
@@ -114,21 +128,34 @@ export interface PerfilTanda {
 
 const diaAR = (ms: number) => new Date(ms - 3 * 60 * 60 * 1000).getUTCDay()
 
+/** Los pedidos del cliente que caen en el punto; `todo` no filtra. */
+function pedidosDelPunto(pedidos: PedidoTanda[], punto?: PuntoTanda): PedidoTanda[] {
+  if (!punto || punto.alcance === 'todo') return pedidos
+  const sucursalId = punto.alcance === 'sucursal' ? punto.sucursalId : null
+  return pedidos.filter((p) => (p.sucursalId ?? null) === sucursalId)
+}
+
 function perfilar(
   clientes: ClienteTanda[],
   productos: Map<number, ProductoTanda>,
   populares: ProductoTanda[],
   ahora: number,
+  punto?: PuntoTanda,
 ): PerfilTanda[] {
-  const rfm = computarPerfilesRFM(clientes.map((c) => ({
-    cantidadPedidos: c.pedidos.length,
-    totalGastado: c.pedidos.reduce((s, p) => s + p.total, 0),
-    fechasPedidos: c.pedidos.map((p) => p.fecha),
+  // Con un punto elegido, el perfil se arma con los pedidos de ese punto: el mensaje habla de esa
+  // sucursal y no de otra. Sin punto (o con `todo`) mira la base completa, como siempre.
+  const conjuntos = clientes
+    .map((cliente) => ({ cliente, pedidos: pedidosDelPunto(cliente.pedidos, punto) }))
+    .filter(({ pedidos }) => !punto || punto.alcance === 'todo' || pedidos.length > 0)
+  const rfm = computarPerfilesRFM(conjuntos.map(({ pedidos }) => ({
+    cantidadPedidos: pedidos.length,
+    totalGastado: pedidos.reduce((s, p) => s + p.total, 0),
+    fechasPedidos: pedidos.map((p) => p.fecha),
   })), ahora)
   const hoy = diaAR(ahora)
-  return clientes.map((cliente, i) => {
+  return conjuntos.map(({ cliente, pedidos: delPunto }, i) => {
     const perfil = rfm[i]
-    const pedidos = [...cliente.pedidos].sort((a, b) => b.fecha - a.fecha)
+    const pedidos = [...delPunto].sort((a, b) => b.fecha - a.fecha)
     const total = pedidos.reduce((s, p) => s + p.total, 0)
 
     const porDia = new Array(7).fill(0)
@@ -158,7 +185,11 @@ function perfilar(
     const delivery = pedidos.length > 0 && pedidos.filter((p) => p.delivery).length / pedidos.length >= 0.5
 
     const dias = perfil.diasDesdeUltimo ?? 0
-    const momento = calcularMomento(perfil.segmento, dias, perfil.cadenciaDias)
+    // Aunque en este punto haga tiempo que no pide, si pidió en otro punto hace menos de dos días
+    // no se le escribe: sería un mensaje cruzado de dos números de la misma marca.
+    const pidioEnOtro = !!punto && punto.alcance !== 'todo'
+      && cliente.pedidos.some((p) => !delPunto.includes(p) && ahora - p.fecha < 2 * MS_DIA)
+    const momento = pidioEnOtro ? 0 : calcularMomento(perfil.segmento, dias, perfil.cadenciaDias)
     const ticket = pedidos.length ? total / pedidos.length : 0
     const frecuencia = 1 + Math.min(pedidos.length, 12) / 12
     const boostDia = diaHabitual?.dia === hoy ? 1.25 : 1
@@ -210,8 +241,9 @@ export function elegibles(
   productos: Map<number, ProductoTanda>,
   populares: ProductoTanda[],
   ahora: number = Date.now(),
+  punto?: PuntoTanda,
 ): Elegibles {
-  const perfiles = perfilar(clientes, productos, populares, ahora)
+  const perfiles = perfilar(clientes, productos, populares, ahora, punto)
     .filter((p) => p.cliente.telefono && !p.cliente.optOut && p.pedidos > 0 && p.momento > 0)
     .filter((p) => p.cliente.ultimoContacto == null || ahora - p.cliente.ultimoContacto >= DIAS_DESCANSO_TANDA * MS_DIA)
     .sort((a, b) => b.puntaje - a.puntaje)

@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { drizzle } from 'drizzle-orm/mysql2'
-import { and, desc, eq, gte, inArray, ne } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, inArray, ne } from 'drizzle-orm'
 import { pool } from '../db'
 import { authMiddleware } from '../middleware/auth'
 import { requireModulo } from '../middleware/modulo'
@@ -20,6 +20,7 @@ import {
   recompraTandaMensaje as MensajeTable,
   recuperoCliente as RecuperoClienteTable,
   restaurante as RestauranteTable,
+  sucursal as SucursalTable,
 } from '../db/schema'
 import {
   carritoRep,
@@ -37,6 +38,15 @@ import {
   type PedidoTanda,
   type ProductoTanda,
 } from '../lib/recompra-tandas'
+import {
+  canalDelNumero,
+  clavePunto,
+  puntoDeLaTanda,
+  puntosEnvio,
+  resolverPunto,
+  type AlcanceEnvio,
+  type PuntoEnvio,
+} from '../lib/recompra-puntos'
 import { cargarPoliticaIncentivosPuntos } from '../lib/puntos-beneficios-pedido'
 import { anclajePublico, generarTokenMarketing, hashTokenMarketing, urlEnlaceReceta, urlMicroCampana } from '../lib/marketing-enlaces'
 import { cifrarGrowthPayload } from '../lib/marketing-crypto'
@@ -76,18 +86,29 @@ async function cargarLocal(db: Db, restauranteId: number) {
     dominioTienda: RestauranteTable.dominioTienda,
     deliveryEnabled: RestauranteTable.deliveryEnabled,
     deliveryFee: RestauranteTable.deliveryFee,
+    whatsappNumber: RestauranteTable.whatsappNumber,
     whatsappPhoneId: RestauranteTable.whatsappPhoneId,
     whatsappAccessToken: RestauranteTable.whatsappAccessToken,
   }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
   return local ?? null
 }
 
-/** Con avisos automáticos y un número de Meta, la tanda sale por la API; si no, por el WhatsApp del local. */
-async function canalDe(db: Db, restauranteId: number, local: { whatsappPhoneId: string | null }) {
-  if (!local.whatsappPhoneId) return 'manual' as const
-  return await tieneModuloActivo(db as any, restauranteId, MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP).catch(() => false)
-    ? 'api' as const
-    : 'manual' as const
+function cargarSucursales(db: Db, restauranteId: number) {
+  return db.select({
+    id: SucursalTable.id,
+    nombre: SucursalTable.nombre,
+    activo: SucursalTable.activo,
+    soloPos: SucursalTable.soloPos,
+    whatsappEnabled: SucursalTable.whatsappEnabled,
+    whatsappNumber: SucursalTable.whatsappNumber,
+  }).from(SucursalTable).where(eq(SucursalTable.restauranteId, restauranteId))
+    .orderBy(asc(SucursalTable.id))
+}
+
+/** Con avisos automáticos el envío puede salir por la API; cada punto decide si su número es el conectado. */
+function moduloAvisosAutomaticos(db: Db, restauranteId: number) {
+  return tieneModuloActivo(db as any, restauranteId, MODULE_KEYS.AVISOS_AUTOMATICOS_WHATSAPP)
+    .catch(() => false)
 }
 
 /** Toda la base del local, en una pasada: la recomendación depende de la distribución completa. */
@@ -101,6 +122,7 @@ async function cargarBase(db: Db, restauranteId: number) {
     db.select({
       id: PedidoUnificadoTable.id, clienteId: PedidoUnificadoTable.clienteId, total: PedidoUnificadoTable.total,
       tipo: PedidoUnificadoTable.tipo, createdAt: PedidoUnificadoTable.createdAt,
+      sucursalId: PedidoUnificadoTable.sucursalId,
     }).from(PedidoUnificadoTable).where(and(
       eq(PedidoUnificadoTable.restauranteId, restauranteId), ne(PedidoUnificadoTable.estado, 'cancelled'),
     )),
@@ -157,12 +179,15 @@ async function cargarBase(db: Db, restauranteId: number) {
 
   const pedidosPorCliente = new Map<number, PedidoTanda[]>()
   const vendidos = new Map<number, number>()
+  let pedidosSinSucursal = 0
   for (const p of pedidos) {
     if (p.clienteId == null) continue
     const fecha = new Date(p.createdAt).getTime()
     const lista = pedidosPorCliente.get(p.clienteId) ?? []
     const its = itemsPorPedido.get(p.id) ?? []
-    lista.push({ fecha, total: Number(p.total) || 0, delivery: p.tipo === 'delivery', items: its })
+    const sucursalId = p.sucursalId ?? null
+    if (sucursalId == null) pedidosSinSucursal++
+    lista.push({ fecha, total: Number(p.total) || 0, delivery: p.tipo === 'delivery', items: its, sucursalId })
     pedidosPorCliente.set(p.clienteId, lista)
     if (ahora - fecha <= 90 * MS_DIA) for (const it of its) vendidos.set(it.productoId, (vendidos.get(it.productoId) ?? 0) + it.cantidad)
   }
@@ -188,16 +213,19 @@ async function cargarBase(db: Db, restauranteId: number) {
     pedidos: pedidosPorCliente.get(c.id) ?? [],
     ultimoContacto: ultimo.get(c.id) ?? null,
   }))
-  return { clientes: base, catalogo, populares }
+  return { clientes: base, catalogo, populares, pedidosSinSucursal }
 }
 
 async function contexto(db: Db, restauranteId: number) {
-  const local = await cargarLocal(db, restauranteId)
+  const [local, sucursales] = await Promise.all([
+    cargarLocal(db, restauranteId),
+    cargarSucursales(db, restauranteId),
+  ])
   if (!local) return null
-  const [base, politica, canal] = await Promise.all([
+  const [base, politica, avisos] = await Promise.all([
     cargarBase(db, restauranteId),
     cargarPoliticaIncentivosPuntos(db, restauranteId),
-    canalDe(db, restauranteId, local),
+    moduloAvisosAutomaticos(db, restauranteId),
   ])
   const localTanda: LocalTanda = {
     nombre: local.nombre ?? 'el local',
@@ -205,7 +233,22 @@ async function contexto(db: Db, restauranteId: number) {
     deliveryFee: Number(local.deliveryFee) || 0,
     puntos: politica.disponible ? politica.config : null,
   }
-  return { local, base, localTanda, canal, elegibles: elegibles(base.clientes, base.catalogo, base.populares) }
+  const puntos = puntosEnvio({
+    nombreLocal: localTanda.nombre,
+    whatsappNumber: local.whatsappNumber,
+    whatsappPhoneId: local.whatsappPhoneId,
+    sucursales,
+    pedidosSinSucursal: base.pedidosSinSucursal,
+  }, avisos)
+  const ahora = Date.now()
+  const elegiblesDe = (punto: PuntoEnvio) => elegibles(
+    base.clientes,
+    base.catalogo,
+    base.populares,
+    ahora,
+    { alcance: punto.alcance, sucursalId: punto.sucursalId },
+  )
+  return { local, sucursales, base, localTanda, puntos, elegiblesDe }
 }
 
 const numero = (v: unknown) => Number(v) || 0

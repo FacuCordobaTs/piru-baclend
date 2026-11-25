@@ -21,6 +21,16 @@ const SALIDAS = {
   telon: { inicial: { clipPath: "inset(0 0 0% 0)" }, salida: { clipPath: "inset(0 0 100% 0)" }, duracion: 0.85 },
   moderna: { inicial: { "--hueco": "0vmax" }, salida: { "--hueco": "150vmax" }, duracion: 1 },
   artesanal: { inicial: { y: "0%" }, salida: { y: "-108%" }, duracion: 0.9 },
+  umami: { inicial: { clipPath: "inset(0% 0 0% 0)" }, salida: { clipPath: "inset(50% 0 50% 0)" }, duracion: 0.9 },
+  sobremesa: { inicial: { clipPath: "inset(0% 0% 0% 0% round 0px)", opacity: 1 }, salida: { clipPath: "inset(47% 12% 47% 12% round 999px)", opacity: 0 }, duracion: 1.1 },
+  // Tarascón: la pantalla sube y el borde de abajo se redondea como la tapa de un pan.
+  tarascon: { inicial: { clipPath: "inset(0% 0% 0% 0% round 0% 0% 0% 0%)" }, salida: { clipPath: "inset(0% 0% 100% 0% round 0% 0% 50% 50%)" }, duracion: 0.9 },
+  // Ñam: la pantalla se va tragada por un mordisco que se cierra en la esquina de la ola.
+  nam: { inicial: { clipPath: "circle(150% at 88% 100%)" }, salida: { clipPath: "circle(0% at 88% 100%)" }, duracion: 0.95 },
+  // Chispa: la pantalla se va barrida en diagonal, como una pincelada que cruza hacia la derecha.
+  chispa: { inicial: { clipPath: "polygon(0% 0%, 130% 0%, 100% 100%, -30% 100%)" }, salida: { clipPath: "polygon(130% 0%, 130% 0%, 100% 100%, 100% 100%)" }, duracion: 0.95 },
+  // Sorbo: la pantalla se cierra como dos palillos que se juntan en el centro.
+  sorbo: { inicial: { clipPath: "inset(0% 0% 0% 0%)" }, salida: { clipPath: "inset(0% 50% 0% 50%)" }, duracion: 0.85 },
 } as const
 
 /**
@@ -114,6 +124,14 @@ function Escena({ p, ms }: { p: Partial<Props>; ms: number }) {
   const salta = tema.plantilla === "moderna"
   // En Hornito el nombre no entra letra por letra: cae de una como un sello (ver `.pv-artesanal .pv-intro-nombre`).
   const sello = tema.plantilla === "artesanal"
+  // En Tarascón cada letra sube estirada y rebota, como un mordisco (ver `.pv-tarascon .pv-intro-nombre`).
+  const muerde = tema.plantilla === "tarascon"
+  // En Ñam cada letra cae desde arriba como una figurita que se pega torcida (ver `.pv-nam .pv-intro-nombre`).
+  const cae = tema.plantilla === "nam"
+  // En Chispa cada letra salta encendida desde abajo, como una chispa de la plancha (ver `.pv-chispa .pv-intro-nombre`).
+  const chispa = tema.plantilla === "chispa"
+  // En Sorbo cada letra baja colgando como un fideo y queda en su escalón (ver `.pv-sorbo .pv-intro-nombre`).
+  const sorbo = tema.plantilla === "sorbo"
   const oscuro = esOscuro(tema.fondo)
   const logo = p.mostrarLogo !== false ? (oscuro ? contenido.logo : contenido.logoClaro) ?? logoPara(local, oscuro) : null
   const palabras = local.nombre.split(/\s+/).filter(Boolean)
@@ -144,9 +162,10 @@ function Escena({ p, ms }: { p: Partial<Props>; ms: number }) {
               return (
                 <motion.span
                   key={i}
-                  initial={sello ? false : salta ? { y: "120%", rotate: -14, scale: 0.6, opacity: 0 } : { y: "105%", opacity: 0 }}
-                  animate={{ y: "0%", rotate: 0, scale: 1, opacity: 1 }}
-                  transition={salta ? { type: "spring", bounce: 0.6, duration: 0.8, delay: 0.3 + i * 0.06 } : { duration: 0.7, delay: 0.35 + i * 0.045, ease: SUAVE }}
+                  style={{ "--n": i } as CSSProperties}
+                  initial={sello ? false : sorbo ? { y: "-140%", scaleY: 2.2, opacity: 0 } : chispa ? { y: "70%", scale: 0.2, rotate: i % 2 ? 12 : -12, opacity: 0 } : cae ? { y: "-160%", rotate: i % 2 ? 18 : -18, opacity: 0 } : salta ? { y: "120%", rotate: -14, scale: 0.6, opacity: 0 } : muerde ? { y: "110%", scaleY: 1.8, opacity: 0 } : { y: "105%", opacity: 0 }}
+                  animate={{ y: "0%", rotate: cae ? (i % 2 ? 3 : -3) : 0, scale: 1, scaleY: 1, opacity: 1 }}
+                  transition={sorbo ? { type: "spring", bounce: 0.55, duration: 0.8, delay: 0.55 + i * 0.07 } : chispa ? { type: "spring", bounce: 0.5, duration: 0.65, delay: 0.95 + i * 0.055 } : cae ? { type: "spring", bounce: 0.55, duration: 0.75, delay: 0.5 + i * 0.06 } : muerde ? { type: "spring", bounce: 0.45, duration: 0.7, delay: 0.45 + i * 0.07 } : salta ? { type: "spring", bounce: 0.6, duration: 0.8, delay: 0.3 + i * 0.06 } : { duration: 0.7, delay: 0.35 + i * 0.045, ease: SUAVE }}
                 >
                   {letra}
                 </motion.span>
