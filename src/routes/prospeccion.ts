@@ -1,6 +1,8 @@
+import { zValidator } from '@hono/zod-validator'
 import { and, eq, isNotNull } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/mysql2'
 import { Hono, type Context } from 'hono'
+import { z } from 'zod'
 import { createMiddleware } from 'hono/factory'
 import * as jwt from 'jsonwebtoken'
 import { timingSafeEqual } from 'node:crypto'
@@ -27,6 +29,7 @@ import { LIMITES } from '../lib/sitios-reglas'
 import { slugDisponible } from '../lib/sitios-slugs'
 import { geocodificarDireccion } from '../services/geocoding'
 import { cartaIaRoute } from './carta-ia'
+import { categoriaRoute } from './categoria'
 import { internoRoute } from './interno'
 import { onboardingRoute } from './onboarding'
 import { sitiosRoute } from './sitios'
@@ -63,6 +66,7 @@ const autenticar = createMiddleware(async (c, next) => {
 const internas = new Hono()
   .route('/api/onboarding', onboardingRoute)
   .route('/api/carta-ia', cartaIaRoute)
+  .route('/api/categoria', categoriaRoute)
   .route('/api/zona-delivery', zonaDeliveryRoute)
   .route('/api/sitios', sitiosRoute)
   .route('/api/interno', internoRoute)
@@ -360,6 +364,35 @@ export const prospeccionRoute = new Hono()
       url: urlTienda(local.username, publicada),
     })
   })
+
+  // Categorías de la carta: el CRM las lista y cambia su orden mientras la tienda siga sin dueño.
+  .get('/tiendas/:id{[0-9]+}/categorias', async (c) => {
+    const local = await tiendaProspecto(idDe(c))
+    if (!local) return c.json({ error: 'Tienda no encontrada' }, 404)
+    const r = await llamar(sesionLocal(local.id, {}), 'GET', '/api/categoria')
+    if (!r.ok) return c.json({ ok: false, errores: mensajesDe(r, 'Categorías') }, 502)
+    const categorias = (Array.isArray(r.json?.categorias) ? r.json.categorias : []).map((x: any) => ({
+      id: Number(x.id),
+      nombre: String(x.nombre ?? ''),
+      esBebida: Boolean(x.esBebida),
+      orden: Number(x.orden ?? 0),
+    }))
+    return c.json({ ok: true, categorias })
+  })
+
+  .put(
+    '/tiendas/:id{[0-9]+}/categorias/orden',
+    zValidator('json', z.object({ categoriaIds: z.array(z.number().int().positive()).min(1) })),
+    async (c) => {
+      const local = await tiendaProspecto(idDe(c))
+      if (!local) return c.json({ error: 'Tienda no encontrada' }, 404)
+      const r = await llamar(sesionLocal(local.id, {}), 'PUT', '/api/categoria/reorder', {
+        categoriaIds: c.req.valid('json').categoriaIds,
+      })
+      if (!r.ok) return falla(c, new PasoFallido(mensajesDe(r, 'Categorías'), r.status >= 500 ? 502 : 422))
+      return c.json({ ok: true, updated: Number(r.json?.updated ?? 0) })
+    },
+  )
 
   // La misma guía para Claude que descarga el dueño en Páginas.
   // Link de reclamo para mandarle al dueño cuando acepta la demo. Reutiliza el vigente.
