@@ -2439,9 +2439,14 @@ publicRoute.post('/restaurante/:id/geocodificar', async (c) => {
     if (direccion.length < 5) return c.json({ success: false, message: 'Ingresá una dirección más completa.' }, 400)
     try {
         const db = drizzle(pool)
-        const [local] = await db.select({ id: RestauranteTable.id }).from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
+        const [local] = await db.select({ id: RestauranteTable.id, lat: RestauranteTable.direccionLat, lng: RestauranteTable.direccionLng })
+            .from(RestauranteTable).where(eq(RestauranteTable.id, restauranteId)).limit(1)
         if (!local) return c.json({ success: false, message: 'Local no encontrado' }, 404)
-        const resultado = await geocodificarDireccion(direccion)
+        // Prioriza la ciudad del local: sin esto "Espora 811" puede caer en otra provincia.
+        const lat = Number(local.lat)
+        const lng = Number(local.lng)
+        const cerca = local.lat && local.lng && Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null
+        const resultado = await geocodificarDireccion(direccion, cerca)
         if (!resultado.success) return c.json({ success: false, message: resultado.error }, 200)
         return c.json({
             success: true,

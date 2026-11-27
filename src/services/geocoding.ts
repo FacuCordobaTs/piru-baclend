@@ -110,13 +110,16 @@ export type GeocodingDireccionResult =
  * el checkout pide `check-zona` por separado para mostrar el costo. Usa la misma clave del backend
  * (`GOOGLE_MAPS_API_KEY`), así el sitio no necesita cargar Google Maps.
  */
-export async function geocodificarDireccion(direccion: string): Promise<GeocodingDireccionResult> {
+export async function geocodificarDireccion(
+  direccion: string,
+  cerca?: { lat: number; lng: number } | null,
+): Promise<GeocodingDireccionResult> {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY
   if (!apiKey) return { success: false, error: 'No pudimos verificar la dirección en este momento.' }
   const limpia = direccion.trim()
   if (limpia.length < 5) return { success: false, error: 'Ingresá una dirección más completa.' }
   try {
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(limpia)}&key=${apiKey}&components=country:AR&language=es`
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(limpia)}&key=${apiKey}&components=country:AR&language=es${cerca ? `&bounds=${cerca.lat - 0.25},${cerca.lng - 0.25}|${cerca.lat + 0.25},${cerca.lng + 0.25}` : ''}`
     const res = await fetch(url)
     const data = (await res.json()) as {
       status?: string
